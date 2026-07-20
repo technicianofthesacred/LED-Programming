@@ -84,4 +84,28 @@ test('direct status reporting feeds the fresh envelope to live consumers', (t) =
     allowAdopt: true,
   });
   assert.equal(isCardLinkConnected(getCardLinkState()), true);
+  assert.equal(getCardLinkState().cardBlank, false);
+
+  reportDirectCardStatus({
+    connected: true,
+    host: 'lightweaver.local',
+    card: { id: CARD_ID },
+    status: {
+      app: 'Lightweaver', cardId: CARD_ID,
+      firmwareVersion: '1.0.0', buildId: 'old-build',
+    },
+    allowAdopt: true,
+  });
+  assert.equal(getCardLinkState().cardBlank, null);
+  assert.equal(isCardLinkConnected(getCardLinkState()), false);
+
+  reportDirectCardStatus({
+    connected: true,
+    host: 'lightweaver.local',
+    card: { id: CARD_ID },
+    status: readyEnvelope({ runtimePhase: 'factory', knownGoodProject: false }),
+    allowAdopt: true,
+  });
+  assert.equal(getCardLinkState().cardBlank, true);
+  assert.equal(isCardLinkConnected(getCardLinkState()), false);
 });

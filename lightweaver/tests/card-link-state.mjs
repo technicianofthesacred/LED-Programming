@@ -434,6 +434,7 @@ const storedValues = new Map([
   ['lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-001122aabbcc', name: 'Expected card' })],
 ]);
 let bridgeStatusFails = false;
+let bridgeStatusPayload = readyEnvelope('lw-001122aabbcc');
 const parentBridge = {
   postMessage(message, targetOrigin) {
     sent.push({ message, targetOrigin });
@@ -466,7 +467,7 @@ const parentBridge = {
             data: { app: 'LightweaverCardBridge', id: message.id, ok: false, error: 'status unavailable' },
           });
         } else {
-          respond(readyEnvelope('lw-001122aabbcc'));
+          respond(bridgeStatusPayload);
         }
       }
       else respond({ ok: true });
@@ -615,6 +616,21 @@ assert.equal(getCardLinkState().state, 'connected-bridge', 'bootstrap verifies t
 assert.equal(isCardLinkConnected(getCardLinkState()), true, 'complete bridged status evidence satisfies live readiness');
 assert.equal(getCardLinkState().readiness?.bootId, 'boot-1');
 
+bridgeStatusPayload = {
+  app: 'Lightweaver', cardId: 'lw-001122aabbcc',
+  firmwareVersion: '1.0.0', buildId: 'partial-status',
+};
+await bootstrapCardLink();
+assert.equal(getCardLinkState().cardBlank, null, 'partial bridged status keeps blank state unknown');
+assert.equal(isCardLinkConnected(getCardLinkState()), false, 'partial bridged status remains checking');
+
+bridgeStatusPayload = readyEnvelope('lw-001122aabbcc', {
+  runtimePhase: 'factory', knownGoodProject: false,
+});
+await bootstrapCardLink();
+assert.equal(getCardLinkState().cardBlank, true, 'authoritative factory bridge status is blank');
+assert.equal(isCardLinkConnected(getCardLinkState()), false);
+
 bridgeStatusFails = true;
 await bootstrapCardLink();
 assert.equal(getCardLinkState().state, 'connected-bridge', 'failed status does not tear down verified bridge transport');
@@ -622,8 +638,38 @@ assert.equal(getCardLinkState().cardBlank, null, 'failed bridged status keeps bl
 assert.equal(getCardLinkState().readiness, null, 'failed bridged status keeps readiness unknown');
 assert.equal(isCardLinkConnected(getCardLinkState()), false, 'failed bridged status never reads green');
 bridgeStatusFails = false;
+bridgeStatusPayload = readyEnvelope('lw-001122aabbcc');
 await bootstrapCardLink();
 assert.equal(isCardLinkConnected(getCardLinkState()), true, 'fresh bridged status restores readiness');
+
+async function refreshBridgeStatus(payload) {
+  bridgeStatusPayload = payload;
+  getSharedCardLink().dispatch({ type: 'connecting', via: 'bridge', host: '192.168.18.70' });
+  listeners.get('lightweaver-card-bridge-changed')?.({
+    detail: {
+      connected: true, verified: true, host: '192.168.18.70',
+      card: { id: 'lw-001122aabbcc', firmwareVersion: '1.0.0' },
+    },
+  });
+  await waitFor(() => getCardLinkState().readiness === payload, 2000, 'bridge status refinement');
+}
+
+const partialBridgeRefresh = {
+  app: 'Lightweaver', cardId: 'lw-001122aabbcc',
+  firmwareVersion: '1.0.0', buildId: 'partial-refresh',
+};
+await refreshBridgeStatus(partialBridgeRefresh);
+assert.equal(getCardLinkState().cardBlank, null, 'partial async bridge refinement stays unknown');
+assert.equal(isCardLinkConnected(getCardLinkState()), false);
+await refreshBridgeStatus(readyEnvelope('lw-001122aabbcc'));
+assert.equal(getCardLinkState().cardBlank, false, 'known-good async bridge refinement is configured');
+assert.equal(isCardLinkConnected(getCardLinkState()), true);
+await refreshBridgeStatus(readyEnvelope('lw-001122aabbcc', {
+  runtimePhase: 'factory', knownGoodProject: false,
+}));
+assert.equal(getCardLinkState().cardBlank, true, 'factory async bridge refinement is blank');
+bridgeStatusPayload = readyEnvelope('lw-001122aabbcc');
+await bootstrapCardLink();
 
 const fallbackResponse = await pushLivePreviewToCard(
   { patternId: 'ocean', brightness: 0.8, zone: 'zone-b', syncZones: false },

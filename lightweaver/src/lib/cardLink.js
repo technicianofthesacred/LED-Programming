@@ -22,7 +22,7 @@ import {
   sendCardBridgeRequest,
   verifyCardBridgeIdentity,
 } from './cardBridge.js';
-import { cardHostToUrl, isFactoryCardStatus, readStoredCardHost, rememberCardHost, writeStoredCardHost } from './cardConnection.js';
+import { cardHostToUrl, readStoredCardHost, rememberCardHost, writeStoredCardHost } from './cardConnection.js';
 import {
   compareCardIdentity,
   normalizeCardIdentity,
@@ -31,6 +31,7 @@ import {
   verifyExpectedCardAtHost,
 } from './cardIdentity.js';
 import { isCardLinkConnected as isFreshCardLinkConnected } from './cardConnectionFlow.js';
+import { classifyCardReadiness } from './cardReadiness.js';
 
 export const CARD_LINK_PING_INTERVAL_MS = 5000;
 export const CARD_LINK_DIRECT_PING_INTERVAL_MS = 20000;
@@ -507,13 +508,18 @@ async function fetchBridgeCardReadiness(host) {
   }
 }
 
+function classifiedCardBlank(readiness, expectedCardId = '') {
+  if (!readiness) return null;
+  return classifyCardReadiness(readiness, { expectedCardId }).blank;
+}
+
 function refreshBridgeCardBlank(host, cardId) {
   return fetchBridgeCardReadiness(host).then(readiness => {
     getSharedCardLink().dispatch({
       type: 'bridge-blank',
       host,
       cardId,
-      blank: readiness ? isFactoryCardStatus(readiness) : null,
+      blank: classifiedCardBlank(readiness, cardId),
       readiness,
     });
   }).catch(() => {
@@ -627,7 +633,7 @@ export function reportDirectCardStatus({
       rememberCardHost(host);
       writeStoredCardHost(host);
     }
-    const blank = isFactoryCardStatus(status || {});
+    const blank = classifiedCardBlank(status, identity.id);
     link.dispatch({
       type: 'direct-status', connected: true, host, card: identity, expectedCard,
       acknowledgedAt, allowAdopt, blank, readiness: status,
@@ -676,7 +682,7 @@ export async function adoptDiscoveredDirectCard({ fetchImpl, link = getSharedCar
   // stay the last thing before dispatch) so the paired card renders with the
   // correct cardBlank immediately instead of flashing green for one poll.
   const readiness = await probeDirectCardReadiness(state.host, fetchImpl);
-  const blank = readiness ? isFactoryCardStatus(readiness) : null;
+  const blank = classifiedCardBlank(readiness, verified.id);
   if (persistedIdentityAuthorityToken(readPersistedCardIdentity()) !== snapshot.persistedAuthority) {
     const error = new Error('The paired card changed in another tab while this check was running. Review the card now shown and try again.');
     error.reason = 'stale-identity';
@@ -733,7 +739,7 @@ export async function bootstrapCardLink() {
     const readiness = comparison.ok
       ? await fetchBridgeCardReadiness(getCardBridgeState().host)
       : null;
-    const blank = readiness ? isFactoryCardStatus(readiness) : null;
+    const blank = classifiedCardBlank(readiness, card.id);
     link.dispatch({
       type: 'card-verified', via: 'bridge', host: getCardBridgeState().host,
       card, expectedCard, acknowledgedAt, blank, readiness,
