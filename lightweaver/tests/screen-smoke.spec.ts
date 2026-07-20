@@ -295,7 +295,10 @@ test('a paired card reporting a factory status surfaces "Needs project", not gre
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({
+      app: 'Lightweaver', provisioningContractVersion: 1,
       cardId: 'lw-blank-card', cardName: 'Blank card', firmwareVersion: '1.4.0',
+      buildId: 'a'.repeat(40), bootId: 'boot-blank', runtimePhase: 'factory',
+      knownGoodProject: false, commandReady: false, outputReady: false,
       mode: 'factory-flash', source: 'defaults', wiringRevision: 0, wiringDigest: '',
     }),
   }));
@@ -316,6 +319,46 @@ test('a paired card reporting a factory status surfaces "Needs project", not gre
   const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
   await expect(dialog).toContainText('This card is blank');
   await expect(dialog.getByRole('button', { name: 'Install your project' })).toBeVisible();
+});
+
+test('card status control distinguishes checking, blank, and command-ready states', async ({ page }) => {
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  const status = page.getByTestId('card-link-status');
+  const card = { id: 'lw-status-card', name: 'Status card' };
+  await dispatchCardLinkEvents(page, [{
+    type: 'card-verified', via: 'bridge', host: 'lightweaver.local', card,
+  }]);
+  await expect(status).toHaveAccessibleName(/Connecting/);
+  await expect(status).not.toHaveClass(/is-connected/);
+
+  await dispatchCardLinkEvents(page, [{
+    type: 'card-verified', via: 'bridge', host: 'lightweaver.local', card,
+    blank: true,
+    readiness: {
+      app: 'Lightweaver', provisioningContractVersion: 1,
+      cardId: card.id, firmwareVersion: '1.4.0', buildId: 'a'.repeat(40),
+      bootId: 'boot-factory', runtimePhase: 'factory', knownGoodProject: false,
+      commandReady: false, outputReady: false,
+    },
+  }]);
+  await expect(status).toHaveAccessibleName(/Needs project/);
+  await expect(status).not.toHaveClass(/is-connected/);
+
+  await dispatchCardLinkEvents(page, [{
+    type: 'card-verified', via: 'bridge', host: 'lightweaver.local', card,
+    blank: false,
+    readiness: {
+      app: 'Lightweaver', provisioningContractVersion: 1,
+      cardId: card.id, firmwareVersion: '1.4.0', buildId: 'a'.repeat(40),
+      bootId: 'boot-ready', runtimePhase: 'ready', knownGoodProject: true,
+      commandReady: true, outputReady: true,
+    },
+  }]);
+  await expect(status).toHaveAccessibleName(/Status card.*Connected/);
+  await expect(status).toHaveClass(/is-connected/);
 });
 
 test('blank-card choice reaches Flash install when Web Serial is supported', async ({ page }) => {

@@ -85,13 +85,33 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
       return {
         ...prev,
         state: 'connecting', reason: '', transport: via, host, missedPings: 0,
-        ...(host !== prev.host ? { card: null, acknowledgedAt: '' } : {}),
+        ...(host !== prev.host ? {
+          card: null,
+          readiness: null,
+          cardBlank: null,
+          bridgeLifecycle: null,
+          acknowledgedAt: '',
+        } : {}),
       };
     }
     case 'bridge-ready': {
-      if ((prev.state === 'connected-bridge' || prev.state === 'reconnecting-bridge') && prev.card?.id && prev.host === host) return prev;
+      const sameLifecycle = event.bridgeLifecycle === prev.bridgeLifecycle;
+      if (
+        sameLifecycle
+        && (prev.state === 'connected-bridge' || prev.state === 'reconnecting-bridge')
+        && prev.card?.id
+        && prev.host === host
+      ) return prev;
       if (prev.state === 'connecting' && prev.transport === 'bridge' && prev.host === host) return prev;
-      return { ...prev, state: 'connecting', reason: '', transport: 'bridge', host, missedPings: 0 };
+      return {
+        ...prev,
+        state: 'connecting', reason: '', transport: 'bridge', host, missedPings: 0,
+        card: null,
+        readiness: null,
+        cardBlank: null,
+        bridgeLifecycle: event.bridgeLifecycle ?? null,
+        acknowledgedAt: '',
+      };
     }
     case 'card-verified': {
       if (!event.card?.id) return { ...prev, state: 'disconnected', reason: 'identity-missing', transport: '', missedPings: 0 };
@@ -101,13 +121,27 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
         if (!comparison.ok) return { ...prev, state: 'disconnected', reason: comparison.reason, transport: '', missedPings: 0 };
       }
       const transport = event.via === 'direct' ? 'direct' : 'bridge';
+      const repeatedBridgeVerification = transport === 'bridge'
+        && event.bridgeLifecycle === prev.bridgeLifecycle
+        && (prev.state === 'connected-bridge' || prev.state === 'reconnecting-bridge')
+        && prev.host === host
+        && prev.card?.id === event.card.id;
+      const readiness = Object.hasOwn(event, 'readiness')
+        ? (event.readiness ?? null)
+        : (repeatedBridgeVerification ? (prev.readiness ?? null) : null);
+      const cardBlank = Object.hasOwn(event, 'blank')
+        ? (typeof event.blank === 'boolean' ? event.blank : null)
+        : (repeatedBridgeVerification && typeof prev.cardBlank === 'boolean' ? prev.cardBlank : null);
       return {
         ...prev,
         state: transport === 'direct' ? 'connected-direct' : 'connected-bridge',
         reason: '', transport, host, missedPings: 0,
         card: event.card,
-        readiness: event.readiness ?? null,
-        cardBlank: typeof event.blank === 'boolean' ? event.blank : null,
+        readiness,
+        cardBlank,
+        bridgeLifecycle: transport === 'bridge'
+          ? (event.bridgeLifecycle ?? (repeatedBridgeVerification ? prev.bridgeLifecycle : null))
+          : null,
         acknowledgedAt: event.acknowledgedAt || new Date().toISOString(),
       };
     }
@@ -273,8 +307,12 @@ export function cardLinkReasonText(reason = '') {
 
 export function cardLinkStatusText(state = {}) {
   switch (state.state) {
-    case 'connected-bridge': return 'Live via card page';
-    case 'connected-direct': return 'Live direct';
+    case 'connected-bridge':
+      if (state.cardBlank === true) return 'Card needs a project';
+      return isCardLinkConnected(state) ? 'Live via card page' : 'Checking card readiness…';
+    case 'connected-direct':
+      if (state.cardBlank === true) return 'Card needs a project';
+      return isCardLinkConnected(state) ? 'Live direct' : 'Checking card readiness…';
     case 'reconnecting': return 'Card stopped responding — reconnecting…';
     case 'reconnecting-bridge': return 'Card restarting…';
     case 'connecting': return 'Looking for the card…';
@@ -569,13 +607,14 @@ export function getSharedCardLink() {
         sharedLink.dispatch({
           type: 'card-verified', via: 'bridge', host: detail.host,
           card: detail.card, expectedCard, acknowledgedAt,
+          bridgeLifecycle: detail.lifecycle,
         });
-        // The change event carries identity only, so read /api/status over the
-        // bridge to resolve blank state. Only kick this on the TRANSITION into a
-        // green bridge link for this card: a status read itself dispatches a
-        // bridge-change (which re-enters this handler), so refreshing on every
-        // bridge-change would recurse forever. A wrong-card dispatch above stays
-        // disconnected and is skipped by the connected-bridge check.
+        // The change event carries identity/lifecycle but not status, so read
+        // /api/status over the bridge to resolve blank state. Only kick this on
+        // the TRANSITION into a green bridge link for this card: a status read
+        // itself dispatches a bridge-change (which re-enters this handler), so
+        // refreshing on every bridge-change would recurse forever. A wrong-card
+        // dispatch above stays disconnected and is skipped by the connected-bridge check.
         const nowLink = sharedLink.getState();
         const wasLinked = prevLink.state === 'connected-bridge' && prevLink.card?.id === detail.card.id;
         if (comparison.ok && nowLink.state === 'connected-bridge' && !wasLinked) {
@@ -584,7 +623,9 @@ export function getSharedCardLink() {
       } else if (detail.identityError) {
         sharedLink.dispatch({ type: 'bridge-lost', reason: detail.identityError, host: detail.host });
       } else {
-        sharedLink.dispatch({ type: 'bridge-ready', host: detail.host });
+        sharedLink.dispatch({
+          type: 'bridge-ready', host: detail.host, bridgeLifecycle: detail.lifecycle,
+        });
       }
       return;
     }
@@ -743,6 +784,7 @@ export async function bootstrapCardLink() {
     link.dispatch({
       type: 'card-verified', via: 'bridge', host: getCardBridgeState().host,
       card, expectedCard, acknowledgedAt, blank, readiness,
+      bridgeLifecycle: getCardBridgeState().lifecycle,
     });
   } catch (error) {
     // The remembered bridge is gone — forget it, so future app loads do not

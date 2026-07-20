@@ -438,6 +438,10 @@ export function getCardBridgeState() {
     discoveredCard: bridgeDiscoveredCard,
     identityError: bridgeIdentityError,
     identityVerified,
+    // Monotonic target generation. A card-page reload can keep the same
+    // WindowProxy, host, and card identity, so consumers need this to revoke
+    // readiness evidence from the previous page lifecycle.
+    lifecycle: bridgeLifecycle,
     host: bridgeHost || readStoredCardHost(),
     origin: bridgeOrigin || cardHostToUrl(bridgeHost || readStoredCardHost()),
     lastSeenAt: bridgeLastSeenAt,

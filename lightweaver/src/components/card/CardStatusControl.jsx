@@ -15,8 +15,13 @@ export function cardConnectionStatus(link = {}) {
   // A paired, reachable card that is still on factory defaults is genuinely
   // linked (writes will pass the identity guard) but has no project installed —
   // so it is not green "Connected", it is "Needs project".
-  if (isCardLinkConnected(link) && link.cardBlank) return 'Needs project';
+  const verifiedTransport = Boolean(
+    link.card?.id
+    && (link.state === 'connected-bridge' || link.state === 'connected-direct')
+  );
+  if (verifiedTransport && link.cardBlank === true) return 'Needs project';
   if (isCardLinkConnected(link)) return 'Connected';
+  if (verifiedTransport) return 'Connecting';
   // A card answered but this origin has never paired it — actionable, not green.
   if (link.reason === 'found-unpaired') return 'Found — pair';
   return 'Not connected';

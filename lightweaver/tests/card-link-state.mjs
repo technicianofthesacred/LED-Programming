@@ -19,6 +19,7 @@ import {
   previewResponseUsedZoneFallback,
   pushLivePreviewToCard,
 } from '../src/lib/cardLiveControl.js';
+import { sendCardBridgeRequest } from '../src/lib/cardBridge.js';
 import { isFactoryCardStatus } from '../src/lib/cardConnection.js';
 import { requireExpectedCardIdentity } from '../src/lib/cardIdentity.js';
 import { nextCardConnectionAction } from '../src/lib/cardConnectionFlow.js';
@@ -72,6 +73,7 @@ const bridged = reduceCardLink(bridgeReadyOnly, {
   host: '192.168.4.1',
   card: { id: 'lw-001122aabbcc', name: 'Front Mandala' },
   readiness: readyEnvelope('lw-001122aabbcc'),
+  bridgeLifecycle: 4,
   acknowledgedAt: '2026-07-14T12:00:00.000Z',
 });
 assert.equal(bridged.state, 'connected-bridge');
@@ -79,6 +81,44 @@ assert.equal(bridged.transport, 'bridge');
 assert.equal(bridged.card.id, 'lw-001122aabbcc');
 assert.equal(bridged.acknowledgedAt, '2026-07-14T12:00:00.000Z');
 assert.equal(isCardLinkConnected(bridged), true);
+
+const repeatedBridgeVerification = reduceCardLink(bridged, {
+  type: 'card-verified', via: 'bridge', host: '192.168.4.1',
+  card: { id: 'lw-001122aabbcc', name: 'Front Mandala' }, bridgeLifecycle: 4,
+});
+assert.equal(
+  repeatedBridgeVerification.readiness,
+  bridged.readiness,
+  'same-target bridge verification preserves authoritative readiness evidence',
+);
+assert.equal(isCardLinkConnected(repeatedBridgeVerification), true);
+
+const reloadedBridgeVerification = reduceCardLink(bridged, {
+  type: 'card-verified', via: 'bridge', host: '192.168.4.1',
+  card: { id: 'lw-001122aabbcc', name: 'Front Mandala' }, bridgeLifecycle: 5,
+});
+assert.equal(reloadedBridgeVerification.readiness, null, 'new bridge lifecycle clears stale readiness');
+assert.equal(reloadedBridgeVerification.cardBlank, null);
+assert.equal(isCardLinkConnected(reloadedBridgeVerification), false);
+
+const changedBridgeIdentity = reduceCardLink(bridged, {
+  type: 'card-verified', via: 'bridge', host: '192.168.4.1',
+  card: { id: 'lw-new-card' }, bridgeLifecycle: 4,
+});
+assert.equal(changedBridgeIdentity.readiness, null, 'new card identity cannot inherit prior readiness');
+assert.equal(isCardLinkConnected(changedBridgeIdentity), false);
+
+const changedBridgeHost = reduceCardLink(bridged, {
+  type: 'connecting', via: 'bridge', host: 'card-b.local',
+});
+assert.equal(changedBridgeHost.readiness, null, 'new bridge host clears prior readiness');
+assert.equal(changedBridgeHost.cardBlank, null);
+
+const reloadedBridgeReady = reduceCardLink(bridged, {
+  type: 'bridge-ready', host: '192.168.4.1', bridgeLifecycle: 5,
+});
+assert.equal(reloadedBridgeReady.state, 'connecting', 'new bridge lifecycle revalidates before commands');
+assert.equal(reloadedBridgeReady.readiness, null);
 
 const wrongBridgeCard = reduceCardLink(bridgeReadyOnly, {
   type: 'card-verified',
@@ -306,6 +346,12 @@ for (const reason of ['card-page-closed', 'card-stopped-answering', 'bridge-miss
 }
 assert.equal(cardLinkStatusText(bridged), 'Live via card page');
 assert.equal(cardLinkStatusText(direct), 'Live direct');
+assert.equal(
+  cardLinkStatusText({ state: 'connected-bridge', card: { id: 'lw-checking' } }),
+  'Checking card readiness…',
+  'transport alone never reports Live',
+);
+assert.equal(cardLinkStatusText(bridgedBlank), 'Card needs a project');
 assert.equal(cardLinkStatusText(connecting), 'Looking for the card…');
 assert.equal(cardLinkStatusText(closed), cardLinkReasonText('card-page-closed'));
 
@@ -615,6 +661,14 @@ await bootstrapCardLink();
 assert.equal(getCardLinkState().state, 'connected-bridge', 'bootstrap verifies the real bridge before commands');
 assert.equal(isCardLinkConnected(getCardLinkState()), true, 'complete bridged status evidence satisfies live readiness');
 assert.equal(getCardLinkState().readiness?.bootId, 'boot-1');
+const readinessBeforePing = getCardLinkState().readiness;
+await sendCardBridgeRequest('ping', {}, { host: '192.168.18.70', timeoutMs: 500 });
+assert.equal(
+  getCardLinkState().readiness,
+  readinessBeforePing,
+  'successful same-card bridge ping preserves readiness evidence',
+);
+assert.equal(isCardLinkConnected(getCardLinkState()), true, 'verified ping does not demote a ready bridge');
 
 bridgeStatusPayload = {
   app: 'Lightweaver', cardId: 'lw-001122aabbcc',
