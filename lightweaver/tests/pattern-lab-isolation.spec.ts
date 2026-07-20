@@ -33,8 +33,19 @@ test('existing Studio routes remain available beside Pattern Lab', async ({ page
   await page.goto('/#screen=pattern-lab', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('pattern-lab-screen')).toBeVisible();
 
-  for (const route of ['Layout', 'Patterns', 'Playlist', 'Show', 'Card']) {
-    await page.getByRole('button', { name: route, exact: true }).click();
-    await expect(page.getByRole('button', { name: route, exact: true })).toHaveAttribute('aria-current', 'page');
+  const routes = [
+    { label: 'Layout', mountedContent: 'layout-mode-switch' },
+    { label: 'Patterns', mountedContent: 'pattern-project-preview' },
+    { label: 'Playlist', mountedContent: 'playlist-physical-preview-status' },
+    { label: 'Show', mountedContent: 'show-stage' },
+    { label: 'Card', mountedContent: 'card-setup-steps' },
+  ];
+
+  for (const route of routes) {
+    const railItem = page.getByRole('button', { name: route.label, exact: true });
+    await railItem.click();
+    await expect(railItem).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByTestId(route.mountedContent)).toBeVisible();
+    await expect(page.getByTestId('pattern-lab-screen')).toHaveCount(0);
   }
 });
