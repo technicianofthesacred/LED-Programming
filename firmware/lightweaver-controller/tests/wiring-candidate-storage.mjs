@@ -73,7 +73,7 @@ const stageBody = storage.slice(stageStart, stageEnd);
 assert.match(stageBody, /validateRuntimeConfigJsonStrict\(json, \*parsed, message\)/, 'staging should fully validate into a temporary config');
 assert.doesNotMatch(stageBody, /config\s*=\s*\*parsed/, 'staging must not mutate the active runtime config');
 
-assert.match(storage, /getString\(NVS_LEGACY_CONFIG_KEY/);
+assert.match(storage, /readNvsString\(prefs,\s*NVS_LEGACY_CONFIG_KEY/);
 assert.match(storage, /putString\(NVS_KNOWN_GOOD_CONFIG_KEY/);
 assert.match(storage, /known-good migration failed/);
 

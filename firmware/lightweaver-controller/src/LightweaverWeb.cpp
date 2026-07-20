@@ -1397,6 +1397,21 @@ class BoundedControlRequestHandler final : public RequestHandler {
 
 void handleControlPost() {
   sendCors();
+  if (!provisioningControlAdmitted(runtimeCommandReady())) {
+    controlRequestBodyReady = false;
+    controlRequestBodyLength = 0;
+    JsonDocument rejected;
+    rejected["ok"] = false;
+    rejected["error"] = "card is not ready for runtime control";
+    rejected["cardId"] = runtimeCardId();
+    rejected["bootId"] = runtimeBootId();
+    rejected["runtimePhase"] = runtimeProvisioningPhase();
+    rejected["commandReady"] = false;
+    String body;
+    serializeJson(rejected, body);
+    server.send(423, "application/json", body);
+    return;
+  }
   JsonDocument doc;
   if (!controlRequestBodyReady || controlRequestBodyRejected) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"control request body unavailable\"}");
@@ -1466,6 +1481,8 @@ void handleControlPost() {
   bool previousCanChange = previousRequested && runtimeCanStepPattern(-1);
   bool cancelStreamRequested =
       hasControlField(doc, "cancelStream") && controlBool(doc, "cancelStream");
+  bool cancelStreamEffective = provisioningCancelStreamEffective(
+      cancelStreamRequested, runtimeIsStreaming());
   bool patternAffectsAllOutputs = patternRequested &&
       runtimePatternAffectsAllOutputs(zoneTarget, confirmedPatternId);
   bool selectedZoneOperationRequested =
@@ -1482,7 +1499,7 @@ void handleControlPost() {
       hasControlField(doc, "driftMax");
   ProvisioningOperationScopeInputs scopeInputs;
   scopeInputs.globalOutputs = colorOrderRequested || nextCanChange ||
-      previousCanChange || cancelStreamRequested || patternAffectsAllOutputs;
+      previousCanChange || cancelStreamEffective || patternAffectsAllOutputs;
   scopeInputs.selectedZones = selectedZoneOperationRequested;
   scopeInputs.syncStateChanged = syncStateChanged;
   ProvisioningOutputScope operationScope = provisioningOperationScope(scopeInputs);
@@ -1491,7 +1508,8 @@ void handleControlPost() {
     return;
   }
   uint8_t preflightAffectedOutputCount = runtimeAffectedOutputCount(zoneTarget, effectiveSyncZones, operationScope);
-  if (preflightAffectedOutputCount == 0) {
+  if (!provisioningControlAdvancesRevision(
+          true, operationScope, preflightAffectedOutputCount)) {
     server.send(422, "application/json", "{\"ok\":false,\"error\":\"command affects zero outputs\"}");
     return;
   }
@@ -1518,7 +1536,7 @@ void handleControlPost() {
     uint8_t hi = hasControlField(doc, "driftMax") ? uint8_t(controlInt(doc, "driftMax") & 0xff) : runtimeGetDriftHueMax();
     runtimeSetDriftRangeZ(zoneTarget, lo, hi);
   }
-  if (cancelStreamRequested) runtimeCancelStream();
+  if (cancelStreamEffective) runtimeCancelStream();
   // Echo current state back
   uint8_t affectedOutputCount =
       runtimeAffectedOutputCount(zoneTarget, runtimeGetSyncZones(), operationScope);

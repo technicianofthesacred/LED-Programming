@@ -475,7 +475,10 @@ bool isSafeProductionJobId(const String& value) {
   return true;
 }
 
-bool validateRuntimeConfigJsonStrict(const String& json, RuntimeConfig& parsed, String& message) {
+bool validateRuntimeConfigJsonStrict(const String& json,
+                                     RuntimeConfig& parsed,
+                                     String& message,
+                                     RuntimeSource source = SOURCE_NVS) {
   JsonDocument doc;
   DeserializationError error = deserializeJson(doc, json);
   if (error) {
@@ -746,7 +749,7 @@ bool validateRuntimeConfigJsonStrict(const String& json, RuntimeConfig& parsed, 
     }
   }
 
-  return loadJsonString(json, parsed, SOURCE_NVS, message);
+  return loadJsonString(json, parsed, source, message);
 }
 
 bool loadSdConfig(RuntimeConfig& config, String& message) {
@@ -761,45 +764,44 @@ bool loadSdConfig(RuntimeConfig& config, String& message) {
   }
   String json = profileFile.readString();
   profileFile.close();
-  return loadJsonString(json, config, SOURCE_SD, message);
+  bool valid = validateRuntimeConfigJsonStrict(json, config, message, SOURCE_SD);
+  if (valid) config.source = SOURCE_SD;
+  return valid;
 }
 
-bool loadNvsConfigKey(const char* key, RuntimeConfig& config, String& message) {
+ProvisioningStorageState readNvsString(Preferences& prefs,
+                                       const char* key,
+                                       String& value,
+                                       String& message) {
+  if (!prefs.isKey(key)) return ProvisioningStorageState::Absent;
+  if (prefs.getType(key) != PT_STR) {
+    message = String("nvs value has invalid type: ") + key;
+    return ProvisioningStorageState::Error;
+  }
+  value = prefs.getString(key, "");
+  if (!value.length()) {
+    message = String("nvs value read failed or empty: ") + key;
+    return ProvisioningStorageState::Error;
+  }
+  return ProvisioningStorageState::Present;
+}
+
+ProvisioningStorageState loadNvsConfigKeyStrict(const char* key,
+                                                RuntimeConfig& config,
+                                                bool& configParsed,
+                                                String& message) {
+  configParsed = false;
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, true)) {
     message = "nvs unavailable";
-    return false;
+    return ProvisioningStorageState::Error;
   }
-  String json = prefs.getString(key, "");
+  String json;
+  ProvisioningStorageState state = readNvsString(prefs, key, json, message);
   prefs.end();
-  if (!json.length()) {
-    message = "nvs empty";
-    return false;
-  }
-  return loadJsonString(json, config, SOURCE_NVS, message);
-}
-
-bool loadNvsConfigKeyStrict(const char* key, RuntimeConfig& config, String& message) {
-  Preferences prefs;
-  if (!prefs.begin(NVS_NAMESPACE, true)) {
-    message = "nvs unavailable";
-    return false;
-  }
-  String json = prefs.getString(key, "");
-  prefs.end();
-  if (!json.length()) {
-    message = "nvs empty";
-    return false;
-  }
-  return validateRuntimeConfigJsonStrict(json, config, message);
-}
-
-bool nvsConfigKeyHasValue(const char* key) {
-  Preferences prefs;
-  if (!prefs.begin(NVS_NAMESPACE, true)) return false;
-  bool present = prefs.getString(key, "").length() > 0;
-  prefs.end();
-  return present;
+  if (state != ProvisioningStorageState::Present) return state;
+  configParsed = validateRuntimeConfigJsonStrict(json, config, message);
+  return ProvisioningStorageState::Present;
 }
 
 WiringCandidateState readCandidateState(Preferences& prefs) {
@@ -934,26 +936,38 @@ String makeActivationId() {
   return String(id);
 }
 
-bool migrateLegacyKnownGood(String& message) {
+ProvisioningStorageState migrateLegacyKnownGood(String& message) {
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, false)) {
     message = "nvs migration open failed";
-    return false;
+    return ProvisioningStorageState::Error;
   }
-  String knownGood = prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "");
-  if (knownGood.length()) {
+  String knownGood;
+  ProvisioningStorageState knownGoodState =
+      readNvsString(prefs, NVS_KNOWN_GOOD_CONFIG_KEY, knownGood, message);
+  if (knownGoodState == ProvisioningStorageState::Present) {
     prefs.end();
-    return true;
+    return ProvisioningStorageState::Present;
   }
-  String legacy = prefs.getString(NVS_LEGACY_CONFIG_KEY, "");
-  if (!legacy.length()) {
+  if (knownGoodState == ProvisioningStorageState::Error) {
     prefs.end();
-    return true;
+    return ProvisioningStorageState::Error;
+  }
+  String legacy;
+  ProvisioningStorageState legacyState =
+      readNvsString(prefs, NVS_LEGACY_CONFIG_KEY, legacy, message);
+  if (legacyState == ProvisioningStorageState::Absent) {
+    prefs.end();
+    return ProvisioningStorageState::Absent;
+  }
+  if (legacyState == ProvisioningStorageState::Error) {
+    prefs.end();
+    return ProvisioningStorageState::Error;
   }
   bool ok = prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, legacy) == legacy.length();
   prefs.end();
   if (!ok) message = "known-good migration failed; legacy config preserved";
-  return ok;
+  return ok ? ProvisioningStorageState::Present : ProvisioningStorageState::Error;
 }
 
 const char* candidateStateLabel(WiringCandidateState state) {
@@ -1076,50 +1090,87 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
 
   // Upgrade in place: copy the legacy config before consulting candidate
   // state. The legacy key is intentionally retained as a downgrade fallback.
-  if (!migrateLegacyKnownGood(message)) {
-    result.message = message;
+  ProvisioningStorageState migrationState = migrateLegacyKnownGood(message);
+  if (provisioningStorageReadFailed(migrationState)) {
+    applyDefaultRuntimeConfig(config);
+    ensureDefaultZone(config);
+    result.ok = true;
+    result.safeMode = true;
+    result.source = SOURCE_DEFAULTS;
+    setRuntimeLoadTruth(config, result, false, false, true);
+    result.message = message + "; safe defaults loaded";
+    return result;
   }
 
   WiringCandidateState state = WIRING_CANDIDATE_NONE;
   {
     Preferences prefs;
-    if (prefs.begin(NVS_NAMESPACE, true)) {
-      state = readCandidateState(prefs);
-      if (!validateCandidateMetadataForBoot(prefs, state, message)) {
-        prefs.end();
-        applyDefaultRuntimeConfig(config);
-        ensureDefaultZone(config);
-        result.ok = true;
-        result.safeMode = true;
-        result.source = SOURCE_DEFAULTS;
-        setRuntimeLoadTruth(config, result, false, false, true);
-        result.message = message + "; safe defaults loaded";
-        return result;
-      }
-      prefs.end();
+    if (!prefs.begin(NVS_NAMESPACE, true)) {
+      applyDefaultRuntimeConfig(config);
+      ensureDefaultZone(config);
+      result.ok = true;
+      result.safeMode = true;
+      result.source = SOURCE_DEFAULTS;
+      setRuntimeLoadTruth(config, result, false, false, true);
+      result.message = "nvs candidate state read failed; safe defaults loaded";
+      return result;
     }
+    state = readCandidateState(prefs);
+    if (!validateCandidateMetadataForBoot(prefs, state, message)) {
+      prefs.end();
+      applyDefaultRuntimeConfig(config);
+      ensureDefaultZone(config);
+      result.ok = true;
+      result.safeMode = true;
+      result.source = SOURCE_DEFAULTS;
+      setRuntimeLoadTruth(config, result, false, false, true);
+      result.message = message + "; safe defaults loaded";
+      return result;
+    }
+    prefs.end();
   }
 
   if (state == WIRING_CANDIDATE_NONE) {
     Preferences prefs;
-    if (prefs.begin(NVS_NAMESPACE, false)) {
-      bool cleaned = finalizeCommittedPromotion(prefs);
-      prefs.end();
-      if (!cleaned) {
-        applyDefaultRuntimeConfig(config);
-        ensureDefaultZone(config);
-        result.ok = true;
-        result.safeMode = true;
-        result.source = SOURCE_DEFAULTS;
-        setRuntimeLoadTruth(config, result, false, false, true);
-        result.message = "candidate metadata corrupt: committed cleanup failed; safe defaults loaded";
-        return result;
-      }
+    if (!prefs.begin(NVS_NAMESPACE, false)) {
+      applyDefaultRuntimeConfig(config);
+      ensureDefaultZone(config);
+      result.ok = true;
+      result.safeMode = true;
+      result.source = SOURCE_DEFAULTS;
+      setRuntimeLoadTruth(config, result, false, false, true);
+      result.message = "nvs committed cleanup open failed; safe defaults loaded";
+      return result;
+    }
+    bool cleaned = finalizeCommittedPromotion(prefs);
+    prefs.end();
+    if (!cleaned) {
+      applyDefaultRuntimeConfig(config);
+      ensureDefaultZone(config);
+      result.ok = true;
+      result.safeMode = true;
+      result.source = SOURCE_DEFAULTS;
+      setRuntimeLoadTruth(config, result, false, false, true);
+      result.message = "candidate metadata corrupt: committed cleanup failed; safe defaults loaded";
+      return result;
     }
   }
 
   if (state == WIRING_CANDIDATE_BOOTING) {
-    if (loadNvsConfigKeyStrict(NVS_CANDIDATE_CONFIG_KEY, config, message)) {
+    bool candidateValid = false;
+    ProvisioningStorageState candidateState = loadNvsConfigKeyStrict(
+        NVS_CANDIDATE_CONFIG_KEY, config, candidateValid, message);
+    if (provisioningStorageReadFailed(candidateState)) {
+      applyDefaultRuntimeConfig(config);
+      ensureDefaultZone(config);
+      result.ok = true;
+      result.safeMode = true;
+      result.source = SOURCE_DEFAULTS;
+      setRuntimeLoadTruth(config, result, false, false, true);
+      result.message = message + "; safe defaults loaded";
+      return result;
+    }
+    if (candidateState == ProvisioningStorageState::Present && candidateValid) {
       Preferences prefs;
       bool marked = prefs.begin(NVS_NAMESPACE, false) &&
                     writeCandidateState(prefs, WIRING_CANDIDATE_AWAITING_CONFIRMATION);
@@ -1164,8 +1215,20 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
     }
   }
 
-  bool knownGoodPresent = nvsConfigKeyHasValue(NVS_KNOWN_GOOD_CONFIG_KEY);
-  if (loadNvsConfigKeyStrict(NVS_KNOWN_GOOD_CONFIG_KEY, config, message)) {
+  bool knownGoodValid = false;
+  ProvisioningStorageState knownGoodState = loadNvsConfigKeyStrict(
+      NVS_KNOWN_GOOD_CONFIG_KEY, config, knownGoodValid, message);
+  if (provisioningStorageReadFailed(knownGoodState)) {
+    applyDefaultRuntimeConfig(config);
+    ensureDefaultZone(config);
+    result.ok = true;
+    result.safeMode = true;
+    result.source = SOURCE_DEFAULTS;
+    setRuntimeLoadTruth(config, result, false, false, true);
+    result.message = message + "; safe defaults loaded";
+    return result;
+  }
+  if (knownGoodState == ProvisioningStorageState::Present && knownGoodValid) {
     overlayNvsWifi(config);
     ensureDefaultZone(config);
     result.ok = true;
@@ -1175,7 +1238,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
     return result;
   }
 
-  if (knownGoodPresent) {
+  if (knownGoodState == ProvisioningStorageState::Present) {
     // A present-but-invalid canonical slot is corruption, not absence. Do not
     // silently boot SD or reconnect using saved WiFi: use compiled-safe wiring
     // and the setup AP so recovery remains local and deterministic.
@@ -1189,13 +1252,25 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
     return result;
   }
 
+  if (!provisioningMayFallBackToSd(migrationState, knownGoodState)) {
+    applyDefaultRuntimeConfig(config);
+    ensureDefaultZone(config);
+    result.ok = true;
+    result.safeMode = true;
+    result.source = SOURCE_DEFAULTS;
+    setRuntimeLoadTruth(config, result, false, false, true);
+    result.message = "known-good storage changed during boot; safe defaults loaded";
+    return result;
+  }
+
   if (loadSdConfig(config, message)) {
     overlayNvsWifi(config);
     ensureDefaultZone(config);
     result.ok = true;
     result.source = SOURCE_SD;
-    setRuntimeLoadTruth(config, result, true, true, false);
-    result.message = message;
+    bool sdKnownGood = provisioningSdProjectKnownGood(true, false);
+    setRuntimeLoadTruth(config, result, true, sdKnownGood, false);
+    result.message = "strict SD project loaded without persisted identity acceptance";
     return result;
   }
   applyDefaultRuntimeConfig(config);

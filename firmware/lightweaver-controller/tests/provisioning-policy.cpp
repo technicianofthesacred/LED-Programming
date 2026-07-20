@@ -41,6 +41,25 @@ int main() {
   readiness.phase = ProvisioningPhase::Recovering;
   assert(!provisioningCommandReady(readiness));
 
+  assert(provisioningControlAdmitted(true));
+  assert(!provisioningControlAdmitted(false));
+
+  assert(provisioningStorageReadFailed(ProvisioningStorageState::Error));
+  assert(!provisioningStorageReadFailed(ProvisioningStorageState::Absent));
+  assert(!provisioningStorageReadFailed(ProvisioningStorageState::Present));
+  assert(provisioningMayFallBackToSd(
+      ProvisioningStorageState::Absent, ProvisioningStorageState::Absent));
+  assert(!provisioningMayFallBackToSd(
+      ProvisioningStorageState::Error, ProvisioningStorageState::Absent));
+  assert(!provisioningMayFallBackToSd(
+      ProvisioningStorageState::Absent, ProvisioningStorageState::Error));
+  assert(!provisioningMayFallBackToSd(
+      ProvisioningStorageState::Present, ProvisioningStorageState::Absent));
+  assert(!provisioningSdProjectKnownGood(true, false));
+  assert(!provisioningSdProjectKnownGood(false, true));
+  assert(provisioningSdProjectKnownGood(true, true));
+  assert(provisioningPhaseForLoad(true, false, false) == ProvisioningPhase::Recovering);
+
   assert(isApprovedProvisioningOutputGpio(16));
   assert(isApprovedProvisioningOutputGpio(17));
   assert(isApprovedProvisioningOutputGpio(18));
@@ -76,5 +95,19 @@ int main() {
   assert(provisioningLookStepChangesSelection(3, 0, -1));
   assert(!provisioningLookStepChangesSelection(3, 3, 1));
   assert(!provisioningLookStepChangesSelection(3, 0, 0));
+
+  assert(!provisioningCancelStreamEffective(false, false));
+  assert(!provisioningCancelStreamEffective(true, false));
+  assert(provisioningCancelStreamEffective(true, true));
+  assert(!provisioningControlAdvancesRevision(
+      false, ProvisioningOutputScope::AllOutputs, 1));
+  assert(!provisioningControlAdvancesRevision(
+      true, ProvisioningOutputScope::None, 1));
+  assert(!provisioningControlAdvancesRevision(
+      true, ProvisioningOutputScope::AllOutputs, 0));
+  assert(provisioningControlAdvancesRevision(
+      true, ProvisioningOutputScope::SelectedZones, 1));
+  assert(provisioningControlAdvancesRevision(
+      true, ProvisioningOutputScope::AllOutputs, 2));
   return 0;
 }

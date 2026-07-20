@@ -29,6 +29,12 @@ enum class ProvisioningOutputScope : uint8_t {
   AllOutputs = 2,
 };
 
+enum class ProvisioningStorageState : uint8_t {
+  Absent = 0,
+  Present = 1,
+  Error = 2,
+};
+
 struct ProvisioningOperationScopeInputs {
   bool globalOutputs = false;
   bool selectedZones = false;
@@ -59,6 +65,38 @@ constexpr bool provisioningCommandReady(const ProvisioningReadinessInputs& input
          input.webServing &&
          input.outputReady &&
          !input.transitionPending;
+}
+
+constexpr bool provisioningControlAdmitted(bool commandReady) {
+  return commandReady;
+}
+
+constexpr bool provisioningStorageReadFailed(ProvisioningStorageState state) {
+  return state == ProvisioningStorageState::Error;
+}
+
+constexpr bool provisioningMayFallBackToSd(ProvisioningStorageState migrationState,
+                                           ProvisioningStorageState knownGoodState) {
+  return migrationState == ProvisioningStorageState::Absent &&
+         knownGoodState == ProvisioningStorageState::Absent;
+}
+
+constexpr bool provisioningSdProjectKnownGood(bool strictConfigValid,
+                                              bool exactIdentityAccepted) {
+  return strictConfigValid && exactIdentityAccepted;
+}
+
+constexpr bool provisioningCancelStreamEffective(bool cancelRequested,
+                                                 bool streamActive) {
+  return cancelRequested && streamActive;
+}
+
+constexpr bool provisioningControlAdvancesRevision(bool commandAdmitted,
+                                                   ProvisioningOutputScope scope,
+                                                   size_t affectedOutputCount) {
+  return commandAdmitted &&
+         scope != ProvisioningOutputScope::None &&
+         affectedOutputCount > 0;
 }
 
 inline bool isApprovedProvisioningOutputGpio(uint8_t gpio) {

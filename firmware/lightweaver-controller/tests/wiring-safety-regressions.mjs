@@ -29,10 +29,10 @@ test('creative save cannot replace known-good during a wiring transaction', () =
 test('persisted boot configs are strict and malformed known-good enters setup safe mode', () => {
   assert.match(storage, /loadNvsConfigKeyStrict\(/);
   const loadBody = body(storage, 'RuntimeLoadResult loadRuntimeConfig(', 'bool saveRuntimeConfigJson(');
-  assert.match(loadBody, /loadNvsConfigKeyStrict\(NVS_CANDIDATE_CONFIG_KEY/);
-  assert.match(loadBody, /loadNvsConfigKeyStrict\(NVS_KNOWN_GOOD_CONFIG_KEY/);
-  assert.match(loadBody, /knownGoodPresent[\s\S]*applyDefaultRuntimeConfig[\s\S]*safeMode\s*=\s*true/);
-  const malformedBranch = loadBody.slice(loadBody.indexOf('if (knownGoodPresent'), loadBody.indexOf('if (loadSdConfig'));
+  assert.match(loadBody, /loadNvsConfigKeyStrict\(\s*NVS_CANDIDATE_CONFIG_KEY/);
+  assert.match(loadBody, /loadNvsConfigKeyStrict\(\s*NVS_KNOWN_GOOD_CONFIG_KEY/);
+  assert.match(loadBody, /knownGoodState\s*==\s*ProvisioningStorageState::Present[\s\S]*applyDefaultRuntimeConfig[\s\S]*safeMode\s*=\s*true/);
+  const malformedBranch = loadBody.slice(loadBody.indexOf('if (knownGoodState == ProvisioningStorageState::Present)'), loadBody.indexOf('if (!provisioningMayFallBackToSd'));
   assert.doesNotMatch(malformedBranch, /overlayNvsWifi/);
   assert.match(header, /bool safeMode = false;/);
 });

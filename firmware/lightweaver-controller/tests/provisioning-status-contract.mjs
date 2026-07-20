@@ -8,6 +8,7 @@ const types = read('src/LightweaverTypes.h');
 const storageHeader = read('src/LightweaverStorage.h');
 const storage = read('src/LightweaverStorage.cpp');
 const runtimeApi = read('src/LightweaverRuntimeApi.h');
+const policy = read('src/LightweaverProvisioningPolicy.h');
 const main = read('src/main.cpp');
 const web = read('src/LightweaverWeb.cpp');
 
@@ -40,15 +41,34 @@ for (const field of ['configValid', 'knownGoodProject', 'runtimePhase']) {
 }
 
 const load = functionBody(storage, /RuntimeLoadResult\s+loadRuntimeConfig\s*\(/);
+const loadSd = functionBody(storage, /bool\s+loadSdConfig\s*\(/);
 const supportedOutputPin = functionBody(storage, /bool\s+supportedOutputPin\s*\(/);
 assert.match(supportedOutputPin, /isApprovedProvisioningOutputGpio\s*\(/,
   'runtime config output validation must use the shared approved GPIO policy');
 assert.doesNotMatch(supportedOutputPin, /38|39|40|48/,
   'production runtime configs must reject legacy discovery-only GPIOs');
-assert.match(load, /loadNvsConfigKeyStrict\(NVS_KNOWN_GOOD_CONFIG_KEY[\s\S]*setRuntimeLoadTruth\(config, result, true, true, false\)/,
+assert.match(load, /loadNvsConfigKeyStrict\(\s*NVS_KNOWN_GOOD_CONFIG_KEY[\s\S]*setRuntimeLoadTruth\(config, result, true, true, false\)/,
   'successfully parsed canonical known-good NVS must become known-good truth');
-assert.match(load, /loadSdConfig\([\s\S]*setRuntimeLoadTruth\(config, result, true, true, false\)/,
-  'an explicitly accepted SD project must become known-good truth');
+assert.match(loadSd, /validateRuntimeConfigJsonStrict\s*\(/,
+  'SD projects must pass the same strict runtime validation as persisted configs');
+assert.match(loadSd, /validateRuntimeConfigJsonStrict\(json, config, message, SOURCE_SD\)/,
+  'strict SD parsing must retain SD-specific runtime defaults and behavior');
+assert.match(loadSd, /config\.source\s*=\s*SOURCE_SD/,
+  'strict SD validation must preserve SD source and project identity for diagnosis');
+assert.match(load, /loadSdConfig\([\s\S]*provisioningSdProjectKnownGood\(true, false\)[\s\S]*setRuntimeLoadTruth\(config, result, true, sdKnownGood, false\)/,
+  'an unaccepted SD file may be playable but must not claim known-good readiness');
+assert.match(policy, /enum class ProvisioningStorageState[\s\S]*Absent[\s\S]*Present[\s\S]*Error/,
+  'persisted config access must distinguish absent, present, and storage errors');
+assert.match(storage, /ProvisioningStorageState\s+migrateLegacyKnownGood\s*\(/,
+  'legacy migration must return tri-state storage truth');
+assert.match(storage, /ProvisioningStorageState\s+loadNvsConfigKeyStrict\s*\(/,
+  'strict NVS reads must return tri-state storage truth');
+assert.match(load, /migrationState[\s\S]*provisioningStorageReadFailed\(migrationState\)[\s\S]*safeMode\s*=\s*true[\s\S]*return result/,
+  'migration/open failure must enter safe recovery before any SD fallback');
+assert.match(load, /knownGoodState[\s\S]*provisioningStorageReadFailed\(knownGoodState\)[\s\S]*safeMode\s*=\s*true[\s\S]*return result/,
+  'known-good read failure must enter safe recovery before any SD fallback');
+assert.match(load, /provisioningMayFallBackToSd\(migrationState, knownGoodState\)/,
+  'production SD fallback must be linked to the native-tested storage policy');
 for (const corruptMessage of [
   'candidate metadata corrupt',
   'candidate rollback failed',
@@ -130,6 +150,32 @@ for (const source of [affectedOutputCount, affectedOutputId]) {
 }
 
 const control = functionBody(web, /void\s+handleControlPost\s*\(/);
+const commandGate = control.indexOf('provisioningControlAdmitted(runtimeCommandReady())');
+const deserialize = control.indexOf('deserializeJson(');
+assert.ok(commandGate !== -1 && commandGate < deserialize,
+  'control admission must reject an unready card before parsing or applying intent');
+for (const field of ['cardId', 'bootId', 'runtimePhase', 'commandReady']) {
+  assert.match(control.slice(commandGate, deserialize), new RegExp(`rejected\\["${field}"\\]\\s*=`),
+    `unready control rejection must report ${field}`);
+}
+assert.match(control.slice(commandGate, deserialize), /server\.send\((409|423)[\s\S]*return;/,
+  'unready control requests must return a lock/conflict response immediately');
+assert.doesNotMatch(control.slice(commandGate, deserialize), /stateRevision|confirmedRevision|runtimeAdvanceStateRevision/,
+  'unready control rejection must not echo or advance revisions');
+for (const handlerName of [
+  'handleConfigPost',
+  'handleWiringCandidate',
+  'handleWiringActivate',
+  'handleWiringConfirm',
+  'handleWiringRollback',
+  'handleWiringDiscover',
+  'handleRecoverLights',
+]) {
+  const provisioningHandler = functionBody(
+      web, new RegExp(`void\\s+${handlerName}\\s*\\(`));
+  assert.doesNotMatch(provisioningHandler, /runtimeCommandReady|provisioningControlAdmitted/,
+    `${handlerName} must remain available while runtime control is locked`);
+}
 assert.match(control, /colorOrder[\s\S]*400[\s\S]*invalid color order/,
   'invalid live color order must receive a 4xx acknowledgement');
 assert.match(control, /runtimeControlTargetExists\s*\([\s\S]*422/,
@@ -147,8 +193,14 @@ assert.match(control, /nextCanChange\s*=\s*nextRequested\s*&&\s*runtimeCanStepPa
   'next must be preflighted before it contributes output scope');
 assert.match(control, /previousCanChange\s*=\s*previousRequested\s*&&\s*runtimeCanStepPattern\(-1\)/,
   'previous must be preflighted before it contributes output scope');
+assert.match(control, /cancelStreamEffective\s*=\s*provisioningCancelStreamEffective\(\s*cancelStreamRequested,\s*runtimeIsStreaming\(\)\)/,
+  'cancel stream scope must derive from a native-tested live-stream preflight');
 assert.match(control, /scopeInputs\.globalOutputs\s*=\s*colorOrderRequested[\s\S]*nextCanChange[\s\S]*previousCanChange[\s\S]*patternAffectsAllOutputs/,
   'only effective loaded-look steps may promote mixed commands to all-output scope');
+assert.match(control, /scopeInputs\.globalOutputs\s*=[^;]*cancelStreamEffective/,
+  'only an active-stream cancellation may promote mixed commands to all-output scope');
+assert.doesNotMatch(control, /scopeInputs\.globalOutputs\s*=[^;]*cancelStreamRequested/,
+  'a no-op cancel request must not create all-output scope by presence alone');
 assert.doesNotMatch(control, /scopeInputs\.globalOutputs\s*=\s*[^;]*nextRequested/,
   'a no-op next request must not create all-output scope by presence alone');
 assert.match(control, /if\s*\(nextCanChange\)\s*runtimeNextPattern\(\)/,
@@ -163,6 +215,10 @@ assert.match(control, /ProvisioningOutputScope\s+operationScope\s*=\s*provisioni
   'mixed command scope must be the policy union of requested operations');
 assert.match(control, /runtimeAffectedOutputCount\(zoneTarget, effectiveSyncZones, operationScope\)/,
   'preflight must use operation-specific prospective scope');
+assert.match(control, /provisioningControlAdvancesRevision\(\s*true,\s*operationScope,\s*preflightAffectedOutputCount\)/,
+  'zero-effect rejection and revision admission must use the native-tested effect policy');
+assert.match(control, /if\s*\(cancelStreamEffective\)\s*runtimeCancelStream\(\)/,
+  'standalone no-op cancel must not mutate the frame source');
 const zeroEffectReject = control.indexOf('command affects zero outputs');
 assert.ok(zeroEffectReject !== -1 && zeroEffectReject < control.indexOf('runtimeNextPattern()') &&
     zeroEffectReject < control.indexOf('runtimeAdvanceStateRevision()'),
@@ -173,5 +229,8 @@ assert.ok(
   control.indexOf('runtimeAdvanceStateRevision()') < control.indexOf('out["confirmedRevision"]'),
   'caller revision compatibility may be emitted only alongside the prior card-owned applied-state revision',
 );
+
+assert.match(setup, /startLook\(currentLookIndex\)[\s\S]*startWiringProbation\(loadResult\.bootedCandidate\)/,
+  'candidate physical startup frame must remain independent from the web command-admission gate');
 
 console.log('firmware provisioning status contract tests passed');
