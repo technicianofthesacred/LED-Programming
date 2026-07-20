@@ -1,235 +1,99 @@
-# Lightweaver Card Provisioning — New Card Checklist
+# Lightweaver new-card checklist
 
-Use this checklist to commission a blank Lightweaver card for a customer. Follow each step in order; if anything goes wrong, note the failure and refer to the "Troubleshooting" section at the end.
+Use this checklist for every card. Work on **one card at a time** in desktop Chrome or Edge. The operator—not Studio—must look at the real LEDs and answer the light-check questions.
 
----
+## Before starting
 
-## Part 1: Flash Firmware
+- [ ] Open the verified artwork/job in Lightweaver Studio.
+- [ ] Disconnect every other Lightweaver card from USB and power.
+- [ ] Connect the LED strip to its correct power supply. USB power for the ESP32 does **not** power a 12 V strip.
+- [ ] Check that card ground and LED-power ground are connected, and that data goes to the strip's **DATA IN** end.
+- [ ] Keep the finished card's label available so you can compare its card ID.
 
-### What you need
-- A blank ESP32-S3 Lightweaver card
-- A computer with Studio open (`led.mandalacodes.com` or local http://localhost:9999)
-- A USB data cable
+**STOP:** Do not improvise when Studio shows **Checking card**, **Found — pair**, **Needs project**, **Card stopped responding**, **Wrong card**, or a recovery code. None of those means ready.
 
-### Steps
+## 1. Select and flash the exact USB card
 
-**[ ]** Plug the card into the computer via USB cable (data, not power-only).
+- [ ] In Studio, open **Production setup** and wait for the artwork and official signed firmware to be verified.
+- [ ] Click **Connect one USB card**. In the browser chooser, select the only ESP32-S3 shown.
+- [ ] Confirm Studio displays the card ID you intend to build. If more than one USB card appears, cancel and disconnect the others.
+- [ ] Follow the displayed action. If Studio offers **Install verified firmware**, reconnect the same USB card and install it.
+- [ ] Wait through USB release and restart. A completed progress bar proves only that bytes were transferred.
+- [ ] Continue only after Studio reads the same card ID and the exact signed firmware version/build back from the restarted card.
 
-**[ ]** In Studio, open the **"Pair & Install"** panel on the left.
+**STOP:** Wrong/missing card ID, wrong firmware build, interrupted flash, unconfirmed USB release, or a transfer without post-restart read-back is not a successful flash.
 
-**[ ]** Click **"Choose USB card"**.
+## 2. Witness the blank-card beacon and set up Wi-Fi
 
-**[ ]** A dialog lists all connected USB devices. Select the correct card (labeled "Lightweaver" or "ESP32").
+- [ ] With LED power on, watch for **eight dim amber pixels, two short pulses**. A blank card cycles the safe outputs, so allow about 10 seconds for two complete cycles.
+- [ ] Treat this only as proof that the blank firmware, strip power, common ground, and a supported data path are alive. The ESP32's green board LED proves power only.
+- [ ] Confirm Studio says **Blank — load a project** or **Needs project**. A factory card must never be shown as green/connected-ready.
+- [ ] Join the card's `Lightweaver-XXXX` Wi-Fi and open `http://192.168.4.1` if the setup page does not appear automatically.
+- [ ] Enter the workshop/gallery Wi-Fi details. When the setup hotspot drops, return the computer to that same workshop/gallery network.
+- [ ] Leave Studio open. It should find the **same card ID** on the LAN and continue automatically.
+- [ ] If automatic return times out, enter the card's shown hostname or IP in **Card address**, reopen the card page, and retry. Do not keep using `192.168.4.1` after the card has left setup mode.
 
-> **Stuck here?** If you see no devices, try unplugging and re-plugging the USB cable. If it still doesn't appear, the card may be in DFU mode already — proceed anyway.
+**STOP:** No amber beacon after two complete cycles, failure to rejoin the LAN, or a different card ID requires recovery. Do not call the green board LED a light-test pass.
 
-**[ ]** Click **"Install current Lightweaver firmware"**.
+## 3. Find, then pair, the LAN card
 
-**[ ]** Wait for the progress bar to finish. The status should change to **"Firmware installed, card ready"**.
+- [ ] If Studio says **Found — pair**, compare the displayed card ID with the USB-inspected ID and the physical label.
+- [ ] Only after all three match, click **Connect** / **Pair this card**.
+- [ ] Pairing and discovery are separate facts: **Found — pair** means reachable but unpaired, not connected and not command-ready.
+- [ ] After pairing, confirm the card still says **Blank — load a project** / **Needs project** until its project is independently installed and read back.
 
-> **Stuck here?** If the install times out or fails:
-> - Note the error message.
-> - Unplug the USB cable and wait 5 seconds.
-> - Plug it back in and try again.
-> - If it fails twice, the card may need recovery (see Troubleshooting).
+**STOP:** Never adopt a different discovered card to finish the current run. Reconnect the expected card instead.
 
-**[ ]** Unplug the USB cable from the card. (Leave it plugged into the computer if running through Part 2 immediately; power the card separately if needed.)
+## 4. Load the project and discover the LED output
 
----
+- [ ] Click **Load verified artwork** / **Install your project** once.
+- [ ] Wait for Studio's independent read-back of the same card ID, firmware build, job/project revision, fingerprint, and wiring revision. A POST/upload acknowledgement alone is not a pass.
+- [ ] Start **Find LED wire**. Studio tests the approved outputs one at a time, in this order:
 
-## Part 2: Join the Card to Home WiFi
+  1. GPIO 16
+  2. GPIO 17
+  3. GPIO 18
+  4. GPIO 21
 
-### What you need
-- The card (unplugged from USB, powered on)
-- A phone or laptop
-- The home/gallery WiFi name (SSID) and password
+- [ ] For each pin, look at the real strip and answer **This strip lit** or **No light**. At most one pin is driven at a time; do not skip ahead or enter an unlisted GPIO.
+- [ ] Record the first pin that produces the eight-pixel, two-pulse amber signal. Continue with only that pin.
 
-### Steps
+**STOP:** If none of GPIO 16/17/18/21 lights, check strip voltage, common ground, DATA IN direction, and connectors. Do not save a guessed pin.
 
-**[ ]** Power on the card (via barrel jack or USB power).
+## 5. Test the temporary project, then confirm it
 
-**[ ]** Wait 5 seconds for the card to boot.
+- [ ] Let Studio stage the project with the observed GPIO and reboot the card into its temporary **90-second test**. This is probation, not known-good.
+- [ ] Wait for the exact staged candidate and activation ID to be read back after restart.
+- [ ] Inspect the **full physical strip**: first pixel blue, last expected pixel red, dim pixels between, correct length, direction, colors, and only the intended output lit.
+- [ ] If every visible fact is correct, click **Yes, this boundary is correct** / **Lights confirmed** before the timer ends.
+- [ ] Wait for Studio to read the exact wiring back as **known-good**. The human **yes** is required; Studio has no light sensor and cannot see the strip.
+- [ ] If anything is wrong, choose the matching on-screen failure. Let Studio roll back or click **Restore last confirmed wiring**. Repeat the test; never confirm merely because Studio says a frame was delivered.
 
-**[ ]** On your phone/laptop, open the WiFi list. Look for a network named **"Lightweaver-XXXXX"** (where XXXXX is a code).
+**STOP:** A staged/testing candidate, expired timer, unproven rollback, wrong color/count/direction/output, flashing/frozen strip, or partial illumination is not shippable.
 
-**[ ]** Join the Lightweaver network (no password required).
+## 6. Prove restart and live command readiness
 
-**[ ]** A web page should appear automatically (the captive portal). If not, open your browser and go to **`192.168.4.1`**.
+- [ ] Power the card and strip off, wait five seconds, then power them on again.
+- [ ] Confirm the full project returns automatically on the same physical strip.
+- [ ] Wait while Studio changes from **Card restarted — verifying** / **Checking card** to its final ready state.
+- [ ] Studio must receive **two stable, complete readiness checks** for the same card, new boot, signed firmware build, known-good project, and initialized output.
+- [ ] Run the final harmless light command and require its acknowledgement from that exact card/boot/output. Look at the strip and confirm it visibly responds.
+- [ ] Save the pass record only after Studio enables completion and every physical boundary is checked.
 
-**[ ]** On the captive portal:
-  - Enter your home/gallery WiFi network name (SSID).
-  - Enter the WiFi password.
-  - Click **"Connect"**.
+**STOP:** If the card resets, disappears, changes boot again, loses the card page, returns blank, or fails the command acknowledgement, Studio must demote it. Reconnect and repeat this section; never accept a stale green state.
 
-**[ ]** The portal shows **"Connected! Return to Studio"**.
+## 7. Finish this card and clear the station
 
-**[ ]** Disconnect from the Lightweaver WiFi. Re-join your home network on your phone/laptop.
+- [ ] Confirm the pass record contains the expected card ID, signed firmware build, job/project identity, known-good wiring, GPIO, pixel count, and physical confirmations.
+- [ ] Label and pack the card only while Studio shows the verified ready/pass state.
+- [ ] Click **Next Card** (older builds may say **Next artwork**).
+- [ ] Confirm the previous card ID, boot ID, command/activation acknowledgements, observations, recovery state, and green status are gone. In batch mode, only the selected immutable job may remain.
+- [ ] Disconnect the finished card before connecting the next blank card.
 
-> **Optional:** The card will also show its IP address on the portal page. Note it if the card doesn't have mDNS support on your network.
+## LAN control path
 
-**[ ]** In Studio, the card should automatically detect that it joined home WiFi and advance to the next step.
+- Public Studio at `https://led.mandalacodes.com` controls a LAN card through the card page's HTTPS-to-local bridge. Keep that local card page open; reopening a page does not itself prove pairing or readiness.
+- Studio served locally over plain `http` can use direct HTTP to the card. It must pass the same identity, two-envelope readiness, read-back, and command-acknowledgement gates.
+- USB flashing must run in the secure top-level Production setup page. Neither transport may turn reachability alone into **Connected** or **Success**.
 
-> **Stuck here?** If Studio doesn't auto-advance after 30 seconds:
-> - Click **"Try again"** in Studio.
-> - If the card still doesn't appear, note the card's IP address from the portal and enter it manually in Studio's **"Card address"** field.
-
----
-
-## Part 3: Pair the Card in Studio
-
-### What you need
-- The card now on home WiFi
-- Studio (same network)
-
-### Steps
-
-**[ ]** In Studio, the status should show **"Found — pair"** or **"Card is blank"**.
-
-**[ ]** Click **"Connect"** (or **"Install project"** if the card is blank).
-
-**[ ]** Studio displays the card's name and ID. Verify it matches the label on the card.
-
-**[ ]** Click **"Pair this card"** to confirm.
-
-**[ ]** Status changes to **"Paired — send project"**.
-
-> **Stuck here?** If pairing fails:
-> - Check that the card is still on the home WiFi (join the Lightweaver AP again if needed to verify the card is reachable).
-> - Try unplug/replug the card's power and pair again.
-
----
-
-## Part 4: Install the Project
-
-### What you need
-- The paired card
-- A Lightweaver project already open in Studio (strips, zones, wiring configured)
-
-### Steps
-
-**[ ]** In Studio, with the card paired, click **"Install your project"** (or **"Send to card"**).
-
-**[ ]** Status shows **"Installing…"** for a few seconds.
-
-**[ ]** Status changes to **"Project installed"** and shows a revision number.
-
-> **Stuck here?** If the install fails:
-> - Check the error message in Studio.
-> - Power-cycle the card (unplug 5 seconds, plug back in).
-> - Try installing again.
-> - If it fails twice, the card may need recovery (see Troubleshooting).
-
----
-
-## Part 5: Light Check (Verify Wiring)
-
-### What you need
-- The card with project installed
-- The physical LED strip wired to the card's GPIO output
-- Power for the LED strip (barrel jack or battery)
-
-### Steps
-
-**[ ]** In Studio, with the project installed, click **"Test lights"** (or **"Wire & Test"**).
-
-**[ ]** A panel shows the available GPIO outputs. Select the GPIO where you wired the LED strip.
-
-**[ ]** Click **"Send test pattern"**.
-
-**[ ]** Watch the LED strip. You should see:
-  - **Success:** The strip lights up with a dim pulse or test color.
-  - **No lights:** The wiring is on the wrong GPIO or the strip is not powered.
-
-**[ ]** If the strip lit up:
-  - Click **"Lights confirmed"** in Studio.
-  - Status changes to **"Ready to hand off"**.
-
-**[ ]** If the strip didn't light up:
-  - Click **"Try a different GPIO"** and test each GPIO until you find the right one.
-  - Once you find it, update the project in Studio to use the correct GPIO.
-  - Send the project to the card again and re-run the light test.
-
-> **Stuck here?** If no GPIO lights the strip:
-> - Check that the LED strip is powered and the power connector is secure.
-> - Check that the GPIO pin and GND are securely connected to the strip.
-> - Verify the strip's data line is connected (usually a 3-wire or 4-wire connector).
-> - Power-cycle the card and try again.
-
----
-
-## Part 6: Handoff
-
-### What you need
-- The verified card (project installed, lights working)
-- The printable "Lightweaver Handoff Card" (a QR code + recovery instructions)
-
-### Steps
-
-**[ ]** Print a copy of the handoff card (see the template in Lightweaver docs).
-
-**[ ]** Write the card's name (from Studio) and the WiFi SSID on the card.
-
-**[ ]** Hand both the card and the printable handoff to the customer.
-
-**[ ]** Explain briefly:
-  - "Join the WiFi network listed on this card."
-  - "Scan the QR code to access the support page."
-  - "Visit led.mandalacodes.com if you ever need help."
-
----
-
-## Troubleshooting
-
-### Card doesn't appear as a USB device after flashing
-- **First try:** Unplug USB, wait 5 seconds, plug back in.
-- **Second try:** Use a different USB port or cable.
-- **If still stuck:** The card may be in DFU bootloader mode (a recovery state). Try the recovery procedure below.
-
-### Firmware installation keeps timing out
-- Check the USB cable is a **data cable** (power-only cables don't work).
-- Try a different USB port on the computer.
-- If the install completes but the card doesn't respond afterward, see **"Card doesn't appear on WiFi"** below.
-
-### Card doesn't appear on WiFi after flashing
-- **First try:** Wait 30 seconds after unplugging USB for the card to boot.
-- **Second try:** Power-cycle the card (unplug barrel jack, wait 5 seconds, plug back in).
-- **If still stuck:** The card may have corrupted firmware. Try re-flashing via USB.
-
-### Studio shows **"Card stopped responding"** after it was working
-- The WiFi connection dropped. Power-cycle the card and wait for Studio to re-connect automatically (30 seconds).
-- If it doesn't reconnect, check that the home WiFi is still running and the card can reach it.
-
-### LED strip doesn't light up during the test
-- Verify the strip is powered (check the barrel jack or battery).
-- Try each GPIO in turn (see Part 5 step 3).
-- Verify the GPIO pin and GND are soldered securely to the strip's pads.
-- Check the data line is connected (if the strip has three or four wires).
-- If none of these work, the strip may have failed — try a replacement.
-
-### Card was working but then stopped after a few days
-- This is likely a WiFi connectivity issue, not a card failure.
-- Power-cycle the card (unplug for 10 seconds, plug back in).
-- If the customer moved the card, they may need to re-join the WiFi via the captive portal.
-- Check the WiFi network is still running and stable.
-
-### "Card needs recovery" message in Studio
-- The card's project got corrupted (rare). Follow these steps:
-  1. Unplug the card's power for 10 seconds.
-  2. Plug it back in and wait 5 seconds.
-  3. In Studio, click **"Recover card"** and follow the prompts.
-  4. The card will erase its stored project and return to factory defaults.
-  5. Go back to **Part 3** (pair the card) and re-install the project.
-
----
-
-## Success
-
-When you reach the end of **Part 6**, the card is ready for the customer. The green status in Studio confirms:
-- ✅ Firmware installed and verified
-- ✅ Paired to this Studio instance
-- ✅ Project installed and readable
-- ✅ Wiring tested and working
-- ✅ LEDs light up correctly
-
-Hand off the card and the printable recovery card. The customer's first experience should be: join WiFi, see the support page, and admire the lights.
-
+The card is ready to ship only when the real strip passed the full visual test after a power cycle, the exact configuration is known-good, Studio verified stable readiness, and the final command was acknowledged.
