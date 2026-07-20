@@ -582,6 +582,13 @@ Implement recording from known Studio render frames first. Card-side Art-Net-to-
 
 ## Task 17: Full verification, provenance, and release
 
+**Status 2026-07-21:** operator guidance, provenance, roadmap, TODO, and the
+deployment/physical acceptance gate are documented. Tasks 1–10 and 12–16 have
+source implementations on the isolated branch. Task 11's immutable handoff
+contract exists, but its visible Use in Project confirmation/persistence action
+remains open. Full integrated automation and real-card physical parity remain
+unchecked release gates below.
+
 **Files:**
 - Create: `docs/pattern-lab-user-guide.md`
 - Create: `docs/pattern-lab-algorithm-provenance.md`
@@ -623,11 +630,11 @@ On a real ESP32-S3 and mapped strip/artwork, verify:
 - Preview on Lights always stops and restores the previous state.
 - Power limiting, RGB order, gamma, and brightness remain correct.
 
-- [ ] **Step 6: Record provenance**
+- [x] **Step 6: Record provenance**
 
 For every adapted algorithm, record source URL, author, license, original identifier, changes, and Lightweaver file path. Do not ship unverified Pixelblaze, WLED, Shadertoy, Processing, p5.js, LEDFx, or xLights code.
 
-- [ ] **Step 7: Commit the verified documentation and release notes**
+- [x] **Step 7: Commit the verified documentation and release notes**
 
 ## Integration checkpoints
 

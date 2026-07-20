@@ -4,7 +4,7 @@
 
 Living source of truth for project work. Update as items move between sections.
 
-Last updated: 2026-07-18
+Last updated: 2026-07-21
 
 > **Current scope: ESP32-only.** The runtime is the Lightweaver card alone — it
 > serves its own branded page (the visitor UI) and the WLED API; the public
@@ -168,6 +168,30 @@ Pi hosting, fleet management, cloud catalogs, OTA updates, deeper WLED
 compatibility, and new Art-Net infrastructure remain deferred until a real
 installation cannot be completed safely without them.
 
+### Pattern Lab feature branch — source complete, release acceptance pending
+
+The isolated `codex/pattern-lab` branch now contains the separate, lazy-loaded
+Pattern Lab workspace. It makes deterministic five-to-fifteen-minute evolution
+available through five artistic controls, six evolution characters, seeded
+variations, optional three-layer composition, and five bounded living
+generators. Private drafts and recipe import/export remain separate from the
+active project.
+
+Delivery work on the branch includes opt-in **Preview on Lights** with card
+snapshot/rollback, deterministic physical-order `LWSEQ1` baking with canonical
+hash sidecars, local offline WAV feature lanes, xLights/MADRIX/Art-Net layout
+exports, disabled-by-default experimental gates, and a bounded ESP32-S3 native
+recipe v1 subset. The runtime remains ESP32-only; no Pi service was added.
+
+Source tests and focused checks exist, but this branch is **not physically
+accepted or deployed**. Before integration, complete the automated and
+real-card gates in the [Pattern Lab deployment checklist](deployment-checklist.md#pattern-lab-release-acceptance).
+Native preview/card parity, long microSD playback, rollback on the intended
+card, output color/calibration, and phone-on-LAN behavior remain required.
+The visible Use in Project confirmation/persistence surface is also still open;
+the current supported handoffs are private recipes, deterministic `.lwseq`,
+and lighting-software exports.
+
 ### Plan status
 
 - `2026-07-17-hardware-foundation.md`: superseded; do not execute.
@@ -245,6 +269,16 @@ through its own narrow, current-main branch and verification gate.
 - [x] Add current-limited one-boundary-at-a-time blue-first/red-last/dark-outside checks with explicit human confirmation and reboot-safe 90-second candidate rollback for count, direction, GPIO, and color order corrections.
 - [x] Add safe recovery classifications, one-action guidance, stable support codes, and bounded redacted diagnostic export.
 - [x] Add the no-code worker procedure in `docs/worker-flash-runbook.md` and separate the feature-branch source gate from the protected signed-firmware production gate.
+
+### Pattern Lab (source complete; release acceptance pending)
+
+- [x] Add a lazy-loaded, private Pattern Lab route without replacing or loading its runtime into existing Studio sections.
+- [x] Add easy five-to-fifteen-minute Long Evolution, seeded A/B variations, creative macros, bounded layers, worker rendering, and five living generators.
+- [x] Add local offline-audio lanes, explicit compatibility/resource diagnostics, deterministic physical-order `LWSEQ1` baking, and xLights/MADRIX/Art-Net exports.
+- [x] Add explicit Preview on Lights ownership and rollback plus a bounded ESP32-S3 native recipe parser/registry/capability surface.
+- [x] Keep graph, shader, and card Art-Net recording paths disabled by default and behind canonical artifact gates.
+- [ ] Connect the validated look/sequence handoff contract to a visible Use in Project confirmation and project persistence action.
+- [ ] Complete full automated verification and real ESP32-S3/strip physical parity before merge, signing, or deployment.
 
 ## Open — user/hardware actions
 

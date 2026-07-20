@@ -21,6 +21,16 @@ plan is a reference library, not one large job to execute.
 
 ## Soon
 
+### Pattern Lab release acceptance (feature branch source complete)
+
+- [ ] Wire the existing immutable handoff contract to a visible **Use in Project** confirmation that adds a new look or sequence asset without overwriting built-ins or saved looks.
+- [ ] Run the complete focused Pattern Lab, Studio, firmware, and launch checks from [the deployment checklist](docs/deployment-checklist.md#pattern-lab-release-acceptance) on the final integrated commit.
+- [ ] On a real ESP32-S3 and mapped strip, verify a ten-minute evolution, native recipe parity, full baked microSD playback, Preview on Lights rollback, pixel order, color order, gamma, brightness, and power limiting.
+- [ ] Verify the public Studio authoring flow on a phone and the local card command path while the phone and card share the installation LAN/AP; do not introduce a Pi or public-cloud command relay.
+- [ ] Merge, rebuild/sign firmware, and deploy only after those gates pass; the current feature branch is not a released or physically accepted build.
+
+Operator workflow and current limitations: [Pattern Lab operator guide](docs/pattern-lab-user-guide.md).
+
 ### Release coherence pass (before bench signoff and deployment)
 
 Run these against the fully integrated `main`; they are Phase 1 release work,

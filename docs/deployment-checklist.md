@@ -72,6 +72,80 @@ Run this before the controller leaves the bench, and again after any code, firmw
 - [ ] **Pi proxy sanity** (if Pi-hosted): on the Pi, confirm `curl http://localhost:3000/api/health` and `curl "http://localhost:3000/api/wled/info?ip=<wled-ip>"`.
 - [ ] **Controller record saved:** MAC address, final IP/hostname, pixel count, GPIO/output mapping, color order, brightness cap, and latest WLED/controller JSON snapshot.
 
+### Pattern Lab release acceptance
+
+Pattern Lab is a separate/private Studio workspace, but its delivery paths
+touch browser rendering, card streaming, microSD playback, physical wiring,
+and firmware capabilities. Complete this section on the final integrated
+commit before merging, signing, or deploying the feature.
+
+Automated source gate:
+
+- [ ] From `lightweaver/`, run:
+  `node --test src/lib/patternLab*.test.js src/lib/lwseqBake.test.js src/lib/offlineAudioLanes.test.js src/lib/xlightsExport.test.js src/lib/madrixPatchExport.test.js`.
+- [ ] Run:
+  `npx playwright test tests/pattern-lab-*.spec.ts --project=chromium --workers=1`.
+- [ ] Run `node tests/standalone-package-unpack.mjs`,
+  `node tests/card-frame-stream.mjs`, and
+  `node tests/card-live-preview.mjs`.
+- [ ] Run `npm run test:core`, `npm run build`, and
+  `npm run launch:check`.
+- [ ] From `firmware/lightweaver-controller/`, run
+  `pio test -e native` and `pio run`.
+- [ ] Confirm existing Patterns, Layout, Playlist, Show, Card, installer,
+  production, persistence, migration, and recovery suites still pass; Pattern
+  Lab must not weaken or replace those paths.
+
+Browser/operator gate:
+
+- [ ] Open `#screen=pattern-lab` on desktop and phone. Confirm the mapped
+  artwork remains usable, the phone control drawer is reachable, and leaving
+  the route disposes the worker without changing the active project.
+- [ ] Create and reopen a private ten-minute Slow Bloom draft, compare
+  Source/Draft, scrub Beginning/Middle/End, select a seeded variation, and
+  confirm there is no obvious short-loop reset.
+- [ ] Analyze a WAV locally. Confirm the recipe contains numeric lanes,
+  settings, and a fingerprint but no WAV bytes or upload; compatibility must
+  be **Bake to card**.
+- [ ] Bake the same canonical recipe/layout/seed/FPS twice and compare the
+  `.lwseq` bytes and sidecar hashes. Confirm cancel leaves no partial export and
+  unknown physical order or unresolved audio fails closed.
+- [ ] Export one xLights model, MADRIX fixture CSV, and Art-Net setup note;
+  compare their first/last pixels, outputs, universe/channel assignments, and
+  direction with the locked wiring map.
+- [ ] Confirm Advanced Graph, Shader Bake, and card Art-Net recording remain
+  disabled by default. Do not enable card-side recording for release.
+- [ ] Confirm the visible Use in Project confirmation adds a new asset and
+  never overwrites a built-in or existing look. Until that UI is connected,
+  recipe/`.lwseq` export is the supported handoff and the branch is not ready
+  for release.
+
+Physical ESP32-S3 gate — required; automation cannot replace it:
+
+- [ ] Connect the phone/Studio and card on the same installation LAN or the
+  card AP. Do not test through a public HTTPS-to-local HTTP assumption, cloud
+  relay, or Raspberry Pi; none is in the current runtime.
+- [ ] Run **Preview on Lights**, then Stop, navigate away, force one delivery
+  error, and supersede the stream from another tab. In every case confirm the
+  previous card zones/look are restored, or the documented safe fallback is
+  used when no snapshot exists.
+- [ ] Compare a representative native recipe with the mapped Studio preview:
+  geometry, seed, timing, palette, brightness, and motion must match. The
+  firmware capability descriptor must continue to report physical parity as
+  unverified until this evidence is recorded.
+- [ ] Play a complex baked recipe from microSD for its complete intended
+  duration. Verify exact physical order across every output, clean loop/end
+  behavior, stable frame rate, and no corruption after reboot/power loss.
+- [ ] Verify RGB/color order, gamma, white balance, brightness ceiling, current
+  limiting, temperature, networking, and SD stability on the intended supply
+  and pixel load.
+- [ ] Record card/build identity, recipe hash, physical-layout hash, `.lwseq`
+  hash, test layout, duration, and pass/fail evidence with the installation
+  record.
+
+See [the Pattern Lab operator guide](pattern-lab-user-guide.md) and
+[algorithm provenance](pattern-lab-algorithm-provenance.md).
+
 ### Workshop Production Setup acceptance
 
 The worker procedure is [worker-flash-runbook.md](worker-flash-runbook.md). Complete this gate before telling workers to use the production website.
