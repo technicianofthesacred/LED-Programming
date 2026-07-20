@@ -378,6 +378,135 @@
 
 .plab-advanced dd { color: var(--text-hi); font-family: var(--font-mono); }
 
+.plab-runtime-tools {
+  padding: 0 18px 18px;
+  border-bottom: 1px solid var(--border-hair);
+}
+
+.plab-runtime-tools > summary {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  color: var(--text-hi);
+  font-size: 11px;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.plab-runtime-tools-body {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm);
+  background: var(--bg-elev);
+}
+
+.plab-runtime-tools-body > .plab-control-section {
+  padding: 16px 14px;
+  border-bottom: 0;
+}
+
+.plab-compatibility-outcomes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  padding: 12px 14px 0;
+  list-style: none;
+}
+
+.plab-compatibility-outcomes li {
+  min-width: 0;
+  padding: 6px 7px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm);
+  color: var(--text-mid);
+  font-size: 9px;
+  text-align: center;
+}
+
+.plab-compatibility-outcomes li[aria-current="true"] {
+  border-color: var(--accent);
+  color: var(--text-hi);
+}
+
+.plab-export-status {
+  display: grid;
+  gap: 3px;
+  padding: 10px 11px;
+  border: 1px solid var(--border-soft);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-sm);
+  color: var(--text-mid);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.plab-export-status strong { color: var(--text-hi); font-size: 11px; }
+.plab-export-status[data-classification="live-on-card"] { border-left-color: var(--ok); }
+.plab-export-status[data-classification="studio-only"] { border-left-color: var(--danger); }
+
+.plab-export-budgets {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.plab-export-budgets > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  color: var(--text-mid);
+  font-size: 9.5px;
+}
+
+.plab-export-budgets dd { min-width: 0; color: var(--text-hi); font-family: var(--font-mono); text-align: right; }
+.plab-export-budgets dd span { color: var(--text-mid); }
+
+.plab-export-reasons,
+.plab-diagnostics section {
+  margin-top: 14px;
+  color: var(--text-mid);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.plab-export-reasons h3,
+.plab-diagnostics h3 { margin-bottom: 5px; color: var(--text-hi); font-size: 10.5px; }
+
+.plab-export-reasons ul,
+.plab-diagnostics ul { margin-left: 17px; }
+
+.plab-export-actions,
+.plab-diagnostic-playback,
+.plab-diagnostic-playback > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.plab-export-actions { margin-top: 12px; }
+.plab-export-actions .btn,
+.plab-diagnostic-playback .btn { min-height: 40px; }
+
+.plab-runtime-cleanup {
+  display: grid;
+  gap: 6px;
+  margin: 0 14px 14px;
+}
+
+.plab-runtime-cleanup .btn { min-height: 40px; justify-content: center; }
+.plab-runtime-cleanup small { color: var(--text-mid); font-size: 9.5px; line-height: 1.45; }
+
+.plab-diagnostics {
+  margin: 0 14px 14px;
+  padding-top: 0;
+}
+
+.plab-diagnostic-playback { justify-content: space-between; color: var(--text-mid); font-size: 10px; }
+.plab-diagnostic-playback strong { color: var(--text-hi); font-family: var(--font-mono); }
+
 .plab-switch-row {
   display: flex;
   align-items: center;
@@ -587,6 +716,7 @@
   .plab-control-heading,
   .plab-actions,
   .plab-private-library,
+  .plab-runtime-tools,
   .plab-import-errors,
   .plab-save-status { grid-column: 1 / -1; }
   .plab-control-body { border-right: 1px solid var(--border-hair); }
@@ -660,6 +790,7 @@
   .plab-control-body { border-right: 0; }
   .plab-control-section,
   .plab-private-library { padding: 18px 14px; }
+  .plab-runtime-tools { padding-inline: 14px; }
   .plab-actions { position: sticky; padding: 14px; }
   .plab-play { min-height: 44px; }
   .plab-actions .btn,
@@ -668,6 +799,9 @@
   .plab-private-library li button { min-height: 44px; }
   .plab-position-buttons .btn,
   .plab-ab-row .btn { min-height: 42px; }
+  .plab-export-actions .btn,
+  .plab-diagnostic-playback .btn,
+  .plab-runtime-cleanup .btn { min-height: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

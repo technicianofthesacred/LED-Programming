@@ -1,14 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { downloadJsonFile } from '../lib/downloadFile.js';
 import { PATTERN_LAB_BLEND_MODES } from '../lib/patternLabCompositor.js';
+import {
+  classifyPatternLabCompatibility,
+  createPatternLabDiagnosticsSnapshot,
+  createPatternLabSimplificationVariant,
+} from '../lib/patternLabCompatibility.js';
 import { PATTERN_LAB_EVOLUTION_CHARACTERS } from '../lib/patternLabEvolution.js';
+import { resolvePatternLabMacros } from '../lib/patternLabMacros.js';
 import { recipeFromPattern } from '../lib/patternLabPatternAdapter.js';
 import { normalizePatternLabRecipe } from '../lib/patternLabRecipe.js';
 import { readPatternLabDraftState, savePatternLabDraft } from '../lib/patternLabStorage.js';
+import { PATTERN_LAB_WORKER_BUDGETS } from '../lib/patternLabWorkerProtocol.js';
 import { isBuiltInPattern, listBuiltInPatterns } from '../lib/patternRegistry.js';
 import { useProject } from '../state/ProjectContext.jsx';
 import PatternLabControls from './PatternLabControls.jsx';
+import PatternLabDiagnostics from './PatternLabDiagnostics.jsx';
 import PatternLabEvolution from './PatternLabEvolution.jsx';
+import PatternLabExport from './PatternLabExport.jsx';
 import PatternLabLayers from './PatternLabLayers.jsx';
 import PatternLabPreview from './PatternLabPreview.jsx';
 import PatternLabVariants from './PatternLabVariants.jsx';
@@ -20,12 +29,93 @@ const WORKFLOW = [
   ['03', 'Evolve', 'Build a five-to-fifteen-minute journey.'],
   ['04', 'Save', 'Keep a private, repeatable variation.'],
 ];
+const COMPATIBILITY_OUTCOMES = [
+  ['live-on-card', 'Live on card'],
+  ['bake-to-card', 'Bake to card'],
+  ['simplify-for-card', 'Simplify for card'],
+  ['studio-only', 'Studio only'],
+];
 const MAX_IMPORT_BYTES = 256 * 1024;
 const MAX_IMPORT_NODES = 2000;
 const MAX_IMPORT_DEPTH = 12;
+const PATTERN_LAB_PREVIEW_FPS = PATTERN_LAB_WORKER_BUDGETS.previewFps;
 
 function cloneRecipe(recipe) {
   return JSON.parse(JSON.stringify(recipe));
+}
+
+function geometryPixelCount(geometry) {
+  if (!Array.isArray(geometry?.strips) || geometry.strips.length === 0) return null;
+  let count = 0;
+  for (const strip of geometry.strips) {
+    const value = Array.isArray(strip?.pixels) ? strip.pixels.length : Number(strip?.pixelCount);
+    if (!Number.isSafeInteger(value) || value < 0) return null;
+    count += value;
+    if (!Number.isSafeInteger(count)) return null;
+  }
+  return count > 0 ? count : null;
+}
+
+function hasKnownStatelessRuntime(recipe) {
+  if (recipe?.base?.kind !== 'lightweaver-pattern' || !isBuiltInPattern(recipe.base.patternId)) return false;
+  return (recipe.layers || []).every(layer => (
+    layer?.generator?.kind === 'lightweaver-pattern'
+      && isBuiltInPattern(layer.generator.patternId)
+  ));
+}
+
+function runtimeMetricsFor(recipe, geometry) {
+  const pixelCount = geometryPixelCount(geometry);
+  // Empty strings are the classifier's explicit "unknown" input. Supplying
+  // every runtime key prevents imported recipe estimates from being trusted.
+  const metrics = {
+    pixelCount: '',
+    fps: PATTERN_LAB_PREVIEW_FPS,
+    operationsPerFrame: '',
+    stateBytes: '',
+    framebufferBytes: '',
+  };
+  if (pixelCount === null) return metrics;
+  metrics.pixelCount = pixelCount;
+  metrics.framebufferBytes = pixelCount * 3;
+  if (hasKnownStatelessRuntime(recipe)) {
+    metrics.stateBytes = 0;
+  }
+  return metrics;
+}
+
+function compatibilityFor(recipe, geometry) {
+  const metrics = runtimeMetricsFor(recipe, geometry);
+  const initial = classifyPatternLabCompatibility(recipe, { metrics });
+  if (!initial.simplification?.variant) return initial;
+  return classifyPatternLabCompatibility(recipe, {
+    metrics,
+    simplificationMetrics: runtimeMetricsFor(initial.simplification.variant, geometry),
+  });
+}
+
+function mappedCoordinate(geometry) {
+  const points = (geometry?.strips || []).flatMap(strip => (
+    Array.isArray(strip?.pixels) ? strip.pixels : []
+  )).filter(point => Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y)));
+  if (!points.length) return {};
+  const xs = points.map(point => Number(point.x));
+  const ys = points.map(point => Number(point.y));
+  const xMin = Math.min(...xs);
+  const xMax = Math.max(...xs);
+  const yMin = Math.min(...ys);
+  const yMax = Math.max(...ys);
+  const x = xMax === xMin ? 0.5 : (xs[0] - xMin) / (xMax - xMin);
+  const y = yMax === yMin ? 0.5 : (ys[0] - yMin) / (yMax - yMin);
+  const offsetX = x - 0.5;
+  const offsetY = y - 0.5;
+  return {
+    x,
+    y,
+    stripProgress: Number.isFinite(Number(points[0].p)) ? Number(points[0].p) : 0,
+    radius: Math.min(1, Math.hypot(offsetX, offsetY) / Math.SQRT1_2),
+    angle: (Math.atan2(offsetY, offsetX) + Math.PI) / (Math.PI * 2),
+  };
 }
 
 function withEvolutionDisabled(recipe) {
@@ -243,6 +333,36 @@ export default function PatternLabScreen() {
     () => Array.from({ length: 4 }, (_, index) => deriveSeed(sourceRecipe?.seed ?? 1, index + variationRound * 4)),
     [sourceRecipe?.seed, variationRound],
   );
+  const runtimeMetrics = useMemo(
+    () => draft ? runtimeMetricsFor(draft, geometry) : null,
+    [draft, geometry],
+  );
+  const compatibility = useMemo(
+    () => draft ? compatibilityFor(draft, geometry) : null,
+    [draft, geometry],
+  );
+  const diagnostics = useMemo(() => (
+    draft
+      && Number.isSafeInteger(runtimeMetrics?.stateBytes)
+      && Number.isSafeInteger(runtimeMetrics?.framebufferBytes)
+  ) ? createPatternLabDiagnosticsSnapshot({
+    paused: !playing,
+    frameIndex: Math.round(previewTime * PATTERN_LAB_PREVIEW_FPS),
+    coordinates: mappedCoordinate(geometry),
+    fps: PATTERN_LAB_PREVIEW_FPS,
+    frameTimeMs: 1000 / PATTERN_LAB_PREVIEW_FPS,
+    stateBytes: runtimeMetrics?.stateBytes,
+    framebufferBytes: runtimeMetrics?.framebufferBytes,
+    state: {
+      recipeId: draft.id,
+      seed: draft.seed,
+      evolution: draft.evolution?.character,
+    },
+    darkness: {
+      brightness: resolvePatternLabMacros(draft).energy.brightness,
+      targetMatched: (draft.targets || []).every(target => target?.kind === 'whole-piece'),
+    },
+  }) : null, [draft, geometry, playing, previewTime, runtimeMetrics]);
 
   function choosePattern(patternId) {
     if (!patternId) {
@@ -332,6 +452,38 @@ export default function PatternLabScreen() {
       };
     });
     setComparison('draft');
+  }
+
+  function useDraftVariant(variant, status) {
+    if (!variant) return;
+    const next = normalizePatternLabRecipe(cloneRecipe(variant));
+    setDraft(next);
+    setComparison('draft');
+    setPreviewTime(0);
+    setPlaying(false);
+    setMessage(`${status} ${next.name}. The source recipe is unchanged.`);
+  }
+
+  function simplifyForCard(variant) {
+    useDraftVariant(variant, 'Created');
+  }
+
+  function removeUnsupportedFeatures(removals) {
+    if (!draft || !Array.isArray(removals) || !removals.length) return;
+    const variant = createPatternLabSimplificationVariant(draft, removals, {
+      id: `${draft.id}-cleanup`,
+      name: `${draft.name} — Cleanup variant`,
+    });
+    useDraftVariant(variant, 'Created');
+  }
+
+  function pauseDiagnostics(paused) {
+    setPlaying(!paused);
+  }
+
+  function stepDiagnosticsFrame() {
+    setPlaying(false);
+    setPreviewTime(current => (current + (1 / PATTERN_LAB_PREVIEW_FPS)) % previewDuration);
   }
 
   function openDraft(saved) {
@@ -530,6 +682,51 @@ export default function PatternLabScreen() {
                   onLayersChange={changeLayers}
                 />
               </div>
+            )}
+
+            {draft && (
+              <details
+                className="plab-runtime-tools"
+                data-testid="pattern-lab-runtime-tools"
+                data-source-recipe-id={sourceRecipe?.id}
+                data-draft-recipe-id={draft.id}
+                data-preview-time={previewTime}
+                data-source-recipe-snapshot={JSON.stringify(sourceRecipe)}
+              >
+                <summary>Card compatibility &amp; diagnostics</summary>
+                <div className="plab-runtime-tools-body">
+                  <ul className="plab-compatibility-outcomes" aria-label="Card compatibility outcomes">
+                    {COMPATIBILITY_OUTCOMES.map(([classification, label]) => (
+                      <li
+                        key={classification}
+                        aria-current={compatibility?.classification === classification ? 'true' : undefined}
+                      >{label}</li>
+                    ))}
+                  </ul>
+                  <PatternLabExport
+                    compatibility={compatibility}
+                    onBake={() => setMessage('Baked card export is not enabled in this preview-only workspace.')}
+                    onSimplify={simplifyForCard}
+                    onRemoveFeature={removeUnsupportedFeatures}
+                  />
+                  {compatibility?.simplification?.variant
+                    && compatibility.simplification.resolvesCompatibility !== true && (
+                    <div className="plab-runtime-cleanup">
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => useDraftVariant(compatibility.simplification.variant, 'Created')}
+                      >Create cleanup variant</button>
+                      <small>This keeps the source intact, but the new draft remains Studio only until every unknown is measured.</small>
+                    </div>
+                  )}
+                  <PatternLabDiagnostics
+                    diagnostics={diagnostics}
+                    onPause={pauseDiagnostics}
+                    onFrameStep={stepDiagnosticsFrame}
+                  />
+                </div>
+              </details>
             )}
 
             <section className="plab-private-library" aria-labelledby="plab-private-heading">
