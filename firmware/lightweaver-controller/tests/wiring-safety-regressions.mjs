@@ -85,6 +85,8 @@ test('factory reset refuses to claim completion when SD config removal fails', (
   const runtimeReset = body(main, 'bool runtimeFactoryReset(', 'void runtimeResetWifi(');
   assert.match(runtimeReset, /SD\.begin\(LW_SD_CS\)/,
     'factory reset must mount SD even when normal boot loaded known-good NVS first');
+  assert.match(runtimeReset, /if \(!sdMounted\)[\s\S]*sd unavailable; remove card or retry[\s\S]*return false/,
+    'an uncertain SD state must fail closed with an actionable error');
   assert.match(runtimeReset, /SD\.exists\("\/lightweaver\.json"\)/);
   assert.match(runtimeReset, /SD\.remove\("\/lightweaver\.json"\)/);
   assert.match(runtimeReset, /sd[^"\n]*remove|remove[^"\n]*sd/i);
@@ -92,6 +94,12 @@ test('factory reset refuses to claim completion when SD config removal fails', (
     'SD removal must succeed before NVS is erased');
   assert.ok(runtimeReset.indexOf('SD.begin') < runtimeReset.indexOf('SD.exists'),
     'SD must be mounted before reset decides whether a config exists');
+  const sdUnavailableBranch = runtimeReset.slice(
+    runtimeReset.indexOf('if (!sdMounted)'),
+    runtimeReset.indexOf('bool sdConfigExists'),
+  );
+  assert.doesNotMatch(sdUnavailableBranch, /prefs|Preferences|\.clear\(|ESP\.restart/,
+    'SD mount failure must return before NVS mutation or reboot');
   const webReset = body(web, 'void handleFactoryReset()', 'void handleResetWifi()');
   assert.match(webReset, /runtimeFactoryReset\(message\)/);
   assert.match(webReset, /server\.send\(500/);

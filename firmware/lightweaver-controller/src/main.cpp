@@ -1794,7 +1794,12 @@ String runtimeFirmwareInfo() {
 bool runtimeFactoryReset(String& message) {
   runtimeMarkRestartPending();
   bool sdMounted = SD.begin(LW_SD_CS);
-  bool sdConfigExists = sdMounted && SD.exists("/lightweaver.json");
+  if (!sdMounted) {
+    restartTransitionPending = false;
+    message = "sd unavailable; remove card or retry; factory reset not completed";
+    return false;
+  }
+  bool sdConfigExists = SD.exists("/lightweaver.json");
   bool sdConfigRemoved = !sdConfigExists || SD.remove("/lightweaver.json");
   if (sdConfigExists && !sdConfigRemoved) {
     restartTransitionPending = false;
@@ -1809,7 +1814,7 @@ bool runtimeFactoryReset(String& message) {
     prefs.end();
   }
   if (!provisioningFactoryResetMayComplete(
-          sdConfigExists, sdConfigRemoved, nvsCleared)) {
+          sdMounted, sdConfigExists, sdConfigRemoved, nvsCleared)) {
     restartTransitionPending = false;
     message = "nvs erase failed after sd cleanup; factory reset not completed";
     return false;
