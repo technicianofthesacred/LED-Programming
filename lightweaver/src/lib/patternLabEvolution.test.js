@@ -79,15 +79,17 @@ test('different seeds produce different spatial and texture clocks', () => {
   assert.notDeepEqual([first.spatial, first.texture], [second.spatial, second.texture]);
 });
 
-test('disabled evolution returns one explicit stable result at every time', () => {
-  const source = recipe('tidal', {
-    evolution: { enabled: false, character: 'tidal', durationSeconds: 600, change: 0.65 },
-  });
-  const initial = sampleEvolution(source, 0);
-  assert.equal(initial.enabled, false);
-  assert.equal(initial.destinations, null);
-  for (const time of [0.125, 17, 137.25, 599.9, 1200]) {
-    assert.deepEqual(sampleEvolution(source, time), initial);
+test('false-like enabled values return one explicit stable disabled result', () => {
+  for (const enabled of [false, 0, null, '']) {
+    const source = recipe('tidal', {
+      evolution: { enabled, character: 'tidal', durationSeconds: 600, change: 0.65 },
+    });
+    const initial = sampleEvolution(source, 0);
+    assert.equal(initial.enabled, false);
+    assert.equal(initial.destinations, null);
+    for (const time of [0.125, 17, 137.25, 599.9, 1200]) {
+      assert.deepEqual(sampleEvolution(source, time), initial);
+    }
   }
 });
 

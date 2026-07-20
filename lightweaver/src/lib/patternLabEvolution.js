@@ -123,7 +123,9 @@ export function sampleEvolution(recipe, elapsedSeconds) {
   const preset = PATTERN_LAB_EVOLUTION_PRESETS[character];
   if (!preset) throw new RangeError(`Unknown evolution character: ${character}`);
 
-  const enabled = recipe?.evolution?.enabled !== false;
+  const enabled = recipe?.evolution?.enabled === undefined
+    ? true
+    : Boolean(recipe.evolution.enabled);
   const duration = bounded(recipe?.evolution?.durationSeconds, 300, 900, DEFAULT_DURATION_SECONDS);
   const elapsed = Math.max(0, Number.isFinite(Number(elapsedSeconds)) ? Number(elapsedSeconds) : 0);
   const change = bounded(recipe?.evolution?.change, 0, 1, DEFAULT_CHANGE);
