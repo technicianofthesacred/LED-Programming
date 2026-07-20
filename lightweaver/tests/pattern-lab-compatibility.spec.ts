@@ -59,7 +59,7 @@ test('exposes card compatibility and clock-linked diagnostics without mutating t
   for (const label of ['Live on card', 'Bake to card', 'Simplify for card', 'Studio only']) {
     await expect(outcomes.getByText(label, { exact: true })).toBeVisible();
   }
-  await expect(outcomes.locator('[aria-current="true"]')).toHaveText('Studio only');
+  await expect(outcomes.locator('[aria-current="true"]')).toHaveText('Live on card');
   await expect(compatibility.locator('[data-classification]')).toHaveAttribute(
     'data-classification',
     /^(live-on-card|bake-to-card|simplify-for-card|studio-only)$/,
@@ -97,10 +97,10 @@ test('exposes card compatibility and clock-linked diagnostics without mutating t
   await expect(tools).toHaveAttribute('data-source-recipe-id', 'section-source');
   await expect(tools).toHaveAttribute('data-draft-recipe-id', 'section-source');
   const sourceSnapshot = await tools.getAttribute('data-source-recipe-snapshot');
-  await expect(compatibility.locator('[data-classification]')).toHaveAttribute('data-classification', 'studio-only');
-  await expect(compatibility.getByLabel('Card compatibility budgets')).toContainText('Operations / frameUnknown');
+  await expect(compatibility.locator('[data-classification]')).toHaveAttribute('data-classification', 'simplify-for-card');
+  await expect(compatibility.getByLabel('Card compatibility budgets')).not.toContainText('Operations / frameUnknown');
   await expect(diagnostics).toContainText('outside the active or supported target');
-  await tools.getByRole('button', { name: 'Create cleanup variant' }).click();
+  await tools.getByRole('button', { name: 'Create simplified variant' }).click();
   await expect(tools).toHaveAttribute('data-source-recipe-id', 'section-source');
   await expect(tools).toHaveAttribute('data-source-recipe-snapshot', sourceSnapshot || '');
   await expect(tools).toHaveAttribute('data-draft-recipe-id', 'section-source-simplified');

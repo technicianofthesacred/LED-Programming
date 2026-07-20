@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import PatternLabPreview from './PatternLabPreview.jsx';
 
 export default function PatternLabVariants({
@@ -14,6 +15,11 @@ export default function PatternLabVariants({
   onSeedLock,
   onNewVariations,
 }) {
+  const previewRecipes = useMemo(
+    () => variantSeeds.map(seed => (recipe ? { ...recipe, seed } : null)),
+    [recipe, variantSeeds],
+  );
+
   return (
     <section className="plab-control-section plab-variants" aria-labelledby="plab-variants-heading" data-testid="pattern-lab-variants">
       <div className="plab-section-heading">
@@ -50,7 +56,7 @@ export default function PatternLabVariants({
           >
             {renderPreviews && recipe && geometry && (
               <PatternLabPreview
-                recipe={{ ...recipe, seed }}
+                recipe={previewRecipes[index]}
                 previewTime={previewTime}
                 geometry={geometry}
                 thumbnail
