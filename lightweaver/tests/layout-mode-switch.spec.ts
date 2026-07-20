@@ -68,6 +68,17 @@ test('the two equal mode tabs live at the top of the inspector', async ({ page }
   expect(drawTint).not.toBe(wireTint);
 });
 
+test('both active mode tabs use the existing orange accent', async ({ page }) => {
+  await gotoLayout(page);
+
+  const activeBackground = (mode: 'draw' | 'wire') =>
+    page.getByTestId(`layout-mode-${mode}`).evaluate(element => getComputedStyle(element).backgroundColor);
+
+  const wireSetupAccent = await activeBackground('draw');
+  await page.getByTestId('layout-mode-wire').click();
+  await expect.poll(() => activeBackground('wire')).toBe(wireSetupAccent);
+});
+
 test('reloading with #screen=layout&mode=wire opens directly in Wire mode', async ({ page }) => {
   await gotoLayout(page, '#screen=layout&mode=wire');
 

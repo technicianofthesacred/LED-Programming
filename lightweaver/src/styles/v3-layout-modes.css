@@ -16,7 +16,7 @@
 .la-mode-switch button { flex: 1 1 0; min-width: 0; }
 .la-mode-switch[data-mode="draw"] { --mode-accent: var(--accent); }
 .la-mode-switch[data-mode="size"] { --mode-accent: oklch(0.72 0.08 155); }
-.la-mode-switch[data-mode="wire"] { --mode-accent: oklch(0.72 0.08 225); }
+.la-mode-switch[data-mode="wire"] { --mode-accent: var(--accent); }
 .la-mode-switch button.on { background: var(--mode-accent); }
 .la-mode-content {
   --mode-tint: var(--accent);
