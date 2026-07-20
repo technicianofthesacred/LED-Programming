@@ -8,6 +8,12 @@ function explicitBoolean(value) {
   return typeof value === 'boolean' ? value : null;
 }
 
+function hasBoundedText(value, maxLength) {
+  if (typeof value !== 'string') return false;
+  const text = value.trim();
+  return text.length > 0 && text.length <= maxLength;
+}
+
 export function normalizeCardReadiness(raw = {}) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   const app = cleanText(source.app, 32);
@@ -20,11 +26,12 @@ export function normalizeCardReadiness(raw = {}) {
     ? source.provisioningContractVersion
     : null;
   const contractSupported = contractVersion === CARD_READINESS_CONTRACT_VERSION;
+  const rawCardId = source.cardId ?? source.id;
   const identityValid = app === 'Lightweaver'
+    && hasBoundedText(rawCardId, 64)
     && /^lw-[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(cardId)
-    && cardId.length <= 64
-    && Boolean(firmwareVersion)
-    && Boolean(buildId);
+    && hasBoundedText(source.firmwareVersion, 48)
+    && hasBoundedText(source.buildId, 96);
 
   return Object.freeze({
     app,

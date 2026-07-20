@@ -25,6 +25,16 @@ import { nextCardConnectionAction } from '../src/lib/cardConnectionFlow.js';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+function readyEnvelope(cardId, overrides = {}) {
+  return {
+    app: 'Lightweaver', provisioningContractVersion: 1,
+    cardId, firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
+    bootId: 'boot-1', runtimePhase: 'ready', knownGoodProject: true,
+    commandReady: true, outputReady: true,
+    ...overrides,
+  };
+}
+
 for (const reason of ['identity-missing', 'firmware-too-old', 'wrong-card', 'bridge-missing']) {
   assert.equal(cardLinkBootstrapFailureReason({ reason }), reason, `bootstrap preserves ${reason}`);
 }
@@ -61,6 +71,7 @@ const bridged = reduceCardLink(bridgeReadyOnly, {
   via: 'bridge',
   host: '192.168.4.1',
   card: { id: 'lw-001122aabbcc', name: 'Front Mandala' },
+  readiness: readyEnvelope('lw-001122aabbcc'),
   acknowledgedAt: '2026-07-14T12:00:00.000Z',
 });
 assert.equal(bridged.state, 'connected-bridge');
@@ -116,11 +127,13 @@ const missingDirectIdentity = reduceCardLink(initial, { type: 'direct-status', c
 assert.equal(missingDirectIdentity.state, 'disconnected');
 assert.equal(missingDirectIdentity.reason, 'identity-missing');
 assert.equal(isCardLinkConnected(missingDirectIdentity), false);
+const directReadiness = readyEnvelope('lw-001122aabbcc');
 const direct = reduceCardLink(initial, {
   type: 'direct-status',
   connected: true,
   host: '192.168.18.70',
   card: { id: 'lw-001122aabbcc', name: 'Front Mandala' },
+  readiness: directReadiness,
   allowAdopt: true,
 });
 assert.equal(direct.state, 'connected-direct');
@@ -153,19 +166,22 @@ assert.equal(isCardLinkConnected(passiveUnpairedCard), false, 'background pollin
 const blankPaired = reduceCardLink(initial, {
   type: 'direct-status', connected: true, host: '192.168.18.72',
   card: { id: 'lw-blank' }, expectedCard: { id: 'lw-blank' }, blank: true,
+  readiness: readyEnvelope('lw-blank', { runtimePhase: 'factory', knownGoodProject: false }),
 });
 assert.equal(blankPaired.state, 'connected-direct');
-assert.equal(isCardLinkConnected(blankPaired), true);
+assert.equal(isCardLinkConnected(blankPaired), false);
 assert.equal(blankPaired.cardBlank, true);
 const configuredPaired = reduceCardLink(initial, {
   type: 'direct-status', connected: true, host: '192.168.18.72',
   card: { id: 'lw-blank' }, expectedCard: { id: 'lw-blank' }, blank: false,
+  readiness: readyEnvelope('lw-blank'),
 });
 assert.equal(configuredPaired.cardBlank, false);
 // A blank→configured transition must return a NEW object, not the short-circuited prev.
 const afterInstall = reduceCardLink(blankPaired, {
   type: 'direct-status', connected: true, host: '192.168.18.72',
   card: { id: 'lw-blank' }, expectedCard: { id: 'lw-blank' }, blank: false,
+  readiness: readyEnvelope('lw-blank'),
 });
 assert.notEqual(afterInstall, blankPaired);
 assert.equal(afterInstall.cardBlank, false);
@@ -187,10 +203,16 @@ assert.equal(isFactoryCardStatus(null), false, 'a missing status is not blank');
 
 // A paired blank card routes the Connection Center to install, NOT green ready.
 assert.equal(nextCardConnectionAction({
-  link: { state: 'connected-direct', card: { id: 'lw-blank' }, cardBlank: true },
+  link: {
+    state: 'connected-direct', card: { id: 'lw-blank' }, cardBlank: true,
+    readiness: readyEnvelope('lw-blank', { runtimePhase: 'factory', knownGoodProject: false }),
+  },
 }).id, 'card-needs-project', 'blank paired card offers install, not ready-local-card');
 assert.equal(nextCardConnectionAction({
-  link: { state: 'connected-direct', card: { id: 'lw-blank' }, cardBlank: false },
+  link: {
+    state: 'connected-direct', card: { id: 'lw-blank' }, cardBlank: false,
+    readiness: readyEnvelope('lw-blank'),
+  },
 }).id, 'ready-local-card', 'a configured paired card is ready');
 
 // ── bridge transport carries blank state too (the only live path on HTTPS) ──
@@ -199,18 +221,20 @@ assert.equal(nextCardConnectionAction({
 const bridgedBlank = reduceCardLink(bridgeReadyOnly, {
   type: 'card-verified', via: 'bridge', host: '192.168.4.1',
   card: { id: 'lw-bridge-blank' }, blank: true,
+  readiness: readyEnvelope('lw-bridge-blank', { runtimePhase: 'factory', knownGoodProject: false }),
 });
 assert.equal(bridgedBlank.state, 'connected-bridge');
 assert.equal(bridgedBlank.cardBlank, true, 'a bridged factory card is blank, not plain green');
 assert.equal(nextCardConnectionAction({ link: bridgedBlank }).id, 'card-needs-project');
-// A verify that did not yet know blank state defaults to not-blank, then a
+// A verify that did not yet know blank state stays unknown, then a
 // follow-up 'bridge-blank' (status read completed) refines it.
 const bridgedUnknown = reduceCardLink(bridgeReadyOnly, {
   type: 'card-verified', via: 'bridge', host: '192.168.4.1', card: { id: 'lw-bridge-x' },
 });
-assert.equal(bridgedUnknown.cardBlank, false, 'unknown blank state defaults to not-blank');
+assert.equal(bridgedUnknown.cardBlank, null, 'unknown blank state stays unknown');
 const refinedBlank = reduceCardLink(bridgedUnknown, {
   type: 'bridge-blank', host: '192.168.4.1', cardId: 'lw-bridge-x', blank: true,
+  readiness: readyEnvelope('lw-bridge-x', { runtimePhase: 'factory', knownGoodProject: false }),
 });
 assert.equal(refinedBlank.cardBlank, true, 'a late bridge-blank demotes the bridge link');
 assert.equal(nextCardConnectionAction({ link: refinedBlank }).id, 'card-needs-project');
@@ -223,7 +247,7 @@ assert.equal(reduceCardLink(initial, { type: 'bridge-blank', host: '192.168.4.1'
 
 assert.equal(reduceCardLink(direct, {
   type: 'direct-status', connected: true, host: '192.168.18.70', card: { id: 'lw-001122aabbcc' },
-  expectedCard: { id: 'lw-001122aabbcc' },
+  expectedCard: { id: 'lw-001122aabbcc' }, readiness: directReadiness,
 }), direct);
 
 const directDown = reduceCardLink(direct, { type: 'direct-status', connected: false, host: '192.168.18.70' });
@@ -657,9 +681,9 @@ assert.equal(nextCardConnectionAction({
 const honestVerified = await adoptDiscoveredDirectCard({
   link: honestLink,
   fetchImpl: async (url) => ({
-    ok: /\/api\/firmware-info$/.test(String(url)),
+    ok: /\/api\/(?:firmware-info|status)$/.test(String(url)),
     json: async () => ({
-      app: 'Lightweaver', cardId: 'lw-honest-01', firmwareVersion: '1.4.0', buildId: 'a'.repeat(40),
+      ...readyEnvelope('lw-honest-01'),
       piece: { name: 'Honest card' },
     }),
   }),
@@ -686,6 +710,7 @@ blankLink.dispatch({
   type: 'direct-status', connected: true, host: '192.168.18.72',
   card: { id: 'lw-honest-01' }, expectedCard: { id: 'lw-honest-01' },
   blank: isFactoryCardStatus({ mode: 'factory-flash', source: 'defaults', wiringRevision: 0, wiringDigest: '' }),
+  readiness: readyEnvelope('lw-honest-01', { runtimePhase: 'factory', knownGoodProject: false }),
 });
 assert.equal(blankLink.getState().state, 'connected-direct');
 assert.equal(blankLink.getState().cardBlank, true, 'a factory status marks the paired card blank');
@@ -713,7 +738,10 @@ await adoptDiscoveredDirectCard({
     };
     if (/\/api\/status$/.test(u)) return {
       ok: true,
-      json: async () => ({ cardId: 'lw-blank-adopt', mode: 'factory-flash', source: 'defaults' }),
+      json: async () => readyEnvelope('lw-blank-adopt', {
+        runtimePhase: 'factory', knownGoodProject: false,
+        mode: 'factory-flash', source: 'defaults',
+      }),
     };
     return { ok: false };
   },

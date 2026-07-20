@@ -82,8 +82,11 @@ test('invalid Lightweaver identity and unsupported contracts remain checking', (
   const invalidIdentities = [
     { app: 'OtherProduct' },
     { cardId: '' },
+    { cardId: `lw-${'a'.repeat(62)}` },
     { firmwareVersion: '' },
+    { firmwareVersion: 'v'.repeat(49) },
     { buildId: '' },
+    { buildId: 'b'.repeat(97) },
   ];
   for (const override of invalidIdentities) {
     const result = classifyCardReadiness(readyEnvelope(override), { expectedCardId: CARD_ID });

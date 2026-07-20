@@ -30,6 +30,7 @@ import {
   readPersistedCardIdentity,
   verifyExpectedCardAtHost,
 } from './cardIdentity.js';
+import { isCardLinkConnected as isFreshCardLinkConnected } from './cardConnectionFlow.js';
 
 export const CARD_LINK_PING_INTERVAL_MS = 5000;
 export const CARD_LINK_DIRECT_PING_INTERVAL_MS = 20000;
@@ -104,10 +105,8 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
         state: transport === 'direct' ? 'connected-direct' : 'connected-bridge',
         reason: '', transport, host, missedPings: 0,
         card: event.card,
-        // The bridge transport carries identity only, so a bridge verify may not
-        // yet know whether the card is blank; treat an absent flag as false and
-        // let a follow-up 'bridge-blank' refine it once /api/status returns.
-        cardBlank: Boolean(event.blank),
+        readiness: event.readiness ?? null,
+        cardBlank: typeof event.blank === 'boolean' ? event.blank : null,
         acknowledgedAt: event.acknowledgedAt || new Date().toISOString(),
       };
     }
@@ -118,9 +117,10 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
       // changes so subscribers do not re-render.
       if (prev.state !== 'connected-bridge' && prev.state !== 'reconnecting-bridge') return prev;
       if (prev.host !== host || prev.card?.id !== event.cardId) return prev;
-      const blank = Boolean(event.blank);
-      if (prev.cardBlank === blank) return prev;
-      return { ...prev, cardBlank: blank };
+      const blank = typeof event.blank === 'boolean' ? event.blank : null;
+      const readiness = event.readiness ?? prev.readiness ?? null;
+      if (prev.cardBlank === blank && prev.readiness === readiness) return prev;
+      return { ...prev, cardBlank: blank, readiness };
     }
     case 'bridge-ping-ok': {
       if (!prev.card?.id) return prev;
@@ -202,12 +202,20 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
             directDiscoveryRevision: (prev.directDiscoveryRevision || 0) + 1,
           };
         }
-        const blank = Boolean(event.blank);
-        if (prev.state === 'connected-direct' && prev.host === host && prev.card?.id === event.card.id && prev.cardBlank === blank) return prev;
+        const blank = typeof event.blank === 'boolean' ? event.blank : null;
+        const readiness = event.readiness ?? null;
+        if (
+          prev.state === 'connected-direct'
+          && prev.host === host
+          && prev.card?.id === event.card.id
+          && prev.cardBlank === blank
+          && prev.readiness === readiness
+        ) return prev;
         return {
           ...prev, state: 'connected-direct', reason: '', transport: 'direct', host, missedPings: 0,
           card: event.card,
           cardBlank: blank,
+          readiness,
           discoveredCard: null,
           expectedCard: event.card,
           directDiscoveryRevision: (prev.directDiscoveryRevision || 0) + 1,
@@ -240,7 +248,7 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
 }
 
 export function isCardLinkConnected(state = {}) {
-  return Boolean(state.card?.id) && (state.state === 'connected-bridge' || state.state === 'connected-direct');
+  return isFreshCardLinkConnected(state);
 }
 
 // Plain, friendly copy for the footer — the audience is a visual artist.
@@ -512,16 +520,15 @@ function refreshBridgeCardBlank(host, cardId) {
 // poll already computes blank from the status it fetched; adopt re-reads it so
 // the just-paired card lands with the correct cardBlank on its first render
 // instead of flashing green for one poll interval before demoting.
-async function probeDirectCardBlank(host, fetchImpl) {
+async function probeDirectCardReadiness(host, fetchImpl) {
   try {
     const fetcher = fetchImpl || globalThis.fetch;
-    if (typeof fetcher !== 'function') return false;
+    if (typeof fetcher !== 'function') return null;
     const response = await fetcher(`${cardHostToUrl(host)}/api/status`);
-    if (!response?.ok) return false;
-    const status = await response.json().catch(() => null);
-    return isFactoryCardStatus(status || {});
+    if (!response?.ok) return null;
+    return response.json().catch(() => null);
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -618,7 +625,7 @@ export function reportDirectCardStatus({
     const blank = isFactoryCardStatus(status || {});
     link.dispatch({
       type: 'direct-status', connected: true, host, card: identity, expectedCard,
-      acknowledgedAt, allowAdopt, blank,
+      acknowledgedAt, allowAdopt, blank, readiness: status,
     });
     return;
   }
@@ -663,7 +670,8 @@ export async function adoptDiscoveredDirectCard({ fetchImpl, link = getSharedCar
   // Read blank state here (before the authority/discovery gates re-check, which
   // stay the last thing before dispatch) so the paired card renders with the
   // correct cardBlank immediately instead of flashing green for one poll.
-  const blank = await probeDirectCardBlank(state.host, fetchImpl);
+  const readiness = await probeDirectCardReadiness(state.host, fetchImpl);
+  const blank = readiness ? isFactoryCardStatus(readiness) : null;
   if (persistedIdentityAuthorityToken(readPersistedCardIdentity()) !== snapshot.persistedAuthority) {
     const error = new Error('The paired card changed in another tab while this check was running. Review the card now shown and try again.');
     error.reason = 'stale-identity';
@@ -686,7 +694,7 @@ export async function adoptDiscoveredDirectCard({ fetchImpl, link = getSharedCar
   writeStoredCardHost(state.host);
   link.dispatch({
     type: 'direct-status', connected: true, host: state.host, card: verified,
-    expectedCard: verified, allowAdopt: true, acknowledgedAt, blank,
+    expectedCard: verified, allowAdopt: true, acknowledgedAt, blank, readiness,
   });
   return verified;
 }
