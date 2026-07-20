@@ -30,8 +30,19 @@ size_t runtimeRequestExpectedLength = 0;
 size_t runtimeRequestBodyLimit = 0;
 bool runtimeRequestBodyReady = false;
 bool runtimeRequestBodyRejected = false;
+constexpr size_t LW_MAX_WIFI_REQUEST_BODY_BYTES = 256;
+constexpr size_t LW_MAX_WIFI_ACK_REQUEST_BODY_BYTES = 128;
+uint8_t wifiRequestBody[LW_MAX_WIFI_REQUEST_BODY_BYTES + 1] = {};
+size_t wifiRequestBodyLength = 0;
+size_t wifiRequestExpectedLength = 0;
+size_t wifiRequestBodyLimit = 0;
+bool wifiRequestBodyReady = false;
+bool wifiRequestBodyRejected = false;
+constexpr uint32_t LW_HANDOFF_RESPONSE_SETTLE_MS = 400;
 bool apTeardownScheduled = false;
 uint32_t apTeardownGeneration = 0;
+uint32_t apTeardownDeadlineMs = 0;
+String apTeardownStationIp;
 
 void startApMode(RuntimeConfig& config);
 void beginStationJoin(RuntimeConfig& config, uint32_t generation);
@@ -1202,12 +1213,15 @@ void handleWiringDiscover() {
 
 void handleWifiPost() {
   sendCors();
-  if (!server.hasArg("plain")) {
-    server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing json body\"}");
+  if (!wifiRequestBodyReady || wifiRequestBodyRejected) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"wifi request body unavailable\"}");
     return;
   }
+  String request(reinterpret_cast<const char*>(wifiRequestBody), wifiRequestBodyLength);
+  wifiRequestBodyReady = false;
+  wifiRequestBodyLength = 0;
   String message;
-  bool ok = saveWifiConfigJson(server.arg("plain"), *runtimeConfigPtr, message);
+  bool ok = saveWifiConfigJson(request, *runtimeConfigPtr, message);
   if (!ok) {
     server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + message + "\"}");
     return;
@@ -1220,6 +1234,7 @@ void handleWifiPost() {
   response["accepted"] = true;
   response["transition"] = "joining";
   response["handoffGeneration"] = generation;
+  response["bootId"] = runtimeBootId();
   response["message"] = message;
   String body;
   serializeJson(response, body);
@@ -1228,18 +1243,27 @@ void handleWifiPost() {
 
 void handleWifiHandoffAck() {
   sendCors();
-  if (!server.hasArg("plain")) {
-    server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing json body\"}");
+  if (!wifiRequestBodyReady || wifiRequestBodyRejected) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"wifi acknowledgement body unavailable\"}");
     return;
   }
   JsonDocument doc;
-  DeserializationError error = deserializeJson(doc, server.arg("plain"));
+  DeserializationError error = deserializeJson(
+      doc, wifiRequestBody, wifiRequestBodyLength);
+  wifiRequestBodyReady = false;
+  wifiRequestBodyLength = 0;
   if (error || !doc.is<JsonObject>() ||
-      !doc["handoffGeneration"].is<uint32_t>()) {
-    server.send(400, "application/json", "{\"ok\":false,\"error\":\"handoffGeneration must be an unsigned integer\"}");
+      !doc["handoffGeneration"].is<uint32_t>() ||
+      !doc["bootId"].is<const char*>()) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"handoffGeneration and bootId are required\"}");
     return;
   }
   uint32_t generation = doc["handoffGeneration"].as<uint32_t>();
+  String requestBootId = doc["bootId"].as<const char*>();
+  if (requestBootId != runtimeBootId()) {
+    server.send(409, "application/json", "{\"ok\":false,\"error\":\"handoff boot is not current\"}");
+    return;
+  }
   const lightweaver::ConnectivityState& state =
       runtimeConfigPtr->wifiRuntime.connectivity;
   if (generation == 0 || generation != state.generation ||
@@ -1254,7 +1278,6 @@ void handleWifiHandoffAck() {
     return;
   }
   server.send(200, "application/json", "{\"ok\":true,\"accepted\":true}");
-  server.client().flush();
   scheduleApTeardown(generation);
 }
 
@@ -1296,6 +1319,91 @@ void handleReboot() {
 }
 
 void handleControlPost();
+
+// WiFi mutation bodies are tiny and security-sensitive. Use WebServer's raw
+// path so an attacker cannot make the framework allocate a Content-Length-
+// sized String before our endpoint sees the request.
+void handleWifiRequestRaw(const String& uri, HTTPRaw& raw) {
+  if (raw.status == RAW_START) {
+    wifiRequestBodyLength = 0;
+    wifiRequestBodyReady = false;
+    wifiRequestBodyRejected = false;
+    wifiRequestExpectedLength = server.clientContentLength();
+    wifiRequestBodyLimit = uri == "/api/wifi/handoff-ack"
+        ? LW_MAX_WIFI_ACK_REQUEST_BODY_BYTES
+        : LW_MAX_WIFI_REQUEST_BODY_BYTES;
+    if (wifiRequestExpectedLength == 0 ||
+        wifiRequestExpectedLength > wifiRequestBodyLimit) {
+      wifiRequestBodyRejected = true;
+      sendCors();
+      int status = wifiRequestExpectedLength == 0 ? 411 : 413;
+      const char* message = status == 411
+          ? "content length required" : "wifi request too large";
+      server.send(status, "application/json",
+                  String("{\"ok\":false,\"error\":\"") + message + "\"}");
+      server.client().stop();
+    }
+    return;
+  }
+  if (raw.status == RAW_WRITE) {
+    if (wifiRequestBodyRejected) return;
+    if (wifiRequestBodyLength + raw.currentSize > wifiRequestExpectedLength ||
+        wifiRequestBodyLength + raw.currentSize > wifiRequestBodyLimit) {
+      wifiRequestBodyRejected = true;
+      sendCors();
+      server.send(413, "application/json",
+                  "{\"ok\":false,\"error\":\"wifi request too large\"}");
+      server.client().stop();
+      return;
+    }
+    memcpy(wifiRequestBody + wifiRequestBodyLength, raw.buf, raw.currentSize);
+    wifiRequestBodyLength += raw.currentSize;
+    return;
+  }
+  if (raw.status == RAW_END) {
+    if (wifiRequestBodyRejected) return;
+    if (wifiRequestBodyLength != wifiRequestExpectedLength) {
+      wifiRequestBodyRejected = true;
+      sendCors();
+      server.send(400, "application/json",
+                  "{\"ok\":false,\"error\":\"partial wifi request\"}");
+      server.client().stop();
+      return;
+    }
+    wifiRequestBody[wifiRequestBodyLength] = 0;
+    wifiRequestBodyReady = true;
+    return;
+  }
+  if (raw.status == RAW_ABORTED) {
+    wifiRequestBodyLength = 0;
+    wifiRequestExpectedLength = 0;
+    wifiRequestBodyReady = false;
+    wifiRequestBodyRejected = false;
+  }
+}
+
+class BoundedWifiRequestHandler final : public RequestHandler {
+ public:
+  bool canHandle(HTTPMethod method, String uri) override {
+    return method == HTTP_POST &&
+        (uri == "/api/wifi" || uri == "/api/wifi/handoff-ack");
+  }
+  bool canUpload(String uri) override { (void)uri; return false; }
+  bool canRaw(String uri) override {
+    return uri == "/api/wifi" || uri == "/api/wifi/handoff-ack";
+  }
+  bool handle(WebServer& webServer, HTTPMethod method, String uri) override {
+    (void)webServer;
+    if (!canHandle(method, uri)) return false;
+    if (uri == "/api/wifi") handleWifiPost();
+    else handleWifiHandoffAck();
+    return true;
+  }
+  void raw(WebServer& webServer, String uri, HTTPRaw& rawBody) override {
+    (void)webServer;
+    if (canRaw(uri)) handleWifiRequestRaw(uri, rawBody);
+  }
+};
 
 void handleRuntimeRequestRaw(const String& uri, HTTPRaw& raw) {
   if (raw.status == RAW_START) {
@@ -1923,6 +2031,8 @@ void beginStationJoin(RuntimeConfig& config, uint32_t generation) {
   if (!config.wifiRuntime.connectivity.apActive) startApMode(config);
   apTeardownScheduled = false;
   apTeardownGeneration = 0;
+  apTeardownDeadlineMs = 0;
+  apTeardownStationIp = "";
   config.wifiRuntime.attemptCount = 0;
   WiFi.disconnect(false, false);
   config.wifiRuntime.connectivity = lightweaver::advanceConnectivity(
@@ -1940,6 +2050,8 @@ void beginStationJoin(RuntimeConfig& config, uint32_t generation) {
 
 void scheduleApTeardown(uint32_t generation) {
   apTeardownGeneration = generation;
+  apTeardownStationIp = WiFi.localIP().toString();
+  apTeardownDeadlineMs = millis() + LW_HANDOFF_RESPONSE_SETTLE_MS;
   apTeardownScheduled = true;
 }
 
@@ -1954,6 +2066,31 @@ void retireSetupAp(RuntimeConfig& config) {
   config.wifiRuntime.stationLinkPending = false;
   config.activeTransport = WIFI_TRANSPORT_STATION;
   config.activeIp = config.wifiRuntime.stationIp;
+}
+
+void processScheduledApTeardown(
+    RuntimeConfig& config,
+    lightweaver::ConnectivityState& state,
+    uint32_t now) {
+  if (!apTeardownScheduled || int32_t(now - apTeardownDeadlineMs) < 0) return;
+  apTeardownScheduled = false;
+  bool proofStillValid =
+      state.phase == lightweaver::ConnectivityPhase::HandoffReady &&
+      apTeardownGeneration != 0 &&
+      apTeardownGeneration == state.generation &&
+      WiFi.status() == WL_CONNECTED &&
+      apTeardownStationIp.length() > 0 &&
+      WiFi.localIP().toString() == apTeardownStationIp;
+  if (proofStillValid) {
+    state = lightweaver::advanceConnectivity(
+        state, {lightweaver::ConnectivityEvent::StationOriginAck,
+                now, apTeardownGeneration});
+    retireSetupAp(config);
+    syncWifiReadiness(config);
+  }
+  apTeardownGeneration = 0;
+  apTeardownDeadlineMs = 0;
+  apTeardownStationIp = "";
 }
 
 void recordStationAssociation(RuntimeConfig& config, uint32_t now) {
@@ -1981,19 +2118,8 @@ void maintainConnectivity() {
   lightweaver::ConnectivityState& state = cfg.wifiRuntime.connectivity;
   uint32_t now = millis();
 
-  if (apTeardownScheduled) {
-    apTeardownScheduled = false;
-    if (WiFi.status() == WL_CONNECTED &&
-        state.phase == lightweaver::ConnectivityPhase::HandoffReady &&
-        apTeardownGeneration != 0 && apTeardownGeneration == state.generation) {
-      state = lightweaver::advanceConnectivity(
-          state, {lightweaver::ConnectivityEvent::StationOriginAck,
-                  now, apTeardownGeneration});
-      retireSetupAp(cfg);
-      syncWifiReadiness(cfg);
-    }
-    apTeardownGeneration = 0;
-  }
+  processScheduledApTeardown(cfg, state, now);
+  if (apTeardownScheduled) return;
 
   static uint32_t lastPollMs = 0;
   if (uint32_t(now - lastPollMs) < 250) return;
@@ -2049,6 +2175,9 @@ void maintainConnectivity() {
         state, {lightweaver::ConnectivityEvent::StationLost, now, 0});
     cfg.wifiRuntime.stationIp = "";
     cfg.wifiRuntime.lastError = "station connection lost";
+    cfg.activeTransport = WIFI_TRANSPORT_AP;
+    cfg.activeIp = WiFi.softAPIP().toString();
+    cfg.activeHostname = "";
     syncWifiReadiness(cfg);
     startStationAttempt(cfg);
     return;
@@ -2123,9 +2252,8 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   server.on("/api/wiring/discover", HTTP_OPTIONS, handleOptions);
   server.on("/api/wiring/discover", HTTP_POST, handleWiringDiscover);
   server.on("/api/wifi", HTTP_OPTIONS, handleOptions);
-  server.on("/api/wifi", HTTP_POST, handleWifiPost);
   server.on("/api/wifi/handoff-ack", HTTP_OPTIONS, handleOptions);
-  server.on("/api/wifi/handoff-ack", HTTP_POST, handleWifiHandoffAck);
+  server.addHandler(new BoundedWifiRequestHandler());
   server.on("/api/wifi/scan", HTTP_GET, handleWifiScan);
   server.on("/api/reboot", HTTP_OPTIONS, handleOptions);
   server.on("/api/reboot", HTTP_POST, handleReboot);

@@ -10,6 +10,8 @@ const storageHeader = read('src/LightweaverStorage.h');
 const runtimeApi = read('src/LightweaverRuntimeApi.h');
 const main = read('src/main.cpp');
 const web = read('src/LightweaverWeb.cpp');
+const parserGuard = read('scripts/guard-webserver-control-body.py');
+const platformio = read('platformio.ini');
 
 function functionBody(source, signature) {
   const match = source.match(signature);
@@ -62,7 +64,7 @@ assert.match(wifiPost, /beginStationJoin\s*\(/,
   'accepted credentials must immediately begin a nonblocking association');
 assert.match(wifiPost, /server\.send\(202/,
   'WiFi save must return HTTP 202 Accepted');
-for (const field of ['accepted', 'transition', 'handoffGeneration']) {
+for (const field of ['accepted', 'transition', 'handoffGeneration', 'bootId']) {
   assert.match(wifiPost, new RegExp(`response\\["${field}"\\]\\s*=`),
     `WiFi save acknowledgement must expose ${field}`);
 }
@@ -87,6 +89,10 @@ assert.match(ack, /handoffGeneration/,
   'handoff acknowledgement must require a generation');
 assert.match(ack, /generation\s*==\s*0|generation\s*!=/,
   'handoff acknowledgement must validate the current nonzero generation');
+assert.match(ack, /bootId[\s\S]*\.is<const char\*>\(\)/,
+  'handoff acknowledgement must require a string bootId');
+assert.match(ack, /requestBootId\s*!=\s*runtimeBootId\(\)[\s\S]*server\.send\(409/,
+  'handoff acknowledgement must reject a stale boot before teardown scheduling');
 assert.match(ack, /server\.client\(\)\.localIP\(\)\s*==\s*WiFi\.localIP\(\)/,
   'handoff proof must use the local socket address, not Host');
 assert.doesNotMatch(ack, /host|Host/,
@@ -94,16 +100,57 @@ assert.doesNotMatch(ack, /host|Host/,
 assert.match(ack, /server\.send\(409/,
   'AP-interface handoff acknowledgements must preserve AP reachability with 409');
 const sent = ack.indexOf('server.send(200');
-const flushed = ack.indexOf('server.client().flush()', sent);
-const scheduled = ack.indexOf('scheduleApTeardown', flushed);
-assert.ok(sent !== -1 && flushed > sent && scheduled > flushed,
-  'acknowledgement must be sent and flushed before AP teardown is scheduled');
-assert.ok(web.includes('server.on("/api/wifi/handoff-ack", HTTP_POST, handleWifiHandoffAck)'),
-  'approved handoff acknowledgement route must be registered');
+const scheduled = ack.indexOf('scheduleApTeardown', sent);
+assert.ok(sent !== -1 && scheduled > sent,
+  'acknowledgement must be sent before deferred AP teardown is scheduled');
+assert.doesNotMatch(ack, /\.flush\s*\(/,
+  'WiFiClient::flush clears RX in this ESP32 core and must not be treated as TX proof');
+
+const scheduleTeardown = functionBody(web, /void\s+scheduleApTeardown\s*\([^;]*\)\s*\{/);
+assert.match(scheduleTeardown, /LW_HANDOFF_RESPONSE_SETTLE_MS/,
+  'acknowledgement teardown must wait for an explicit post-response deadline');
+assert.match(scheduleTeardown, /WiFi\.localIP\(\)\.toString\(\)/,
+  'deferred teardown must snapshot the acknowledged station IP');
+const processTeardown = functionBody(web, /void\s+processScheduledApTeardown\s*\(/);
+assert.match(processTeardown, /int32_t\(now\s*-\s*apTeardownDeadlineMs\)\s*<\s*0[\s\S]*return/,
+  'teardown processing must remain nonblocking until the response-settle deadline');
+for (const proof of [
+  'state.phase == lightweaver::ConnectivityPhase::HandoffReady',
+  'apTeardownGeneration == state.generation',
+  'WiFi.status() == WL_CONNECTED',
+  'WiFi.localIP().toString() == apTeardownStationIp',
+]) {
+  assert.ok(processTeardown.includes(proof), `deferred teardown must revalidate ${proof}`);
+}
+assert.ok(processTeardown.indexOf('apTeardownDeadlineMs') < processTeardown.indexOf('retireSetupAp'),
+  'AP teardown must happen only after the response-settle deadline and proof revalidation');
+
+assert.match(web, /constexpr size_t LW_MAX_WIFI_REQUEST_BODY_BYTES\s*=\s*256/);
+assert.match(web, /constexpr size_t LW_MAX_WIFI_ACK_REQUEST_BODY_BYTES\s*=\s*128/);
+assert.match(web, /class BoundedWifiRequestHandler/,
+  'WiFi mutations must use a dedicated raw request handler');
+assert.match(web, /server\.addHandler\(new BoundedWifiRequestHandler\(\)\)/,
+  'bounded WiFi handler must be registered');
+assert.doesNotMatch(web, /server\.on\("\/api\/wifi", HTTP_POST|server\.on\("\/api\/wifi\/handoff-ack", HTTP_POST/,
+  'WiFi mutations must not use ordinary plain-body route buffering');
+const wifiRaw = functionBody(web, /void\s+handleWifiRequestRaw\s*\(/);
+assert.match(wifiRaw, /clientContentLength\(\)[\s\S]*LW_MAX_WIFI_ACK_REQUEST_BODY_BYTES[\s\S]*413/,
+  'raw WiFi handler must reject declared oversized bodies with 413');
+assert.doesNotMatch(wifiPost + ack, /server\.(?:arg|hasArg)\("plain"\)/,
+  'WiFi handlers must consume only the fixed raw buffer');
+for (const route of ['/api/wifi', '/api/wifi/handoff-ack']) {
+  assert.ok(parserGuard.includes(route), `${route} must be guarded before WebServer body allocation`);
+}
+assert.match(parserGuard, /LW_WEB_WIFI_MAX_BODY_BYTES[\s\S]*LW_WEB_WIFI_ACK_MAX_BODY_BYTES/,
+  'framework allocation guard must use explicit WiFi body limits');
+assert.match(platformio, /-DLW_WEB_WIFI_MAX_BODY_BYTES=256/);
+assert.match(platformio, /-DLW_WEB_WIFI_ACK_MAX_BODY_BYTES=128/);
 
 const connectivity = functionBody(web, /void\s+maintainConnectivity\s*\(/);
 assert.match(connectivity, /advanceConnectivity\s*\(/,
   'runtime lifecycle must be driven by the tested pure policy');
+assert.match(connectivity, /processScheduledApTeardown\(cfg, state, now\);\s*if\s*\(apTeardownScheduled\)\s*return;/,
+  'an accepted ACK deadline must fence grace-based teardown until response settlement');
 assert.match(connectivity, /WL_CONNECTED[\s\S]*HandoffReady|StationAssociated/,
   'association must enter handoff-ready while AP remains available');
 assert.match(connectivity, /station association timed out[\s\S]*startApMode|SetupAp[\s\S]*startApMode/,
@@ -119,6 +166,8 @@ assert.match(connectivity, /state\.phase\s*==\s*lightweaver::ConnectivityPhase::
   'passive SDK station reacquisition must refresh IP and network bindings');
 assert.doesNotMatch(connectivity, /ConnectivityPhase::RecoveryAp|ConnectivityPhase::Reconnecting|kRecoveryApThresholdMs|kReconnectCadenceMs/,
   'Task 2 must not orchestrate active post-handoff retry or recovery AP behavior');
+assert.match(connectivity, /ConnectivityPhase::HandoffReady[\s\S]*ConnectivityEvent::StationLost[\s\S]*stationIp\s*=\s*""[\s\S]*activeTransport\s*=\s*WIFI_TRANSPORT_AP[\s\S]*activeIp\s*=\s*WiFi\.softAPIP\(\)\.toString\(\)[\s\S]*activeHostname\s*=\s*""/,
+  'pre-ack loss must immediately restore legacy AP transport, IP, and hostname truth');
 
 assert.match(runtimeApi, /void\s+runtimeSetWifiTransitionPending\s*\(bool pending\)/,
   'web orchestration must expose a dedicated WiFi readiness interlock');

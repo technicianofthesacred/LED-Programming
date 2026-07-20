@@ -43,6 +43,37 @@ EARLY_CONTROL_GUARD = r"""
     }
 #endif
 
+#if defined(LW_WEB_WIFI_MAX_BODY_BYTES) && defined(LW_WEB_WIFI_ACK_MAX_BODY_BYTES)
+    // WiFi credentials and handoff acknowledgements must reach the fixed raw
+    // buffers without any framework-sized String/form allocation first.
+    bool lwWifiEndpoint = _currentUri == "/api/wifi";
+    bool lwWifiAckEndpoint = _currentUri == "/api/wifi/handoff-ack";
+    size_t lwWifiBodyLimit = lwWifiAckEndpoint
+      ? LW_WEB_WIFI_ACK_MAX_BODY_BYTES
+      : LW_WEB_WIFI_MAX_BODY_BYTES;
+    if ((lwWifiEndpoint || lwWifiAckEndpoint) &&
+        (!isJson || isForm || isEncoded || _clientContentLength == 0 ||
+         _clientContentLength > lwWifiBodyLimit)) {
+      int status = (!isJson || isForm || isEncoded) ? 415
+        : (_clientContentLength == 0 ? 411 : 413);
+      const char* error = status == 415 ? "application/json required"
+        : (status == 411 ? "content length required" : "wifi request too large");
+      extern bool corsOriginAllowed(const String& origin);
+      String origin = header("Origin");
+      if (corsOriginAllowed(origin)) {
+        sendHeader("Access-Control-Allow-Origin", origin);
+        sendHeader("Vary", "Origin");
+        sendHeader("Access-Control-Allow-Headers", "Content-Type");
+        sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+        sendHeader("Access-Control-Allow-Private-Network", "true");
+      }
+      sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+      send(status, "application/json", String("{\"ok\":false,\"error\":\"") + error + "\"}");
+      client.stop();
+      return false;
+    }
+#endif
+
 #if defined(LW_WEB_CONFIG_MAX_BODY_BYTES) && defined(LW_WEB_CANDIDATE_MAX_BODY_BYTES)
     // Config mutations accept only JSON and are rejected from parsed headers
     // before WebServer can enter multipart, form, plainBuf, or raw allocation.
