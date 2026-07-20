@@ -1,11 +1,15 @@
-import { PATTERN_LAB_RECIPE_VERSION, normalizePatternLabRecipe } from './patternLabRecipe.js';
+import { PATTERN_LAB_RECIPE_VERSION, assertPatternLabJsonSafe, normalizePatternLabRecipe } from './patternLabRecipe.js';
 
 export const PATTERN_LAB_DRAFTS_KEY = 'lw_pattern_lab_drafts_v1';
 export const PATTERN_LAB_DRAFTS_BACKUP_KEY = 'lw_pattern_lab_drafts_v1_backup';
 
 function defaultStorage() {
-  if (typeof window !== 'undefined' && window.localStorage) return window.localStorage;
-  if (typeof localStorage !== 'undefined') return localStorage;
+  try {
+    if ('window' in globalThis) return globalThis.window?.localStorage || null;
+    if ('localStorage' in globalThis) return globalThis.localStorage || null;
+  } catch {
+    return null;
+  }
   return null;
 }
 
@@ -20,19 +24,25 @@ function normalizeEnvelope(value) {
   return value.drafts.map(normalizePatternLabRecipe);
 }
 
-export function readPatternLabDrafts(options = {}) {
+function readPatternLabDraftState(options = {}) {
   const storage = storageFrom(options);
-  if (!storage) return [];
+  if (!storage) return { status: 'unavailable', drafts: [] };
+  let recoveryFailed = false;
   for (const key of [PATTERN_LAB_DRAFTS_KEY, PATTERN_LAB_DRAFTS_BACKUP_KEY]) {
     try {
       const raw = storage.getItem(key);
       if (!raw) continue;
-      return normalizeEnvelope(JSON.parse(raw));
+      return { status: 'restored', drafts: normalizeEnvelope(JSON.parse(raw)) };
     } catch {
+      recoveryFailed = true;
       // The other private copy may still contain the user's drafts.
     }
   }
-  return [];
+  return { status: recoveryFailed ? 'unrecoverable' : 'empty', drafts: [] };
+}
+
+export function readPatternLabDrafts(options = {}) {
+  return readPatternLabDraftState(options).drafts;
 }
 
 export function writePatternLabDrafts(drafts, options = {}) {
@@ -42,6 +52,7 @@ export function writePatternLabDrafts(drafts, options = {}) {
 
   // Validate and normalize the complete next snapshot before either live copy changes.
   const normalized = drafts.map(normalizePatternLabRecipe);
+  assertPatternLabJsonSafe(normalized);
   const text = JSON.stringify({ version: PATTERN_LAB_RECIPE_VERSION, drafts: normalized });
   storage.setItem(PATTERN_LAB_DRAFTS_KEY, text);
   try {
@@ -54,7 +65,12 @@ export function writePatternLabDrafts(drafts, options = {}) {
 
 export function savePatternLabDraft(draft, options = {}) {
   const normalized = normalizePatternLabRecipe(draft);
-  const current = readPatternLabDrafts(options);
+  assertPatternLabJsonSafe(normalized);
+  const state = readPatternLabDraftState(options);
+  if (state.status === 'unrecoverable') {
+    throw new Error('Cannot save Pattern Lab draft because existing drafts could not be recovered');
+  }
+  const current = state.drafts;
   writePatternLabDrafts([normalized, ...current.filter(item => item.id !== normalized.id)], options);
   return normalized;
 }

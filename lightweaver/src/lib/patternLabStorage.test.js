@@ -61,3 +61,85 @@ test('deletes one draft and tolerates unavailable or invalid storage', () => {
   storage.setItem(PATTERN_LAB_DRAFTS_BACKUP_KEY, 'bad');
   assert.deepEqual(readPatternLabDrafts({ storage }), []);
 });
+
+test('save refuses to overwrite stored copies when neither copy can be recovered', () => {
+  const storage = memoryStorage();
+  storage.setItem(PATTERN_LAB_DRAFTS_KEY, '{truncated-primary');
+  storage.setItem(PATTERN_LAB_DRAFTS_BACKUP_KEY, JSON.stringify({ version: 1, drafts: [{ version: 9, id: 'future-draft' }] }));
+  const primary = storage.getItem(PATTERN_LAB_DRAFTS_KEY);
+  const backup = storage.getItem(PATTERN_LAB_DRAFTS_BACKUP_KEY);
+
+  assert.throws(
+    () => savePatternLabDraft(createPatternLabRecipe({ id: 'must-not-replace' }), { storage }),
+    /cannot save.*recover/i,
+  );
+  assert.equal(storage.getItem(PATTERN_LAB_DRAFTS_KEY), primary);
+  assert.equal(storage.getItem(PATTERN_LAB_DRAFTS_BACKUP_KEY), backup);
+});
+
+test('safe unknown fields survive a storage round trip unchanged', () => {
+  const storage = memoryStorage();
+  const draft = createPatternLabRecipe({
+    id: 'extension-round-trip',
+    futureTop: { flag: true, nested: ['alpha', 4, null, { beta: false }] },
+    layers: [{ id: 'layer-one', futureLayer: { values: [0.1, 0.2] } }],
+  });
+
+  writePatternLabDrafts([draft], { storage });
+  const [restored] = readPatternLabDrafts({ storage });
+  assert.deepEqual(restored.futureTop, draft.futureTop);
+  assert.deepEqual(restored.layers[0].futureLayer, draft.layers[0].futureLayer);
+});
+
+test('JSON-unsafe unknown fields are rejected before either stored copy changes', async t => {
+  const unsafeValues = [
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['undefined', undefined],
+    ['function', () => true],
+    ['symbol', Symbol('unsafe')],
+    ['bigint', 1n],
+    ['non-plain object', new Date('2026-07-20T00:00:00.000Z')],
+    ['sparse array', [, 'value']],
+  ];
+  for (const [label, value] of unsafeValues) {
+    await t.test(label, () => {
+      const storage = memoryStorage();
+      writePatternLabDrafts([createPatternLabRecipe({ id: 'original' })], { storage });
+      const primary = storage.getItem(PATTERN_LAB_DRAFTS_KEY);
+      const backup = storage.getItem(PATTERN_LAB_DRAFTS_BACKUP_KEY);
+      const draft = createPatternLabRecipe({ id: `unsafe-${label}` });
+      draft.futureValue = value;
+      assert.throws(() => writePatternLabDrafts([draft], { storage }), /json-safe/i);
+      assert.equal(storage.getItem(PATTERN_LAB_DRAFTS_KEY), primary);
+      assert.equal(storage.getItem(PATTERN_LAB_DRAFTS_BACKUP_KEY), backup);
+    });
+  }
+
+  await t.test('cycle', () => {
+    const storage = memoryStorage();
+    writePatternLabDrafts([createPatternLabRecipe({ id: 'original' })], { storage });
+    const primary = storage.getItem(PATTERN_LAB_DRAFTS_KEY);
+    const backup = storage.getItem(PATTERN_LAB_DRAFTS_BACKUP_KEY);
+    const draft = createPatternLabRecipe({ id: 'cyclic' });
+    draft.futureValue = draft;
+    assert.throws(() => writePatternLabDrafts([draft], { storage }), /json-safe/i);
+    assert.equal(storage.getItem(PATTERN_LAB_DRAFTS_KEY), primary);
+    assert.equal(storage.getItem(PATTERN_LAB_DRAFTS_BACKUP_KEY), backup);
+  });
+});
+
+test('default storage acquisition safely handles a throwing browser getter', () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    get() { throw new DOMException('Storage blocked', 'SecurityError'); },
+  });
+  try {
+    assert.deepEqual(readPatternLabDrafts(), []);
+    assert.equal(writePatternLabDrafts([]), false);
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, 'window', descriptor);
+    else delete globalThis.window;
+  }
+});

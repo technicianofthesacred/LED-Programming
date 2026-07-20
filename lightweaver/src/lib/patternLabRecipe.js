@@ -6,11 +6,57 @@ const DEFAULT_MACROS = { color: 0.5, movement: 0.5, shape: 0.5, texture: 0.5, en
 const DEFAULT_EVOLUTION = { enabled: true, character: 'slow-bloom', durationSeconds: 600, change: 0.35 };
 let fallbackId = 0;
 
-function clone(value) {
-  if (Array.isArray(value)) return value.map(clone);
+function clone(value, ancestors = new WeakSet()) {
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, clone(nested)]));
+    if (ancestors.has(value)) throw new TypeError('Pattern Lab recipe must be JSON-safe: cyclic value');
+    if (Object.getOwnPropertySymbols(value).length) throw new TypeError('Pattern Lab recipe must be JSON-safe: symbol key');
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) {
+        if (!Object.hasOwn(value, index)) throw new TypeError('Pattern Lab recipe must be JSON-safe: sparse array');
+      }
+    } else if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
+      throw new TypeError('Pattern Lab recipe must be JSON-safe: non-plain object');
+    }
+    ancestors.add(value);
   }
+  if (Array.isArray(value)) {
+    const result = value.map(item => clone(item, ancestors));
+    ancestors.delete(value);
+    return result;
+  }
+  if (value && typeof value === 'object') {
+    const result = Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, clone(nested, ancestors)]));
+    ancestors.delete(value);
+    return result;
+  }
+  return value;
+}
+
+export function assertPatternLabJsonSafe(value) {
+  const ancestors = new WeakSet();
+  function visit(current, path) {
+    if (current === null || typeof current === 'string' || typeof current === 'boolean') return;
+    if (typeof current === 'number') {
+      if (!Number.isFinite(current)) throw new TypeError(`Pattern Lab recipe must be JSON-safe: non-finite number at ${path}`);
+      return;
+    }
+    if (typeof current !== 'object') throw new TypeError(`Pattern Lab recipe must be JSON-safe: ${typeof current} at ${path}`);
+    if (ancestors.has(current)) throw new TypeError(`Pattern Lab recipe must be JSON-safe: cyclic value at ${path}`);
+    if (Object.getOwnPropertySymbols(current).length) throw new TypeError(`Pattern Lab recipe must be JSON-safe: symbol key at ${path}`);
+    if (Array.isArray(current)) {
+      for (let index = 0; index < current.length; index += 1) {
+        if (!Object.hasOwn(current, index)) throw new TypeError(`Pattern Lab recipe must be JSON-safe: sparse array at ${path}`);
+      }
+    }
+    if (!Array.isArray(current) && Object.getPrototypeOf(current) !== Object.prototype && Object.getPrototypeOf(current) !== null) {
+      throw new TypeError(`Pattern Lab recipe must be JSON-safe: non-plain object at ${path}`);
+    }
+    ancestors.add(current);
+    if (Array.isArray(current)) current.forEach((item, index) => visit(item, `${path}[${index}]`));
+    else Object.entries(current).forEach(([key, nested]) => visit(nested, `${path}.${key}`));
+    ancestors.delete(current);
+  }
+  visit(value, '$');
   return value;
 }
 
