@@ -377,8 +377,8 @@ test('Bridge return does not call a successful POST independent restoration proo
   }));
   await page.getByRole('button', { name: 'Restore saved project' }).click();
   await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
-  await expect(page.getByRole('alert')).toContainText(/independent.*(?:read-back|firmware and project evidence)|not marked.*restored/i);
   await expect.poll(() => page.evaluate(() => (window as any).__commissioningPushes.length)).toBe(1);
+  await expect(page.getByRole('alert')).toContainText(/independent.*(?:read-back|firmware and project evidence)|not marked.*restored/i);
   const pushedIdentity = await page.evaluate(() => {
     const config = (window as any).__commissioningPushes[0].runtimePackage.config;
     return {

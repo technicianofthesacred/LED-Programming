@@ -897,12 +897,13 @@ test('production setup is keyboard operable, restores heading focus, and announc
   await page.goto('/#screen=layout');
   const entry = page.getByRole('button', { name: 'Card', exact: true });
   await entry.focus();
-  await page.keyboard.press('Enter');
+  await entry.press('Enter');
+  await expect(page).toHaveURL(/#screen=card&section=overview/);
   // Batch production is no longer a section tab; it is reached from the
   // low-emphasis overview link.
   const batch = page.getByTestId('card-batch-link').getByRole('button', { name: 'Batch production', exact: true });
   await batch.focus();
-  await page.keyboard.press('Enter');
+  await batch.press('Enter');
   await expect(page).toHaveURL(/#screen=card&section=workshop/);
   await expect(page.getByRole('heading', { name: 'Batch production', level: 1 })).toBeFocused();
   await expect(page.getByRole('heading', { name: 'Production setup', level: 2 })).toBeVisible();

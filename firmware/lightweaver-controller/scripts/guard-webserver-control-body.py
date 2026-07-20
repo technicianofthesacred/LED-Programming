@@ -10,6 +10,17 @@ BODY_BRANCH_ANCHOR = """    if (!isForm && _currentHandler && _currentHandler->c
 BODY_STATE_ANCHOR = """    bool isEncoded = false;"""
 CONTENT_TYPE_ANCHOR = """      if (headerName.equalsIgnoreCase(FPSTR(Content_Type))){
         using namespace mime;"""
+RAW_READ_ANCHOR = """        _currentRaw->currentSize = client.readBytes(_currentRaw->buf, HTTP_RAW_BUFLEN);"""
+BOUNDED_RAW_READ = """        // Arduino Stream::readBytes waits for the requested byte count or its
+        // five-second timeout. The upstream raw parser always asks for a full
+        // buffer, so every final short JSON chunk stalls even though the whole
+        // Content-Length has already arrived. Read exactly the remaining body
+        // bytes while keeping the framework buffer as the hard upper bound.
+        size_t lwRawRemaining = _clientContentLength - _currentRaw->totalSize;
+        size_t lwRawReadLength = lwRawRemaining < static_cast<size_t>(HTTP_RAW_BUFLEN)
+          ? lwRawRemaining
+          : static_cast<size_t>(HTTP_RAW_BUFLEN);
+        _currentRaw->currentSize = client.readBytes(_currentRaw->buf, lwRawReadLength);"""
 EARLY_CONTROL_GUARD = r"""
 #if defined(LW_WEB_CONTROL_MAX_BODY_BYTES)
     // Lightweaver's control endpoint must reject from parsed headers, before
@@ -85,7 +96,8 @@ def guard_control_body_before_framework_buffer(build_env, node):
     source_text = source_bytes.decode("utf-8")
     if (source_text.count(BODY_BRANCH_ANCHOR) != 1 or
             source_text.count(BODY_STATE_ANCHOR) != 1 or
-            source_text.count(CONTENT_TYPE_ANCHOR) != 1):
+            source_text.count(CONTENT_TYPE_ANCHOR) != 1 or
+            source_text.count(RAW_READ_ANCHOR) != 1):
         print("Lightweaver WebServer guard anchor is missing or ambiguous; refusing to build.")
         build_env.Exit(1)
 
@@ -107,6 +119,11 @@ def guard_control_body_before_framework_buffer(build_env, node):
     patched_text = source_text.replace(
         BODY_BRANCH_ANCHOR,
         EARLY_CONTROL_GUARD + BODY_BRANCH_ANCHOR,
+        1,
+    )
+    patched_text = patched_text.replace(
+        RAW_READ_ANCHOR,
+        BOUNDED_RAW_READ,
         1,
     )
     generated_dir = build_env.subst("$BUILD_DIR/lightweaver-framework-guard")
