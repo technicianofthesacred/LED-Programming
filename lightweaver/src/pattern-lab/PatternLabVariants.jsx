@@ -20,7 +20,7 @@ export default function PatternLabVariants({
         <span className="plab-section-index">04</span>
         <div>
           <h2 id="plab-variants-heading">Save variation</h2>
-          <p>Compare the untouched source or choose a mapped seed preview.</p>
+          <p>Compare the source or choose a seed at the journey midpoint. Selecting one turns on Long Evolution.</p>
         </div>
       </div>
 

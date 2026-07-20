@@ -179,8 +179,6 @@ export default function PatternLabScreen() {
   const mobileDrawer = useMobileDrawer();
   const previewRecipe = comparison === 'source' ? sourceRecipe : draft;
   const previewDuration = draft?.evolution?.durationSeconds ?? 600;
-  const seedPreviewSelected = comparison === 'draft'
-    && Boolean(draft && sourceRecipe && !draft.evolution.enabled && draft.seed !== sourceRecipe.seed);
 
   useEffect(() => {
     const state = readPatternLabDraftState();
@@ -278,7 +276,11 @@ export default function PatternLabScreen() {
   }
 
   function chooseSeed(seed) {
-    setDraft(current => current ? { ...cloneRecipe(current), seed } : current);
+    setDraft(current => current ? {
+      ...cloneRecipe(current),
+      seed,
+      evolution: { ...current.evolution, enabled: true },
+    } : current);
     setComparison('draft');
     setMessage('');
   }
@@ -448,7 +450,6 @@ export default function PatternLabScreen() {
                   previewTime={previewTime}
                   playing={playing}
                   geometry={geometry}
-                  seedPreview={seedPreviewSelected}
                 />
               ) : (
                 <>

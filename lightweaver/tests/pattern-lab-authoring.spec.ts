@@ -247,14 +247,16 @@ test('uses an accessible lower controls drawer on a phone while keeping preview 
   await expect(page.getByText('Advanced controls')).not.toHaveAttribute('open', '');
 });
 
-test('renders four mapped seed previews and does not mutate the draft until one is selected', async ({ page }) => {
+test('seed selection explicitly enables and persists the real Long Evolution workflow', async ({ page }) => {
   await page.getByLabel('Base pattern').selectOption('aurora');
   const variants = page.getByTestId('pattern-lab-variants');
+  const evolutionToggle = page.getByRole('checkbox', { name: /Long Evolution/ });
   await expect(variants.getByTestId('pattern-lab-variation-preview')).toHaveCount(4);
   await expect(variants.locator('canvas')).toHaveCount(4);
+  await expect(variants).toContainText('journey midpoint');
+  await expect(evolutionToggle).not.toBeChecked();
   const mainCanvas = page.getByTestId('pattern-lab-mapped-preview').locator('canvas');
   await page.waitForTimeout(350);
-  const mainBefore = await mainCanvas.evaluate(canvas => canvas.toDataURL());
   await expect.poll(async () => {
     const signatures = await variants.locator('canvas').evaluateAll(canvases => canvases.map(canvas => canvas.toDataURL()));
     return new Set(signatures).size;
@@ -269,7 +271,38 @@ test('renders four mapped seed previews and does not mutate the draft until one 
 
   await page.getByRole('button', { name: 'Select variation 2' }).click();
   await expect(page.getByTestId('pattern-lab-seed')).not.toHaveText(seedBefore || '1');
-  await expect.poll(() => mainCanvas.evaluate(canvas => canvas.toDataURL())).not.toBe(mainBefore);
+  const selectedSeed = await page.getByTestId('pattern-lab-seed').textContent();
+  await expect(evolutionToggle).toBeChecked();
+  await expect(page.getByRole('button', { name: 'Export recipe' })).toBeEnabled();
+
+  await page.getByRole('button', { name: 'Beginning' }).click();
+  await page.waitForTimeout(350);
+  const beginningFrame = await mainCanvas.evaluate(canvas => canvas.toDataURL());
+  await page.getByRole('button', { name: 'End' }).click();
+  await expect.poll(() => mainCanvas.evaluate(canvas => canvas.toDataURL())).not.toBe(beginningFrame);
+
+  await page.getByRole('button', { name: 'Beginning' }).click();
+  await page.waitForTimeout(350);
+  const beforePlay = await mainCanvas.evaluate(canvas => canvas.toDataURL());
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect.poll(async () => Number(await page.getByLabel('Preview time').inputValue())).toBeGreaterThan(0.2);
+  await expect.poll(() => mainCanvas.evaluate(canvas => canvas.toDataURL())).not.toBe(beforePlay);
+  await page.getByRole('button', { name: 'Pause', exact: true }).click();
+
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export recipe' }).click();
+  const download = await downloadPromise;
+  const exportedPath = await download.path();
+  expect(exportedPath).not.toBeNull();
+  const exported = JSON.parse(await readFile(exportedPath!, 'utf8'));
+  expect(exported.evolution.enabled).toBe(true);
+  expect(exported.seed).toBe(Number(selectedSeed));
+
+  await page.getByRole('button', { name: 'Save private draft' }).click();
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: /Open Aurora/ }).click();
+  await expect(page.getByRole('checkbox', { name: /Long Evolution/ })).toBeChecked();
+  await expect(page.getByTestId('pattern-lab-seed')).toHaveText(selectedSeed || '');
   await page.getByRole('checkbox', { name: 'Lock seed choices' }).check();
   await expect(page.getByRole('button', { name: 'New variation' })).toBeDisabled();
 });
