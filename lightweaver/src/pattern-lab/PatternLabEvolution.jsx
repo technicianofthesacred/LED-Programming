@@ -1,4 +1,6 @@
+import { useEffect, useRef, useState } from 'react';
 import { PATTERN_LAB_EVOLUTION_CHARACTERS } from '../lib/patternLabEvolution.js';
+import { analyzeOfflineAudioWav, createOfflineAudioRequirement } from '../lib/offlineAudioLanes.js';
 
 const CHARACTER_LABELS = {
   'slow-bloom': 'Slow Bloom',
@@ -14,9 +16,42 @@ function formatTime(seconds) {
   return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, '0')}`;
 }
 
-export default function PatternLabEvolution({ recipe, previewTime, onEvolutionChange, onPreviewTime }) {
+export default function PatternLabEvolution({
+  recipe,
+  previewTime,
+  onEvolutionChange,
+  onPreviewTime,
+  onAudioAnalysis,
+}) {
   const evolution = recipe?.evolution;
   const duration = evolution?.durationSeconds ?? 600;
+  const analysisController = useRef(null);
+  const [audioStatus, setAudioStatus] = useState({ state: 'idle', message: '' });
+
+  useEffect(() => () => analysisController.current?.abort(), []);
+
+  async function analyzeAudio(file) {
+    analysisController.current?.abort();
+    if (!file) return;
+    const controller = new AbortController();
+    analysisController.current = controller;
+    setAudioStatus({ state: 'analyzing', message: `Analyzing ${file.name} on this device…` });
+    try {
+      const analysis = await analyzeOfflineAudioWav(file, { signal: controller.signal });
+      if (analysisController.current !== controller) return;
+      onAudioAnalysis?.(analysis, createOfflineAudioRequirement(analysis));
+      setAudioStatus({
+        state: 'ready',
+        message: `${analysis.settings.durationSeconds.toFixed(1)} seconds analyzed · audio file not stored`,
+      });
+    } catch (error) {
+      if (error?.name === 'AbortError') return;
+      setAudioStatus({
+        state: 'error',
+        message: error instanceof Error ? error.message : 'Audio analysis failed.',
+      });
+    }
+  }
 
   return (
     <section className="plab-control-section plab-evolution" aria-labelledby="plab-evolution-heading">
@@ -102,6 +137,33 @@ export default function PatternLabEvolution({ recipe, previewTime, onEvolutionCh
           onChange={event => onPreviewTime(Number(event.target.value))}
         />
       </div>
+
+      <details className="plab-advanced plab-audio-lanes">
+        <summary>Offline audio lanes</summary>
+        <p>Choose a WAV file to derive bass, mid, high, onset, and motion lanes. The audio stays on this device; only numbers and its fingerprint enter the recipe.</p>
+        <label className="plab-field">
+          <span>WAV audio file</span>
+          <input
+            aria-label="WAV audio file"
+            type="file"
+            accept="audio/wav,.wav"
+            disabled={!recipe || audioStatus.state === 'analyzing'}
+            onChange={event => analyzeAudio(event.target.files?.[0])}
+          />
+        </label>
+        {recipe?.offlineAudio && (
+          <button type="button" className="btn" onClick={() => {
+            analysisController.current?.abort();
+            onAudioAnalysis?.(null, null);
+            setAudioStatus({ state: 'idle', message: 'Offline audio lanes removed.' });
+          }}>Remove audio lanes</button>
+        )}
+        {(audioStatus.message || recipe?.offlineAudio) && (
+          <p role={audioStatus.state === 'error' ? 'alert' : 'status'} data-audio-state={audioStatus.state}>
+            {audioStatus.message || `Audio fingerprint ${recipe.offlineAudio.audioFingerprint.sha256.slice(0, 10)}… · Bake only`}
+          </p>
+        )}
+      </details>
     </section>
   );
 }

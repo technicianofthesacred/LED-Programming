@@ -47,7 +47,7 @@ export const DEFAULT_PATTERN_LAB_CARD_DESCRIPTOR = deepFreeze({
     transforms: [],
     masks: [],
     capabilities: ['time', 'beat'],
-    bakeableCapabilities: [],
+    bakeableCapabilities: ['offline-analysis'],
     targets: ['whole-piece'],
   },
   substitutions: {

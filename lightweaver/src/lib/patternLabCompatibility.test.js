@@ -219,6 +219,26 @@ test('only descriptor-modeled deterministic capabilities may opt into baking', (
   assert.ok(result.actions.some(action => action.id === 'bake'));
 });
 
+test('the default card treats analyzed offline audio as deterministic bake-only data', () => {
+  const result = classifyPatternLabCompatibility(recipe({
+    requirements: [{
+      capability: 'offline-analysis',
+      required: true,
+      bakeable: true,
+      delivery: 'bake-only',
+      audioSha256: 'a'.repeat(64),
+    }],
+  }), { metrics: FIT_METRICS });
+
+  assert.equal(result.classification, 'bake-to-card');
+  assert.ok(result.actions.some(action => action.id === 'bake'));
+  assert.ok(result.reasons.some(reason => (
+    reason.code === 'required-capability-unsupported'
+      && reason.feature === 'offline-analysis'
+  )));
+  assert.ok(!DEFAULT_PATTERN_LAB_CARD_DESCRIPTOR.features.capabilities.includes('offline-analysis'));
+});
+
 test('reports every explicit native and sequence budget including the 3968-byte cap', () => {
   const result = classifyPatternLabCompatibility(recipe(), { metrics: FIT_METRICS });
   assert.deepEqual(Object.keys(result.budgets), [

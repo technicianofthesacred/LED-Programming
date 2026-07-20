@@ -7,6 +7,7 @@ import {
   createPatternLabSimplificationVariant,
 } from '../lib/patternLabCompatibility.js';
 import { PATTERN_LAB_EVOLUTION_CHARACTERS, sampleEvolution } from '../lib/patternLabEvolution.js';
+import { OFFLINE_AUDIO_CAPABILITY } from '../lib/offlineAudioLanes.js';
 import {
   PATTERN_LAB_GENERATOR_IDS,
   estimatePatternLabGeneratorBudgets,
@@ -592,6 +593,26 @@ export default function PatternLabScreen() {
     setMessage('');
   }
 
+  function changeAudioAnalysis(analysis, requirement) {
+    setDraft(current => {
+      if (!current) return current;
+      const requirements = (current.requirements || []).filter(item => (
+        item?.capability !== OFFLINE_AUDIO_CAPABILITY
+      ));
+      if (!analysis || !requirement) {
+        const { offlineAudio: _offlineAudio, ...withoutAudio } = current;
+        return { ...withoutAudio, requirements };
+      }
+      return {
+        ...current,
+        offlineAudio: cloneRecipe(analysis),
+        requirements: [...requirements, cloneRecipe(requirement)],
+      };
+    });
+    setComparison('draft');
+    setMessage('');
+  }
+
   function chooseSeed(seed) {
     setDraft(current => current ? {
       ...cloneRecipe(current),
@@ -860,6 +881,7 @@ export default function PatternLabScreen() {
               previewTime={previewTime}
               onEvolutionChange={changeEvolution}
               onPreviewTime={setPreviewTime}
+              onAudioAnalysis={changeAudioAnalysis}
             />
             <PatternLabVariants
               recipe={draft}

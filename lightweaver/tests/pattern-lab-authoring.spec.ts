@@ -7,6 +7,28 @@ const PREVIEW_SOURCE = await readFile(fileURLToPath(new URL('../src/v3/PatternPr
 const LAB_PREVIEW_SOURCE = await readFile(fileURLToPath(new URL('../src/pattern-lab/PatternLabPreview.jsx', import.meta.url)), 'utf8');
 let cardMutationRequests: string[];
 
+function wavBuffer({ durationSeconds = 0.12, sampleRate = 8000 } = {}) {
+  const sampleCount = Math.max(1, Math.round(durationSeconds * sampleRate));
+  const buffer = Buffer.alloc(44 + sampleCount * 2);
+  buffer.write('RIFF', 0);
+  buffer.writeUInt32LE(buffer.length - 8, 4);
+  buffer.write('WAVE', 8);
+  buffer.write('fmt ', 12);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * 2, 28);
+  buffer.writeUInt16LE(2, 32);
+  buffer.writeUInt16LE(16, 34);
+  buffer.write('data', 36);
+  buffer.writeUInt32LE(sampleCount * 2, 40);
+  for (let index = 0; index < sampleCount; index += 1) {
+    buffer.writeInt16LE(Math.round(Math.sin(index * Math.PI / 8) * 12000), 44 + index * 2);
+  }
+  return buffer;
+}
+
 async function projectBytes(page) {
   await expect.poll(() => page.evaluate(key => localStorage.getItem(key), AUTOSAVE_KEY)).not.toBeNull();
   return page.evaluate(key => localStorage.getItem(key), AUTOSAVE_KEY);
@@ -68,6 +90,42 @@ test('creates, compares, and reopens a long private pattern without changing the
 
   await expect.poll(() => page.evaluate(key => localStorage.getItem(key), AUTOSAVE_KEY)).toBe(projectBefore);
   expect(cardMutationRequests).toEqual([]);
+});
+
+test('derives offline audio lanes locally and marks the recipe as bake-only', async ({ page }) => {
+  await page.getByLabel('Base pattern').selectOption('aurora');
+  await page.getByText('Offline audio lanes').click();
+  await page.getByLabel('WAV audio file').setInputFiles({
+    name: 'private-song.wav',
+    mimeType: 'audio/wav',
+    buffer: wavBuffer(),
+  });
+
+  await expect(page.locator('[data-audio-state="ready"]')).toContainText('audio file not stored');
+  const tools = page.getByTestId('pattern-lab-runtime-tools');
+  await page.getByText('Card compatibility & diagnostics').click();
+  await expect(tools.getByRole('listitem').filter({ hasText: 'Bake to card' })).toHaveAttribute('aria-current', 'true');
+
+  const recipeDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export recipe' }).click();
+  const recipePath = await (await recipeDownload).path();
+  const recipe = JSON.parse(await readFile(recipePath!, 'utf8'));
+  expect(recipe.offlineAudio.version).toBe(1);
+  expect(recipe.offlineAudio.audioFingerprint.sha256).toMatch(/^[a-f0-9]{64}$/);
+  expect(recipe.requirements).toContainEqual(expect.objectContaining({
+    capability: 'offline-analysis',
+    delivery: 'bake-only',
+    audioSha256: recipe.offlineAudio.audioFingerprint.sha256,
+  }));
+  expect(JSON.stringify(recipe)).not.toContain('private-song.wav');
+
+  await page.getByRole('button', { name: 'Remove audio lanes' }).click();
+  const cleanedDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export recipe' }).click();
+  const cleanedPath = await (await cleanedDownload).path();
+  const cleaned = JSON.parse(await readFile(cleanedPath!, 'utf8'));
+  expect(cleaned.offlineAudio).toBeUndefined();
+  expect(cleaned.requirements).not.toContainEqual(expect.objectContaining({ capability: 'offline-analysis' }));
 });
 
 test('Play advances one bounded journey clock and Pause preserves it', async ({ page }) => {
