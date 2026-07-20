@@ -4,10 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 // Wire panel presentation: ordering, direction, and GPIO assignment all live
-// in Draw's GPIO-grouped strip list now; Wire keeps the two-step Check →
-// Install flow with every expert wiring tool demoted to the single Advanced
-// wiring disclosure. These tests pin that structure against the canonical
-// wiring model (runs/outputs) via exported project JSON.
+// in Draw's GPIO-grouped strip list now; Wire is a single-flow page (one LED
+// check CTA → auto-locked install) with specialist tools demoted to the
+// single Advanced installation tools disclosure. These tests pin that structure
+// against the canonical wiring model (runs/outputs) via exported project JSON.
 
 function writeFixture(tmp: string) {
   const fixture = path.join(tmp, 'patch-board-line.svg');
@@ -86,8 +86,10 @@ async function exportProject(page: any, tmp: string, name = 'saved.json') {
 }
 
 async function openAdvanced(page: any) {
-  const toggle = page.getByTestId('advanced-wiring-toggle');
-  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+  const details = page.getByTestId('advanced-installation-tools');
+  if (!await details.evaluate((element: HTMLDetailsElement) => element.open)) {
+    await details.locator('summary').first().click();
+  }
 }
 
 async function loadVerifiedWiring(page: any, tmp: string) {
@@ -139,19 +141,22 @@ test('Draw lists strips grouped by GPIO in data-wire order and drag reorder writ
   expect(runStripOrder).toEqual(['default-inner-circle', 'default-outer-circle']);
 });
 
-test('Advanced wiring is one collapsed disclosure and Split still cuts a run', async ({ page }) => {
+test('Advanced installation tools are collapsed and Split still cuts a run', async ({ page }) => {
   const tmp = await importLine(page);
   await enterWire(page);
 
-  const toggle = page.getByTestId('advanced-wiring-toggle');
-  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  const advanced = page.getByTestId('advanced-installation-tools');
+  await expect(advanced).toHaveJSProperty('open', false);
   await expect(page.getByRole('button', { name: 'Split a strip mid-wire' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Paint the route by clicking strips' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Add a cable jump' })).toHaveCount(0);
 
-  await toggle.click();
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await openAdvanced(page);
+  await expect(advanced).toHaveJSProperty('open', true);
+  const custom = advanced.locator('.lww-custom-mapping');
+  await expect(custom).toHaveJSProperty('open', false);
+  await custom.locator('summary').click();
   await expect(page.getByRole('button', { name: 'Split a strip mid-wire' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Paint the route by clicking strips' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add a cable jump' })).toBeVisible();
   // The wire count and the shortest-route suggestion moved to Draw entirely —
   // neither has a home anywhere in the Wire panel.
   await expect(page.getByRole('group', { name: 'LED data wire count' })).toHaveCount(0);
@@ -159,43 +164,48 @@ test('Advanced wiring is one collapsed disclosure and Split still cuts a run', a
   await expect(page.getByRole('region', { name: 'Suggest shortest order' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Mark card position on drawing' })).toHaveCount(0);
 
-  await expect(page.getByTestId('wiring-run-row')).toHaveCount(1);
+  expect((await exportProject(page, tmp, 'before-split.json')).layout.wiring.runs.filter((run: any) => run.type === 'strip')).toHaveLength(1);
   await page.getByRole('button', { name: 'Split a strip mid-wire' }).click();
   await clickStripPathAt(page, 0.45);
-  await expect(page.getByTestId('wiring-run-row')).toHaveCount(2);
   await expect(page.getByText('Selected split')).toBeVisible();
+  expect((await exportProject(page, tmp, 'after-split.json')).layout.wiring.runs.filter((run: any) => run.type === 'strip')).toHaveLength(2);
   await page.getByRole('button', { name: 'Move split later' }).click();
   await page.getByRole('button', { name: 'Merge split runs' }).click();
-  await expect(page.getByTestId('wiring-run-row')).toHaveCount(1);
 
   const saved = await exportProject(page, tmp);
   expect(saved.layout.wiring.runs.filter((run: any) => run.type === 'strip')).toHaveLength(1);
 });
 
-test('locked wiring blocks reorder, direction, split, and skipped-pixel mutations', async ({ page }) => {
+test('auto-locked verified wiring blocks physical mutations until Unlock to edit reopens it', async ({ page }) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-locked-wire-'));
   await gotoDefaultWire(page);
   await loadVerifiedWiring(page, tmp);
 
-  // The seeded project is fully verified, so the panel auto-advances to the
-  // Install step; wait for that settled state instead of clicking.
-  await expect(page.getByTestId('commissioning-step')).toHaveAttribute('aria-label', 'Lock it in and install');
-  await page.getByRole('button', { name: 'Lock wiring' }).click();
-  await expect(page.getByRole('button', { name: 'Unlock wiring' })).toBeVisible();
+  // Fully verified wiring auto-locks — no manual lock button exists. The
+  // primary flow area settles on the install control.
+  await expect(page.getByText('Checked ✓ — install it on the card.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Lock wiring' })).toHaveCount(0);
+  await expect(page.getByTestId('layout-send-to-card')).toBeEnabled();
 
   await openAdvanced(page);
+  const custom = page.locator('.lww-custom-mapping');
+  await custom.locator('summary').click();
   await expect(page.getByRole('button', { name: 'Add skipped LEDs' })).toBeDisabled();
-  await expect(page.getByTestId('wiring-run-row').first().getByRole('button', { name: 'Flip' })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Drag Output A' })).toBeDisabled();
-
-  await page.getByRole('button', { name: 'Split a strip mid-wire' }).click();
-  const before = await page.getByTestId('wiring-run-row').count();
-  await clickStripPathAt(page, 0.4);
-  await expect(page.getByTestId('wiring-run-row')).toHaveCount(before);
+  await expect(page.getByRole('button', { name: 'Split a strip mid-wire' })).toBeDisabled();
 
   const project = await exportProject(page, tmp);
   expect(project.layout.wiring.locked).toBe(true);
   expect(project.layout.wiring.runs.every((run: any) => run.verified)).toBe(true);
+
+  // "Unlock to edit" inside Advanced reopens the plan and clears verification,
+  // returning the primary flow to the LED-check CTA.
+  await page.getByTestId('unlock-wiring').click();
+  await expect(page.getByTestId('start-led-check')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add skipped LEDs' })).toBeEnabled();
+  const reopened = await exportProject(page, tmp, 'reopened.json');
+  expect(reopened.layout.wiring.locked).toBe(false);
+  expect(reopened.layout.wiring.verified).toBe(false);
+  expect(reopened.layout.wiring.runs.every((run: any) => run.verified === false)).toBe(true);
 });
 
 test('numeric strip count replaces the full value with an exact accessible selector', async ({ page }) => {

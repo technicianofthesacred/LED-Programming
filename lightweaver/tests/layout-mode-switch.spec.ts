@@ -12,6 +12,8 @@ test('keyboard 1/2 update the hash mode param and the active segment', async ({ 
   await gotoLayout(page);
 
   await expect(page.getByTestId('layout-mode-switch')).toBeVisible();
+  await expect(page.getByTestId('layout-mode-draw')).toHaveText('Wire');
+  await expect(page.getByTestId('layout-mode-wire')).toHaveText('Test & Install');
   await expect(page.getByTestId('layout-mode-draw')).toHaveClass(/on/);
   await expect(page.getByTestId('layout-mode-draw')).toHaveAttribute('aria-pressed', 'true');
   await page.keyboard.press('2');
@@ -28,14 +30,18 @@ test('keyboard 1/2 update the hash mode param and the active segment', async ({ 
   await expect(page.getByTestId('layout-wire-panel')).toHaveCount(0);
 });
 
-test('Wire owns the power supply controls and Size is not a layout mode', async ({ page }) => {
+test('Test & Install keeps card hardware advanced and Size is not a layout mode', async ({ page }) => {
   await gotoLayout(page);
   await expect(page.getByTestId('layout-mode-size')).toHaveCount(0);
 
   await page.getByTestId('layout-mode-wire').click();
-  // The supply inputs live behind the "Power details" disclosure.
+  const advanced = page.getByTestId('advanced-installation-tools');
+  await expect(advanced).toHaveJSProperty('open', false);
+  await advanced.locator('summary').first().click();
+  // The supply inputs live behind the nested Card hardware disclosure.
   const power = page.getByTestId('wire-power-section');
   await expect(power).toBeVisible();
+  await expect(power).toHaveJSProperty('open', false);
   await power.locator('summary').click();
   await expect(page.getByLabel('Power supply amps')).toBeVisible();
   await expect(page.getByLabel('Milliamps per LED')).toBeVisible();
@@ -67,8 +73,8 @@ test('reloading with #screen=layout&mode=wire opens directly in Wire mode', asyn
 
   await expect(page.getByTestId('layout-mode-wire')).toHaveClass(/on/);
   await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
-  await page.getByRole('group', { name: 'Steps' }).getByRole('button', { name: 'Install' }).click();
-  await expect(page.getByTestId('layout-send-to-card')).toBeVisible();
+  // Unverified wiring lands on the single LED-check CTA.
+  await expect(page.getByTestId('start-led-check')).toBeVisible();
 });
 
 test('switching modes and activating Wire tools suspend the in-progress strip until Draw resumes or Cancel clears it', async ({ page }) => {
@@ -100,13 +106,17 @@ test('switching modes and activating Wire tools suspend the in-progress strip un
   await expect(page.locator('.la-draw-hint')).toContainText('2 points');
 
   await page.getByTestId('layout-mode-wire').click();
-  await page.getByTitle('Split one physical strip where the wire jumps to a new spot.').click();
+  await page.getByText('Advanced installation tools', { exact: true }).click();
+  await page.getByText('Custom mapping', { exact: true }).click();
+  await page.getByRole('button', { name: 'Split a strip mid-wire' }).click();
   await page.getByTestId('layout-mode-draw').click();
   await drawBtn.click();
   await expect(page.locator('.la-draw-hint')).toContainText('2 points');
 
   await page.getByTestId('layout-mode-wire').click();
-  await page.getByTitle('Join two strips into one continuous run.').click();
+  await page.getByText('Advanced installation tools', { exact: true }).click();
+  await page.getByText('Custom mapping', { exact: true }).click();
+  await page.getByRole('button', { name: 'Add a cable jump' }).click();
   await page.getByTestId('layout-mode-draw').click();
   await drawBtn.click();
   await expect(page.locator('.la-draw-hint')).toContainText('2 points');

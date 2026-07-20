@@ -1,16 +1,11 @@
-export function WiringPreflight({ compiled, locked, canLock, onToggleLock, mutationError }) {
-  const ready = compiled.sendReady;
+export function WiringPreflight({ compiled, mutationError }) {
   const plainMessage = message => String(message || '').replace(/run-[a-z0-9-]+/gi, 'a strip').replace(/\bout\d+\b/gi, 'an output');
+  // Only renders when there is something actionable — a clean compile adds nothing to read.
+  if (!mutationError && !compiled.errors.length) return null;
   return (
-    <section className={`lw-wiring-preflight${compiled.ok ? '' : ' has-errors'}`} aria-live="polite">
-      <div className="lw-wire-section-title">
-        <span>{ready ? 'Ready to install' : 'Physical check required'}</span>
-        <strong data-testid="wiring-total-pixels">{compiled.totalPixels} LEDs</strong>
-      </div>
+    <section className="lw-wiring-preflight has-errors" aria-live="polite">
       {mutationError && <p className="lw-wiring-error">{mutationError}</p>}
       {compiled.errors.map(item => <p className="lw-wiring-error" key={`${item.code}-${item.runId || ''}`}>{plainMessage(item.message)}</p>)}
-      {!compiled.ok ? null : <p>{ready ? 'Physical mapping is confirmed.' : locked ? 'Unlock to change the physical mapping.' : 'Check each strip boundary before installation.'}</p>}
-      {(locked || canLock) && <button className="btn" onClick={onToggleLock}>{locked ? 'Unlock wiring' : 'Lock wiring'}</button>}
     </section>
   );
 }

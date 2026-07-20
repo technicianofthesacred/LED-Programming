@@ -34,7 +34,7 @@ export function WiringBenchTest({
   wiring, compiled, updateWiring, priorConfirmedLook = null, cardHost,
   strips = [], adjustableRunIds = [], onAdjustBoundary,
   adjustableOutputIds = [], onAdjustOutput,
-  onActivityChange, onDefer,
+  onDefer,
 }) {
   const [acknowledged, setAcknowledged] = useState(false);
   const [state, dispatch] = useReducer(wiringChaseReducer, null);
@@ -92,15 +92,6 @@ export function WiringBenchTest({
   // Collapse the "Something's wrong" panel whenever the wizard moves.
   useEffect(() => { setTroubleOpen(false); }, [state?.stepIndex, state?.status]);
 
-  // Tell the parent when a check question is on screen so it can clear the
-  // rest of step 4 (one question per screen, redesign change 9). The cleanup
-  // covers unmount mid-check (mode/step switch).
-  const checkActive = state?.status === 'active';
-  useEffect(() => {
-    onActivityChange?.(checkActive);
-    return () => onActivityChange?.(false);
-  }, [checkActive, onActivityChange]);
-
   if (wiring.locked) return null;
 
   // useReducer cannot lazily initialize on an event without replacing the
@@ -152,6 +143,8 @@ export function WiringBenchTest({
     highWaterPixelsRef.current = compiled.totalPixels;
     setAcknowledged(false);
     dispatch({ type: 'cancel' });
+    // With no step rail to land on, deferring exits the check flow entirely.
+    onDefer?.();
   };
   const correctDirection = () => {
     if (activeStep?.kind !== 'run') return;

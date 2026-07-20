@@ -6,8 +6,8 @@ import path from 'node:path';
 const TEST_CARD_ID = 'lw-layout-tests';
 const TEST_BUILD_ID = 'a'.repeat(40);
 
-// Phase 2 step 9 (docs/layout-redesign-plan.md) — the Wire-mode finish line:
-// Send to card + Export ledmap.json. Reuses the `mockLocalCard` route pattern
+// Test & Install finish line: Save to card, with WLED export kept under
+// Advanced installation tools. Reuses the `mockLocalCard` route pattern
 // from workflow.spec.ts. The default project boots the two-circle hardware
 // layout (strips already present), so Wire mode has a chain + a real config to
 // push and export without importing an SVG.
@@ -112,9 +112,11 @@ async function gotoWire(page: any, { verified = false, transformProject = null a
   }, TEST_CARD_ID);
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
-  await page.getByRole('group', { name: 'Steps' }).getByRole('button', { name: 'Install' }).click();
-  await expect(page.getByTestId('layout-send-to-card')).toBeVisible();
-  if (!verified) return;
+  if (!verified) {
+    // Unverified wiring exposes no install control — only the LED-check CTA.
+    await expect(page.getByTestId('start-led-check')).toBeVisible();
+    return;
+  }
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-send-ready-'));
   await page.waitForTimeout(600);
   const pending = page.waitForEvent('download');
@@ -136,11 +138,9 @@ async function gotoWire(page: any, { verified = false, transformProject = null a
   await page.addInitScript(value => localStorage.setItem('lw_autosave_v3', value), JSON.stringify(project));
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('layout-wire-panel')).toBeVisible();
-  // The seeded project is fully verified, so once the autosave restores the
-  // panel auto-advances to the Install step itself. Wait for that settled
-  // state instead of clicking — sampling and clicking early raced the
-  // auto-advance effect on CI.
-  await expect(page.getByTestId('commissioning-step')).toHaveAttribute('aria-label', 'Lock it in and install');
+  // The seeded project is fully verified, so the primary flow area settles on
+  // the install control. Wait for the enabled state instead of sampling early.
+  await expect(page.getByText('Checked ✓ — install it on the card.')).toBeVisible();
   await expect(page.getByTestId('layout-send-to-card')).toBeEnabled();
 }
 
@@ -171,16 +171,16 @@ async function proxyStudioOverHttps(page: any) {
   });
 }
 
-test('Send to card stays disabled for default unverified wiring and makes no request', async ({ page }) => {
+test('unverified wiring exposes no install control and makes no request', async ({ page }) => {
   const card = await mockLocalCard(page);
   await gotoWire(page);
 
-  const send = page.getByTestId('layout-send-to-card');
-  await expect(send).toBeDisabled();
-  await expect(send).toContainText('Save to card');
-  await expect(send.locator('.la-card-push-dot')).toHaveCount(1);
-  await expect(page.getByTestId('layout-export-ledmap')).toHaveText('Download WLED map');
-  await expect(page.getByTestId('layout-export-ledmap')).toHaveAttribute('title', 'Secondary export for a separate WLED setup — does not change the Lightweaver card');
+  // The install surface only exists after the LED check verifies the wiring.
+  // The specialist WLED export exists in the DOM but stays behind Advanced.
+  await expect(page.getByTestId('layout-send-to-card')).toHaveCount(0);
+  await expect(page.getByTestId('advanced-installation-tools')).toHaveJSProperty('open', false);
+  await expect(page.getByTestId('layout-export-ledmap')).not.toBeVisible();
+  await expect(page.getByTestId('start-led-check')).toBeVisible();
   expect(card.operations).toEqual([]);
 });
 
@@ -268,7 +268,15 @@ test('a failed push retains the acknowledged installed revision and Retry instal
 
 test('Download WLED map exports a valid { n, map } file', async ({ page }) => {
   await mockLocalCard(page);
-  await gotoWire(page);
+  await gotoWire(page, { verified: true });
+
+  const send = page.getByTestId('layout-send-to-card');
+  await expect(send).toContainText('Save to card');
+  await expect(send.locator('.la-card-push-dot')).toHaveCount(1);
+  const advanced = page.getByTestId('advanced-installation-tools');
+  await advanced.locator('summary').first().click();
+  await expect(page.getByTestId('layout-export-ledmap')).toHaveText('Download WLED map');
+  await expect(page.getByTestId('layout-export-ledmap')).toHaveAttribute('title', 'Secondary export for a separate WLED setup');
 
   const downloadPromise = page.waitForEvent('download');
   await page.getByTestId('layout-export-ledmap').click();

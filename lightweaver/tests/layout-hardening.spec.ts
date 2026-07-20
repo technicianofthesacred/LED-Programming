@@ -5,13 +5,6 @@ async function gotoLayout(page: any) {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
 }
 
-// The Wire commissioning flow is two steps (Check · Install); the StepRail
-// (role=group "Steps") is the navigation affordance.
-async function openWireStep(page: any, railLabel: 'Check' | 'Install', target: (panel: any) => any) {
-  await page.getByRole('group', { name: 'Steps' }).getByRole('button', { name: railLabel }).click();
-  await expect(target(page)).toBeVisible();
-}
-
 test('pending drawing survives a mode visit until explicitly cancelled', async ({ page }) => {
   await gotoLayout(page);
   await page.getByTitle('Draw a new LED strip path on the artwork.').click();
@@ -191,18 +184,18 @@ test('coarse targets keep primary Layout and wire controls at least 44 pixels', 
   }
 
   await page.getByTestId('layout-mode-wire').click();
-  // Check step: the guided bench check is the primary control surface.
-  let box = await page.getByRole('button', { name: 'I can see the LED strips' }).boundingBox();
+  // The single next action is the guided LED check CTA…
+  let box = await page.getByTestId('start-led-check').boundingBox();
   expect(box?.height).toBeGreaterThanOrEqual(44);
-  // The lane/port editors live behind the top-level Advanced wiring disclosure.
-  box = await page.getByTestId('advanced-wiring-toggle').boundingBox();
+  // …and the check itself keeps its primary button touch-sized.
+  await page.getByTestId('start-led-check').click();
+  box = await page.getByRole('button', { name: 'I can see the LED strips' }).boundingBox();
   expect(box?.height).toBeGreaterThanOrEqual(44);
-  await page.getByTestId('advanced-wiring-toggle').click();
-  box = await page.getByRole('button', { name: /Outer circle IN port/ }).boundingBox();
+  // Specialist tools stay behind the top-level Advanced disclosure.
+  const advanced = page.getByTestId('advanced-installation-tools');
+  box = await advanced.locator('summary').first().boundingBox();
   expect(box?.height).toBeGreaterThanOrEqual(44);
-  await openWireStep(page, 'Install', panel => panel.getByTestId('layout-send-to-card'));
-  box = await page.getByTestId('layout-send-to-card').boundingBox();
-  expect(box?.height).toBeGreaterThanOrEqual(44);
+  await expect(advanced).toHaveJSProperty('open', false);
   await context.close();
 });
 
@@ -250,8 +243,12 @@ test('mode toolbar only presents tools that apply while keeping secondary groups
   await expect(page.getByTitle('Draw a new LED strip path on the artwork.')).toHaveCount(0);
 
   await page.getByTestId('layout-mode-wire').click();
-  await expect(page.getByTitle('Split one physical strip where the wire jumps to a new spot.')).toBeVisible();
-  await expect(page.getByTitle('Join two strips into one continuous run.')).toBeVisible();
+  await expect(page.getByTitle('Split one physical strip where the wire jumps to a new spot.')).toHaveCount(0);
+  await expect(page.getByTitle('Join two strips into one continuous run.')).toHaveCount(0);
+  await page.getByText('Advanced installation tools', { exact: true }).click();
+  await page.getByText('Custom mapping', { exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Split a strip mid-wire' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add a cable jump' })).toBeVisible();
   await expect(page.getByTitle('Import an SVG to map LED strips')).toHaveCount(0);
   await expect(page.getByTitle('Draw a new LED strip path on the artwork.')).toHaveCount(0);
 });
@@ -277,11 +274,13 @@ test('focusable SVG strip supports Select, arrow nudge, and Delete', async ({ pa
 
 test('wire scaffold is concise and recovery actions stay hidden without a mixed-content failure', async ({ page }) => {
   await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
-  // The intro guide is gone — the two-step rail plus a one-line step
-  // description is the whole scaffold.
+  // The intro guide and step rail are gone. A compact Wire-derived summary
+  // plus one primary CTA is the whole scaffold.
   await expect(page.getByRole('region', { name: 'Wire setup guide' })).toHaveCount(0);
-  await expect(page.getByRole('group', { name: 'Steps' }).getByRole('button')).toHaveCount(2);
-  await expect(page.getByText('The card lights the real LEDs and you confirm what you see.')).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Steps' })).toHaveCount(0);
+  await expect(page.locator('.lww-plan-head .meta')).toContainText('from Wire');
+  await expect(page.getByTestId('test-install-plan-summary')).toBeVisible();
+  await expect(page.getByTestId('start-led-check')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Copy payload' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Open installer' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0);

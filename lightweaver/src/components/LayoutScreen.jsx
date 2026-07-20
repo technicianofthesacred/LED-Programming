@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { TbIcon } from './layout/shared/InspectorPrimitives.jsx';
 import { ModeSwitch } from './layout/shared/ModeSwitch.jsx';
 import { GLOW_MODES, svgPt } from '../lib/layoutGeometry.js';
-import { mainChain, normalizePatchBoard } from '../lib/patchBoard.js';
 import { LayoutCanvas } from './layout/canvas/LayoutCanvas.jsx';
 import { DrawModePanel } from './layout/modes/DrawModePanel.jsx';
 import { WireModePanel } from './layout/modes/WireModePanel.jsx';
@@ -44,7 +43,6 @@ export function LayoutScreen({ connected, cardHost }) {
     setHoveredLayerId, hoveredSubPathId, setHoveredSubPathId,
     // wire
     wireOverlayMode, setWireOverlayMode,
-    setSelectedWirePatchId, setLinkRouteIds, linkRouteStartedRef,
     chopStripAtEvent, toggleRoutePatch,
     // canvas + preview
     showLight, setShowLight, showLeds, setShowLeds,
@@ -200,45 +198,8 @@ export function LayoutScreen({ connected, cardHost }) {
             </>
           )}
 
-          {/* Draw / Chop / Link tools */}
-          {/* Split / Link are wire concerns — surfaced only in Wire mode
-              (plan's canvas behavior matrix: chop/link overlays are Wire only). */}
-          {mode === 'wire' && (
-            <>
-              <button
-                className={`tb-btn${wireOverlayMode === 'chop' ? ' active' : ''}`}
-                title="Split one physical strip where the wire jumps to a new spot."
-                onClick={() => {
-                  setDrawMode(false);
-                  setGhostPt(null);
-                  setWireOverlayMode(m => m === 'chop' ? 'idle' : 'chop');
-                }}>
-                Split
-              </button>
-              <button
-                className={`tb-btn${wireOverlayMode === 'link' ? ' active' : ''}`}
-                title="Join two strips into one continuous run."
-                onClick={() => {
-                  setDrawMode(false);
-                  setGhostPt(null);
-                  setSelectedWirePatchId(null);
-                  setWireOverlayMode(m => {
-                    const nextMode = m === 'link' ? 'idle' : 'link';
-                    if (nextMode === 'link') {
-                      const currentRows = mainChain(normalizePatchBoard(patchBoard, strips)).rowIds;
-                      setLinkRouteIds(currentRows);
-                      linkRouteStartedRef.current = false;
-                    } else {
-                      setLinkRouteIds([]);
-                      linkRouteStartedRef.current = false;
-                    }
-                    return nextMode;
-                  });
-                }}>
-                Link
-              </button>
-            </>
-          )}
+          {/* Split and cable-jump tools live inside Test & Install's closed
+              Advanced section so the normal toolbar stays task-focused. */}
           </div>
 
           {/* Undo / Redo */}
