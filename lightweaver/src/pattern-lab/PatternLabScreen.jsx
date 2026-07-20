@@ -7,6 +7,7 @@ import {
   createPatternLabSimplificationVariant,
 } from '../lib/patternLabCompatibility.js';
 import { PATTERN_LAB_EVOLUTION_CHARACTERS, sampleEvolution } from '../lib/patternLabEvolution.js';
+import { PATTERN_LAB_GENERATOR_IDS } from '../lib/patternLabGenerators.js';
 import { resolvePatternLabMacros } from '../lib/patternLabMacros.js';
 import { recipeFromPattern } from '../lib/patternLabPatternAdapter.js';
 import { normalizePatternLabRecipe } from '../lib/patternLabRecipe.js';
@@ -39,6 +40,13 @@ const MAX_IMPORT_BYTES = 256 * 1024;
 const MAX_IMPORT_NODES = 2000;
 const MAX_IMPORT_DEPTH = 12;
 const PATTERN_LAB_PREVIEW_FPS = PATTERN_LAB_WORKER_BUDGETS.previewFps;
+const GENERATOR_NAMES = {
+  particles: 'Particle Drift',
+  ripple: 'Living Ripples',
+  'random-walkers': 'Wandering Trails',
+  'cellular-field': 'Cellular Field',
+  'gray-scott-1d': 'Reaction Diffusion',
+};
 
 function cloneRecipe(recipe) {
   return JSON.parse(JSON.stringify(recipe));
@@ -156,8 +164,14 @@ function withEvolutionDisabled(recipe) {
 }
 
 function sourceFromRecipe(recipe) {
-  const source = recipeFromPattern(recipe.base.patternId, { palette: recipe.palette });
-  return withEvolutionDisabled({ ...source, id: recipe.id, name: recipe.name });
+  const stateful = PATTERN_LAB_GENERATOR_IDS.includes(recipe.base?.kind);
+  const source = recipeFromPattern(stateful ? 'aurora' : recipe.base.patternId, { palette: recipe.palette });
+  return withEvolutionDisabled({
+    ...source,
+    id: recipe.id,
+    name: recipe.name,
+    ...(stateful ? { base: cloneRecipe(recipe.base) } : {}),
+  });
 }
 
 function deriveSeed(seed, index) {
@@ -514,7 +528,15 @@ export default function PatternLabScreen() {
       setDraft(null);
       return;
     }
-    const source = withEvolutionDisabled(recipeFromPattern(patternId, { palette: project.palette }));
+    const generatorId = patternId.startsWith('generator:') ? patternId.slice('generator:'.length) : '';
+    const stateful = PATTERN_LAB_GENERATOR_IDS.includes(generatorId);
+    const source = stateful
+      ? withEvolutionDisabled({
+          ...recipeFromPattern('aurora', { palette: project.palette }),
+          name: GENERATOR_NAMES[generatorId],
+          base: { kind: generatorId, patternId: 'aurora', params: { advanced: {} } },
+        })
+      : withEvolutionDisabled(recipeFromPattern(patternId, { palette: project.palette }));
     setSourceRecipe(source);
     setDraft(cloneRecipe(source));
     setComparison('draft');
@@ -528,6 +550,21 @@ export default function PatternLabScreen() {
 
   function changeMacro(name, value) {
     setDraft(current => current ? { ...current, macros: { ...current.macros, [name]: value } } : current);
+    setComparison('draft');
+    setMessage('');
+  }
+
+  function changeAdvanced(name, value) {
+    setDraft(current => current ? {
+      ...current,
+      base: {
+        ...current.base,
+        params: {
+          ...current.base.params,
+          advanced: { ...current.base.params?.advanced, [name]: value },
+        },
+      },
+    } : current);
     setComparison('draft');
     setMessage('');
   }
@@ -746,6 +783,7 @@ export default function PatternLabScreen() {
                   previewTime={previewTime}
                   playing={playing}
                   geometry={geometry}
+                  fallbackLook={project.standaloneController?.defaultLook}
                 />
               ) : (
                 <>
@@ -793,9 +831,12 @@ export default function PatternLabScreen() {
               <PatternLabControls
                 patterns={patterns}
                 recipe={draft}
-                selectedPatternId={draft?.base?.patternId || ''}
+                selectedPatternId={PATTERN_LAB_GENERATOR_IDS.includes(draft?.base?.kind)
+                  ? `generator:${draft.base.kind}`
+                  : draft?.base?.patternId || ''}
                 onPatternChange={choosePattern}
                 onMacroChange={changeMacro}
+                onAdvancedChange={changeAdvanced}
               />
             </div>
             <PatternLabEvolution

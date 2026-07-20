@@ -4,6 +4,52 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/#screen=pattern-lab', { waitUntil: 'domcontentloaded' });
 });
 
+test('chooses and sculpts a living simulation through the simple Pattern Lab controls', async ({ page }) => {
+  await page.addInitScript(() => {
+    const NativeWorker = window.Worker;
+    const recipes: Array<Record<string, unknown>> = [];
+    class RecipeWorker extends NativeWorker {
+      postMessage(message: { type?: string; payload?: { recipe?: Record<string, unknown> } }, transfer?: Transferable[] | StructuredSerializeOptions) {
+        if (message?.type === 'render' && message.payload?.recipe) {
+          recipes.push(structuredClone(message.payload.recipe));
+        }
+        if (transfer === undefined) super.postMessage(message);
+        else super.postMessage(message, transfer);
+      }
+    }
+    Object.defineProperty(window, 'Worker', { configurable: true, value: RecipeWorker });
+    Object.defineProperty(window, '__LW_STATEFUL_RECIPES__', { value: recipes });
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByLabel('Base pattern').selectOption('generator:particles');
+  await expect(page.getByTestId('pattern-lab-mapped-preview')).toHaveAttribute('data-worker-state', 'frame');
+  await expect(page.getByTestId('pattern-lab-draft-name')).toHaveText('Particle Drift');
+  await page.getByText('Advanced controls').click();
+  await page.getByRole('slider', { name: 'Particle count' }).fill('48');
+  await page.getByRole('slider', { name: 'Movement', exact: true }).fill('68');
+  await expect(page.getByLabel('Movement value')).toHaveText('68%');
+  await expect.poll(() => page.evaluate(() => {
+    const recipes = (window as typeof window & { __LW_STATEFUL_RECIPES__: Array<Record<string, unknown>> })
+      .__LW_STATEFUL_RECIPES__;
+    return recipes.some(recipe => (
+      (recipe.base as { kind?: string })?.kind === 'particles'
+      && (recipe.macros as { movement?: number })?.movement === 0.68
+      && (recipe.base as { params?: { advanced?: { particleCount?: number } } })
+        ?.params?.advanced?.particleCount === 48
+    ));
+  })).toBe(true);
+
+  const recipes = await page.evaluate(() => (
+    (window as typeof window & { __LW_STATEFUL_RECIPES__: Array<Record<string, unknown>> })
+      .__LW_STATEFUL_RECIPES__
+  ));
+  const stateful = recipes.filter(recipe => (recipe.base as { kind?: string })?.kind === 'particles');
+  expect(stateful.length).toBeGreaterThan(0);
+  expect(stateful.every(recipe => Number.isInteger(recipe.seed))).toBe(true);
+  expect(stateful.some(recipe => (recipe.macros as { movement?: number })?.movement === 0.68)).toBe(true);
+});
+
 test('the real worker renders the deterministic bounded stateful generator pack', async ({ page }) => {
   const result = await page.evaluate(async () => {
     const {

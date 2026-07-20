@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   PATTERN_LAB_WORKER_BUDGETS,
   quantizePatternLabWorkerTime,
 } from '../lib/patternLabWorkerProtocol.js';
 import { resolvePatternLabMacros } from '../lib/patternLabMacros.js';
 import { sampleEvolution } from '../lib/patternLabEvolution.js';
+import { createPatternLabPreviewSession } from '../lib/patternLabPreviewSession.js';
 import { PatternPreview } from '../v3/PatternPreview.jsx';
 import usePatternLabWorker from './usePatternLabWorker.js';
 
@@ -58,6 +59,20 @@ function workerColorLookup(frame) {
   };
 }
 
+function byteHex(value) {
+  return Math.max(0, Math.min(255, Number(value) || 0)).toString(16).padStart(2, '0').toUpperCase();
+}
+
+export function patternLabFrameToCardPixels(frame) {
+  const total = Number(frame?.totalSamples);
+  const lookup = workerColorLookup(frame);
+  if (!lookup || !Number.isSafeInteger(total) || total < 1) return null;
+  return Array.from({ length: total }, (_, index) => {
+    const color = lookup(index);
+    return `${byteHex(color.r)}${byteHex(color.g)}${byteHex(color.b)}`;
+  });
+}
+
 export default function PatternLabPreview({
   recipe,
   previewTime,
@@ -65,7 +80,10 @@ export default function PatternLabPreview({
   geometry,
   thumbnail = false,
   seedPreview = false,
+  fallbackLook = {},
 }) {
+  const physicalSessionRef = useRef(null);
+  const [physicalPreview, setPhysicalPreview] = useState({ state: 'idle', active: false, error: null });
   const patternId = recipe.base.patternId;
   const macros = resolvePatternLabMacros(recipe);
   const evolutionRecipe = seedPreview && !recipe.evolution.enabled
@@ -129,6 +147,7 @@ export default function PatternLabPreview({
     enabled: !thumbnail,
   });
   const workerFunction = useMemo(() => workerColorLookup(worker.frame), [worker.frame]);
+  const physicalPixels = useMemo(() => patternLabFrameToCardPixels(worker.frame), [worker.frame]);
   const displayGeometry = useMemo(() => {
     if (!workerFunction) return geometry;
     return {
@@ -145,6 +164,35 @@ export default function PatternLabPreview({
   const workerSampleLimit = workerMode === 'preview'
     ? PATTERN_LAB_WORKER_BUDGETS.previewSamples
     : PATTERN_LAB_WORKER_BUDGETS.finalSamples;
+
+  useEffect(() => {
+    if (physicalPreview.active && physicalPixels) physicalSessionRef.current?.push(physicalPixels);
+  }, [physicalPixels, physicalPreview.active]);
+
+  useEffect(() => () => {
+    const session = physicalSessionRef.current;
+    physicalSessionRef.current = null;
+    if (session) void session.stop('unmount').catch(() => {});
+  }, []);
+
+  async function togglePhysicalPreview() {
+    if (physicalPreview.active) {
+      await physicalSessionRef.current?.stop('user').catch(() => {});
+      physicalSessionRef.current = null;
+      return;
+    }
+    if (!physicalPixels) return;
+    const session = createPatternLabPreviewSession({
+      fallbackLook,
+      onStateChange: setPhysicalPreview,
+    });
+    physicalSessionRef.current = session;
+    try {
+      await session.start(physicalPixels);
+    } catch (error) {
+      setPhysicalPreview({ state: 'error', active: false, error });
+    }
+  }
 
   return (
     <div
@@ -183,6 +231,36 @@ export default function PatternLabPreview({
         dotSize={clamp(3.25 - shapeScale * 0.5 + texture * 0.18, 1.5, 3.3)}
         targetFps={thumbnail ? 8 : PATTERN_LAB_WORKER_BUDGETS.previewFps}
       />
+      {!thumbnail && (
+        <div
+          className="plab-live-preview"
+          data-state={physicalPreview.state}
+          data-preview-error={physicalPreview.error?.message || undefined}
+        >
+          <button
+            type="button"
+            className="plab-live-preview-action"
+            aria-pressed={physicalPreview.active}
+            disabled={!physicalPixels || ['starting', 'stopping'].includes(physicalPreview.state)}
+            onClick={togglePhysicalPreview}
+          >
+            {physicalPreview.active ? 'Stop preview' : physicalPreview.state === 'starting' ? 'Connecting…' : 'Preview on Lights'}
+          </button>
+          <span role="status" aria-live="polite">
+            {physicalPreview.active
+              ? 'Live · Stop restores the previous card look'
+              : physicalPreview.state === 'restored'
+                ? 'Previous card look restored'
+                : physicalPreview.state === 'superseded'
+                  ? 'Control moved to another Lightweaver screen'
+                : physicalPreview.state === 'error'
+                  ? physicalPreview.restored
+                    ? 'Could not preview · previous card look restored'
+                    : 'Could not restore the previous card look'
+                  : 'Opt-in · your lights stay unchanged'}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

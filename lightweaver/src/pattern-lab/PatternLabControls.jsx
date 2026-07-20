@@ -1,4 +1,16 @@
 import { resolvePatternLabMacros } from '../lib/patternLabMacros.js';
+import {
+  PATTERN_LAB_GENERATOR_CONTROLS,
+  PATTERN_LAB_GENERATOR_IDS,
+} from '../lib/patternLabGenerators.js';
+
+const GENERATOR_LABELS = {
+  particles: 'Particle Drift',
+  ripple: 'Living Ripples',
+  'random-walkers': 'Wandering Trails',
+  'cellular-field': 'Cellular Field',
+  'gray-scott-1d': 'Reaction Diffusion',
+};
 
 const MACROS = [
   ['color', 'Color', 'Warmth and palette travel'],
@@ -8,8 +20,17 @@ const MACROS = [
   ['energy', 'Energy', 'Quiet glow to luminous presence'],
 ];
 
-export default function PatternLabControls({ patterns, recipe, selectedPatternId, onPatternChange, onMacroChange }) {
+export default function PatternLabControls({
+  patterns,
+  recipe,
+  selectedPatternId,
+  onPatternChange,
+  onMacroChange,
+  onAdvancedChange,
+}) {
   const technical = recipe ? resolvePatternLabMacros(recipe) : null;
+  const generatorId = PATTERN_LAB_GENERATOR_IDS.includes(recipe?.base?.kind) ? recipe.base.kind : null;
+  const generatorControls = generatorId ? PATTERN_LAB_GENERATOR_CONTROLS[generatorId] : null;
 
   return (
     <div className="plab-control-body">
@@ -25,7 +46,14 @@ export default function PatternLabControls({ patterns, recipe, selectedPatternId
           <span>Base pattern</span>
           <select id="plab-base-pattern" value={selectedPatternId || ''} onChange={event => onPatternChange(event.target.value)}>
             <option value="">Choose a pattern…</option>
-            {patterns.map(pattern => <option key={pattern.id} value={pattern.id}>{pattern.name}</option>)}
+            <optgroup label="Living simulations">
+              {PATTERN_LAB_GENERATOR_IDS.map(id => (
+                <option key={id} value={`generator:${id}`}>{GENERATOR_LABELS[id]}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Built-in Lightweaver looks">
+              {patterns.map(pattern => <option key={pattern.id} value={pattern.id}>{pattern.name}</option>)}
+            </optgroup>
           </select>
         </label>
       </section>
@@ -68,6 +96,34 @@ export default function PatternLabControls({ patterns, recipe, selectedPatternId
               <div><dt>Detail</dt><dd>{technical.texture.detailScale.toFixed(2)}×</dd></div>
               <div><dt>Brightness ceiling</dt><dd>{Math.round(technical.energy.brightness * 100)}%</dd></div>
             </dl>
+            {generatorControls && (
+              <div className="plab-generator-advanced">
+                <p>{GENERATOR_LABELS[generatorId]} details</p>
+                {generatorControls.advanced.map(control => {
+                  const value = recipe.base?.params?.advanced?.[control.key] ?? control.defaultValue;
+                  const integer = Number.isInteger(control.minimum)
+                    && Number.isInteger(control.maximum)
+                    && Number.isInteger(control.defaultValue);
+                  return (
+                    <label className="plab-macro" key={control.key}>
+                      <span className="plab-macro-label">
+                        <strong>{control.label}</strong>
+                        <output>{integer ? Math.round(value) : Number(value).toFixed(3)}</output>
+                      </span>
+                      <input
+                        aria-label={control.label}
+                        type="range"
+                        min={control.minimum}
+                        max={control.maximum}
+                        step={integer ? 1 : (control.maximum - control.minimum) / 100}
+                        value={value}
+                        onChange={event => onAdvancedChange?.(control.key, Number(event.target.value))}
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+            )}
           </details>
         ) : (
           <div className="plab-advanced plab-advanced-disabled">

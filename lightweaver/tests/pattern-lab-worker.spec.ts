@@ -28,6 +28,9 @@ test('initializes one compact transferable geometry snapshot and keeps render me
           type: message?.type,
           hasGeometry: Boolean(message?.payload?.geometry),
           recipeKeys: message?.payload?.recipe ? Object.keys(message.payload.recipe as object).sort() : [],
+          baseKind: (message?.payload?.recipe as { base?: { kind?: string } })?.base?.kind,
+          seed: (message?.payload?.recipe as { seed?: number })?.seed,
+          macroMovement: (message?.payload?.recipe as { macros?: { movement?: number } })?.macros?.movement,
           coordinates: Object.prototype.toString.call((message?.payload?.geometry as { coordinates?: unknown })?.coordinates),
           transferCount: Array.isArray(transferOrOptions) ? transferOrOptions.length : 0,
         });
@@ -56,7 +59,10 @@ test('initializes one compact transferable geometry snapshot and keeps render me
     && Number(message.transferCount) === 2)).toBe(true);
   expect(renders.length).toBeGreaterThan(0);
   expect(renders.every(message => !message.hasGeometry)).toBe(true);
-  expect(renders.every(message => JSON.stringify(message.recipeKeys) === JSON.stringify(['base', 'layers', 'palette']))).toBe(true);
+  expect(renders.every(message => JSON.stringify(message.recipeKeys) === JSON.stringify(['base', 'layers', 'macros', 'palette', 'seed']))).toBe(true);
+  expect(renders.every(message => message.baseKind === 'lightweaver-pattern')).toBe(true);
+  expect(renders.every(message => Number.isInteger(message.seed))).toBe(true);
+  expect(renders.some(message => message.macroMovement === 0.5)).toBe(true);
 });
 
 test('matches full-layout pixels when preview sampling excludes a hidden extreme strip', async ({ page }) => {
