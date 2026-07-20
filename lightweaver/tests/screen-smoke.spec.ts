@@ -372,14 +372,25 @@ test('a paired card reporting a factory status surfaces "Needs project", not gre
 
 test('card status control distinguishes checking, blank, and command-ready states', async ({ page }) => {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => localStorage.clear());
+  const card = { id: 'lw-status-card', name: 'Status card' };
+  await page.unroute('http://lightweaver.local/**');
+  await page.route('http://lightweaver.local/**', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ cardId: card.id, cardName: card.name }),
+  }));
+  await page.evaluate(pairedCard => {
+    localStorage.clear();
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1,
+      ...pairedCard,
+      hostname: 'lightweaver',
+    }));
+    localStorage.setItem('lw_chip_card_host', 'lightweaver.local');
+  }, card);
   await page.reload({ waitUntil: 'domcontentloaded' });
 
   const status = page.getByTestId('card-link-status');
-  const card = { id: 'lw-status-card', name: 'Status card' };
-  await dispatchCardLinkEvents(page, [{
-    type: 'card-verified', via: 'direct', host: 'lightweaver.local', card,
-  }]);
   await expect(status).toHaveAccessibleName(/Checking card/);
   await expect(status).not.toHaveClass(/is-connected/);
 
