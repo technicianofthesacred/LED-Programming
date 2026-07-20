@@ -168,6 +168,32 @@ test('exports canonical recipes and rejects invalid imports without mutating the
   await expect(page.getByRole('slider', { name: 'Movement', exact: true })).toHaveValue('64');
 
   await page.getByLabel('Import recipe').setInputFiles({
+    name: 'null-layer.lwrecipe.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({ ...exported, layers: [null] })),
+  });
+  await expect(alert.locator('li')).toHaveCount(1);
+  await expect(alert).toContainText('$.layers[0]');
+  await expect(page.getByTestId('pattern-lab-draft-name')).toHaveText(nameBefore || 'Aurora');
+  await expect(page.getByRole('slider', { name: 'Movement', exact: true })).toHaveValue('64');
+
+  await page.getByLabel('Import recipe').setInputFiles({
+    name: 'malformed-layer.lwrecipe.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({
+      ...exported,
+      layers: [{ id: '', name: 42, blendMode: 'overlay', opacity: 2 }],
+    })),
+  });
+  await expect(alert.locator('li')).toHaveCount(4);
+  await expect(alert).toContainText('$.layers[0].id');
+  await expect(alert).toContainText('$.layers[0].name');
+  await expect(alert).toContainText('$.layers[0].blendMode');
+  await expect(alert).toContainText('$.layers[0].opacity');
+  await expect(page.getByTestId('pattern-lab-draft-name')).toHaveText(nameBefore || 'Aurora');
+  await expect(page.getByRole('slider', { name: 'Movement', exact: true })).toHaveValue('64');
+
+  await page.getByLabel('Import recipe').setInputFiles({
     name: 'too-large.lwrecipe.json',
     mimeType: 'application/json',
     buffer: Buffer.alloc(300 * 1024, 32),

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { downloadJsonFile } from '../lib/downloadFile.js';
+import { PATTERN_LAB_BLEND_MODES } from '../lib/patternLabCompositor.js';
 import { PATTERN_LAB_EVOLUTION_CHARACTERS } from '../lib/patternLabEvolution.js';
 import { recipeFromPattern } from '../lib/patternLabPatternAdapter.js';
 import { normalizePatternLabRecipe } from '../lib/patternLabRecipe.js';
@@ -64,7 +65,23 @@ function validateImportDocument(value) {
   if (!PATTERN_LAB_EVOLUTION_CHARACTERS.includes(value.evolution?.character)) {
     add('$.evolution.character', 'must be one of the six supported characters');
   }
-  if (!Array.isArray(value.layers) || value.layers.length > 3) add('$.layers', 'must contain at most 3 layers');
+  if (!Array.isArray(value.layers) || value.layers.length > 3) {
+    add('$.layers', 'must contain at most 3 layers');
+  } else {
+    value.layers.forEach((layer, index) => {
+      const path = `$.layers[${index}]`;
+      if (!layer || typeof layer !== 'object' || Array.isArray(layer)) {
+        add(path, 'must be a layer object');
+        return;
+      }
+      if (typeof layer.id !== 'string' || !layer.id.trim()) add(`${path}.id`, 'must be a non-empty string');
+      if (typeof layer.name !== 'string' || !layer.name.trim()) add(`${path}.name`, 'must be a non-empty string');
+      if (!PATTERN_LAB_BLEND_MODES.includes(layer.blendMode)) add(`${path}.blendMode`, 'must be a supported blend mode');
+      if (!Number.isFinite(Number(layer.opacity)) || Number(layer.opacity) < 0 || Number(layer.opacity) > 1) {
+        add(`${path}.opacity`, 'must be between 0 and 1');
+      }
+    });
+  }
   if (Array.isArray(value.targets) && value.targets.length > 64) add('$.targets', 'must contain at most 64 targets');
   if (Array.isArray(value.requirements) && value.requirements.length > 64) add('$.requirements', 'must contain at most 64 entries');
   if (Array.isArray(value.provenance) && value.provenance.length > 64) add('$.provenance', 'must contain at most 64 entries');
