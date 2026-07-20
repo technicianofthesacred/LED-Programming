@@ -32,10 +32,36 @@ assert.match(storage, /parseNativeRecipeV1\(/, 'storage must validate recipes at
 assert.match(storage, /synchronizeNativeRecipes\(/, 'only active validated config recipes should reach runtime dispatch');
 assert.match(patterns, /findNativeRecipe\(/, 'recipe lookup must be additive to built-in pattern dispatch');
 assert.match(patterns, /renderNativeRecipe\(/, 'accepted native recipes must use the bounded renderer');
+assert.match(
+  patterns,
+  /if\s*\(\s*!isSupportedProceduralPattern\(preset\)\s*\)\s*return false;[\s\S]*?if\s*\(\s*!isSupportedLegacyProceduralPattern\(preset\)\s*\)\s*\{[\s\S]*?findNativeRecipe\(preset\.c_str\(\)\)[\s\S]*?renderNativeRecipe/,
+  'registered non-legacy recipe routes must render while compiled procedural IDs retain precedence',
+);
+assert.match(
+  patterns,
+  /!isSupportedPresetPattern\(patternId\)[\s\S]*findNativeRecipe\(patternId\.c_str\(\)\)/,
+  'registered recipe routes must not override compiled preset IDs',
+);
+assert.doesNotMatch(
+  patterns,
+  /source\.nscale8\(amount\)/,
+  'blend modes must be computed at full strength before opacity interpolation',
+);
+assert.match(
+  patterns,
+  /CRGB\s+blended\s*=\s*destination[\s\S]*destination\s*=\s*blend\(destination,\s*blended,\s*amount\)/,
+  'native layer opacity must interpolate from the backdrop to the full blend result',
+);
 
 for (const legacy of ['aurora', 'custom-color', 'warm-white', 'blackout', 'test-white']) {
   assert.match(patterns, new RegExp(`"${legacy}"`), `legacy pattern ${legacy} must remain available`);
 }
+
+assert.match(
+  storage,
+  /id\.length\(\)\s*>\s*lightweaver::LW_RECIPE_MAX_ID_BYTES/,
+  'strict config validation must reject native route IDs the runtime registry cannot store',
+);
 
 assert.match(runtimeApi, /String\s+runtimeRecipeCapabilities\(\)/);
 assert.match(web, /recipeCapabilities/, 'firmware info should expose the versioned recipe descriptor');

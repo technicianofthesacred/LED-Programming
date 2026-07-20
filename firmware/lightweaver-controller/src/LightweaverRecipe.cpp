@@ -396,14 +396,20 @@ bool parseNativeRecipeV1(JsonVariantConst value, size_t serializedBytes,
                   "recipe.requirements[]", "must be an object");
     }
     JsonObjectConst requirement = requirementValue.as<JsonObjectConst>();
-    if (!requirement["capability"].is<const char*>()) continue;
+    if (!requirement["capability"].is<const char*>()) {
+      return fail(error, RecipeParseErrorCode::InvalidType,
+                  "recipe.requirements[].capability", "must be a string");
+    }
+    if (!requirement["required"].isNull() && !requirement["required"].is<bool>()) {
+      return fail(error, RecipeParseErrorCode::InvalidType,
+                  "recipe.requirements[].required", "must be a boolean");
+    }
     const char* capability = requirement["capability"].as<const char*>();
-    if (std::strncmp(capability, "live-", 5) == 0 ||
-        std::strcmp(capability, "audio") == 0 ||
-        std::strcmp(capability, "beat") == 0) {
+    const bool required = requirement["required"] | true;
+    if (required && std::strcmp(capability, "time") != 0) {
       return fail(error, RecipeParseErrorCode::UnsupportedLiveInput,
                   "recipe.requirements[].capability",
-                  "live inputs are not available to native recipes");
+                  "required capability is not available to native recipes");
     }
   }
 

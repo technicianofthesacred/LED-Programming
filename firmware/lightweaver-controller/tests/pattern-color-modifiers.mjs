@@ -29,8 +29,8 @@ assert.match(compiledSupport, /isSupportedProceduralPattern\(patternId\)/);
 assert.match(compiledSupport, /isSupportedPresetPattern\(patternId\)/);
 
 const proceduralSupport = source.slice(
-  source.indexOf('bool isSupportedProceduralPattern('),
-  source.indexOf('\n}', source.indexOf('bool isSupportedProceduralPattern(')),
+  source.indexOf('static bool isSupportedLegacyProceduralPattern('),
+  source.indexOf('\n}', source.indexOf('static bool isSupportedLegacyProceduralPattern(')),
 );
 const presetSupport = source.slice(
   source.indexOf('bool isSupportedPresetPattern('),

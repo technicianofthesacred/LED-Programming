@@ -198,6 +198,18 @@ void test_rejects_bake_only_and_live_inputs() {
       R"({"version":1,"id":"live","palette":["#000000","#ffffff"],"requirements":[{"capability":"live-audio","required":true}],"layers":[]})",
       RecipeParseErrorCode::UnsupportedLiveInput,
       "recipe.requirements[].capability");
+  expectRejected(
+      R"({"version":1,"id":"unknown","palette":["#000000","#ffffff"],"requirements":[{"capability":"future-sensor","required":true}],"layers":[]})",
+      RecipeParseErrorCode::UnsupportedLiveInput,
+      "recipe.requirements[].capability");
+  expectRejected(
+      R"({"version":1,"id":"malformed","palette":["#000000","#ffffff"],"requirements":[{"required":true}],"layers":[]})",
+      RecipeParseErrorCode::InvalidType,
+      "recipe.requirements[].capability");
+  expectRejected(
+      R"({"version":1,"id":"malformed-required","palette":["#000000","#ffffff"],"requirements":[{"capability":"time","required":"yes"}],"layers":[]})",
+      RecipeParseErrorCode::InvalidType,
+      "recipe.requirements[].required");
 }
 
 void test_capability_descriptor_is_versioned_and_bounded() {

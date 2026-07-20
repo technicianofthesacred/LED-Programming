@@ -169,26 +169,23 @@ static void compositeRecipeLayer(CRGB& destination, CRGB source, float alpha,
                                  lightweaver::RecipeBlendMode blendMode,
                                  bool firstLayer) {
   uint8_t amount = static_cast<uint8_t>(constrain(int(alpha * 255.0f), 0, 255));
-  if (blendMode == lightweaver::RecipeBlendMode::Crossfade) {
-    destination = blend(destination, source, amount);
-    return;
-  }
-  source.nscale8(amount);
+  CRGB blended = destination;
   if (blendMode == lightweaver::RecipeBlendMode::Add) {
-    destination.r = qadd8(destination.r, source.r);
-    destination.g = qadd8(destination.g, source.g);
-    destination.b = qadd8(destination.b, source.b);
+    blended.r = qadd8(destination.r, source.r);
+    blended.g = qadd8(destination.g, source.g);
+    blended.b = qadd8(destination.b, source.b);
   } else if (blendMode == lightweaver::RecipeBlendMode::Max) {
-    destination.r = max(destination.r, source.r);
-    destination.g = max(destination.g, source.g);
-    destination.b = max(destination.b, source.b);
-  } else if (firstLayer) {
-    destination = source;
+    blended.r = max(destination.r, source.r);
+    blended.g = max(destination.g, source.g);
+    blended.b = max(destination.b, source.b);
+  } else if (blendMode == lightweaver::RecipeBlendMode::Crossfade || firstLayer) {
+    blended = source;
   } else {
-    destination.r = scale8(destination.r, source.r);
-    destination.g = scale8(destination.g, source.g);
-    destination.b = scale8(destination.b, source.b);
+    blended.r = scale8(destination.r, source.r);
+    blended.g = scale8(destination.g, source.g);
+    blended.b = scale8(destination.b, source.b);
   }
+  destination = blend(destination, blended, amount);
 }
 
 bool renderNativeRecipe(const lightweaver::NativeRecipe& recipe, CRGB* leds,
@@ -251,9 +248,8 @@ bool renderNativeRecipe(const lightweaver::NativeRecipe& recipe, CRGB* leds,
   return true;
 }
 
-bool isSupportedProceduralPattern(const String& patternId) {
-  return lightweaver::findNativeRecipe(patternId.c_str()) != nullptr ||
-         patternId == "aurora" ||
+static bool isSupportedLegacyProceduralPattern(const String& patternId) {
+  return patternId == "aurora" ||
          patternId == "custom-color" ||
          patternId == "ember" ||
          patternId == "plasma" ||
@@ -285,6 +281,12 @@ bool isSupportedProceduralPattern(const String& patternId) {
          patternId == "wave";
 }
 
+bool isSupportedProceduralPattern(const String& patternId) {
+  return isSupportedLegacyProceduralPattern(patternId) ||
+         (!isSupportedPresetPattern(patternId) &&
+          lightweaver::findNativeRecipe(patternId.c_str()) != nullptr);
+}
+
 bool isSupportedPresetPattern(const String& patternId) {
   return patternId == "warm-white" ||
          patternId == "cool-white" ||
@@ -307,8 +309,10 @@ bool isSupportedCompiledPattern(const String& patternId) {
 
 bool renderProceduralPattern(const String& preset, CRGB* leds, uint16_t totalPixels, uint32_t now, const PatternModifiers& mods) {
   if (!isSupportedProceduralPattern(preset)) return false;
-  const lightweaver::NativeRecipe* recipe = lightweaver::findNativeRecipe(preset.c_str());
-  if (recipe) return renderNativeRecipe(*recipe, leds, totalPixels, now, mods);
+  if (!isSupportedLegacyProceduralPattern(preset)) {
+    const lightweaver::NativeRecipe* recipe = lightweaver::findNativeRecipe(preset.c_str());
+    return recipe ? renderNativeRecipe(*recipe, leds, totalPixels, now, mods) : false;
+  }
   uint32_t t = scaleTime(now, mods.speed);
   if (preset == "custom-color") {
     uint8_t hue = mods.customHue;

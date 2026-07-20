@@ -713,6 +713,11 @@ bool validateRuntimeConfigJsonStrict(const String& json,
     JsonVariantConst recipeValue = look["nativeRecipe"];
     if (recipeValue.isNull()) recipeValue = look["recipe"];
     if (!recipeValue.isNull()) {
+      if (id.length() > lightweaver::LW_RECIPE_MAX_ID_BYTES ||
+          preset.length() > lightweaver::LW_RECIPE_MAX_ID_BYTES) {
+        message = "native recipe route id exceeds supported limit";
+        return false;
+      }
       lightweaver::NativeRecipe nativeRecipe;
       lightweaver::RecipeParseError recipeError;
       if (!lightweaver::parseNativeRecipeV1(
