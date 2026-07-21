@@ -4,6 +4,9 @@ Living list of outstanding work on the LED installation controller. Project is b
 
 ## Active release path
 
+The focused pause/resume handoff for the current card-provisioning release is
+[docs/card-provisioning-remaining.md](docs/card-provisioning-remaining.md).
+
 The immediate goal is to prove and ship the product already on `main`, not to
 run every historical plan. The ordered source of truth is the
 [release-first roadmap](docs/roadmap.md#current-execution-order-protect-the-working-product).
