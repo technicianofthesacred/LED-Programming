@@ -348,7 +348,10 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     setUsbOwnershipBlocked(false);
   }
 
-  async function releaseUsbConnection(connection = usbOwnershipRef.current.connection || { loader: loaderRef.current, transport: transportRef.current }) {
+  async function releaseUsbConnection(requestedConnection = null) {
+    const connection = requestedConnection || usbOwnershipRef.current.connection
+      || (loaderRef.current || transportRef.current ? { loader: loaderRef.current, transport: transportRef.current } : null);
+    if (!connection) return true;
     if (!connection?.loader && !connection?.transport && !testDriver()) return true;
     // This barrier is deliberately independent of a production-run lease. A
     // storage event may replace the run while the physical port is releasing.
@@ -622,12 +625,22 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     const installConnection = usbOwnershipRef.current.connection || { loader: loaderRef.current, transport: transportRef.current };
     let activeRunLease = runLease;
     let installLease = null;
+    let installReleaseAttempted = false;
+    let installReleasedByFlow = false;
     try {
       const installingRun = await advance('install', { cardChanged: false, usbReleased: false }, runLease);
       installLease = Object.freeze(correlation(installingRun));
       activeRunLease = installLease;
         const driver = testDriver();
-        if (driver?.install) await driver.install({ release: release.value, hardware, onProgress: setProgress });
+        if (driver?.install) {
+          await driver.install({ release: release.value, hardware, onProgress: setProgress });
+          assertActiveRunLease(installLease);
+          installReleaseAttempted = true;
+          if (!await releaseUsbConnection(installConnection)) {
+            throw new Error('USB release could not be confirmed after firmware installation.');
+          }
+          installReleasedByFlow = true;
+        }
         else {
           const file = new File([release.value.bytes], `lightweaver-${release.value.manifest.firmwareVersion}.bin`, { type: 'application/octet-stream' });
           await flashFirmwareAndRelease({
@@ -636,6 +649,8 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
               if (!await disconnectESP(loader, transport)) throw new Error('USB release could not be confirmed after firmware installation.');
             },
           });
+          clearUsbOwnership(installConnection);
+          installReleasedByFlow = true;
         }
         assertActiveRunLease(installLease);
         loaderRef.current = null; transportRef.current = null;
@@ -646,7 +661,9 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
         assertActiveRunLease(installLease);
         setStatus('Official firmware installed and USB released. Reconnect the same card after it restarts; Studio will not install it again.');
     } catch (reason) {
-      const released = await releaseUsbConnection(installConnection);
+      const released = installReleasedByFlow ? true
+        : installReleaseAttempted ? false
+          : await releaseUsbConnection(installConnection);
       const catchLease = activeRunLease;
       const operationWasCurrent = runLeaseIsCurrent(catchLease);
       if (!released) {

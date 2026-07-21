@@ -1019,6 +1019,7 @@ test('worker completes one verified job, retains its pass, and Next artwork rese
   await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
   await page.getByRole('button', { name: 'Reconnect same USB card' }).click();
   await page.getByRole('button', { name: 'Install verified firmware' }).click();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_test_disconnect_connection_ids') || '[]'))).toEqual([1, 2]);
   await page.getByRole('button', { name: 'Reconnect same card' }).click();
   await page.getByRole('button', { name: 'Load verified artwork' }).click();
   await page.getByRole('button', { name: 'Verify card read-back' }).click();
@@ -1030,6 +1031,7 @@ test('worker completes one verified job, retains its pass, and Next artwork rese
   await page.getByRole('button', { name: 'Save pass record' }).click();
   await expect(page.getByText('Artwork passed')).toBeVisible();
   await page.getByRole('button', { name: 'Next artwork' }).click();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('lw_test_disconnect_connection_ids') || '[]'))).toEqual([1, 2]);
   await expect(page.getByRole('heading', { name: 'Choose the artwork job' })).toBeVisible();
   await expect(page.getByText('No completed artwork passes')).toHaveCount(0);
   await expect(page.getByText(/Latest:.*Moon/)).toBeVisible();
