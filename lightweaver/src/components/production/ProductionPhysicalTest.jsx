@@ -343,10 +343,10 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
       candidate.snapshot.wiringDigest = candidate.config.wiringDigest;
       const driver = productionDriver();
       const staged = driver?.stageCandidate ? await driver.stageCandidate(candidate) : await stageCardWiringCandidate(candidate.config, { host: lease.host, transport: lease.transport });
+      if (staged?.activationId && staged.state === 'staged') stagedCandidate = { ...candidate, activationId: staged.activationId, phase: 'staged' };
       assertCandidateOperation();
       assertLease(lease);
-      if (!staged?.activationId || staged.state !== 'staged') throw new Error('The card did not acknowledge a staged candidate.');
-      stagedCandidate = { ...candidate, activationId: staged.activationId, phase: 'staged' };
+      if (!stagedCandidate) throw new Error('The card did not acknowledge a staged candidate.');
       dispatch({ type: 'candidate', candidate: stagedCandidate });
       const evidence = driver?.readCandidateEvidence ? await driver.readCandidateEvidence(staged.activationId) : await readCardWiringCandidateEvidence(staged.activationId, { host: lease.host, transport: lease.transport });
       assertCandidateOperation();
