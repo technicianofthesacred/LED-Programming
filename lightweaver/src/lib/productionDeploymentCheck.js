@@ -90,19 +90,44 @@ async function sha256Hex(cryptoImpl, bytes) {
   return bytesToHex(new Uint8Array(await cryptoImpl.subtle.digest('SHA-256', bytes)));
 }
 
-export async function verifyStudioBuildGraph(fetchImpl, cryptoImpl, graphUrl) {
+function graphEntrySummary(entry) {
+  return entry ? `${entry.bytes} bytes, sha256 ${entry.sha256}` : 'missing';
+}
+
+export function assertStudioBuildGraphMatches(expectedInput, actualInput) {
+  const expected = parseStudioBuildGraph(typeof expectedInput === 'string' ? expectedInput : JSON.stringify(expectedInput));
+  const actual = parseStudioBuildGraph(typeof actualInput === 'string' ? actualInput : JSON.stringify(actualInput));
+  const expectedByPath = new Map(expected.files.map(file => [file.path, file]));
+  const actualByPath = new Map(actual.files.map(file => [file.path, file]));
+  const paths = [...new Set([...expectedByPath.keys(), ...actualByPath.keys()])].sort();
+  for (const path of paths) {
+    const expectedEntry = expectedByPath.get(path);
+    const actualEntry = actualByPath.get(path);
+    if (!expectedEntry || !actualEntry || expectedEntry.bytes !== actualEntry.bytes || expectedEntry.sha256 !== actualEntry.sha256) {
+      throw new Error(
+        `Production Studio build graph mismatch: ${path}\n` +
+        `  expected ${graphEntrySummary(expectedEntry)}\n` +
+        `  actual   ${graphEntrySummary(actualEntry)}`,
+      );
+    }
+  }
+  return expected;
+}
+
+export async function verifyStudioBuildGraph(fetchImpl, cryptoImpl, graphUrl, expectedGraph) {
   const parsedGraphUrl = new URL(graphUrl);
-  const graphResponse = await fetchImpl(parsedGraphUrl.href, { cache: 'no-store' });
+  const graphResponse = await fetchImpl(parsedGraphUrl.href, { cache: 'no-store', redirect: 'manual' });
   if (!graphResponse.ok) {
     throw new Error(`Production Studio build graph answered HTTP ${graphResponse.status} at\n  ${parsedGraphUrl.href}`);
   }
-  const graph = parseStudioBuildGraph(await graphResponse.text());
+  const liveGraph = parseStudioBuildGraph(await graphResponse.text());
+  const graph = assertStudioBuildGraphMatches(expectedGraph, liveGraph);
   for (const expected of graph.files) {
     const assetUrl = new URL(expected.path, `${parsedGraphUrl.origin}/`);
     if (assetUrl.origin !== parsedGraphUrl.origin) {
       throw new Error(`Studio build graph file escaped its production origin: ${expected.path}`);
     }
-    const assetResponse = await fetchImpl(assetUrl.href, { cache: 'no-store' });
+    const assetResponse = await fetchImpl(assetUrl.href, { cache: 'no-store', redirect: 'manual' });
     if (!assetResponse.ok) {
       throw new Error(`Production Studio asset ${expected.path} answered HTTP ${assetResponse.status} at\n  ${assetUrl.href}`);
     }

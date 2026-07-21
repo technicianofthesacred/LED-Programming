@@ -34,10 +34,18 @@ function graphFetch(graphBody, files = {}, statuses = {}) {
       const url = new URL(String(input));
       requests.push({ url: url.href, init });
       if (url.pathname === '/studio-build-graph.json') {
-        return new Response(graphBody, { status: statuses[url.pathname] ?? 200 });
+        const status = statuses[url.pathname] ?? 200;
+        return new Response(graphBody, {
+          status,
+          headers: status >= 300 && status < 400 ? { location: 'https://evil.test/redirected-graph.json' } : {},
+        });
       }
       const body = files[url.pathname.slice(1)];
-      return new Response(body ?? 'missing', { status: statuses[url.pathname] ?? (body === undefined ? 404 : 200) });
+      const status = statuses[url.pathname] ?? (body === undefined ? 404 : 200);
+      return new Response(body ?? 'missing', {
+        status,
+        headers: status >= 300 && status < 400 ? { location: 'https://evil.test/redirected-asset.js' } : {},
+      });
     },
   };
 }
@@ -101,12 +109,34 @@ test('live graph verification fetches every listed file from the graph origin wi
   };
   const entries = Object.entries(bodies).map(([path, body]) => fileEntry(path, body));
   const harness = graphFetch(graph(entries), bodies);
-  const result = await verifyStudioBuildGraph(harness.fetch, webcrypto, 'https://example.test/studio-build-graph.json');
+  const expectedGraph = parseStudioBuildGraph(graph(entries));
+  const result = await verifyStudioBuildGraph(harness.fetch, webcrypto, 'https://example.test/studio-build-graph.json', expectedGraph);
   assert.deepEqual(result.graph.files, entries);
   assert.deepEqual(harness.requests.map(request => new URL(request.url).pathname), [
     '/studio-build-graph.json', '/assets/studio.css', '/assets/studio.js', '/index.html',
   ]);
-  assert.ok(harness.requests.every(request => request.init.cache === 'no-store'));
+  assert.ok(harness.requests.every(request => request.init.cache === 'no-store' && request.init.redirect === 'manual'));
+});
+
+test('live graph must match this checkout instead of authenticating a self-consistent old deployment', async () => {
+  const currentBodies = {
+    'assets/production-new.js': 'current-production',
+    'assets/studio-new.js': 'current-studio',
+    'index.html': '<script src="/assets/studio-new.js">',
+  };
+  const oldBodies = {
+    'assets/production-old.js': 'old-production',
+    'assets/studio-old.js': 'old-studio',
+    'index.html': '<script src="/assets/studio-old.js">',
+  };
+  const expectedGraph = parseStudioBuildGraph(graph(Object.entries(currentBodies).map(([path, body]) => fileEntry(path, body))));
+  const oldGraph = graph(Object.entries(oldBodies).map(([path, body]) => fileEntry(path, body)));
+  const harness = graphFetch(oldGraph, oldBodies);
+  await assert.rejects(
+    verifyStudioBuildGraph(harness.fetch, webcrypto, 'https://example.test/studio-build-graph.json', expectedGraph),
+    /graph mismatch: assets\/production-new\.js.*expected .*actual\s+missing/s,
+  );
+  assert.deepEqual(harness.requests.map(request => new URL(request.url).pathname), ['/studio-build-graph.json']);
 });
 
 test('live graph verification detects a stale root loader', async () => {
@@ -117,7 +147,7 @@ test('live graph verification detects a stale root loader', async () => {
   const entries = Object.entries(expected).map(([path, body]) => fileEntry(path, body));
   const harness = graphFetch(graph(entries), { ...expected, 'index.html': '<script src="/assets/old.js">' });
   await assert.rejects(
-    verifyStudioBuildGraph(harness.fetch, webcrypto, 'https://example.test/studio-build-graph.json'),
+    verifyStudioBuildGraph(harness.fetch, webcrypto, 'https://example.test/studio-build-graph.json', parseStudioBuildGraph(graph(entries))),
     /index\.html.*expected .*sha256.*actual .*sha256/s,
   );
 });
@@ -131,21 +161,22 @@ test('live graph verification detects a stale lazy Production chunk not named by
   const entries = Object.entries(expected).map(([path, body]) => fileEntry(path, body));
   const harness = graphFetch(graph(entries), { ...expected, 'assets/production.js': 'old-production-screen' });
   await assert.rejects(
-    verifyStudioBuildGraph(harness.fetch, webcrypto, 'https://example.test/studio-build-graph.json'),
+    verifyStudioBuildGraph(harness.fetch, webcrypto, 'https://example.test/studio-build-graph.json', parseStudioBuildGraph(graph(entries))),
     /assets\/production\.js.*expected .*actual /s,
   );
 });
 
 test('live graph verification cannot skip a missing graph or asset', async () => {
   const entries = [fileEntry('assets/studio.js', 'studio'), fileEntry('index.html', 'root')];
+  const expectedGraph = parseStudioBuildGraph(graph(entries));
   const missingGraph = graphFetch('', {}, { '/studio-build-graph.json': 404 });
   await assert.rejects(
-    verifyStudioBuildGraph(missingGraph.fetch, webcrypto, 'https://example.test/studio-build-graph.json'),
+    verifyStudioBuildGraph(missingGraph.fetch, webcrypto, 'https://example.test/studio-build-graph.json', expectedGraph),
     /graph answered HTTP 404/,
   );
   const missingAsset = graphFetch(graph(entries), { 'index.html': 'root' });
   await assert.rejects(
-    verifyStudioBuildGraph(missingAsset.fetch, webcrypto, 'https://example.test/studio-build-graph.json'),
+    verifyStudioBuildGraph(missingAsset.fetch, webcrypto, 'https://example.test/studio-build-graph.json', expectedGraph),
     /assets\/studio\.js answered HTTP 404/,
   );
 });
@@ -163,9 +194,29 @@ test('live graph verification reports the first lexicographic mismatch determini
     'assets/z.js': 'old-z-that-also-has-a-different-size',
   });
   await assert.rejects(
-    verifyStudioBuildGraph(harness.fetch, webcrypto, 'https://example.test/studio-build-graph.json'),
+    verifyStudioBuildGraph(harness.fetch, webcrypto, 'https://example.test/studio-build-graph.json', parseStudioBuildGraph(graph(entries))),
     error => error.message.includes('assets/a.js') && !error.message.includes('assets/z.js'),
   );
+});
+
+test('live graph and asset redirects are refused even if the destination could match', async () => {
+  const bodies = { 'assets/studio.js': 'studio', 'index.html': 'root' };
+  const entries = Object.entries(bodies).map(([path, body]) => fileEntry(path, body));
+  const expectedGraph = parseStudioBuildGraph(graph(entries));
+
+  const graphRedirect = graphFetch(graph(entries), bodies, { '/studio-build-graph.json': 302 });
+  await assert.rejects(
+    verifyStudioBuildGraph(graphRedirect.fetch, webcrypto, 'https://example.test/studio-build-graph.json', expectedGraph),
+    /graph answered HTTP 302/,
+  );
+  assert.equal(graphRedirect.requests[0].init.redirect, 'manual');
+
+  const assetRedirect = graphFetch(graph(entries), bodies, { '/assets/studio.js': 302 });
+  await assert.rejects(
+    verifyStudioBuildGraph(assetRedirect.fetch, webcrypto, 'https://example.test/studio-build-graph.json', expectedGraph),
+    /assets\/studio\.js answered HTTP 302/,
+  );
+  assert.ok(assetRedirect.requests.every(request => request.init.redirect === 'manual'));
 });
 
 test('mutable firmware metadata cannot be cached while immutable releases can be cached forever', async () => {

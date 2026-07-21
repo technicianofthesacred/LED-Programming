@@ -6,6 +6,7 @@
 // script closes that gap by hashing what production actually serves.
 //
 // Run manually or after a production publish:
+//   npm run build && npm run stage:pages
 //   npm run check:prod          (from lightweaver/)
 //
 // Network-optional by design: when the site is unreachable (offline dev,
@@ -26,12 +27,14 @@ import { verifyProductionCachePolicies, verifyProductionReleaseSet } from '../sr
 import {
   assertLegacyRouteRemoved,
   assertStudioRoot,
+  parseStudioBuildGraph,
   resolveProductionUrls,
   verifyStudioBuildGraph,
 } from '../src/lib/productionDeploymentCheck.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const localBinPath = resolve(here, '../public/firmware/lightweaver-controller-esp32s3-factory.bin');
+const expectedStudioGraphPath = resolve(here, '../.pages/lightweaver/studio-build-graph.json');
 const {
   studioUrl,
   legacyDesignUrl,
@@ -56,6 +59,17 @@ function sha256(bytes) {
 function fail(message) {
   console.error(`check-prod-freshness FAILED\n${message}`);
   process.exit(1);
+}
+
+let expectedStudioGraph;
+try {
+  expectedStudioGraph = parseStudioBuildGraph(readFileSync(expectedStudioGraphPath, 'utf8'));
+} catch (err) {
+  fail(
+    `The expected Studio build graph for this checkout is missing or invalid at\n  ${expectedStudioGraphPath}\n` +
+      'Run npm run build && npm run stage:pages from lightweaver before npm run check:prod.\n' +
+      `  ${err?.message ?? err}`,
+  );
 }
 
 const local = new Uint8Array(readFileSync(localBinPath));
@@ -91,7 +105,7 @@ try {
 
 let studioBuildFileCount = 0;
 try {
-  const verifiedStudio = await verifyStudioBuildGraph(productionFetch, webcrypto, studioBuildGraphUrl);
+  const verifiedStudio = await verifyStudioBuildGraph(productionFetch, webcrypto, studioBuildGraphUrl, expectedStudioGraph);
   studioBuildFileCount = verifiedStudio.graph.files.length;
 } catch (err) {
   fail(
