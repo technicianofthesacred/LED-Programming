@@ -74,6 +74,8 @@ export function initialCardLinkState(host = '') {
     handoffCorrelation: null,
     handoffEnvelopeCount: 0,
     handoffAckReady: false,
+    handoffAckAttempted: false,
+    handoffAckInFlight: false,
     handoffAckSent: false,
     handoffBridgeLifecycle: null,
   };
@@ -99,6 +101,8 @@ function clearedLiveEvidence(prev, additions = {}, {
     handoffCorrelation: null,
     handoffEnvelopeCount: 0,
     handoffAckReady: false,
+    handoffAckAttempted: false,
+    handoffAckInFlight: false,
     handoffAckSent: false,
     handoffBridgeLifecycle: null,
     ...additions,
@@ -303,7 +307,7 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
       if (!correlation || !sameWifiHandoffCorrelation(correlation, prev.handoffCorrelation) || host !== correlation.host) return prev;
       const lifecycle = event.bridgeLifecycle ?? null;
       if (prev.handoffBridgeLifecycle !== lifecycle) {
-        if (prev.handoffEnvelopeCount > 0 || prev.handoffAckSent) {
+        if (prev.handoffEnvelopeCount > 0 || prev.handoffAckAttempted || prev.handoffAckSent) {
           return clearedLiveEvidence(prev, {
             state: 'revalidating', reason: 'checking-card', transport: 'bridge', host,
             expectedCard: prev.expectedCard, bridgeLifecycle: lifecycle,
@@ -312,7 +316,7 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
         }
       }
       const status = event.readiness;
-      if (prev.handoffAckSent && prev.handoffEnvelopeCount >= 2
+      if (prev.handoffAckAttempted
         && isFinalStationHandoff({ status, correlation })) {
         const expectedCard = {
           id: correlation.expectedCardId,
@@ -351,22 +355,48 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
       }
       const handoffEnvelopeCount = Math.min(2, (prev.handoffEnvelopeCount || 0) + 1);
       return {
-        ...prev, state: 'revalidating', reason: 'wifi-network-switch',
+        ...prev, state: 'revalidating',
+        reason: prev.handoffAckAttempted ? 'checking-card' : 'wifi-network-switch',
         transport: 'bridge', host, readiness: null, cardBlank: null,
         acknowledgedAt: '', activity: 'idle', bridgeLifecycle: lifecycle,
         handoffBridgeLifecycle: lifecycle, handoffEnvelopeCount,
-        handoffAckReady: handoffEnvelopeCount >= 2 && !prev.handoffAckSent,
+        handoffAckReady: handoffEnvelopeCount >= 2 && !prev.handoffAckAttempted,
       };
     }
-    case 'wifi-handoff-ack-sent': {
+    case 'wifi-handoff-ack-attempted': {
       if (!prev.handoffAckReady
+        || prev.handoffAckAttempted
         || !sameWifiHandoffCorrelation(event.correlation, prev.handoffCorrelation)
         || host !== prev.host
         || (event.bridgeLifecycle ?? null) !== prev.handoffBridgeLifecycle) return prev;
       return {
         ...prev, state: 'revalidating', reason: 'checking-card',
         readiness: null, cardBlank: null, acknowledgedAt: '', activity: 'idle',
-        handoffAckReady: false, handoffAckSent: true,
+        handoffAckReady: false, handoffAckAttempted: true, handoffAckInFlight: true,
+      };
+    }
+    case 'wifi-handoff-ack-sent': {
+      if (!prev.handoffAckAttempted
+        || !prev.handoffAckInFlight
+        || !sameWifiHandoffCorrelation(event.correlation, prev.handoffCorrelation)
+        || host !== prev.host
+        || (event.bridgeLifecycle ?? null) !== prev.handoffBridgeLifecycle) return prev;
+      return {
+        ...prev, state: 'revalidating', reason: 'checking-card',
+        readiness: null, cardBlank: null, acknowledgedAt: '', activity: 'idle',
+        handoffAckReady: false, handoffAckInFlight: false, handoffAckSent: true,
+      };
+    }
+    case 'wifi-handoff-ack-uncertain': {
+      if (!prev.handoffAckAttempted
+        || !prev.handoffAckInFlight
+        || !sameWifiHandoffCorrelation(event.correlation, prev.handoffCorrelation)
+        || host !== prev.host
+        || (event.bridgeLifecycle ?? null) !== prev.handoffBridgeLifecycle) return prev;
+      return {
+        ...prev, state: 'revalidating', reason: 'checking-card',
+        readiness: null, cardBlank: null, acknowledgedAt: '', activity: 'idle',
+        handoffAckReady: false, handoffAckInFlight: false, handoffAckSent: false,
       };
     }
     case 'card-verified': {
@@ -436,6 +466,8 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
           handoffCorrelation: prev.handoffCorrelation,
           handoffEnvelopeCount: prev.handoffEnvelopeCount,
           handoffAckReady: prev.handoffAckReady,
+          handoffAckAttempted: prev.handoffAckAttempted,
+          handoffAckInFlight: prev.handoffAckInFlight,
           handoffAckSent: prev.handoffAckSent,
           handoffBridgeLifecycle: prev.handoffBridgeLifecycle,
         } : {}),
@@ -858,7 +890,7 @@ export async function resumeCardWifiHandoff({
   }
   if (isCardLinkConnected(link.getState())
     && sameWifiHandoffCorrelation(link.getState().handoffCorrelation, correlation)
-    && link.getState().handoffAckSent) return link.getState();
+    && link.getState().handoffAckAttempted) return link.getState();
   const host = correlation.host;
   const assertCurrent = () => {
     if (!isCurrent()) {
@@ -889,16 +921,33 @@ export async function resumeCardWifiHandoff({
   }
 
   const beforeAck = link.getState();
-  if (!beforeAck.handoffAckSent) {
+  if (!beforeAck.handoffAckAttempted) {
     if (!beforeAck.handoffAckReady) return beforeAck;
-    await sendRequest('wifi-handoff-ack', {}, {
-      host, timeoutMs: CARD_LINK_PING_TIMEOUT_MS, retryOnTimeout: false,
-    });
-    assertCurrent();
+    // Latch before the privileged write. A timeout is ambiguous: the card may
+    // have applied the acknowledgement even though its response was lost, so
+    // automatic recovery may only poll final status, never send it again.
     link.dispatch({
-      type: 'wifi-handoff-ack-sent', host, correlation,
+      type: 'wifi-handoff-ack-attempted', host, correlation,
       bridgeLifecycle,
     });
+    const attempted = link.getState();
+    if (!attempted.handoffAckInFlight) return attempted;
+    try {
+      await sendRequest('wifi-handoff-ack', {}, {
+        host, timeoutMs: CARD_LINK_PING_TIMEOUT_MS, retryOnTimeout: false,
+      });
+      assertCurrent();
+      link.dispatch({
+        type: 'wifi-handoff-ack-sent', host, correlation,
+        bridgeLifecycle,
+      });
+    } catch {
+      assertCurrent();
+      link.dispatch({
+        type: 'wifi-handoff-ack-uncertain', host, correlation,
+        bridgeLifecycle,
+      });
+    }
   }
 
   await readStatus();

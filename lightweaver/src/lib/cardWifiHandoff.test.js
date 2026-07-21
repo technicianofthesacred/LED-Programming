@@ -157,6 +157,7 @@ test('final station correlation requires exact fresh status on the correlated st
   const correlation = accept();
   const status = handoffStatus({
     runtimePhase: 'factory',
+    commandReady: true,
     wifi: {
       transport: 'station',
       transition: 'station',
@@ -178,6 +179,7 @@ test('final station correlation requires exact fresh status on the correlated st
     handoffStatus({ wifi: { ...status.wifi, transport: 'ap' } }),
     handoffStatus({ wifi: { ...status.wifi, stationIp: '192.168.18.71' } }),
     handoffStatus({ wifi: { ...status.wifi, ip: '192.168.18.71' } }),
+    handoffStatus({ commandReady: false, wifi: status.wifi }),
     handoffStatus({ commandReady: undefined, wifi: status.wifi }),
   ];
   for (const candidate of cases) {

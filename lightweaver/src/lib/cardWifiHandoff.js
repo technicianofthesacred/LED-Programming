@@ -176,6 +176,7 @@ export function acceptWifiHandoff(options = {}) {
 export function isFinalStationHandoff({ status, correlation } = {}) {
   const expected = normalizeWifiHandoffCorrelation(correlation);
   if (!expected || !status || typeof status !== 'object' || Array.isArray(status)) return false;
+  if (status.commandReady !== true) return false;
   const identity = {
     id: expected.expectedCardId,
     firmwareVersion: expected.expectedFirmwareVersion,

@@ -132,11 +132,19 @@ assert.equal(wifiTwo.handoffEnvelopeCount, 2);
 assert.equal(wifiTwo.handoffAckReady, true);
 assert.equal(isCardLinkConnected(wifiTwo), false);
 
-const wifiAcked = reduceCardLink(wifiTwo, {
+const wifiAckAttempted = reduceCardLink(wifiTwo, {
+  type: 'wifi-handoff-ack-attempted', host: wifiCorrelation.host,
+  correlation: wifiCorrelation, bridgeLifecycle: 11,
+});
+assert.equal(wifiAckAttempted.handoffAckAttempted, true);
+assert.equal(wifiAckAttempted.handoffAckInFlight, true);
+assert.equal(wifiAckAttempted.handoffAckReady, false);
+const wifiAcked = reduceCardLink(wifiAckAttempted, {
   type: 'wifi-handoff-ack-sent', host: wifiCorrelation.host,
   correlation: wifiCorrelation, bridgeLifecycle: 11,
 });
 assert.equal(wifiAcked.handoffAckSent, true);
+assert.equal(wifiAcked.handoffAckInFlight, false);
 assert.equal(wifiAcked.handoffAckReady, false);
 const finalNotReady = reduceCardLink(wifiAcked, {
   type: 'wifi-handoff-status', host: wifiCorrelation.host,
@@ -222,6 +230,69 @@ await resumeCardWifiHandoff({
 });
 assert.equal(orchestratedCalls.filter(type => type === 'wifi-handoff-ack').length, 1, 'handoff ack is exactly once');
 orchestratedLink.destroy();
+
+const lostAckLink = createCardLink({ host: wifiCorrelation.host, connectTimeoutMs: 0 });
+lostAckLink.dispatch({
+  type: 'wifi-handoff-retargeted', host: wifiCorrelation.host,
+  correlation: wifiCorrelation, bridgeLifecycle: 31,
+});
+let lostAckRequests = 0;
+let lostAckStatusReads = 0;
+let returnFinalStation = false;
+const lostAckSendRequest = async type => {
+  if (type === 'wifi-handoff-ack') {
+    lostAckRequests += 1;
+    const error = new Error('ack response lost');
+    error.reason = 'bridge-timeout';
+    throw error;
+  }
+  lostAckStatusReads += 1;
+  return returnFinalStation
+    ? handoffEnvelope(wifiCorrelation, {
+      wifi: {
+        transport: 'station', transition: 'station', transitionPending: false,
+        apActive: false, stationIp: wifiCorrelation.host, ip: wifiCorrelation.host,
+        handoffGeneration: wifiCorrelation.handoffGeneration,
+      },
+    })
+    : handoffEnvelope(wifiCorrelation);
+};
+await resumeCardWifiHandoff({
+  link: lostAckLink,
+  correlation: wifiCorrelation,
+  bridgeLifecycle: 31,
+  isCurrent: () => true,
+  sendRequest: lostAckSendRequest,
+}).catch(() => {});
+await resumeCardWifiHandoff({
+  link: lostAckLink,
+  correlation: wifiCorrelation,
+  bridgeLifecycle: 31,
+  isCurrent: () => true,
+  sendRequest: lostAckSendRequest,
+}).catch(() => {});
+assert.deepEqual(
+  { acks: lostAckRequests },
+  { acks: 1 },
+  'a lost acknowledgement response cannot cause an automatic second privileged mutation',
+);
+assert.ok(lostAckStatusReads >= 3,
+  'after an uncertain acknowledgement the handoff keeps polling status instead of resending');
+assert.equal(lostAckLink.getState().handoffAckAttempted, true);
+assert.equal(lostAckLink.getState().handoffAckInFlight, false);
+assert.equal(isCardLinkConnected(lostAckLink.getState()), false);
+returnFinalStation = true;
+await resumeCardWifiHandoff({
+  link: lostAckLink,
+  correlation: wifiCorrelation,
+  bridgeLifecycle: 31,
+  isCurrent: () => true,
+  sendRequest: lostAckSendRequest,
+});
+assert.equal(lostAckRequests, 1);
+assert.equal(isCardLinkConnected(lostAckLink.getState()), true,
+  'exact final station status completes an acknowledgement whose response was lost');
+lostAckLink.destroy();
 
 const repeatedBridgeVerification = reduceCardLink(bridged, {
   type: 'card-verified', via: 'bridge', host: '192.168.4.1',

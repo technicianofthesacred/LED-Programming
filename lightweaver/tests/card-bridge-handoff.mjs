@@ -856,6 +856,19 @@ stationStatus = {
   },
 };
 await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().identityVerified, false,
+  'final station transport without command readiness cannot restore write authority');
+await assert.rejects(
+  sendCardBridgeRequest('control', {}, { host: stationHost, timeoutMs: 25 }),
+  error => error?.reason === 'handoff-awaiting-ack',
+  'the lower bridge write guard remains locked until commandReady is explicitly true',
+);
+
+stationStatus = {
+  ...stationStatus,
+  commandReady: true,
+};
+await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
 assert.equal(getCardBridgeState().identityVerified, true,
   'an exact fresh station status restores the expected card authority');
 const completedRepeat = retargetCardBridge(stationHost, handoffCorrelation);
