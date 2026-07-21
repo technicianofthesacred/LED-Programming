@@ -18,6 +18,7 @@ import {
   clearWifiHandoffRecovery,
   inspectFinalStationHandoff,
   isFinalStationHandoff,
+  markWifiHandoffConfigAttempted,
   normalizeWifiHandoffCorrelation,
   readWifiHandoffRecovery,
   writeWifiHandoffRecovery,
@@ -826,7 +827,9 @@ export function restoreCardBridgeHandoff(rawFlowId = '') {
     && sameHandoffCorrelation(bridgeHandoffCorrelation, correlation)) {
     return {
       ok: true, state: 'already-restored', correlation, flowId,
-      ackAttempted: recovery.ackAttempted, lifecycle: bridgeLifecycle,
+      ackAttempted: recovery.ackAttempted,
+      configAttempted: recovery.configAttempted,
+      lifecycle: bridgeLifecycle,
     };
   }
 
@@ -836,7 +839,7 @@ export function restoreCardBridgeHandoff(rawFlowId = '') {
   revokeBridgeForNavigation({ host, origin });
   bridgeHandoffCorrelation = correlation;
   bridgeHandoffFlowId = flowId;
-  bridgeInitialConfigAttempted = false;
+  bridgeInitialConfigAttempted = recovery.configAttempted;
   bridgeRestoredHandoff = recovery.ackAttempted;
   bridgeRestoredFinalEnvelopeCount = 0;
 
@@ -863,6 +866,7 @@ export function restoreCardBridgeHandoff(rawFlowId = '') {
   return {
     ok: true, state: 'restored', window: opened, host, url: url.href,
     correlation, flowId, ackAttempted: recovery.ackAttempted,
+    configAttempted: recovery.configAttempted,
     lifecycle: bridgeLifecycle,
   };
 }
@@ -934,6 +938,42 @@ export function clearCardBridgeHandoff(rawFlowId = '') {
   clearWifiHandoffRecovery(flowId);
   dispatchBridgeChange();
   return true;
+}
+
+// Convert a successfully restored replacement from handoff-scoped identity to
+// the ordinary persisted pairing before clearing the correlation. Callers must
+// reach this only after independent project readback has succeeded.
+export function adoptCommissionedCardBridgeIdentity(rawFlowId = '') {
+  const flowId = normalizeCommissioningFlowId(rawFlowId);
+  if (!flowId || flowId !== bridgeHandoffFlowId || !bridgeHandoffCorrelation) return null;
+  if (!bridgeConnected
+    || !bridgeReady
+    || bridgeAuthorityLifecycle !== bridgeLifecycle
+    || !bridgeStationIdentityVerified
+    || !bridgeCard?.id) {
+    throw bridgeError(
+      'The commissioned replacement card lost exact bridge authority before pairing completed.',
+      bridgeIdentityError || 'identity-missing',
+    );
+  }
+  requireExpectedCardIdentity(bridgeCard, {
+    expected: handoffExpectedIdentity(bridgeHandoffCorrelation),
+  });
+  if (!adoptExpectedCardIdentity(bridgeCard)) {
+    throw bridgeError('Could not save the commissioned replacement card identity.', 'identity-storage');
+  }
+  const adopted = bridgeCard;
+  bridgeHandoffCorrelation = null;
+  bridgeHandoffFlowId = '';
+  bridgeHandoffAckReady = false;
+  bridgeInitialConfigAvailable = false;
+  bridgeInitialConfigAttempted = false;
+  bridgeRestoredHandoff = false;
+  bridgeRestoredFinalEnvelopeCount = 0;
+  clearWifiHandoffRecovery(flowId);
+  bridgeIdentityError = bridgeRuntimeCommandReady ? '' : 'runtime-not-ready';
+  dispatchBridgeChange();
+  return adopted;
 }
 
 function requireDiscoveredBridgeCard(rawHost = bridgeHost) {
@@ -1198,6 +1238,7 @@ function markBridgeTimeout(startedAt) {
     bridgeConnected = false;
     bridgeReady = false;
     bridgeCard = null;
+    bridgeHandoffAckReady = false;
     bridgeStationIdentityVerified = false;
     bridgeRuntimeCommandReady = false;
     bridgeInitialConfigAvailable = false;
@@ -1353,9 +1394,17 @@ export function sendCardBridgeRequest(type, payload = {}, {
   }
 
   if (consumeInitialConfigAuthority) {
+    if (!markWifiHandoffConfigAttempted({
+      flowId: bridgeHandoffFlowId,
+      correlation: bridgeHandoffCorrelation,
+    })) {
+      return Promise.reject(bridgeError(
+        'Studio could not persist the one-time initial config attempt.',
+        'handoff-recovery',
+      ));
+    }
     bridgeInitialConfigAttempted = true;
     bridgeInitialConfigAvailable = false;
-    clearWifiHandoffRecovery(bridgeHandoffFlowId);
     dispatchBridgeChange();
   }
 

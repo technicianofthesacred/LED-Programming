@@ -547,9 +547,9 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
           handoffCorrelation: prev.handoffCorrelation,
           handoffFlowId: prev.handoffFlowId,
           handoffEnvelopeCount: prev.handoffEnvelopeCount,
-          handoffAckReady: prev.handoffAckReady,
+          handoffAckReady: false,
           handoffAckAttempted: prev.handoffAckAttempted,
-          handoffAckInFlight: prev.handoffAckInFlight,
+          handoffAckInFlight: false,
           handoffAckSent: prev.handoffAckSent,
           handoffBridgeLifecycle: prev.handoffBridgeLifecycle,
           handoffStationVerified: false,
@@ -1243,6 +1243,14 @@ export function getSharedCardLink() {
           type: 'bridge-ready', host: detail.handoffCorrelation.host,
           bridgeLifecycle: detail.lifecycle,
         });
+      }
+      if (!detail.connected || !detail.verified) {
+        sharedLink.dispatch({
+          type: detail.open === false ? 'bridge-lost' : 'bridge-ping-missed',
+          reason: detail.identityError || 'card-stopped-answering',
+          host: detail.handoffCorrelation.host,
+        });
+        return;
       }
       const latestHandoff = sharedLink.getState();
       if (detail.connected && detail.verified && (

@@ -226,17 +226,25 @@ export function isFinalStationHandoff(options = {}) {
   return Boolean(inspectFinalStationHandoff(options));
 }
 
-export function writeWifiHandoffRecovery({ correlation: rawCorrelation, flowId: rawFlowId, ackAttempted = false } = {}, {
+export function writeWifiHandoffRecovery({
+  correlation: rawCorrelation,
+  flowId: rawFlowId,
+  ackAttempted = false,
+  configAttempted = false,
+} = {}, {
   storage = browserSessionStorage(),
 } = {}) {
   const correlation = normalizeWifiHandoffCorrelation(rawCorrelation);
   const flowId = exactFlowId(rawFlowId);
-  if (!storage || !correlation || !flowId || typeof ackAttempted !== 'boolean') return false;
+  if (!storage || !correlation || !flowId
+    || typeof ackAttempted !== 'boolean'
+    || typeof configAttempted !== 'boolean') return false;
   const record = {
     version: WIFI_HANDOFF_RECOVERY_VERSION,
     flowId,
     correlation,
     ackAttempted,
+    configAttempted,
   };
   const serialized = JSON.stringify(record);
   if (serialized.length > WIFI_HANDOFF_RECOVERY_MAX_BYTES) return false;
@@ -263,11 +271,15 @@ export function readWifiHandoffRecovery({ flowId: rawFlowId = '', storage = brow
     const parsed = JSON.parse(raw);
     const flowId = exactFlowId(parsed?.flowId);
     const correlation = normalizeWifiHandoffCorrelation(parsed?.correlation);
+    const configAttempted = parsed?.configAttempted === undefined
+      ? false
+      : parsed.configAttempted;
     if (
       parsed?.version !== WIFI_HANDOFF_RECOVERY_VERSION
       || !flowId
       || !correlation
       || typeof parsed.ackAttempted !== 'boolean'
+      || typeof configAttempted !== 'boolean'
     ) throw new Error('invalid');
     if (requestedFlowId && requestedFlowId !== flowId) {
       storage.removeItem(WIFI_HANDOFF_RECOVERY_KEY);
@@ -278,6 +290,7 @@ export function readWifiHandoffRecovery({ flowId: rawFlowId = '', storage = brow
       flowId,
       correlation,
       ackAttempted: parsed.ackAttempted,
+      configAttempted,
     });
   } catch {
     try { storage.removeItem(WIFI_HANDOFF_RECOVERY_KEY); } catch { /* noop */ }
@@ -292,7 +305,22 @@ export function markWifiHandoffAckAttempted({ flowId: rawFlowId, correlation: ra
   const correlation = normalizeWifiHandoffCorrelation(rawCorrelation);
   const current = readWifiHandoffRecovery({ flowId, storage });
   if (!current || !correlation || !sameRecoveryCorrelation(current.correlation, correlation)) return false;
-  return writeWifiHandoffRecovery({ correlation, flowId, ackAttempted: true }, { storage });
+  return writeWifiHandoffRecovery({
+    correlation, flowId, ackAttempted: true,
+    configAttempted: current.configAttempted,
+  }, { storage });
+}
+
+export function markWifiHandoffConfigAttempted({ flowId: rawFlowId, correlation: rawCorrelation } = {}, {
+  storage = browserSessionStorage(),
+} = {}) {
+  const flowId = exactFlowId(rawFlowId);
+  const correlation = normalizeWifiHandoffCorrelation(rawCorrelation);
+  const current = readWifiHandoffRecovery({ flowId, storage });
+  if (!current || !correlation || !sameRecoveryCorrelation(current.correlation, correlation)) return false;
+  return writeWifiHandoffRecovery({
+    correlation, flowId, ackAttempted: current.ackAttempted, configAttempted: true,
+  }, { storage });
 }
 
 export function clearWifiHandoffRecovery(rawFlowId = '', { storage = browserSessionStorage() } = {}) {

@@ -1247,7 +1247,7 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
   expect(productionPath.staleEnvelopeIgnored).toBe(true);
 });
 
-test('HTTPS Studio reload reacquires an acknowledged blank handoff without replaying the acknowledgement', async ({ page }) => {
+test('HTTPS Studio reload proves an ambiguous initial config without replaying either mutation', async ({ page }) => {
   await page.addInitScript(() => {
     const stationHost = '192.168.18.92';
     const expectedCard = {
@@ -1275,11 +1275,20 @@ test('HTTPS Studio reload reacquires an acknowledged blank handoff without repla
       postMessage(message: Record<string, unknown>) {
         const type = String(message.type || '');
         appendType(type);
-        if (type === 'config') sessionStorage.setItem('__reload_configured', '1');
+        if (type === 'config') {
+          sessionStorage.setItem('__reload_configured', '1');
+          if (sessionStorage.getItem('__reload_drop_config_response') === '1') {
+            sessionStorage.setItem('__reload_drop_config_response', '0');
+            return;
+          }
+        }
         const configured = sessionStorage.getItem('__reload_configured') === '1';
+        const reportedCardId = sessionStorage.getItem('__reload_report_prior_card') === '1'
+          ? 'lw-aaaaaaaaaaaa'
+          : expectedCard.id;
         const response = type === 'firmware-info'
           ? {
-            app: 'Lightweaver', cardId: expectedCard.id,
+            app: 'Lightweaver', cardId: reportedCardId,
             firmwareVersion: expectedCard.firmwareVersion, buildId: expectedCard.buildId,
             ...(configured ? {
               projectRevision: Number(sessionStorage.getItem('__reload_revision')),
@@ -1289,7 +1298,7 @@ test('HTTPS Studio reload reacquires an acknowledged blank handoff without repla
           : type === 'status'
             ? {
               app: 'Lightweaver', provisioningContractVersion: 1,
-              cardId: expectedCard.id, firmwareVersion: expectedCard.firmwareVersion,
+              cardId: reportedCardId, firmwareVersion: expectedCard.firmwareVersion,
               buildId: expectedCard.buildId, bootId: 'boot-reload-blank',
               runtimePhase: configured ? 'ready' : 'factory',
               knownGoodProject: configured, commandReady: configured, outputReady: configured,
@@ -1361,6 +1370,7 @@ test('HTTPS Studio reload reacquires an acknowledged blank handoff without repla
     sessionStorage.setItem('__reload_revision', String(flow.project.revision));
     sessionStorage.setItem('__reload_fingerprint', flow.project.fingerprint);
     sessionStorage.setItem('__reload_bridge_types', '[]');
+    sessionStorage.setItem('__reload_drop_config_response', '1');
     return { flowId, correlation };
   });
 
@@ -1390,6 +1400,29 @@ test('HTTPS Studio reload reacquires an acknowledged blank handoff without repla
   await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeEnabled();
   const beforePush = afterReload.length;
   await page.getByRole('button', { name: 'Restore saved project', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => {
+    const types = JSON.parse(sessionStorage.getItem('__reload_bridge_types') || '[]');
+    const recovery = JSON.parse(sessionStorage.getItem('lw_wifi_handoff_recovery_v1') || 'null');
+    return {
+      configCount: types.filter((type: string) => type === 'config').length,
+      configAttempted: recovery?.configAttempted,
+    };
+  })).toEqual({ configCount: 1, configAttempted: true });
+
+  // The card applied config but its response was lost. A real Studio reload
+  // may only reacquire the named popup and prove the outcome through status;
+  // it must never post config or the WiFi acknowledgement a second time.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect.poll(() => page.evaluate(async () => {
+    const bridge = await import('/src/lib/cardBridge.js');
+    const link = await import('/src/lib/cardLink.js');
+    return { bridge: bridge.getCardBridgeState(), link: link.getCardLinkState() };
+  })).toMatchObject({
+    bridge: { runtimeCommandReady: true, initialConfigAuthority: false },
+    link: { handoffStationVerified: true, cardBlank: false },
+  });
+  await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Restore saved project', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Check lights', exact: true })).toBeVisible();
   const pushed = await page.evaluate((start) => ({
     types: JSON.parse(sessionStorage.getItem('__reload_bridge_types') || '[]').slice(start),
@@ -1400,4 +1433,20 @@ test('HTTPS Studio reload reacquires an acknowledged blank handoff without repla
   expect(pushed.types).not.toContain('wiring-candidate');
   expect(pushed.types.indexOf('config')).toBeLessThan(pushed.types.indexOf('firmware-info'));
   expect(pushed.recovery).toBeNull();
+
+  const identityHandoff = await page.evaluate(async (host) => {
+    const bridge = await import('/src/lib/cardBridge.js');
+    const persisted = JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null');
+    const handoffFlowId = bridge.getCardBridgeState().handoffFlowId;
+    const accepted = await bridge.verifyCardBridgeIdentity(host);
+    sessionStorage.setItem('__reload_report_prior_card', '1');
+    let priorReason = '';
+    try { await bridge.verifyCardBridgeIdentity(host); }
+    catch (error) { priorReason = (error as { reason?: string })?.reason || ''; }
+    return { persisted, handoffFlowId, accepted, priorReason };
+  }, seeded.correlation.host);
+  expect(identityHandoff.persisted.id).toBe('lw-cccccccccccc');
+  expect(identityHandoff.handoffFlowId).toBe('');
+  expect(identityHandoff.accepted.id).toBe('lw-cccccccccccc');
+  expect(identityHandoff.priorReason).toBe('wrong-card');
 });

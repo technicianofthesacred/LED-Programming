@@ -387,6 +387,7 @@ function bridgeWindowHarness({
     ['lw_chip_card_host', host],
     ['lw_card_identity_v1', JSON.stringify({ version: 1, id: identityId })],
   ]);
+  const sessionValues = new Map();
   const win = {
     location: {
       href: 'https://led.mandalacodes.com/#screen=patterns',
@@ -398,6 +399,11 @@ function bridgeWindowHarness({
       getItem: key => storageValues.get(key) ?? null,
       setItem: (key, value) => storageValues.set(key, value),
       removeItem: key => storageValues.delete(key),
+    },
+    sessionStorage: {
+      getItem: key => sessionValues.get(key) ?? null,
+      setItem: (key, value) => sessionValues.set(key, value),
+      removeItem: key => sessionValues.delete(key),
     },
     addEventListener(type, listener) {
       const listenersForType = eventListeners.get(type) || new Set();
@@ -423,6 +429,7 @@ function bridgeWindowHarness({
     win,
     opened,
     storageValues,
+    sessionValues,
     emitMessage(event) {
       for (const listener of eventListeners.get('message') || []) listener(event);
     },
@@ -842,35 +849,11 @@ stationStatus = {
   cardId: handoffIdentity.id,
   firmwareVersion: handoffIdentity.firmwareVersion,
   buildId: handoffIdentity.buildId,
-  bootId: 'boot-stale', runtimePhase: 'factory', knownGoodProject: false,
+  bootId: handoffCorrelation.expectedBootId, runtimePhase: 'factory', knownGoodProject: false,
   commandReady: false, outputReady: true,
   wifi: {
-    transport: 'station', transition: 'station', transitionPending: false,
-    stationIp: stationHost, ip: stationHost, handoffGeneration: 9,
-  },
-};
-handoffHarness.emitMessage({
-  origin: `http://${stationHost}`,
-  source: handoffTab,
-  data: { app: 'LightweaverCardBridge', type: 'ready', host: stationHost, version: 2 },
-});
-await new Promise(resolve => setTimeout(resolve, 5));
-assert.equal(getCardBridgeState().identityVerified, false,
-  'a stale station boot cannot restore command authority');
-await assert.rejects(
-  sendCardBridgeRequest('control', {}, { host: stationHost, timeoutMs: 25 }),
-  error => error?.reason === 'handoff-correlation',
-);
-
-stationStatus = {
-  ...stationStatus,
-  bootId: handoffCorrelation.expectedBootId,
-  wifi: {
-    ...stationStatus.wifi,
-    transport: 'ap',
-    transition: 'handoff-ready',
-    transitionPending: true,
-    apActive: true,
+    transport: 'ap', transition: 'handoff-ready', transitionPending: true,
+    apActive: true, stationIp: stationHost, ip: stationHost, handoffGeneration: 9,
   },
 };
 handoffHarness.emitMessage({
@@ -887,6 +870,35 @@ await assert.rejects(
   error => error?.reason === 'handoff-awaiting-ack',
   'normal commands remain locked before final station state',
 );
+const messagesBeforeAckTimeout = handoffMessages.length;
+suppressStationStatus = true;
+await assert.rejects(
+  sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 15, retryOnTimeout: false }),
+  error => error?.reason === 'bridge-timeout',
+);
+assert.equal(getCardBridgeState().handoffAckReady, false,
+  'any bridge timeout revokes the current-lifecycle acknowledgement latch');
+suppressStationStatus = false;
+await sendCardBridgeRequest('ping', {}, { host: stationHost, timeoutMs: 100 });
+await sendCardBridgeRequest('firmware-info', {}, { host: stationHost, timeoutMs: 100 });
+await assert.rejects(
+  sendCardBridgeRequest('wifi-handoff-ack', {}, { host: stationHost, timeoutMs: 25 }),
+  error => error?.reason === 'handoff-correlation',
+  'identity-free transport recovery cannot restore acknowledgement authority',
+);
+assert.equal(
+  handoffMessages.slice(messagesBeforeAckTimeout).filter(entry => entry.message.type === 'wifi-handoff-ack').length,
+  0,
+  'no acknowledgement is posted after timeout without fresh exact status evidence',
+);
+handoffHarness.emitMessage({
+  origin: `http://${stationHost}`,
+  source: handoffTab,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: stationHost, version: 2 },
+});
+await new Promise(resolve => setTimeout(resolve, 5));
+assert.equal(getCardBridgeState().handoffAckReady, true,
+  'fresh exact handoff status in the current lifecycle can grant a new acknowledgement latch');
 await sendCardBridgeRequest('wifi-handoff-ack', {}, { host: stationHost, timeoutMs: 100 });
 
 stationStatus = {
@@ -911,15 +923,6 @@ assert.equal(getCardBridgeState().identityVerified, true,
 assert.equal(getCardBridgeState().initialConfigAuthority, true,
   'an exact same-card firmware read preserves current-lifecycle blank config authority');
 
-stationFirmwareIdentity = { ...handoffIdentity, buildId: 'hostile-partial-build' };
-await sendCardBridgeRequest('firmware-info', {}, { host: stationHost, timeoutMs: 100 });
-assert.equal(getCardBridgeState().identityVerified, false,
-  'mismatched read-only identity evidence revokes station authority');
-assert.equal(getCardBridgeState().initialConfigAuthority, false,
-  'mismatched read-only identity evidence revokes config authority');
-stationFirmwareIdentity = handoffIdentity;
-await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
-
 const blankRuntimePackage = makeCardRuntimePackage({
   projectName: 'Commissioned card B',
   mode: 'website-flash',
@@ -942,6 +945,11 @@ const initialPushTypes = handoffMessages
   .map(entry => entry.message.type);
 assert.deepEqual(initialPushTypes, ['config'],
   'blank commissioning sends one complete config without firmware/layout or wiring-candidate probes');
+assert.equal(
+  JSON.parse(handoffHarness.sessionValues.get('lw_wifi_handoff_recovery_v1')).configAttempted,
+  true,
+  'the one-way config attempt is durable before the response can be trusted',
+);
 await assert.rejects(
   sendCardBridgeRequest('config', { project: 'duplicate' }, {
     host: stationHost, timeoutMs: 25, commissioningFlowId,
@@ -959,6 +967,22 @@ await assert.rejects(
   error => error?.reason === 'runtime-not-ready',
   'blank-card commissioning authority never grants light/frame mutation authority',
 );
+
+stationStatus = { ...stationStatus, bootId: 'boot-stale-after-config' };
+await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().identityVerified, false,
+  'a stale station boot immediately revokes current-lifecycle authority');
+stationStatus = { ...stationStatus, bootId: handoffCorrelation.expectedBootId };
+await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
+
+stationFirmwareIdentity = { ...handoffIdentity, buildId: 'hostile-partial-build' };
+await sendCardBridgeRequest('firmware-info', {}, { host: stationHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().identityVerified, false,
+  'mismatched read-only identity evidence revokes station authority');
+assert.equal(getCardBridgeState().initialConfigAuthority, false,
+  'mismatched read-only identity evidence revokes config authority');
+stationFirmwareIdentity = handoffIdentity;
+await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
 
 stationStatus = {
   ...stationStatus,

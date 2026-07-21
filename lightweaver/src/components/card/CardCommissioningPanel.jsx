@@ -20,6 +20,7 @@ import {
   suspendCardWifiHandoff,
 } from '../../lib/cardLink.js';
 import {
+  adoptCommissionedCardBridgeIdentity,
   clearCardBridgeHandoff,
   getCardBridgeState,
   retargetCardBridge,
@@ -483,6 +484,7 @@ export function CardCommissioningPanel({
           const responseReadback = await selectedReadback({ host: link.host, endpoint: '/api/firmware-info', expectedCardId: flow.expectedCard.id });
           const evidence = adaptCardRestorationReadback({ method: 'GET', endpoint: '/api/firmware-info', response: responseReadback });
           const next = markCardProjectRestored(flow, evidence);
+          adoptCommissionedCardBridgeIdentity(flow.flowId);
           await writeCardCommissioning(next);
           markProjectInstalled(flow.project.revision);
           setFlow(next);
@@ -493,6 +495,7 @@ export function CardCommissioningPanel({
           try {
             const candidate = await readCandidateEvidence(priorAttempt.activationId, { host: link.host, timeoutMs: 8000 });
             const next = stageCardProjectForPhysicalCheck(flow, bindCardWiringActivationEvidence(candidate, candidate));
+            adoptCommissionedCardBridgeIdentity(flow.flowId);
             await writeCardCommissioning(next);
             setFlow(next);
             setRestoreState('complete');
@@ -531,6 +534,7 @@ export function CardCommissioningPanel({
         const candidateReadback = await readCandidateEvidence(response.activationId, { host: link.host, timeoutMs: 8000 });
         const activationEvidence = bindCardWiringActivationEvidence(response, candidateReadback);
         const next = stageCardProjectForPhysicalCheck(flow, activationEvidence);
+        adoptCommissionedCardBridgeIdentity(flow.flowId);
         await writeCardCommissioning(next);
         setFlow(next);
         setRestoreState('complete');
@@ -548,6 +552,7 @@ export function CardCommissioningPanel({
         method: 'GET', endpoint: '/api/firmware-info', response: responseReadback,
       });
       const next = markCardProjectRestored(flow, evidence);
+      adoptCommissionedCardBridgeIdentity(flow.flowId);
       await writeCardCommissioning(next);
       markProjectInstalled(flow.project.revision);
       setFlow(next);

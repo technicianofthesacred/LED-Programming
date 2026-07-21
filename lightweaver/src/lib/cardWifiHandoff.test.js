@@ -210,7 +210,7 @@ test('final station correlation requires exact fresh status on the correlated st
   }), false, 'final station boot comparison is exact and non-lossy');
 });
 
-test('session recovery persists only bounded correlation, flow, and ack-attempt state', () => {
+test('session recovery persists only bounded correlation, flow, and one-way attempt state', () => {
   const values = new Map();
   const storage = {
     getItem: key => values.get(key) ?? null,
@@ -219,18 +219,25 @@ test('session recovery persists only bounded correlation, flow, and ack-attempt 
   };
   const correlation = accept();
   const flowId = 'flow-session-recovery-123456';
-  assert.equal(writeWifiHandoffRecovery({ correlation, flowId, ackAttempted: false }, { storage }), true);
+  assert.equal(writeWifiHandoffRecovery({
+    correlation, flowId, ackAttempted: false, configAttempted: false,
+  }, { storage }), true);
   assert.deepEqual(readWifiHandoffRecovery({ flowId, storage }), {
     version: 1,
     flowId,
     correlation,
     ackAttempted: false,
+    configAttempted: false,
   });
   assert.equal(readWifiHandoffRecovery({ flowId: 'flow-different-123456789', storage }), null,
     'another active commissioning flow cannot inherit the session correlation');
   assert.equal(values.has(WIFI_HANDOFF_RECOVERY_KEY), false,
     'changing commissioning flow clears the stale session correlation');
-  assert.equal(writeWifiHandoffRecovery({ correlation, flowId, ackAttempted: false }, { storage }), true);
+  assert.equal(writeWifiHandoffRecovery({
+    correlation, flowId, ackAttempted: false, configAttempted: true,
+  }, { storage }), true);
+  assert.equal(readWifiHandoffRecovery({ flowId, storage }).configAttempted, true,
+    'the one-way initial config attempt survives a same-tab reload');
   assert.equal(markWifiHandoffAckAttempted({ flowId, correlation }, { storage }), true);
   assert.equal(readWifiHandoffRecovery({ flowId, storage }).ackAttempted, true);
   const raw = values.get(WIFI_HANDOFF_RECOVERY_KEY);

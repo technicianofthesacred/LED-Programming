@@ -1380,4 +1380,51 @@ await waitFor(
 assert.equal(cardLinkStatusText(dropLink.getState()), 'Card stopped responding — reconnecting…');
 dropLink.destroy();
 
+// A correlated bridge timeout is still a transport loss. The bridge-change
+// listener must demote an already-green shared handoff immediately rather than
+// returning early merely because the correlation remains available for retry.
+const shared = getSharedCardLink();
+shared.dispatch({
+  type: 'wifi-handoff-retargeted', host: wifiCorrelation.host,
+  correlation: wifiCorrelation, bridgeLifecycle: 80, flowId: wifiFlowId,
+});
+for (let envelope = 0; envelope < 2; envelope += 1) {
+  shared.dispatch({
+    type: 'wifi-handoff-status', host: wifiCorrelation.host,
+    correlation: wifiCorrelation, bridgeLifecycle: 80, flowId: wifiFlowId,
+    readiness: handoffEnvelope(wifiCorrelation),
+  });
+}
+shared.dispatch({
+  type: 'wifi-handoff-ack-attempted', host: wifiCorrelation.host,
+  correlation: wifiCorrelation, bridgeLifecycle: 80, flowId: wifiFlowId,
+});
+shared.dispatch({
+  type: 'wifi-handoff-ack-sent', host: wifiCorrelation.host,
+  correlation: wifiCorrelation, bridgeLifecycle: 80, flowId: wifiFlowId,
+});
+shared.dispatch({
+  type: 'wifi-handoff-status', host: wifiCorrelation.host,
+  correlation: wifiCorrelation, bridgeLifecycle: 80, flowId: wifiFlowId,
+  readiness: handoffEnvelope(wifiCorrelation, {
+    wifi: {
+      transport: 'station', transition: 'station', transitionPending: false,
+      apActive: false, stationIp: wifiCorrelation.host, ip: wifiCorrelation.host,
+      handoffGeneration: wifiCorrelation.handoffGeneration,
+    },
+  }),
+});
+assert.equal(isCardLinkConnected(shared.getState()), true);
+listeners.get('lightweaver-card-bridge-changed')?.({
+  detail: {
+    connected: false, verified: false, identityError: 'bridge-timeout',
+    host: wifiCorrelation.host, lifecycle: 80,
+    handoffCorrelation: wifiCorrelation, handoffFlowId: wifiFlowId,
+  },
+});
+assert.equal(isCardLinkConnected(shared.getState()), false,
+  'correlated bridge timeout immediately removes the visible connected state');
+assert.equal(shared.getState().readiness, null,
+  'correlated bridge timeout immediately clears stale readiness evidence');
+
 console.log('card-link-state tests passed');
