@@ -57,8 +57,15 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
 
   cardLinkRef.current = cardLink;
   function currentCardLink() { return productionDriver()?.getCardLink?.() || cardLinkRef.current || {}; }
-  function captureLease() { return captureProductionCardLease(currentCardLink(), expectedCardId, { mutation: 'runtime' }); }
-  function assertLease(lease) { return assertProductionCardLease(lease, currentCardLink(), { mutation: 'runtime' }); }
+  function runtimeAuthorityOptions() {
+    return {
+      mutation: 'runtime',
+      expectedFirmwareVersion: job.firmware.version,
+      expectedBuildId: job.firmware.buildId,
+    };
+  }
+  function captureLease() { return captureProductionCardLease(currentCardLink(), expectedCardId, runtimeAuthorityOptions()); }
+  function assertLease(lease) { return assertProductionCardLease(lease, currentCardLink(), runtimeAuthorityOptions()); }
   function invalidateLease(lease, reason = 'production-physical-operation-failed') { return invalidateCardLinkOperationLease(lease, { reason }); }
   async function reacquireAfterCardReboot(priorLease, timeoutMs = 15000) {
     const deadline = Date.now() + timeoutMs;
@@ -129,7 +136,7 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
 
   useEffect(() => {
     if (!ready) return;
-    const authority = productionCardAuthority(productionDriver()?.getCardLink?.() || cardLink || {}, expectedCardId, { mutation: 'runtime' });
+    const authority = productionCardAuthority(productionDriver()?.getCardLink?.() || cardLink || {}, expectedCardId, runtimeAuthorityOptions());
     if (authority.ok) return;
     generationRef.current += 1;
     void stopStream({ invalidate: false });

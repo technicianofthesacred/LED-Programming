@@ -372,7 +372,9 @@ test('HTTPS production transport performs exact blank config then runtime frame 
     while (Date.now() < blankDeadline && linkModule.getCardLinkState().cardBlank !== true) await new Promise(resolve => setTimeout(resolve, 25));
     const blankLink = linkModule.getCardLinkState();
     if (blankLink.cardBlank !== true) throw new Error(`blank link not ready: ${JSON.stringify(blankLink)}`);
-    const configLease = leaseModule.captureProductionCardLease(blankLink, expectedCardId, { mutation: 'config' });
+    const configLease = leaseModule.captureProductionCardLease(blankLink, expectedCardId, {
+      mutation: 'config', expectedFirmwareVersion: firmware.version, expectedBuildId: firmware.buildId,
+    });
     await pushClient.pushConfigToCard(configuration, {
       host: configLease.host, commissioningFlowId: configLease.commissioningFlowId,
       reboot: false, allowProjectChange: true, allowLayoutChange: true,
@@ -492,7 +494,7 @@ test('a delayed hotspot status cannot retarget or resurrect recovery after the p
   expect(await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun())).toMatchObject({ runId: replacementRunId, state: 'connect-card' });
 });
 
-test('install-required production reconnects through the factory AP and exact station handoff after flashing', async ({ page }) => {
+test('an erased no-response card explicitly reconnects by USB, flashes, then returns through factory AP and exact station handoff', async ({ page }) => {
   const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   await page.route('https://led.mandalacodes.com/**', async route => {
     const requested = new URL(route.request().url());
@@ -502,27 +504,13 @@ test('install-required production reconnects through the factory AP and exact st
   const job = await serveJob(page);
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
-    const oldReadiness = {
-      app: 'Lightweaver', cardId: 'lw-aabbccddeeff', firmwareVersion: '0.9.0', buildId: '0'.repeat(40),
-      bootId: 'boot-before-flash', runtimePhase: 'factory', knownGoodProject: false, commandReady: false, outputReady: false,
-    };
     const driver = {
       connectCard: async () => ({}), disconnect: async () => true,
       inspectCard: async () => ({ cardId: 'lw-aabbccddeeff', chipName: 'ESP32-S3', flashSize: '16MB' }),
-      connectLan: async () => {},
-      getCardLink: () => ({
-        state: 'connected-bridge', transport: 'bridge', host: '192.168.18.70',
-        card: { id: 'lw-aabbccddeeff' }, expectedCard: { id: 'lw-aabbccddeeff' },
-        cardBlank: true, validatedBootId: 'boot-before-flash', operationGeneration: 4,
-        bridgeLifecycle: 9, readiness: oldReadiness,
-      }),
-      readEvidence: async () => ({
-        app: 'Lightweaver', cardId: 'lw-aabbccddeeff', firmwareVersion: '0.9.0', buildId: '0'.repeat(40),
-        projectRevision: 0, projectFingerprint: '', productionJobId: '', productionJobDigest: '',
-      }),
+      connectLan: async () => { throw new Error('Erased card has no LAN endpoint'); },
       install: async ({ onProgress }) => {
         localStorage.setItem('lw_test_factory_flashed', '1');
-        delete driver.connectLan; delete driver.getCardLink; delete driver.readEvidence;
+        delete driver.connectLan;
         onProgress(1);
       },
     };
@@ -588,9 +576,14 @@ test('install-required production reconnects through the factory AP and exact st
   await page.getByRole('button', { name: /Moon · batch 7/ }).click();
   await page.getByRole('button', { name: 'Connect one USB card' }).click();
   await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
-  await expect(page.getByRole('button', { name: 'Reconnect same USB card' })).toBeVisible();
-  await page.getByRole('button', { name: 'Reconnect same USB card' }).click();
-  await page.getByRole('button', { name: 'Install verified firmware' }).click();
+  const recovery = page.getByRole('region', { name: 'Safe recovery' });
+  await expect(recovery).toContainText('could not read the local card page');
+  await expect(recovery.getByRole('button', { name: 'Reconnect the expected card page' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Reconnect same USB card to install verified firmware' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Install verified firmware', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Reconnect same USB card to install verified firmware' }).click();
+  await expect(page.getByRole('button', { name: 'Install verified firmware', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Install verified firmware', exact: true }).click();
   await page.getByRole('button', { name: 'Reconnect same card' }).click();
   await expect(page.getByRole('button', { name: 'Load verified artwork' })).toBeVisible({ timeout: 12_000 });
 
@@ -848,6 +841,39 @@ test('a stale USB recovery action cannot mutate a replacement production run', a
   const storedRun = await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun());
   expect(replacementRunId).not.toBe(staleRunId);
   expect(storedRun).toMatchObject({ runId: replacementRunId, state: 'connect-card', usbReleased: true });
+});
+
+test('a run replacement during inspected-card USB release cannot start LAN evidence or recovery for the new run', async ({ page }) => {
+  const job = await serveJob(page);
+  await installDriver(page, { disconnectDelayMs: 200 });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  const staleRunId = await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun().runId);
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click({ noWaitAfter: true });
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_test_disconnect_count'))).toBe('1');
+
+  const replacementRunId = await page.evaluate(async digest => {
+    const module = await import('/src/lib/productionRun.js');
+    const replacement = await module.updateProductionRunAtomically(() => {
+      const created = module.createProductionRun({ jobDigest: digest });
+      const correlation = {
+        runId: created.runId, flowId: created.flowId, jobDigest: created.jobDigest,
+        operationId: created.operationId, expectedCardId: created.expectedCardId, generation: created.generation,
+      };
+      return module.transitionProductionRun(created, 'connect-card', { correlation });
+    });
+    window.dispatchEvent(new StorageEvent('storage', { key: module.PRODUCTION_RUN_COMMIT_A_KEY }));
+    return replacement.runId;
+  }, job.digest);
+
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_test_disconnect_settled_count'))).toBe('1');
+  await page.waitForTimeout(100);
+  await expect(page.getByRole('region', { name: 'Safe recovery' })).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem('lw_test_lan_handoff_count'))).toBeNull();
+  const storedRun = await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun());
+  expect(replacementRunId).not.toBe(staleRunId);
+  expect(storedRun).toMatchObject({ runId: replacementRunId, state: 'connect-card' });
 });
 
 test('install failure never claims USB release when cleanup fails', async ({ page }) => {

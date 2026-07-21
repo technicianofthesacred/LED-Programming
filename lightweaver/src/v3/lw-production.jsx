@@ -122,12 +122,21 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     return testDriver()?.getCardLink?.() || cardLinkRef.current || {};
   }
 
+  function authorityOptions(mutation = 'runtime') {
+    if (!['config', 'runtime'].includes(mutation)) return { mutation };
+    return {
+      mutation,
+      expectedFirmwareVersion: release.value?.manifest?.firmwareVersion || '',
+      expectedBuildId: release.value?.manifest?.buildId || '',
+    };
+  }
+
   function captureCardLease(mutation = 'runtime', runLease = correlation(runRef.current)) {
-    return captureProductionCardLease(currentCardLink(), runLease?.expectedCardId, { mutation });
+    return captureProductionCardLease(currentCardLink(), runLease?.expectedCardId, authorityOptions(mutation));
   }
 
   function assertCardLease(lease, mutation = 'runtime') {
-    return assertProductionCardLease(lease, currentCardLink(), { mutation });
+    return assertProductionCardLease(lease, currentCardLink(), authorityOptions(mutation));
   }
 
   function captureRunLease() {
@@ -166,9 +175,9 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
   async function waitForRuntimeAuthority(expectedCardId, runLease, timeoutMs = 7000) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      assertRunLease(runLease);
-      const authority = productionCardAuthority(currentCardLink(), expectedCardId, { mutation: 'runtime' });
-      if (authority.ok) return captureProductionCardLease(currentCardLink(), expectedCardId, { mutation: 'runtime' });
+      assertActiveRunLease(runLease);
+      const authority = productionCardAuthority(currentCardLink(), expectedCardId, authorityOptions('runtime'));
+      if (authority.ok) return captureProductionCardLease(currentCardLink(), expectedCardId, authorityOptions('runtime'));
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     throw new Error('The configured card did not establish two fresh command-ready status checks.');
@@ -193,8 +202,8 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
   }
 
   const displayedCardLink = testDriver()?.getCardLink?.() || cardLink || {};
-  const configAuthority = productionCardAuthority(displayedCardLink, run?.expectedCardId, { mutation: 'config' });
-  const runtimeAuthority = productionCardAuthority(displayedCardLink, run?.expectedCardId, { mutation: 'runtime' });
+  const configAuthority = productionCardAuthority(displayedCardLink, run?.expectedCardId, authorityOptions('config'));
+  const runtimeAuthority = productionCardAuthority(displayedCardLink, run?.expectedCardId, authorityOptions('runtime'));
   const readbackAuthority = productionCardAuthority(displayedCardLink, run?.expectedCardId, { mutation: 'readback' });
 
   const advance = useCallback(async (next, options = {}, origin) => {
@@ -251,10 +260,10 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     const observed = testDriver()?.getCardLink?.() || cardLink || {};
     const mutation = run.state === 'restore' ? 'config' : 'runtime';
     const authority = run.state === 'verify-card'
-      ? (productionCardAuthority(observed, run.expectedCardId, { mutation: 'runtime' }).ok
+      ? (productionCardAuthority(observed, run.expectedCardId, authorityOptions('runtime')).ok
         ? { ok: true }
         : productionCardAuthority(observed, run.expectedCardId, { mutation: 'readback' }))
-      : productionCardAuthority(observed, run.expectedCardId, { mutation });
+      : productionCardAuthority(observed, run.expectedCardId, authorityOptions(mutation));
     if (!authority.ok) {
       setStatus('Card link lost — reconnect the exact USB-inspected card. No command or pass is authorized.');
     }
@@ -338,19 +347,22 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       });
       runRef.current = updated;
       setRun(updated);
-    } catch { /* the visible recovery remains conservative even if persistence is unavailable */ }
+      return updated;
+    } catch { return null; /* the visible recovery remains conservative even if persistence is unavailable */ }
   }
 
   async function connectCard() {
     if (busy || release.state !== 'ready') return;
     const runLease = captureRunLease();
+    let activeRunLease = runLease;
     setBusy(true); setError(''); setRecovery(null); setStatus('Select the one Lightweaver card connected by USB.');
     let connection = null;
     try {
       const driver = testDriver();
       connection = driver?.connectCard ? await driver.connectCard() : await connectESP();
+      assertActiveRunLease(runLease);
       const rawInspection = driver?.inspectCard ? await driver.inspectCard(connection) : await inspectConnectedESP(connection.loader, connection.chip);
-      assertRunLease(runLease);
+      assertActiveRunLease(runLease);
       const inspected = { ...rawInspection, ...validateInstallHardware(rawInspection) };
       if (runLease.expectedCardId && inspected.cardId !== runLease.expectedCardId) {
         throw new Error(`Wrong card. Reconnect ${runLease.expectedCardId}; this card is ${inspected.cardId}. Nothing was changed.`);
@@ -364,33 +376,46 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       setUsbConnected(true);
       setHardware(inspected);
       setRecovery(null);
-      if (runRef.current?.state === 'connect-card') await advance('inspect', { expectedCardId: inspected.cardId }, runLease);
+      if (runRef.current?.state === 'connect-card') {
+        const inspectedRun = await advance('inspect', { expectedCardId: inspected.cardId }, runLease);
+        activeRunLease = Object.freeze(correlation(inspectedRun));
+        assertActiveRunLease(activeRunLease);
+      }
       setStatus(`Card ${inspected.cardId} inspected. Nothing has been changed.`);
     } catch (reason) {
       const acquired = Boolean(connection);
       const released = acquired ? await releaseUsbConnection(connection) : true;
+      if (reason?.code === 'stale-production-run' || !runLeaseIsCurrent(activeRunLease)) return;
       loaderRef.current = released ? null : connection?.loader || null;
       transportRef.current = released ? null : connection?.transport || null;
       setUsbConnected(!released); setHardware(null);
-      if (!released) await persistUnreleasedUsb(runLease);
+      if (!released) {
+        const ownershipRun = await persistUnreleasedUsb(activeRunLease);
+        if (ownershipRun) activeRunLease = Object.freeze(correlation(ownershipRun));
+      }
+      if (!runLeaseIsCurrent(activeRunLease)) return;
       showRecovery(reason, { phase: run?.state || 'connect-card', cardChanged: 'no', usbReleased: released ? 'yes' : 'unknown' });
     }
-    finally { setBusy(false); }
+    finally { if (runLeaseIsCurrent(activeRunLease)) setBusy(false); }
   }
 
   async function inspectInstalledFirmware() {
     if (busy || !hardware || !usbConnected || run.state !== 'inspect') return;
+    const runLease = captureRunLease();
+    let activeRunLease = runLease;
     setBusy(true); setError('');
     try {
       const connection = { loader: loaderRef.current, transport: transportRef.current };
       const released = await releaseUsbConnection(connection);
+      assertActiveRunLease(runLease);
       if (released) { loaderRef.current = null; transportRef.current = null; setUsbConnected(false); }
       if (!released) throw new Error('USB ownership could not be released.');
-      await readInstalledFirmwareEvidence();
+      activeRunLease = await readInstalledFirmwareEvidence(runLease) || runLease;
     } catch (reason) {
+      if (reason?.code === 'stale-production-run' || !runLeaseIsCurrent(runLease)) return;
       setFirmwareDecision('unproven');
       showRecovery('usb-ownership-uncertain');
-    } finally { setBusy(false); }
+    } finally { if (runLeaseIsCurrent(activeRunLease)) setBusy(false); }
   }
 
   async function connectCardPageThroughWifi(runLease, initialHost, { authority = 'identity' } = {}) {
@@ -448,15 +473,15 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     const returnDeadline = Date.now() + 180000;
     while (Date.now() < returnDeadline) {
       assertActiveRunLease(runLease);
-      if (productionCardAuthority(currentCardLink(), runLease.expectedCardId, { mutation: authority }).ok) return;
+      if (productionCardAuthority(currentCardLink(), runLease.expectedCardId, authorityOptions(authority)).ok) return;
       await new Promise(resolve => setTimeout(resolve, 100));
       assertActiveRunLease(runLease);
     }
     throw new Error('The exact card did not return on the gallery network before setup timed out.');
   }
 
-  async function readInstalledFirmwareEvidence() {
-    const runLease = captureRunLease();
+  async function readInstalledFirmwareEvidence(runLease = captureRunLease()) {
+    let activeRunLease = runLease;
     let lease = null;
     try {
       const driver = testDriver();
@@ -480,27 +505,33 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       if (exact) {
         setRecovery(null);
         setFirmwareDecision('exact');
-        await advance('restore', { usbReleased: true }, runLease);
+        const restoringRun = await advance('restore', { usbReleased: true }, runLease);
+        activeRunLease = Object.freeze(correlation(restoringRun));
+        assertActiveRunLease(activeRunLease);
         setStatus('The online card is the same USB card and already has the exact official firmware. Ready to load the artwork.');
       } else {
         setFirmwareDecision('install-required');
         setHardware(null);
         setStatus(`Card ${evidence.cardId} reports firmware ${evidence.firmwareVersion} (${evidence.buildId.slice(0, 8)}), which does not match the verified release. Reconnect the same USB card to update it.`);
       }
+      return activeRunLease;
     } catch (reason) {
-      if (reason?.code === 'stale-production-run' || !runLeaseIsCurrent(runLease)) return;
+      if (reason?.code === 'stale-production-run' || !runLeaseIsCurrent(activeRunLease)) return null;
       if (lease && reason?.code !== 'stale-production-run') invalidateOperation(lease, 'production-preflight-failed');
       setFirmwareDecision('unproven');
       if (/wrong online card/i.test(String(reason?.message || ''))) showRecovery('wrong-card-reconnect');
       else showRecovery('card-page-unavailable');
+      return activeRunLease;
     }
   }
 
   async function retryInstalledFirmwareEvidence() {
     if (busy || run.state !== 'inspect') return;
+    const runLease = captureRunLease();
+    let activeRunLease = runLease;
     setBusy(true); setError('');
-    try { await readInstalledFirmwareEvidence(); }
-    finally { setBusy(false); }
+    try { activeRunLease = await readInstalledFirmwareEvidence(runLease) || runLease; }
+    finally { if (runLeaseIsCurrent(activeRunLease)) setBusy(false); }
   }
 
   async function installOrContinue() {
@@ -508,10 +539,13 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     if (firmwareDecision !== 'install-required' || !usbConnected) return;
     setBusy(true); setError('');
     const runLease = captureRunLease();
+    const installConnection = { loader: loaderRef.current, transport: transportRef.current };
+    let activeRunLease = runLease;
     let installLease = null;
     try {
       const installingRun = await advance('install', { cardChanged: false, usbReleased: false }, runLease);
       installLease = Object.freeze(correlation(installingRun));
+      activeRunLease = installLease;
         const driver = testDriver();
         if (driver?.install) await driver.install({ release: release.value, hardware, onProgress: setProgress });
         else {
@@ -523,30 +557,39 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
             },
           });
         }
+        assertActiveRunLease(installLease);
         loaderRef.current = null; transportRef.current = null;
         setUsbConnected(false);
-        assertRunLease(installLease);
-        await advance('reconnect', { cardChanged: true, usbReleased: true }, installLease);
+        const reconnectingRun = await advance('reconnect', { cardChanged: true, usbReleased: true }, installLease);
+        installLease = Object.freeze(correlation(reconnectingRun));
+        activeRunLease = installLease;
+        assertActiveRunLease(installLease);
         setStatus('Official firmware installed and USB released. Reconnect the same card after it restarts; Studio will not install it again.');
     } catch (reason) {
-      const released = await releaseUsbConnection();
+      const released = await releaseUsbConnection(installConnection);
+      const catchLease = activeRunLease;
+      if (reason?.code === 'stale-production-run' || !runLeaseIsCurrent(catchLease)) return;
       if (released) { loaderRef.current = null; transportRef.current = null; setUsbConnected(false); }
       else setUsbConnected(true);
       setHardware(null);
       try {
         if (installLease) {
           const recoveryRun = await advance('recovery', { recoveryAction: 'release-usb', cardChanged: true, usbReleased: released }, installLease);
-          await advance('connect-card', { cardChanged: true, usbReleased: released }, correlation(recoveryRun));
+          activeRunLease = Object.freeze(correlation(recoveryRun));
+          const connectingRun = await advance('connect-card', { cardChanged: true, usbReleased: released }, correlation(recoveryRun));
+          activeRunLease = Object.freeze(correlation(connectingRun));
         }
       } catch {}
+      if (!runLeaseIsCurrent(activeRunLease)) return;
       showRecovery(released ? 'disconnect-phase' : 'usb-ownership-uncertain', { cardChanged: 'unknown', usbReleased: released ? 'yes' : 'unknown' });
     }
-    finally { setBusy(false); }
+    finally { if (runLeaseIsCurrent(activeRunLease)) setBusy(false); }
   }
 
   async function reconnectAfterInstall() {
     setBusy(true); setError('');
     const runLease = captureRunLease();
+    let activeRunLease = runLease;
     let lease = null;
     try {
       const driver = testDriver();
@@ -555,7 +598,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       lease = captureCardLease('config', runLease);
       const evidence = driver?.readEvidence ? await driver.readEvidence('reconnect') : await readCardProjectEvidence({ host: lease.host, transport: lease.transport });
       assertCardLease(lease, 'config');
-      assertRunLease(runLease);
+      assertActiveRunLease(runLease);
       if (evidence.cardId !== runLease.expectedCardId) throw new Error(`Wrong card. Reconnect ${runLease.expectedCardId}; the online card is ${evidence.cardId}.`);
       if (evidence.firmwareVersion !== release.value.manifest.firmwareVersion || evidence.buildId !== release.value.manifest.buildId) {
         showRecovery('firmware-mismatch', { cardChanged: run?.cardChanged ? 'yes' : 'no', firmwareEvidence: {
@@ -564,14 +607,16 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
         } });
         return;
       }
-      await advance('restore', { usbReleased: true }, runLease);
+      const restoringRun = await advance('restore', { usbReleased: true }, runLease);
+      activeRunLease = Object.freeze(correlation(restoringRun));
+      assertActiveRunLease(activeRunLease);
       setStatus('The same card is online with the exact firmware. Ready to load the artwork once.');
     } catch (reason) {
-      if (reason?.code === 'stale-production-run' || !runLeaseIsCurrent(runLease)) return;
+      if (reason?.code === 'stale-production-run' || !runLeaseIsCurrent(activeRunLease)) return;
       if (lease && reason?.code !== 'stale-production-run') invalidateOperation(lease, 'production-reconnect-readback-failed');
       showRecovery(reason, { phase: 'reconnect', usbReleased: 'yes' });
     }
-    finally { if (mountedRef.current) setBusy(false); }
+    finally { if (runLeaseIsCurrent(activeRunLease)) setBusy(false); }
   }
 
   async function restoreArtwork() {
@@ -582,13 +627,13 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     let lease = null;
     let mutationIntentPersisted = false;
     try {
-      assertRunLease(runLease);
+      assertActiveRunLease(runLease);
       const driver = testDriver();
       lease = captureCardLease('config', runLease);
-      const blankConfig = productionCardAuthority(currentCardLink(), runLease.expectedCardId, { mutation: 'config' }).blank === true;
+      const blankConfig = productionCardAuthority(currentCardLink(), runLease.expectedCardId, authorityOptions('config')).blank === true;
       const binding = driver?.readEvidence ? await driver.readEvidence('before-restore') : await readCardProjectEvidence({ host: lease.host, transport: lease.transport });
       assertCardLease(lease, 'config');
-      assertRunLease(runLease);
+      assertActiveRunLease(runLease);
       if (binding.cardId !== runLease.expectedCardId
         || binding.firmwareVersion !== release.value.manifest.firmwareVersion
         || binding.buildId !== release.value.manifest.buildId) {
@@ -609,14 +654,16 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
         allowProjectChange: true,
         allowLayoutChange: true,
         commissioningFlowId: lease.commissioningFlowId,
-        factoryBlank: blankConfig,
-      });
-      assertRunLease(mutationRunLease);
+          factoryBlank: blankConfig,
+        });
+      assertActiveRunLease(mutationRunLease);
       // Applying first wiring may restart the card or replace the bridge page.
       // The old lease is expected to die. The next step uses a new, exact
       // handoff/readback lease and will not replay this mutation.
       setStatus('Artwork was sent once. Now Studio will rebind the exact card lifecycle and read it back independently.');
     } catch (reason) {
+      const catchRunLease = mutationIntentPersisted ? mutationRunLease : runLease;
+      if (reason?.code === 'stale-production-run' || !runLeaseIsCurrent(catchRunLease)) return;
       if (lease && reason?.code !== 'stale-production-run') invalidateOperation(lease, 'production-config-failed');
       if (!mutationIntentPersisted) restoreStartedRef.current = false;
       if (mutationIntentPersisted) {
@@ -625,25 +672,31 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       }
       else showRecovery(/exact USB-inspected card/i.test(String(reason?.message || '')) ? 'wrong-card-reconnect' : 'restore-failure', { cardChanged: 'no', usbReleased: 'yes' });
     }
-    finally { setBusy(false); }
+    finally {
+      const finalRunLease = mutationIntentPersisted ? mutationRunLease : runLease;
+      if (runLeaseIsCurrent(finalRunLease)) setBusy(false);
+    }
   }
 
   async function verifyCard() {
     setBusy(true); setError('');
     const runLease = captureRunLease();
+    let activeRunLease = runLease;
     let lease = null;
     try {
-      assertRunLease(runLease);
-      const mutation = productionCardAuthority(currentCardLink(), runLease.expectedCardId, { mutation: 'runtime' }).ok
+      assertActiveRunLease(runLease);
+      const mutation = productionCardAuthority(currentCardLink(), runLease.expectedCardId, authorityOptions('runtime')).ok
         ? 'runtime' : 'readback';
       lease = captureCardLease(mutation, runLease);
       const evidence = testDriver()?.readEvidence ? await testDriver().readEvidence('verify') : await readCardProjectEvidence({ host: lease.host, transport: lease.transport });
       assertCardLease(lease, mutation);
-      assertRunLease(runLease);
+      assertActiveRunLease(runLease);
       if (!exactEvidence(evidence, job, runLease.expectedCardId, release.value)) {
         if (evidence.cardId !== runLease.expectedCardId) throw new Error(`Wrong card. Expected ${runLease.expectedCardId}, but read back ${evidence.cardId}. No retry was unlocked.`);
         if (evidence.firmwareVersion !== release.value.manifest.firmwareVersion || evidence.buildId !== release.value.manifest.buildId) throw new Error('Card firmware changed after restore. No retry was unlocked.');
-        await advance('restore', { usbReleased: true }, runLease);
+        const restoringRun = await advance('restore', { usbReleased: true }, runLease);
+        activeRunLease = Object.freeze(correlation(restoringRun));
+        assertActiveRunLease(activeRunLease);
         restoreStartedRef.current = false;
         throw new Error('Card read-back does not match this job and firmware. No second restore ran; review the evidence, then explicitly retry if appropriate.');
       }
@@ -653,37 +706,40 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
         // command-ready before the one-time commissioning authority is cleared.
         await readCardStatusEnvelope({ host: lease.host, transport: lease.transport });
         assertCardLease(lease, mutation);
-        assertRunLease(runLease);
+        assertActiveRunLease(runLease);
         await revalidateSharedCommissionedCard({
           expectedCardId: runLease.expectedCardId,
           host: lease.host,
           flowId: lease.commissioningFlowId,
           bridgeLifecycle: lease.bridgeLifecycle,
         });
-        assertRunLease(runLease);
+        assertActiveRunLease(runLease);
         // Keep the commissioning correlation until cardLink has consumed its
         // own fresh status read as well. Clearing it earlier would strand the
         // bridge at runtime-ready while Studio still held stale blank evidence.
         await waitForRuntimeAuthority(runLease.expectedCardId, runLease);
         await adoptVerifiedBridgeIdentity(lease.commissioningFlowId, lease, mutation);
-        assertRunLease(runLease);
+        assertActiveRunLease(runLease);
       } else if (lease.transport === 'direct') {
         for (let freshRead = 0; freshRead < 2; freshRead += 1) {
           const readiness = await readCardStatusEnvelope({ host: lease.host, transport: 'direct' });
           reportDirectCardStatus({ connected: true, host: lease.host, status: readiness });
-          assertRunLease(runLease);
+          assertActiveRunLease(runLease);
         }
       }
       await waitForRuntimeAuthority(runLease.expectedCardId, runLease);
-      await advance('check-lights', {}, runLease);
+      const checkingRun = await advance('check-lights', {}, runLease);
+      activeRunLease = Object.freeze(correlation(checkingRun));
+      assertActiveRunLease(activeRunLease);
       setStatus('Card identity and artwork match exactly. Check every physical output before recording a pass.');
     } catch (reason) {
+      if (reason?.code === 'stale-production-run' || !runLeaseIsCurrent(activeRunLease)) return;
       if (lease && reason?.code !== 'stale-production-run') invalidateOperation(lease, 'production-readback-failed');
       if (/does not match this job|no second restore/i.test(String(reason?.message || ''))) showRecovery('restore-readback-mismatch');
       else if (/wrong card/i.test(String(reason?.message || ''))) showRecovery('wrong-card-reconnect');
       else showRecovery('restore-failure', { cardChanged: 'unknown', usbReleased: 'yes' });
     }
-    finally { setBusy(false); }
+    finally { if (runLeaseIsCurrent(activeRunLease)) setBusy(false); }
   }
 
   async function continueAfterLights(results = observations) {
@@ -817,6 +873,14 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     const current = recovery;
     if (!current || busy) return;
     const recoveryRunLease = captureRunLease();
+    if (action === 'prepare-erased-install') {
+      assertActiveRunLease(recoveryRunLease);
+      setRecovery(null);
+      setFirmwareDecision('install-required');
+      setStatus('No card page was verified. Reconnect the same USB-inspected card to explicitly install verified firmware; Studio has not called it blank or connected.');
+      await connectCard();
+      return;
+    }
     if (action === 'retry-signed-release') { setRecovery(null); await preloadFirmware(job); return; }
     if (action === 'retry-usb') { setRecovery(null); await connectCard(); return; }
     if (action === 'reconnect-expected-card') {
@@ -928,6 +992,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
                   platform={diagnosticPlatform(cap)}
                   onAction={action => void handleRecoveryAction(action)}
                 />}
+                {recovery?.supportCode === 'LW-CARD-202' && run?.state === 'inspect' && hardware && firmwareDecision === 'unproven' && !usbConnected && <button className="btn" type="button" disabled={busy} onClick={() => void handleRecoveryAction('prepare-erased-install')}>Reconnect same USB card to install verified firmware</button>}
               </section>}
             </div>
             <aside><ProductionPassRecord refreshKey={recordRefresh} /></aside>

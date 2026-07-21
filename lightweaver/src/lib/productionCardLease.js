@@ -8,7 +8,9 @@ function fail(reason) {
   return { ok: false, reason };
 }
 
-export function productionCardAuthority(link = {}, expectedCardId = '', { mutation = 'runtime' } = {}) {
+export function productionCardAuthority(link = {}, expectedCardId = '', {
+  mutation = 'runtime', expectedFirmwareVersion = '', expectedBuildId = '',
+} = {}) {
   const expected = String(expectedCardId || '').trim().toLowerCase();
   const actual = cardId(link.card);
   const expectedByLink = cardId(link.expectedCard);
@@ -50,6 +52,15 @@ export function productionCardAuthority(link = {}, expectedCardId = '', { mutati
       ? { ok: true, readOnly: true, blank: link.cardBlank === true }
       : fail('The exact card identity status is not ready for read-only evidence.');
   }
+  if (mutation === 'config' || mutation === 'runtime') {
+    const targetVersion = String(expectedFirmwareVersion || '').trim();
+    const targetBuild = String(expectedBuildId || '').trim();
+    if (!targetVersion || !targetBuild
+      || String(readiness.firmwareVersion || '') !== targetVersion
+      || String(readiness.buildId || '') !== targetBuild) {
+      return fail(`The exact card does not have the verified signed firmware required for ${mutation === 'config' ? 'configuration' : 'runtime commands'}.`);
+    }
+  }
   if (mutation === 'config' && link.cardBlank === true) {
     if (link.state === 'connected-bridge' && !/^[A-Za-z0-9_-]{16,96}$/.test(link.handoffFlowId || '')) {
       return fail('The blank card is missing its verified WiFi handoff flow.');
@@ -79,12 +90,21 @@ export function captureProductionCardLease(link, expectedCardId, options = {}) {
     operationGeneration: link.operationGeneration,
     validatedBootId: String(link.validatedBootId),
     commissioningFlowId: String(link.handoffFlowId || ''),
+    expectedFirmwareVersion: ['config', 'runtime'].includes(options.mutation) ? String(options.expectedFirmwareVersion || '') : '',
+    expectedBuildId: ['config', 'runtime'].includes(options.mutation) ? String(options.expectedBuildId || '') : '',
   });
 }
 
 export function assertProductionCardLease(lease, link, options = {}) {
   if (!lease) throw new Error('The production card lease is missing.');
-  const authority = productionCardAuthority(link, lease.expectedCardId, options);
+  const authorityOptions = ['config', 'runtime'].includes(options.mutation)
+    ? {
+        ...options,
+        expectedFirmwareVersion: options.expectedFirmwareVersion || lease.expectedFirmwareVersion,
+        expectedBuildId: options.expectedBuildId || lease.expectedBuildId,
+      }
+    : options;
+  const authority = productionCardAuthority(link, lease.expectedCardId, authorityOptions);
   if (!authority.ok) throw new Error(`The card link is not ready: ${authority.reason}`);
   const current = {
     expectedCardId: options.mutation === 'readback'
@@ -96,6 +116,8 @@ export function assertProductionCardLease(lease, link, options = {}) {
     operationGeneration: link.operationGeneration,
     validatedBootId: String(link.validatedBootId || ''),
     commissioningFlowId: String(link.handoffFlowId || ''),
+    expectedFirmwareVersion: ['config', 'runtime'].includes(options.mutation) ? String(authorityOptions.expectedFirmwareVersion || '') : '',
+    expectedBuildId: ['config', 'runtime'].includes(options.mutation) ? String(authorityOptions.expectedBuildId || '') : '',
   };
   if (Object.keys(current).some(key => current[key] !== lease[key])) {
     throw new Error('The exact card link changed during this operation. Nothing else was authorized.');
