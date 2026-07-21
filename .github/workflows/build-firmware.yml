@@ -168,6 +168,23 @@ jobs:
             lightweaver/public/production/jobs
             release/job-sources
           )
+          RELEASE_INPUTS=(
+            'firmware/lightweaver-controller/src/**'
+            'firmware/lightweaver-controller/platformio.ini'
+            'firmware/lightweaver-controller/scripts/**'
+            'scripts/build-firmware-manifest.mjs'
+            'scripts/build-production-job.mjs'
+            'scripts/rebuild-production-jobs.mjs'
+            'scripts/sign-release-artifacts.mjs'
+            'lightweaver/src/lib/**'
+            'packages/installer-core/**'
+            'release/firmware-manifest.schema.json'
+            'release/production-job.schema.json'
+            'release/job-generators/**'
+            'release/job-sources/**'
+            'release/keys/lightweaver-release-public.pem'
+            '.github/workflows/build-firmware.yml'
+          )
           if git diff --quiet -- "${RELEASE_PATHS[@]}" && \
              test -z "$(git ls-files --others --exclude-standard -- "${RELEASE_PATHS[@]}")"; then
             echo "Signed firmware release already matches current source — nothing to commit."
@@ -178,6 +195,14 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "${RELEASE_PATHS[@]}"
           git commit -m "CI: publish signed Lightweaver firmware release"
+          git fetch origin main
+          if ! git diff --quiet "$GITHUB_SHA..origin/main" -- "${RELEASE_INPUTS[@]}"; then
+            echo "::error::Main changed a release input while this signer ran. Refusing to publish a stale signed build; the newer source must rebuild it."
+            exit 1
+          fi
+          # Test/docs-only updates may land while the protected build compiles.
+          # Integrate them so the signed artifact push remains fast-forward.
+          git rebase origin/main
           git push origin "HEAD:main"
           echo "changed=true" >> "$GITHUB_OUTPUT"
 

@@ -420,6 +420,13 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
   assert.ok(releaseCommit < artifactUpload);
   assert.match(workflow.slice(signedVerification, releaseCommit), /release-build-identity\.mjs/);
   assert.match(workflow.slice(signedVerification, releaseCommit), /firmwareRelease\.test\.js/);
+  const releaseCommitStep = workflow.slice(releaseCommit, artifactUpload);
+  assert.match(releaseCommitStep, /git fetch origin main/);
+  assert.match(releaseCommitStep, /git diff --quiet "\$GITHUB_SHA\.\.origin\/main" -- "\$\{RELEASE_INPUTS\[@\]\}"/);
+  assert.ok(
+    releaseCommitStep.indexOf('git rebase origin/main') < releaseCommitStep.indexOf('git push origin "HEAD:main"'),
+    'a signer must integrate harmless concurrent main updates before publishing',
+  );
   assert.match(deployWorkflow, /if: github\.ref == 'refs\/heads\/main'/);
   assert.doesNotMatch(deployWorkflow, /uses:\s*actions\/[^@]+@v\d/);
 });
