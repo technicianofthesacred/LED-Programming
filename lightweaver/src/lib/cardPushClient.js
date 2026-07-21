@@ -24,6 +24,7 @@ import {
   CardConfigCapacityError,
   prepareCardStoragePayload,
 } from './cardStoragePayload.js';
+import { classifyCardReadiness } from './cardReadiness.js';
 import { stageCardWiringCandidate } from './cardWiringSafety.js';
 
 export function getCardHostname() {
@@ -83,13 +84,24 @@ function isMixedContentBlocked() {
   return typeof window !== 'undefined' && !canPushDirectlyToCard(window.location.protocol);
 }
 
+function selectedTransport(options = {}) {
+  if (options.transport === 'bridge' || options.transport === 'direct') return options.transport;
+  return isMixedContentBlocked() ? 'bridge' : 'direct';
+}
+
+function bridgeRequest(type, payload, requestOptions, options = {}) {
+  const requestImpl = options.bridgeRequestImpl || sendCardBridgeRequest;
+  return requestImpl(type, payload, requestOptions);
+}
+
 async function postConfigToHost(host, runtimePackage, options = {}) {
   const url = `${cardHostToUrl(host)}/api/config`;
   const body = options.preparedPayload?.json || cardStorageJson(runtimePackage);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), options.timeoutMs || 6000);
   try {
-    const r = await fetch(url, {
+    const fetchImpl = options.fetchImpl || globalThis.fetch;
+    const r = await fetchImpl(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,
@@ -243,13 +255,14 @@ async function cardNeedsConfigReboot(host, runtimePackage, options = {}) {
 
 async function resolveConfigRebootForCard(host, runtimePackage, options = {}) {
   const timeoutMs = Math.min(options.timeoutMs || 6000, 1200);
-  const current = isMixedContentBlocked()
-    ? await sendCardBridgeRequest('firmware-info', {}, {
+  const transport = selectedTransport(options);
+  const current = transport === 'bridge'
+    ? await bridgeRequest('firmware-info', {}, {
         host,
         timeoutMs,
         retryOnTimeout: true,
-      }).catch(() => null)
-    : await readFirmwareInfoToHost(host, timeoutMs);
+      }, options).catch(() => null)
+    : await readFirmwareInfoToHost(host, timeoutMs, options.fetchImpl || globalThis.fetch);
   const layoutChanged = current ? cardConfigNeedsRebootFromInfo(current, runtimePackage) : false;
   const projectChanged = current ? cardConfigProjectMismatchFromInfo(current, runtimePackage) : false;
   const reboot = options.reboot === true ||
@@ -262,7 +275,8 @@ export async function requestCardReboot(host, options = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), Math.min(options.timeoutMs || 6000, 1200));
   try {
-    const response = await fetch(`${cardHostToUrl(host)}/api/reboot`, {
+    const fetchImpl = options.fetchImpl || globalThis.fetch;
+    const response = await fetchImpl(`${cardHostToUrl(host)}/api/reboot`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
@@ -277,10 +291,10 @@ export async function requestCardReboot(host, options = {}) {
   }
 }
 
-function normalizeConfigPushError(host, err) {
+function normalizeConfigPushError(host, err, transport = '') {
   if (err instanceof CardConfigCapacityError) return err;
   if (err instanceof CardPushError) return err;
-  if (isMixedContentBlocked()) {
+  if (transport === 'bridge' || (!transport && isMixedContentBlocked())) {
     return new CardPushError(
       'mixed-content',
       'Browser blocked the connection (mixed content). Use the copy-paste fallback or open the designer over plain HTTP.',
@@ -300,8 +314,10 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
   // over-capacity configuration never causes an external side effect.
   const preparedPayload = prepareCardStoragePayload(runtimePackage);
   const host = options.host || getCardHostname();
-  const mixedContentBlocked = isMixedContentBlocked();
-  const initialBridgeConfig = mixedContentBlocked && hasCardBridgeInitialConfigAuthority({
+  const transport = selectedTransport(options);
+  const useBridge = transport === 'bridge';
+  const initialConfigAuthorityImpl = options.initialConfigAuthorityImpl || hasCardBridgeInitialConfigAuthority;
+  const initialBridgeConfig = useBridge && initialConfigAuthorityImpl({
     host,
     flowId: options.commissioningFlowId,
   });
@@ -312,12 +328,12 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
   // proof and the complete first project.
   if (initialBridgeConfig) {
     try {
-      return await sendCardBridgeRequest('config', preparedPayload.config, {
+      return await bridgeRequest('config', preparedPayload.config, {
         host,
         timeoutMs: options.timeoutMs || 6000,
         reboot: options.reboot === true,
         commissioningFlowId: options.commissioningFlowId,
-      });
+      }, options);
     } catch (err) {
       if (err instanceof CardPushError) throw err;
       throw new CardPushError(
@@ -329,8 +345,41 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
       );
     }
   }
-  if (!mixedContentBlocked) {
-    await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: Math.min(options.timeoutMs || 6000, 1500) });
+  if (!useBridge) {
+    const exactIdentity = await guardDirectCardMutation(host, {
+      fetchImpl: options.fetchImpl,
+      timeoutMs: Math.min(options.timeoutMs || 6000, 1500),
+    });
+    if (options.factoryBlank === true) {
+      if (!exactIdentity?.id || !exactIdentity.firmwareVersion || !exactIdentity.buildId) {
+        throw new CardPushError(
+          'blank-authority',
+          'Stopped before saving: Studio could not prove the exact paired card and firmware for this blank-card write.',
+        );
+      }
+      const status = await readCardStatusEnvelope({
+        host,
+        transport: 'direct',
+        timeoutMs: Math.min(options.timeoutMs || 6000, 1500),
+        fetchImpl: options.fetchImpl || globalThis.fetch,
+      });
+      const readiness = classifyCardReadiness(status, { expectedCard: exactIdentity });
+      if (readiness.state !== 'blank' || readiness.blank !== true) {
+        throw new CardPushError(
+          'blank-authority',
+          'Stopped before saving: this exact card did not return fresh factory-blank authority.',
+        );
+      }
+      try {
+        return await postConfigToHost(host, runtimePackage, {
+          ...options,
+          reboot: options.reboot === true,
+          preparedPayload,
+        });
+      } catch (err) {
+        throw normalizeConfigPushError(host, err, transport);
+      }
+    }
   }
   const rebootPlan = await resolveConfigRebootForCard(host, runtimePackage, options);
   if (rebootPlan.projectChanged && options.allowProjectChange !== true) {
@@ -347,9 +396,12 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
       return await stageCardWiringCandidate(preparedPayload.config, {
         host,
         timeoutMs: options.timeoutMs || 6000,
+        transport,
+        fetchImpl: options.fetchImpl,
+        bridgeRequestImpl: options.bridgeRequestImpl,
       });
     } catch (err) {
-      throw normalizeConfigPushError(host, err);
+      throw normalizeConfigPushError(host, err, transport);
     }
   }
   const pushOptions = {
@@ -357,9 +409,9 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
     reboot: options.reboot === 'if-needed' ? rebootPlan.reboot : options.reboot,
     preparedPayload,
   };
-  if (mixedContentBlocked) {
+  if (useBridge) {
     try {
-      return await sendCardBridgeRequest(
+      return await bridgeRequest(
         'config',
         preparedPayload.config,
         {
@@ -368,6 +420,7 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
           reboot: pushOptions.reboot,
           commissioningFlowId: options.commissioningFlowId,
         },
+        options,
       );
     } catch (err) {
       if (err instanceof CardPushError) throw err;
@@ -406,10 +459,10 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
           return await postConfigToHost(found.host, runtimePackage, retryOptions);
         } catch (retryErr) {
           if (retryErr instanceof CardPushError) throw retryErr;
-          throw normalizeConfigPushError(found.host, retryErr);
+          throw normalizeConfigPushError(found.host, retryErr, transport);
         }
       }
     }
-    throw normalizeConfigPushError(host, err);
+    throw normalizeConfigPushError(host, err, transport);
   }
 }
