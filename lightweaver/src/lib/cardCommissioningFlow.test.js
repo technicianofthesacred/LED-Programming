@@ -100,8 +100,9 @@ test('uses one exact four-stage commissioning vocabulary', () => {
   assert.equal(Object.isFrozen(CARD_COMMISSIONING_STAGES), true);
 });
 
-test('derives the same stable card identity from the ESP eFuse MAC', () => {
-  assert.equal(cardIdFromEspMac('AA:BB:CC:DD:EE:FF'), 'lw-aabbccddeeff');
+test('derives the firmware card identity from the ESP USB MAC byte order', () => {
+  assert.equal(cardIdFromEspMac('44:1B:F6:81:FE:B0'), 'lw-b0fe81f61b44');
+  assert.equal(cardIdFromEspMac('AA:BB:CC:DD:EE:FF'), 'lw-ffeeddccbbaa');
   assert.equal(cardIdFromEspMac('not-a-mac'), '');
 });
 

@@ -32,7 +32,14 @@ function text(value, max = 128) {
 
 export function cardIdFromEspMac(value = '') {
   const normalized = String(value || '').trim().toLowerCase().replace(/:/g, '');
-  return /^[0-9a-f]{12}$/.test(normalized) ? `lw-${normalized}` : '';
+  if (!/^[0-9a-f]{12}$/.test(normalized)) return '';
+
+  // esptool-js prints the eFuse bytes in network MAC order, while Arduino's
+  // ESP.getEfuseMac() exposes the same six bytes as a little-endian integer.
+  // Firmware card IDs use that integer representation, so reverse whole bytes
+  // here to make the USB identity match the card's HTTP identity exactly.
+  const firmwareOrder = normalized.match(/../g).reverse().join('');
+  return `lw-${firmwareOrder}`;
 }
 
 function clone(value) {

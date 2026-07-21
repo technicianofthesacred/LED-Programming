@@ -9,6 +9,10 @@ function normalizeMac(value) {
   return hex;
 }
 
+function firmwareCardId(mac) {
+  return `lw-${mac.match(/../g).reverse().join('')}`;
+}
+
 function runtimeFailure(code, message, phase) {
   const error = new Error(message);
   error.code = code;
@@ -55,7 +59,7 @@ function createEsptoolRuntime({ selectPort, connect, reset }) {
     const flashSize = await loader.detectFlashSize();
     const mac = normalizeMac(await loader.chip.readMac(loader));
     const fingerprint = crypto.createHash('sha256').update(`${mac}|${chipName}|${flashSize}`).digest('hex');
-    return Object.freeze({ cardId: `lw-${mac}`, fingerprint, chipName, flashSize });
+    return Object.freeze({ cardId: firmwareCardId(mac), fingerprint, chipName, flashSize });
   }
 
   async function connectOne() {

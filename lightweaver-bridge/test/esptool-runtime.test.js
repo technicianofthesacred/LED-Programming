@@ -19,7 +19,7 @@ test('native runtime derives card id, restores application boot, then releases U
     reset: async () => calls.push('reset'),
   });
   const identity = await runtime.inspectOne();
-  assert.equal(identity.cardId, 'lw-441bf681feb0');
+  assert.equal(identity.cardId, 'lw-b0fe81f61b44');
   assert.equal(identity.chipName, 'ESP32-S3');
   assert.equal(identity.flashSize, '16MB');
   assert.match(identity.fingerprint, /^[a-f0-9]{64}$/);
@@ -39,7 +39,7 @@ test('native restart identifies, hard-resets to the app, and always releases USB
     }),
     reset: async () => calls.push('reset'),
   });
-  assert.equal((await runtime.restartOne()).cardId, 'lw-441bf681feb0');
+  assert.equal((await runtime.restartOne()).cardId, 'lw-b0fe81f61b44');
   assert.deepEqual(calls, ['reset', 'disconnect']);
 });
 
