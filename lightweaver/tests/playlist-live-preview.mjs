@@ -44,8 +44,8 @@ assert.equal(innerTarget?.zoneId, 'patch-default-inner-circle');
 assert.equal(innerTarget?.look.patternId, 'plasma');
 
 // Playlist selection is a Studio intent immediately, while the highlighted
-// physical row remains the last card-confirmed revision. Late acknowledgements
-// from a superseded row cannot move the physical highlight backwards.
+// runtime-applied row remains the last card-acknowledged revision. Late
+// acknowledgements from a superseded row cannot move the highlight backwards.
 let physicalState = createCardActionState({ confirmedRevision: 'row-fire' });
 physicalState = cardActionReducer(physicalState, { type: 'start', revision: 'row-ocean' });
 assert.equal(cardActionStatusLabel(physicalState), 'Sending to Lightweaver');
@@ -55,6 +55,6 @@ const afterLateOcean = cardActionReducer(physicalState, { type: 'confirm', revis
 assert.strictEqual(afterLateOcean, physicalState);
 physicalState = cardActionReducer(physicalState, { type: 'confirm', revision: 'row-plasma' });
 assert.equal(physicalState.confirmedRevision, 'row-plasma');
-assert.equal(cardActionStatusLabel(physicalState), 'Playing on Lightweaver');
+assert.equal(cardActionStatusLabel(physicalState), 'Applied by Lightweaver runtime');
 
 console.log('playlist live preview helpers OK');

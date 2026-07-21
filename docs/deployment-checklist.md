@@ -82,8 +82,12 @@ Use desktop Chrome or Edge, one USB data cable, the powered GPIO 18 fixture,
 and the production URL. Start with a full chip erase. Do not use a preview
 deployment, developer tools, a local server, a terminal, or a typed local IP.
 
-- [ ] The exact USB-derived card ID is retained for the whole run.
+- [ ] The exact USB-derived card ID is retained for the whole run. For USB MAC
+      `44:1B:F6:81:FE:B0`, the only valid firmware/LAN ID is
+      `lw-b0fe81f61b44`.
 - [ ] The live site flashes only the verified signed factory release.
+- [ ] USB release/reset finishes and the action becomes usable again; a disabled
+      **Releasing USB…** state is not completion.
 - [ ] The blank card produces the eight-pixel/two-pulse amber factory beacon.
 - [ ] Studio calls the reachable card **Blank — load a project**, never green.
 - [ ] The worker joins `Lightweaver-XXXX` and returns to the same Studio tab.
@@ -116,6 +120,10 @@ ambiguous check quarantines that card; it does not authorize a manual shortcut.
 | Observation | What it proves | Shipment action |
 | --- | --- | --- |
 | Flash/write complete | Bytes were verified | Continue; not alive yet |
+| Exact USB ID `lw-b0fe81f61b44` | USB byte-order mapping is correct | Continue; transport and output unproved |
+| Disabled **Releasing USB…** | Release/reset is still pending or stuck | Stop; require timeout and same-card recovery |
+| `ERR_NAME_NOT_RESOLVED` for `lightweaver.local` | mDNS did not provide a route | Stop; do not infer flash, boot, or handoff success |
+| Missing from prior LAN and expected AP | No current network transport was found | Recover/reinspect the exact USB card; never assume success |
 | Green board LED | Controller has some power | Continue; strip unproved |
 | Eight amber pixels pulse | Factory firmware/beacon path runs | Continue; project unproved |
 | Blank status | Exact reachable card has no known-good project | Load once; never show green |
@@ -180,12 +188,17 @@ See [the Pattern Lab operator guide](pattern-lab-user-guide.md) and
 
 ## Current limiter
 
-As of 2026-07-21, source hardening is still being integrated. The current public
-factory artifact predates the latest firmware changes, the protected signer and
-live Studio publish have not completed for this branch, and the released Studio
-has not driven a fully erased card through the uninterrupted whole-system flow
-to a visible 44-pixel pass. The user has reported that the live flow remains
-dark/failing. Therefore Lightweaver is **not ready to ship** yet.
+As of 2026-07-21, the USB ingress byte-order fix is signed, deployed, and
+verified by live Studio against the physical card: esptool MAC
+`44:1B:F6:81:FE:B0` correctly produced `lw-b0fe81f61b44`. The later dead end was
+traced to an ESP32-S3 reset returning to the ROM downloader. The source now uses
+an RTC-watchdog restart with GPIO0 released, and the real card returned at its
+station address with a new boot ID and truthful blank state. Studio source also
+accepts an already verified station card during firmware preflight and bounds
+the unavailable-card recovery path. These corrections still need a protected
+signed release, live deployment, and the uninterrupted acceptance above. No
+physical-light gate was verified during diagnostic recovery, so Lightweaver is
+**not ready to ship** yet.
 
 ## Deferred lanes
 

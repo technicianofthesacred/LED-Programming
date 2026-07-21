@@ -132,7 +132,7 @@ test('clicking a card updates the preview', async ({ page }) => {
   await expect.poll(() => controlRequests.some(r => r.patternId === 'ocean')).toBe(true);
 });
 
-test('Studio preview changes immediately while physical playback waits for the paired-card acknowledgement', async ({ page }) => {
+test('Studio preview changes immediately while runtime application waits for the paired-card acknowledgement', async ({ page }) => {
   let releaseControl: (() => void) | null = null;
   await page.route('**/api/firmware-info', route => route.fulfill({
     status: 200,
@@ -161,7 +161,7 @@ test('Studio preview changes immediately while physical playback waits for the p
   await expect(page.getByTestId('physical-preview-status')).toHaveText('Sending to Lightweaver');
   await expect.poll(() => Boolean(releaseControl)).toBe(true);
   releaseControl?.();
-  await expect(page.getByTestId('physical-preview-status')).toHaveText('Playing on Lightweaver');
+  await expect(page.getByTestId('physical-preview-status')).toHaveText('Applied by Lightweaver runtime');
 });
 
 test('an old card keeps the Studio selection and offers a card software update', async ({ page }) => {
@@ -182,7 +182,7 @@ test('an old card keeps the Studio selection and offers a card software update',
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
   await expect(page.getByTestId('card-live-preview-label')).toHaveText('Ocean');
-  const alert = page.getByRole('alert').filter({ hasText: 'This card is running old software and cannot confirm physical previews.' });
+  const alert = page.getByRole('alert').filter({ hasText: 'This card is running old software and cannot report which preview command it applied.' });
   await expect(alert).toBeVisible();
   await expect(alert.getByRole('button', { name: 'Update card' })).toBeVisible();
   await expect(alert.getByRole('button', { name: 'Reconnect' })).toHaveCount(0);
@@ -203,13 +203,13 @@ test('an unknown preview failure stays bounded and does not render the card resp
   await page.evaluate(() => localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-preview-test' })));
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
-  const alert = page.getByRole('alert').filter({ hasText: 'The physical preview could not be confirmed. Check the card connection and try again.' });
+  const alert = page.getByRole('alert').filter({ hasText: 'The preview command could not be verified. Check the card connection and try again.' });
   await expect(alert).toBeVisible();
   await expect(alert).not.toContainText('PRIVATE-CARD-RESPONSE');
   await expect(alert.getByRole('button')).toHaveCount(0);
 });
 
-test('unconfirmed physical output recovers lights and clears the failed preview action', async ({ page }) => {
+test('missing runtime state proof recovers the card before asking for visible confirmation', async ({ page }) => {
   let recoveryCount = 0;
   await page.addInitScript(() => {
     localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-output-test' }));
@@ -249,7 +249,7 @@ test('unconfirmed physical output recovers lights and clears the failed preview 
   await gotoFreshPatterns(page);
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
-  const alert = page.getByRole('alert').filter({ hasText: 'The preview reached the card, but the lights did not confirm physical output.' });
+  const alert = page.getByRole('alert').filter({ hasText: 'The preview reached the card, but its runtime did not report which pattern or revision it applied.' });
   await expect(alert.getByRole('button', { name: 'Recover lights' })).toBeVisible();
   await alert.getByRole('button', { name: 'Recover lights' }).click();
 

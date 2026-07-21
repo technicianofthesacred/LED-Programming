@@ -196,14 +196,14 @@ String studioBridgeScript() {
   String script;
   script.reserve(7600);
   const String bridgeVersion = String(LW_BRIDGE_VERSION);
-  // Keep in sync with corsOriginAllowed(): production Studio, the studio
-  // preview deployment (Pages branch subdomains), and local dev.
+  // Keep in sync with corsOriginAllowed(): production Studio, the exact
+  // primary Pages deployment, and local dev.
   // Bridge protocol (see LW_BRIDGE_VERSION, spliced in below): every reply and
   // the ready handshake carry version:N so Studio can feature-detect the frame
   // relay. The opener origin is carried in a bounded fragment and allowlisted
   // before use, so even the ready handshake never needs postMessage('*').
   script += F("const LW_STUDIO_ORIGINS=['https://led.mandalacodes.com','https://lightweaver-edw.pages.dev'];"
-              "const lwBridgeAllowed=o=>LW_STUDIO_ORIGINS.includes(o)||/^http:\\/\\/(localhost|127\\.0\\.0\\.1)(:\\d+)?$/.test(o)||/^https:\\/\\/[a-z0-9-]+\\.lightweaver-edw\\.pages\\.dev$/.test(o);"
+              "const lwBridgeAllowed=o=>LW_STUDIO_ORIGINS.includes(o)||/^https?:\\/\\/localhost(:\\d+)?$/.test(o)||/^http:\\/\\/127\\.0\\.0\\.1(:\\d+)?$/.test(o);"
               "const lwBridgeRawParams=()=>{"
                 "const raw=(location.hash||'').replace(/^#/,'');if(!raw||raw.length>512)return null;"
                 "const p=new URLSearchParams(raw);if(p.getAll('studioBridge').length!==1||p.get('studioBridge')!=='1')return null;"
@@ -697,15 +697,13 @@ void handleRoot() {
                 "if(r.ok&&j.ok){setMsg('Saved on card. Rebooting to apply.','ok');setTimeout(()=>{location.reload()},2000);await post('/api/reboot',{})}"
                 "else{setMsg(j.error||('HTTP '+r.status),'err')}}"
               "catch(e){setMsg('Failed: '+e.message,'err')}};"
-            "(async()=>{try{const s=await get('/api/status');const p=await get('/api/patterns');patterns=p.patterns||[];sceneControl.setConfirmed(p.currentId||'');blackoutControl.setConfirmed(!!s.blackout);"
-              // Pull current custom-color state by posting an empty control (the echo includes it)
-              "try{const e=await post('/api/control',{});if(typeof e.hue==='number'){customHue=e.hue;customSat=e.saturation;customBreathe=!!e.breathe;customDrift=!!e.drift}"
-                "if(typeof e.driftMin==='number')driftMin=e.driftMin;"
-                "if(typeof e.driftMax==='number')driftMax=e.driftMax;"
-                "if(typeof e.brightness==='number')brightnessControl.setConfirmed(e.brightness);"
-                "if(typeof e.speed==='number'){$('s-slider').value=sliderFromSpeed(e.speed);$('s-val').textContent=e.speed.toFixed(2)+'\xC3\x97'}"
-                "if(typeof e.hueShift==='number'){$('h-slider').value=e.hueShift;$('h-val').textContent=e.hueShift}"
-              "}catch(_){}"
+            "(async()=>{try{const e=await get('/api/zones');const z=(e.zones||[])[0]||{};const p=await get('/api/patterns');patterns=p.patterns||[];sceneControl.setConfirmed(p.currentId||'');blackoutControl.setConfirmed(!!z.blackout);"
+              "if(typeof z.customHue==='number'){customHue=z.customHue;customSat=z.customSaturation;customBreathe=!!z.customBreathe;customDrift=!!z.customDrift}"
+              "if(typeof z.driftHueMin==='number')driftMin=z.driftHueMin;"
+              "if(typeof z.driftHueMax==='number')driftMax=z.driftHueMax;"
+              "if(typeof z.brightness==='number')brightnessControl.setConfirmed(z.brightness);"
+              "if(typeof z.speed==='number'){$('s-slider').value=sliderFromSpeed(z.speed);$('s-val').textContent=z.speed.toFixed(2)+'\xC3\x97'}"
+              "if(typeof z.hueShift==='number'){$('h-slider').value=z.hueShift;$('h-val').textContent=z.hueShift}"
               "renderColorPanel();showColorPanel(currentId==='custom-color');"
               "$('off-btn').classList.toggle('on',blackoutOn);renderPat()}catch(e){}})();"
             // Streaming-state poll. Cheap 1Hz GET on /api/status — well under
@@ -2330,7 +2328,7 @@ void maintainConnectivity() {
 // wildcard (plus Allow-Private-Network) any public website the homeowner
 // visited could pass Chrome's private-network preflight and command the card,
 // including credential wipe. Mirrors the postMessage bridge allowlist
-// (LW_STUDIO_ORIGINS + localhost) plus the studio preview deployment. Native
+// (LW_STUDIO_ORIGINS + localhost). Native
 // apps and curl send no Origin header and are unaffected; the card's own
 // pages are same-origin and need no CORS at all.
 // Global (declared in LightweaverWeb.h): the WLED-compat JSON API shares it.

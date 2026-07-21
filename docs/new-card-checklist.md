@@ -5,13 +5,18 @@ Run this once for every card in desktop Chrome or Edge at
 44-pixel bench strip, and one USB data cable. Do not use a terminal, type a card
 address, or recover outside the guided screen.
 
-Write the card ID shown by Studio: `lw-________________`
+Write the canonical card ID shown by Studio: `lw-________________`
+
+For the current labeled bench card, Studio must show `lw-b0fe81f61b44`.
+`lw-441bf681feb0` is the former byte-order bug and is a stop. For later cards,
+copy the ID Studio shows onto that card's production record before continuing.
 
 ## Build the card
 
 - [ ] Studio says the selected USB device is the same ESP32-S3 card ID written
       above and the firmware release is signed and verified.
-- [ ] Full erase and flash finish, USB is released, and the card restarts.
+- [ ] Full erase and flash finish, USB release completes, and the card restarts.
+      A disabled **Releasing USB…** button is still pending and does not pass.
 - [ ] The external strip shows the factory beacon: exactly eight dim amber
       pixels, two pulses, then off. A green board LED alone does not pass.
 - [ ] Studio shows **Blank — load a project** for this exact card. It does not
@@ -56,3 +61,21 @@ Write the card ID shown by Studio: `lw-________________`
 If any box fails, stop and do not ship the card. An HTTP response, green board
 LED, eight-pixel beacon, partial light, brief flicker, or unexported on-screen
 pass never replaces the missing check.
+
+If Studio remains at **Releasing USB…**, `lightweaver.local` returns
+`ERR_NAME_NOT_RESOLVED`, or the card appears on neither its prior LAN nor the
+expected setup/recovery AP:
+
+1. Record the failed stage, canonical card ID, and exact browser error.
+   Do not check off USB release, restart, beacon, Wi-Fi handoff, or connection.
+2. Let Studio's bounded operation finish or time out. Use its same-card retry if
+   offered; do not repeatedly erase or flash while the write result is
+   ambiguous.
+3. If instructed, power-cycle and reinspect the one card over USB. It must again
+   identify as the canonical ID written above before the run can resume.
+4. Resume only when that exact card returns through USB, its expected AP, or a
+   verified LAN status. A different Lightweaver, an unresolved hostname, or
+   disappearance from both LAN and AP never counts as recovery.
+5. If Studio offers no enabled retry/restart path, quarantine the card and file
+   the run as a Production Setup failure. Do not use a terminal, typed address,
+   or direct request to turn it into a production pass.

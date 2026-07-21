@@ -35,12 +35,12 @@ test('native restart identifies, hard-resets to the app, and always releases USB
     selectPort: async () => ({}),
     connect: async () => ({
       loader: { chip: { CHIP_NAME: 'ESP32-S3', async readMac() { return '44:1B:F6:81:FE:B0'; } }, async detectFlashSize() { return '16MB'; } },
-      transport: { async disconnect() { calls.push('disconnect'); } },
+      transport: { async disconnect(options) { calls.push(['disconnect', options]); } },
     }),
     reset: async () => calls.push('reset'),
   });
   assert.equal((await runtime.restartOne()).cardId, 'lw-b0fe81f61b44');
-  assert.deepEqual(calls, ['reset', 'disconnect']);
+  assert.deepEqual(calls, ['reset', ['disconnect', { resetSignals: false }]]);
 });
 
 test('native restart normalizes raw close errors as unresolved USB ownership', async () => {

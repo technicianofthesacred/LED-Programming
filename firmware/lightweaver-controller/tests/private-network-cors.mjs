@@ -2,11 +2,52 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const web = readFileSync(resolve(here, '../src/LightweaverWeb.cpp'), 'utf8');
 const wled = readFileSync(resolve(here, '../src/LightweaverWledJsonApi.cpp'), 'utf8');
 const websocket = readFileSync(resolve(here, '../src/LightweaverWledWebSocket.cpp'), 'utf8');
+
+const bridgeStart = web.indexOf('String studioBridgeScript()');
+assert.notEqual(bridgeStart, -1, 'firmware should define the card-page Studio bridge');
+const predicateEnd = web.indexOf('const lwBridgeRawParams', bridgeStart);
+assert.notEqual(predicateEnd, -1, 'bridge should define its origin predicate before parsing launch data');
+const predicateSource = web.slice(bridgeStart, predicateEnd);
+const emittedPredicate = [...predicateSource.matchAll(/"(?:\\.|[^"\\])*"/g)]
+  .map(match => JSON.parse(match[0]))
+  .join('');
+const bridgeContext = {};
+vm.runInNewContext(emittedPredicate + ';globalThis.allowed=lwBridgeAllowed', bridgeContext);
+
+const trustedOrigins = [
+  'https://led.mandalacodes.com',
+  'https://lightweaver-edw.pages.dev',
+  'http://localhost',
+  'http://localhost:5173',
+  'https://localhost',
+  'https://localhost:5173',
+  'http://127.0.0.1',
+  'http://127.0.0.1:5173',
+];
+for (const origin of trustedOrigins) {
+  assert.equal(bridgeContext.allowed(origin), true, 'bridge should trust the direct CORS origin ' + origin);
+}
+
+const untrustedOrigins = [
+  'https://attacker.lightweaver-edw.pages.dev',
+  'https://studio.lightweaver-edw.pages.dev',
+  'https://127.0.0.1',
+  'https://evil.example',
+];
+for (const origin of untrustedOrigins) {
+  assert.equal(bridgeContext.allowed(origin), false, 'bridge should reject ' + origin);
+}
+assert.doesNotMatch(
+  predicateSource,
+  /\[a-z0-9-\]\+.*lightweaver-edw.*pages.*dev/,
+  'bridge source must not trust arbitrary Cloudflare Pages preview subdomains',
+);
 
 assert.match(
   websocket,

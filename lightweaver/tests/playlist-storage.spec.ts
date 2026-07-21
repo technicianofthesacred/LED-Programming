@@ -499,7 +499,7 @@ test('Playlist ignores a stale reset failure after the playlist is edited', asyn
   await expect(page.locator('.pl-row')).toHaveCount(3);
 });
 
-test('Playlist marks a row physical only after the paired card acknowledges the latest intent', async ({ page }) => {
+test('Playlist marks a row runtime-applied only after the paired card acknowledges the latest intent', async ({ page }) => {
   const project = makePlaylistProject({ count: 2 });
   let releaseControl: (() => void) | null = null;
   await page.addInitScript(() => {
@@ -532,7 +532,7 @@ test('Playlist marks a row physical only after the paired card acknowledges the 
   await expect(firstRow).not.toHaveClass(/\bis-live\b/);
   await expect.poll(() => Boolean(releaseControl)).toBe(true);
   releaseControl?.();
-  await expect(page.getByTestId('playlist-physical-preview-status')).toHaveText('Playing on Lightweaver');
+  await expect(page.getByTestId('playlist-physical-preview-status')).toHaveText('Applied by Lightweaver runtime');
   await expect(firstRow).toHaveClass(/\bis-live\b/);
 });
 
@@ -551,12 +551,12 @@ test('Playlist transport timeout keeps its prior live row and offers a bounded r
 
   await page.locator('.pl-row').first().getByRole('button', { name: 'Live' }).click();
   const alert = page.getByTestId('playlist-card-status');
-  await expect(alert).toContainText('The card did not answer in time. Reconnect if needed, then retry the physical preview.');
+  await expect(alert).toContainText('The card did not answer in time. Reconnect if needed, then retry the preview command.');
   await expect(alert.getByRole('button', { name: 'Retry' })).toBeVisible();
   await expect(alert.getByRole('button', { name: 'Reconnect' })).toHaveCount(0);
 });
 
-test('Playlist keeps the failure visible while dedicated light recovery runs and confirms success', async ({ page }) => {
+test('Playlist keeps missing runtime proof visible while recovery runs, then asks for human confirmation', async ({ page }) => {
   const project = makePlaylistProject({ count: 2 });
   let releaseRecovery: (() => void) | null = null;
   let recoveryCount = 0;
@@ -600,12 +600,12 @@ test('Playlist keeps the failure visible while dedicated light recovery runs and
 
   await page.locator('.pl-row').first().getByRole('button', { name: 'Live' }).click();
   const alert = page.getByTestId('playlist-card-status');
-  await expect(alert).toContainText('The preview reached the card, but the lights did not confirm physical output.');
+  await expect(alert).toContainText('The preview reached the card, but its runtime did not report which pattern or revision it applied.');
   const recoverButton = alert.getByRole('button', { name: 'Recover lights' });
   await recoverButton.click();
 
   await expect.poll(() => Boolean(releaseRecovery)).toBe(true);
-  await expect(alert).toContainText('The preview reached the card, but the lights did not confirm physical output.');
+  await expect(alert).toContainText('The preview reached the card, but its runtime did not report which pattern or revision it applied.');
   await expect(recoverButton).toBeDisabled();
   releaseRecovery?.();
 
@@ -677,7 +677,7 @@ test('Playlist serializes card mutations behind recovery so the final physical c
   const rows = page.locator('.pl-row');
   await rows.first().getByRole('button', { name: 'Live' }).click();
   const failure = page.getByTestId('playlist-card-status');
-  await expect(failure).toContainText('The preview reached the card, but the lights did not confirm physical output.');
+  await expect(failure).toContainText('The preview reached the card, but its runtime did not report which pattern or revision it applied.');
   await failure.getByRole('button', { name: 'Recover lights' }).click();
   await expect.poll(() => Boolean(releaseRecovery)).toBe(true);
 
@@ -695,7 +695,7 @@ test('Playlist serializes card mutations behind recovery so the final physical c
 
   await rows.nth(1).getByRole('button', { name: 'Live' }).click();
   await expect(rows.nth(1)).toHaveClass(/\bis-live\b/);
-  await expect(page.getByTestId('playlist-physical-preview-status')).toHaveText('Playing on Lightweaver');
+  await expect(page.getByTestId('playlist-physical-preview-status')).toHaveText('Applied by Lightweaver runtime');
   await expect(page.getByTestId('playlist-card-status')).toHaveCount(0);
   expect(physicalCommands.at(-1)).toMatch(/^control:/);
   expect(physicalCommands.lastIndexOf('recover:2')).toBeLessThan(physicalCommands.length - 1);
@@ -732,6 +732,6 @@ test('Playlist reports a bounded failure when dedicated light recovery is reject
   const alert = page.getByTestId('playlist-card-status');
   await alert.getByRole('button', { name: 'Recover lights' }).click();
 
-  await expect(alert).toContainText('Light recovery did not complete. The physical preview could not be confirmed. Check the card connection and try again.');
+  await expect(alert).toContainText('Light recovery did not complete. The preview command could not be verified. Check the card connection and try again.');
   await expect(alert).not.toContainText('unsafe');
 });

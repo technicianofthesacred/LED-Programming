@@ -630,13 +630,13 @@ class NativeSerialTransport {
     await withTimeout(this._ioTail, timeout, 'Serial transport unlock timed out');
   }
 
-  async disconnect() {
+  async disconnect({ resetSignals = true } = {}) {
     if (this._disconnecting) return this._disconnecting;
     if (!this._port && !this._connected) return;
     this._establishDisconnectGeneration();
     if (!this._terminalError) this._terminalError = new Error('Serial transport disconnected');
     this._wakeWaiters();
-    this._disconnecting = this._disconnectSequence().finally(() => { this._disconnecting = null; });
+    this._disconnecting = this._disconnectSequence({ resetSignals }).finally(() => { this._disconnecting = null; });
     return this._disconnecting;
   }
 
@@ -646,7 +646,7 @@ class NativeSerialTransport {
     this._connectionGeneration += 1;
   }
 
-  async _disconnectSequence() {
+  async _disconnectSequence({ resetSignals = true } = {}) {
     if (this._openingSettlement) {
       await withTimeout(this._openingSettlement, this._disconnectTimeoutMs, 'Serial open cleanup timed out');
     }
@@ -672,7 +672,7 @@ class NativeSerialTransport {
         // The native close below is the final ownership boundary for a stuck callback.
       }
     }
-    await this._cleanupPort(false, { resetSignals: ioDrained });
+    await this._cleanupPort(false, { resetSignals: resetSignals && ioDrained });
   }
 
   _disconnectFailure(message, cause) {

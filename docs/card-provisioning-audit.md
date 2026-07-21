@@ -17,13 +17,26 @@ The invariant for every screen and mutation is:
 > green.
 
 Firmware source and automated contracts on this branch implement the
-deterministic network handoff and recovery described below. A real card has
-shown the bounded factory beacon, and direct diagnostic control has lit its
-GPIO 18 strip. The released Studio has **not yet** completed the full erased-card
-Production Setup flow on that card, and the user has reported the whole-system
-flow still failing/dark. A protected signed firmware release, live build-graph
-freshness proof, and one uninterrupted real-card run are still required. This
-branch is not shipment evidence by itself.
+deterministic network handoff and recovery described below. The USB identity
+ingress fix is already signed and deployed: on the real card, esptool MAC
+`44:1B:F6:81:FE:B0` resolves to the firmware/LAN identity
+`lw-b0fe81f61b44`, and live Studio showed that exact ID.
+
+The subsequent dead end was reproduced at the serial protocol level. USB
+inspection left the ESP32-S3 in its ROM downloader after the card briefly
+started. The source fix releases GPIO0, arms the S3 RTC watchdog, closes USB
+without another control-line transition, and treats fresh exact-card LAN
+evidence—not a serial response—as the restart authority. The real card returned
+at its station address with a new boot ID in about nine seconds and truthfully
+reported a blank, non-command-ready project. Studio's source flow now also
+accepts an already verified exact station card for firmware inspection instead
+of forcing it back through a nonexistent setup AP.
+
+Those fixes still require a new protected signed firmware release, a live
+Studio deployment, and one uninterrupted erased-card acceptance. No factory
+beacon, guided boundary, Aurora, or recovery light result was visually verified
+in the diagnostic recovery. Source correctness and API readback are not
+shipment evidence.
 
 ## Full-flow audit
 
@@ -45,14 +58,30 @@ destructive operation.
 **Verification replacing assumption.** Studio validates manifest signature,
 target, image size, SHA-256, merged-image structure, and ESP image magic before
 erase. The inspected eFuse identity is bound to the immutable production run.
+At USB ingress, the esptool MAC bytes are converted to the firmware's canonical
+order: `44:1B:F6:81:FE:B0` must become `lw-b0fe81f61b44`, not
+`lw-441bf681feb0`. Browser Web Serial and the native bridge have regression
+coverage for this mapping, and the deployed Studio verified the exact real-card
+ID.
+
 The writer uses esptool verification and releases the port on every exit.
 Resume inspects the same card/build instead of blindly flashing again. “Flash
 written” is not “card alive”: the next gate requires the factory beacon or a
 fresh runtime status from that exact card.
 
-**Remaining gap.** The protected signer must rebuild the committed factory
-artifact after these firmware changes. The live Studio must then flash an
-erased card; source tests cannot prove Web Serial, cable, boot, or board power.
+**Root cause and correction.** Exact USB identity passed, but the original reset
+sequence briefly booted the app and then sampled the download strap again,
+leaving the ESP32-S3 at `DOWNLOAD(USB/UART0)`. The corrected S3 path uses its RTC
+watchdog while GPIO0 is released and closes the port without resetting the
+signals a second time. A torn serial response is inconclusive; Studio releases
+USB and waits up to 30 seconds for fresh exact-card LAN evidence. Failure exits
+the busy state with same-card recovery actions. Tests cover restart ordering,
+lost reset response, unreachable card page, stale runs, and retained USB
+ownership.
+
+**Remaining gap.** This correction must be signed, deployed, and exercised by
+the live worker flow after a full erase. Source tests and diagnostic recovery
+cannot prove the production browser, cable, application boot, or visible output.
 
 ### 2. Prove the factory card is blank and visibly alive
 
@@ -108,9 +137,18 @@ wrong-boot, wrong-generation, or wrong-card messages fail closed. Same-window
 navigation revokes old bridge authority. The worker never types or discovers a
 local IP.
 
-**Remaining gap.** The live HTTPS browser path—including popup permission,
-network switch, retarget, and return to the same Studio tab—must pass on the
-real card. Direct LAN polling does not substitute for this test.
+**Corrected preflight behavior.** The observed `ERR_NAME_NOT_RESOLVED`, missing
+old LAN route, and missing AP were three failed routes, never handoff success.
+After the watchdog recovery, the real card returned on its existing station
+network. Production Setup now consumes that already verified exact-card station
+evidence for preflight; it no longer tries to correlate an old installed build
+to the not-yet-installed release's factory AP lifecycle. A card that does not
+return still exits the bounded wait and offers exact-card recovery without
+advancing.
+
+**Remaining gap.** The live HTTPS path—including popup permission, an actual
+blank-card network switch, retarget, and return to the same Studio tab—must pass
+on the real card. Direct LAN polling does not substitute for this test.
 
 ### 4. Recognize the exact card and classify blank versus usable
 
@@ -180,6 +218,13 @@ invalidated immediately when card-link truth is lost. Loss demotes the footer,
 cancels streaming, and cannot create a pass. Temporary corrections are bounded
 and roll back unless the real boundary is confirmed.
 
+Pattern, playlist, brightness, color, and frame responses now say only
+**Applied by Lightweaver runtime** after exact runtime acknowledgement. They do
+not say that LEDs are playing or visible. The card's visitor page hydrates from
+the read-only zones snapshot instead of issuing an empty control mutation, so
+opening or refreshing the page cannot silently change the strip. The final
+warm-white/Aurora result remains a separate human-visible gate.
+
 **Remaining gap.** There is no optical sensor. A human must see and confirm the
 entire real strip. The user has not yet reported this succeeding through the
 released whole-system flow, so shipment acceptance remains open.
@@ -227,8 +272,12 @@ credentials is explicitly **not deployed** and cannot authorize shipment.
 | Former assumption | Evidence now required |
 | --- | --- |
 | Flash write finished | Verified write plus factory beacon or exact runtime status |
+| USB showed `44:1B:F6:81:FE:B0` | Canonical expected ID is `lw-b0fe81f61b44`; identity only |
+| Button says **Releasing USB…** | Nothing yet; require completion or an actionable timeout |
 | Green board LED means the strip works | Human observation of the commanded external strip |
 | AP disappeared, so Wi-Fi setup worked | Exact handoff-ready proof, exact acknowledgement, and two station envelopes |
+| `lightweaver.local` did not resolve | Hostname discovery failed; recover the exact card before continuing |
+| Card is absent from its old LAN address and AP | No current transport was found; do not infer boot, handoff, or card death |
 | A Lightweaver answered | Expected card ID, release, boot, generation, host, and bridge lifecycle |
 | Paired/reachable means connected | Complete current command/output readiness; blank stays non-green |
 | One status response is current | Two fresh complete responses for one lifecycle and boot |
@@ -240,8 +289,10 @@ credentials is explicitly **not deployed** and cannot authorize shipment.
 
 ## Current release limiter
 
-The software release sequence and the real-card acceptance are both unfinished.
-Do not mark a card ready to ship until the protected signer publishes the new
-firmware/jobs, the live Studio passes build-graph freshness, and an erased card
-completes [`new-card-checklist.md`](new-card-checklist.md) through the live
-Production Setup route with the full GPIO 18 strip visibly correct.
+The USB byte-order fix is deployed and verified. The ESP32-S3 restart and
+station-preflight corrections are implemented and verified in source and on the
+real card at the transport/status level, but are not yet in the protected live
+release described here. The current limiter is publish plus one uninterrupted
+live acceptance. Do not mark a card ready to ship until an erased card completes
+[`new-card-checklist.md`](new-card-checklist.md), including human physical-light
+and recovery checks; none was verified in the diagnostic recovery.

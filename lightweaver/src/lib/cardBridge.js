@@ -350,8 +350,8 @@ function applyAuthoritativeBridgeStatus(status, host = bridgeHost) {
 function isAllowedStudioOrigin(origin = '') {
   return origin === 'https://led.mandalacodes.com'
     || origin === 'https://lightweaver-edw.pages.dev'
-    || /^https:\/\/[a-z0-9-]+\.lightweaver-edw\.pages\.dev$/.test(origin)
-    || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+    || /^https?:\/\/localhost(:\d+)?$/.test(origin)
+    || /^http:\/\/127\.0\.0\.1(:\d+)?$/.test(origin);
 }
 
 function currentStudioOrigin(candidate = '') {

@@ -1,13 +1,13 @@
-export const PHYSICAL_PREVIEW_FAILURE_MESSAGE = 'The Studio preview changed, but the physical lights did not. Reconnect and retry.';
+export const PHYSICAL_PREVIEW_FAILURE_MESSAGE = 'Studio changed, but the card did not verify that it applied the preview command. Reconnect and retry.';
 
 const CARD_ACTION_FAILURES = Object.freeze({
   'identity-missing': Object.freeze({
-    message: 'This card is running old software and cannot confirm physical previews. Update the card, then retry.',
+    message: 'This card is running old software and cannot report which preview command it applied. Update the card, then retry.',
     actionId: 'update-card',
     actionLabel: 'Update card',
   }),
   'firmware-too-old': Object.freeze({
-    message: 'This card is running old software and cannot confirm physical previews. Update the card, then retry.',
+    message: 'This card is running old software and cannot report which preview command it applied. Update the card, then retry.',
     actionId: 'update-card',
     actionLabel: 'Update card',
   }),
@@ -17,27 +17,27 @@ const CARD_ACTION_FAILURES = Object.freeze({
     actionLabel: 'Reconnect card',
   }),
   'bridge-missing': Object.freeze({
-    message: 'The local card page is not open. Reopen it, then retry the physical preview.',
+    message: 'The local card page is not open. Reopen it, then retry the preview command.',
     actionId: 'open-card-page',
     actionLabel: 'Open card page',
   }),
   timeout: Object.freeze({
-    message: 'The card did not answer in time. Reconnect if needed, then retry the physical preview.',
+    message: 'The card did not answer in time. Reconnect if needed, then retry the preview command.',
     actionId: 'retry',
     actionLabel: 'Retry',
   }),
   'card-rejected': Object.freeze({
-    message: 'The card rejected the physical preview. Open the card page to inspect the reported problem before retrying.',
+    message: 'The card rejected the preview command. Open the card page to inspect the reported problem before retrying.',
     actionId: 'open-card-page',
     actionLabel: 'Open card page',
   }),
-  'physical-output-unconfirmed': Object.freeze({
-    message: 'The preview reached the card, but the lights did not confirm physical output. Verify the LED wiring or recover the lights.',
+  'runtime-state-unconfirmed': Object.freeze({
+    message: 'The preview reached the card, but its runtime did not report which pattern or revision it applied. Recover the lights, then verify them in person.',
     actionId: 'recover-lights',
     actionLabel: 'Recover lights',
   }),
   unknown: Object.freeze({
-    message: 'The physical preview could not be confirmed. Check the card connection and try again.',
+    message: 'The preview command could not be verified. Check the card connection and try again.',
     actionId: '',
     actionLabel: '',
   }),
@@ -49,6 +49,7 @@ const CARD_ACTION_FAILURE_ALIASES = Object.freeze({
   offline: 'timeout',
   'no-answer': 'timeout',
   'preview-unconfirmed': 'card-rejected',
+  'physical-output-unconfirmed': 'runtime-state-unconfirmed',
 });
 
 export function classifyCardActionFailure(error) {
@@ -91,6 +92,6 @@ export function cardActionReducer(state, action) {
 
 export function cardActionStatusLabel(state = {}) {
   if (state.status === 'pending') return 'Sending to Lightweaver';
-  if (state.status === 'confirmed') return 'Playing on Lightweaver';
+  if (state.status === 'confirmed') return 'Applied by Lightweaver runtime';
   return 'Previewing in Studio';
 }

@@ -127,16 +127,16 @@ assert.equal(request.options.headers['Content-Type'], 'application/json');
 assert.equal(JSON.parse(request.options.body).patternId, 'ocean');
 assert.equal(JSON.parse(request.options.body).cancelStream, true);
 
-// A transport response is not a physical acknowledgement unless it is valid
-// JSON, says ok:true, belongs to the paired card, and does not contradict the
-// requested look/revision when the firmware echoes those fields.
-for (const [label, responseBody, reason] of [
-  ['malformed JSON', null, 'invalid-acknowledgement'],
-  ['ok:false', { ok: false, cardId: 'lw-expected' }, 'preview-unconfirmed'],
-  ['wrong card', { ok: true, cardId: 'lw-other', patternId: 'ocean' }, 'wrong-card'],
-  ['missing look and revision proof', { ok: true, cardId: 'lw-expected' }, 'physical-output-unconfirmed'],
-  ['wrong echoed look', { ok: true, cardId: 'lw-expected', patternId: 'fire' }, 'preview-mismatch'],
-  ['wrong echoed revision', { ok: true, cardId: 'lw-expected', revision: 6 }, 'preview-mismatch'],
+// A transport response is only runtime acknowledgement. It must be valid JSON,
+// say ok:true, belong to the paired card, and report the requested
+// pattern/revision. None of these responses can prove visible light output.
+for (const [label, responseBody, reason, message] of [
+  ['malformed JSON', null, 'invalid-acknowledgement', 'The card returned an unreadable control acknowledgement.'],
+  ['ok:false', { ok: false, cardId: 'lw-expected' }, 'preview-unconfirmed', 'The card runtime did not accept the preview command.'],
+  ['wrong card', { ok: true, cardId: 'lw-other', patternId: 'ocean' }, 'wrong-card', 'A different Lightweaver card answered the preview request.'],
+  ['missing look and revision proof', { ok: true, cardId: 'lw-expected' }, 'runtime-state-unconfirmed', 'The card answered, but did not report which pattern or revision it applied.'],
+  ['wrong echoed look', { ok: true, cardId: 'lw-expected', patternId: 'fire' }, 'preview-mismatch', 'The card runtime reported a different pattern.'],
+  ['wrong echoed revision', { ok: true, cardId: 'lw-expected', revision: 6 }, 'preview-mismatch', 'The card runtime reported a different preview revision.'],
 ]) {
   globalThis.fetch = async () => ({
     ok: true,
@@ -151,6 +151,8 @@ for (const [label, responseBody, reason] of [
     ),
     error => {
       assert.equal(error?.reason, reason, label);
+      assert.equal(error?.message, message, label);
+      assert.doesNotMatch(error?.message || '', /\bphysical\b|\blights?\b/i, `${label} must not imply visible-output evidence`);
       return true;
     },
   );
@@ -224,7 +226,7 @@ const aliasAcknowledgement = await pushLivePreviewToCard(
 );
 assert.equal(aliasRequestBody.patternId, 'aurora', 'display-only pattern ids must transmit their firmware runtime alias');
 assert.equal(aliasAcknowledgement.patternId, 'aurora', 'firmware echo is validated against the transmitted runtime id');
-assert.equal(aliasAcknowledgement.revision, 19, 'alias-aware acknowledgement must preserve physical preview revision proof');
+assert.equal(aliasAcknowledgement.revision, 19, 'alias-aware acknowledgement must preserve applied preview revision proof');
 
 const controlResponseLimit = 8192;
 const exactLimitBase = JSON.stringify({ ok: true, cardId: 'lw-expected', patternId: 'ocean', padding: '' });

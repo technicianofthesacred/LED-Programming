@@ -11,7 +11,7 @@ import { acceptWifiHandoff } from '../lib/cardWifiHandoff.js';
 import { invalidateCardLinkOperationLease, reportDirectCardStatus, revalidateSharedCommissionedCard } from '../lib/cardLink.js';
 import { getCardWiringStatus } from '../lib/cardWiringSafety.js';
 import { connectESP, disconnectESP, flashFirmware, inspectConnectedESP } from '../lib/flash.js';
-import { flashFirmwareAndRelease } from '../lib/flashWorkflow.js';
+import { flashFirmwareAndRelease, resetEspIntoApp } from '../lib/flashWorkflow.js';
 import { validateInstallHardware, validateProductionInstallRelease } from '../lib/flashPlan.js';
 import { loadProductionFirmwareRelease } from '../lib/firmwareRelease.js';
 import { detectPlatformCapabilities } from '../lib/platformCapabilities.js';
@@ -33,6 +33,7 @@ const STEPS = [
   ['select-job', 'Job'], ['connect-card', 'USB card'], ['install', 'Firmware'],
   ['restore', 'Load artwork'], ['check-lights', 'Check lights'], ['complete', 'Record'],
 ];
+const PREFLIGHT_CARD_PAGE_TIMEOUT_MS = 30000;
 
 function capabilities() {
   let topLevel = true;
@@ -481,6 +482,12 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     setBusy(true); setError('');
     try {
       const connection = usbOwnershipRef.current.connection || { loader: loaderRef.current, transport: transportRef.current };
+      let restartError = null;
+      try {
+        const driver = testDriver();
+        if (driver?.restartIntoApp) await driver.restartIntoApp(connection);
+        else await resetEspIntoApp(connection.transport, connection.loader);
+      } catch (reason) { restartError = reason; }
       const released = await releaseUsbConnection(connection);
       const operationWasCurrent = runLeaseIsCurrent(runLease);
       if (!released) {
@@ -491,6 +498,12 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       assertActiveRunLease(activeRunLease);
       if (released) { loaderRef.current = null; transportRef.current = null; setUsbConnected(false); }
       if (!released) throw new Error('USB ownership could not be released.');
+      if (restartError) {
+        // ESP32-S3 resets can tear down the serial response after the hardware
+        // watchdog was already armed. Treat LAN identity/readiness as the
+        // authority instead of assuming either success or failure from USB.
+        setStatus('USB reset response ended early. Waiting for this exact card to prove it restarted.');
+      }
       activeRunLease = await readInstalledFirmwareEvidence(runLease) || runLease;
     } catch (reason) {
       if (reason?.code === 'stale-production-run' || !runLeaseIsCurrent(runLease)) return;
@@ -499,13 +512,24 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     } finally { if (runLeaseIsCurrent(activeRunLease)) setBusy(false); }
   }
 
-  async function connectCardPageThroughWifi(runLease, initialHost, { authority = 'identity' } = {}) {
+  async function connectCardPageThroughWifi(runLease, initialHost, { authority = 'identity', setupTimeoutMs = 180000 } = {}) {
+    if (window.location.protocol === 'https:') {
+      // A previously commissioned exact card can already be verified on the
+      // station LAN while its firmware is old or project is blank. Inspect it
+      // in place; reopening the bridge would discard that proof and incorrectly
+      // force an AP handoff tied to firmware we have not inspected yet.
+      const observed = currentCardLink();
+      const wifi = observed?.readiness?.wifi;
+      if (wifi?.transport === 'station'
+        && Boolean(wifi.stationIp || wifi.ip)
+        && productionCardAuthority(observed, runLease.expectedCardId, authorityOptions(authority)).ok) return;
+    }
     await onConnectCard?.(initialHost);
     assertActiveRunLease(runLease);
     if (window.location.protocol !== 'https:') return;
 
     setStatus('Finish WiFi setup in the card page. Studio is waiting for this exact card to join the gallery network.');
-    const setupDeadline = Date.now() + 180000;
+    const setupDeadline = Date.now() + setupTimeoutMs;
     let handoff = null;
     let finalStationSeen = false;
     while (Date.now() < setupDeadline && !handoff && !finalStationSeen) {
@@ -571,7 +595,9 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       if (driver?.connectLan) {
         await driver.connectLan();
         assertActiveRunLease(runLease);
-      } else await connectCardPageThroughWifi(runLease, cardHost);
+      } else await connectCardPageThroughWifi(runLease, cardHost, {
+        setupTimeoutMs: driver?.preflightTimeoutMs ?? PREFLIGHT_CARD_PAGE_TIMEOUT_MS,
+      });
       assertActiveRunLease(runLease);
       driver?.noteLanHandoff?.();
       lease = captureCardLease('identity', runLease);
@@ -1078,7 +1104,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
                 {!recovery && <>{run?.state === 'connect-card' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready' || usbOwnershipForeign} onClick={connectCard}>{busy ? 'Inspecting card…' : 'Connect one USB card'}</button>}
                 {usbOwnershipForeign && retainedUsb.connection && <button className="btn" type="button" disabled={busy || retainedUsb.releasing} onClick={() => void releaseRetainedUsbOwnership()}>{retainedUsb.releasing ? 'Releasing retained USB…' : 'Release retained USB safely'}</button>}
                 {run?.state === 'inspect' && !hardware && firmwareDecision === 'uninspected' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready' || usbOwnershipForeign} onClick={connectCard}>{busy ? 'Inspecting same card…' : 'Reconnect same USB card'}</button>}
-                {run?.state === 'inspect' && hardware && firmwareDecision === 'uninspected' && <button className="btn primary" type="button" disabled={busy || !usbConnected || usbOwnershipForeign} onClick={inspectInstalledFirmware}>{busy ? 'Releasing USB…' : 'Release USB and inspect firmware'}</button>}
+                {run?.state === 'inspect' && hardware && firmwareDecision === 'uninspected' && <button className="btn primary" type="button" disabled={busy || !usbConnected || usbOwnershipForeign} onClick={inspectInstalledFirmware}>{busy ? (usbConnected ? 'Restarting card…' : 'Waiting for exact card…') : 'Release USB and inspect firmware'}</button>}
                 {run?.state === 'inspect' && firmwareDecision === 'unproven' && <button className="btn primary" type="button" disabled={busy} onClick={retryInstalledFirmwareEvidence}>{busy ? 'Connecting to card page…' : 'Reconnect card page and retry'}</button>}
                 {run?.state === 'inspect' && firmwareDecision === 'install-required' && !usbConnected && <button className="btn primary" type="button" disabled={busy || usbOwnershipForeign} onClick={connectCard}>{busy ? 'Inspecting same card…' : 'Reconnect same USB card'}</button>}
                 {run?.state === 'inspect' && hardware && firmwareDecision === 'install-required' && usbConnected && <button className="btn primary" type="button" disabled={busy || usbOwnershipForeign} onClick={installOrContinue}>Install verified firmware</button>}

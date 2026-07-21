@@ -329,6 +329,14 @@ test('disconnect waits for an active write success before resetting signals and 
   assert.equal(port.closeCalls, 1);
 });
 
+test('disconnect can close after a loader-directed app restart without toggling USB reset signals', async () => {
+  const { port, transport } = createHarness();
+  await transport.connect();
+  await transport.disconnect({ resetSignals: false });
+  assert.deepEqual(port.signals, []);
+  assert.equal(port.closeCalls, 1);
+});
+
 test('disconnect waits for an active write error before closing without a race', async () => {
   const port = new FakeSerialPort({ deferWrites: true });
   const { transport } = createHarness({ port, writeTimeoutMs: 1000, disconnectTimeoutMs: 200 });

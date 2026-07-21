@@ -14,6 +14,31 @@ assert.match(source, /'b-slider'\)\.disabled=on/, 'pending brightness changes sh
 assert.match(source, /'off-btn'\)\.disabled=on/, 'pending blackout changes should disable the blackout button');
 assert.match(source, /payload\.ok!==true/, 'controls should commit only after an explicit card acknowledgement');
 
+const visitorInitStart = source.indexOf('"(async()=>{try{', source.indexOf('/*LW_CONFIRMED_CONTROL_END*/'));
+const visitorInitEnd = source.indexOf('// Streaming-state poll.', visitorInitStart);
+assert.notEqual(visitorInitStart, -1, 'visitor page should define its initial state hydration');
+assert.notEqual(visitorInitEnd, -1, 'visitor hydration should end before status polling');
+const visitorInit = source.slice(visitorInitStart, visitorInitEnd);
+assert.match(visitorInit, /get\('\/api\/zones'\)/,
+  'visitor controls should hydrate from the read-only zones snapshot');
+assert.doesNotMatch(visitorInit, /post\('\/api\/control',\{\}\)/,
+  'visitor hydration must not issue an empty mutating control request');
+for (const field of [
+  'blackout',
+  'brightness',
+  'speed',
+  'hueShift',
+  'customHue',
+  'customSaturation',
+  'customBreathe',
+  'customDrift',
+  'driftHueMin',
+  'driftHueMax',
+]) {
+  assert.match(visitorInit, new RegExp(`\\b${field}\\b`),
+    `visitor hydration should consume zones.${field}`);
+}
+
 const startMarker = '/*LW_CONFIRMED_CONTROL_START*/';
 const endMarker = '/*LW_CONFIRMED_CONTROL_END*/';
 const start = source.indexOf(startMarker);

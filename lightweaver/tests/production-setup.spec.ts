@@ -88,9 +88,9 @@ async function installDriver(page, {
   candidateEvidenceMismatch = false, physicalIdentityMismatch = false, physicalFirmwareMismatch = false,
   activationFailure = false, activationLifecycleChange = false, rollbackFailure = false, rollbackRebootReads = 0, physicalDeliveryFailure = false, physicalDeliveryFailureOnce = false, physicalDeliveryDelayMs = 0, linkLossDuringPhysical = false,
   connectErrorOnce = '',
-  disconnectFailureAt = 0, disconnectDelayMs = 0, secondUsbWrong = false, installThrows = false, reconnectFirmwareMismatch = false,
+  disconnectFailureAt = 0, disconnectDelayMs = 0, restartThrows = false, stationPreflight = false, secondUsbWrong = false, installThrows = false, reconnectFirmwareMismatch = false,
 } = {}) {
-  await page.addInitScript(({ firmwareVersion, firmwareBuildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, connectErrorOnce, disconnectFailureAt, disconnectDelayMs, secondUsbWrong, installThrows, reconnectFirmwareMismatch }) => {
+  await page.addInitScript(({ firmwareVersion, firmwareBuildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, connectErrorOnce, disconnectFailureAt, disconnectDelayMs, restartThrows, stationPreflight, secondUsbWrong, installThrows, reconnectFirmwareMismatch }) => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
     const evidence = {
       cardId: 'lw-aabbccddeeff', firmwareVersion,
@@ -112,8 +112,14 @@ async function installDriver(page, {
         outputReady: localStorage.getItem('lw_test_card_blank') !== '1',
         runtimePhase: localStorage.getItem('lw_test_card_blank') === '1' ? 'factory' : 'ready',
         knownGoodProject: localStorage.getItem('lw_test_card_blank') !== '1',
+        ...(stationPreflight ? { wifi: { transport: 'station', stationIp: '192.168.18.70', ip: '192.168.18.70' } } : {}),
       },
     });
+    const recordPreflightPhase = phase => {
+      const phases = JSON.parse(localStorage.getItem('lw_test_preflight_phases') || '[]');
+      phases.push(phase);
+      localStorage.setItem('lw_test_preflight_phases', JSON.stringify(phases));
+    };
     window.__LW_PRODUCTION_DRIVER_FOR_TEST__ = {
       getCardLink: readyCardLink,
       connectCard: async () => {
@@ -122,8 +128,13 @@ async function installDriver(page, {
         if (attempts === 1 && connectErrorOnce) throw new Error(connectErrorOnce);
         return { testConnectionId: attempts };
       },
-      connectLan: async () => {},
+      ...(stationPreflight ? {} : { connectLan: async () => { recordPreflightPhase('lan'); } }),
+      restartIntoApp: async () => {
+        recordPreflightPhase('restart');
+        if (restartThrows) throw new Error('Card did not leave download mode');
+      },
       disconnect: async connection => {
+        recordPreflightPhase('disconnect');
         const count = Number(localStorage.getItem('lw_test_disconnect_count') || 0) + 1;
         localStorage.setItem('lw_test_disconnect_count', String(count));
         const disconnected = JSON.parse(localStorage.getItem('lw_test_disconnect_connection_ids') || '[]');
@@ -278,7 +289,8 @@ async function installDriver(page, {
         return evidence;
       },
     };
-  }, { firmwareVersion: signedRelease.firmwareVersion, firmwareBuildId: signedRelease.buildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, connectErrorOnce, disconnectFailureAt, disconnectDelayMs, secondUsbWrong, installThrows, reconnectFirmwareMismatch });
+    if (stationPreflight) window.open = () => ({ closed: false, focus() {}, postMessage() {} });
+  }, { firmwareVersion: signedRelease.firmwareVersion, firmwareBuildId: signedRelease.buildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, connectErrorOnce, disconnectFailureAt, disconnectDelayMs, restartThrows, stationPreflight, secondUsbWrong, installThrows, reconnectFirmwareMismatch });
 }
 
 test('production fixture tracks the exact currently signed firmware release', async () => {
@@ -1518,6 +1530,104 @@ test('throwing LAN evidence has a clear handoff retry and never unlocks mutation
   await expect(page.getByRole('button', { name: 'Reconnect same USB card' })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('lw_test_lan_handoff_count'))).toBe('2');
   expect(await page.evaluate(() => localStorage.getItem('lw_test_install_count'))).toBeNull();
+});
+
+test('firmware preflight restarts the inspected ESP into its application before USB release and LAN evidence', async ({ page }) => {
+  await serveJob(page); await installDriver(page);
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+
+  await expect(page.getByRole('button', { name: 'Reconnect same USB card' })).toBeVisible();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('lw_test_preflight_phases') || '[]'))).toEqual([
+    'restart', 'disconnect', 'lan',
+  ]);
+});
+
+test('an exact card already verified on station LAN reaches firmware evidence without re-entering WiFi handoff', async ({ page }) => {
+  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
+  await page.route('https://led.mandalacodes.com/**', async route => {
+    const requested = new URL(route.request().url());
+    const upstream = await page.request.fetch(`http://localhost:${testPort}${requested.pathname}${requested.search}`);
+    await route.fulfill({ response: upstream });
+  });
+  await serveJob(page); await installDriver(page, { stationPreflight: true });
+  await page.goto('https://led.mandalacodes.com/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+
+  await expect(page.getByRole('button', { name: 'Reconnect same USB card' })).toBeVisible({ timeout: 5_000 });
+  expect(await page.evaluate(() => localStorage.getItem('lw_test_preflight_count'))).toBe('1');
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('lw_test_preflight_phases') || '[]'))).toEqual([
+    'restart', 'disconnect',
+  ]);
+});
+
+test('an interrupted restart response still releases USB and verifies the exact LAN outcome before recovery', async ({ page }) => {
+  await serveJob(page); await installDriver(page, { restartThrows: true, preflightThrowsOnce: true });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+
+  const recovery = page.getByRole('region', { name: 'Safe recovery' });
+  await expect(recovery).toContainText('could not read the local card page');
+  await expect(recovery).toContainText('USB released?Yes');
+  await expect(recovery.getByRole('button', { name: 'Reconnect the expected card page' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Reconnect same USB card to install verified firmware' })).toBeEnabled();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('lw_test_preflight_phases') || '[]'))).toEqual([
+    'restart', 'disconnect', 'lan',
+  ]);
+  expect(await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun())).toMatchObject({
+    state: 'inspect', expectedCardId: 'lw-aabbccddeeff',
+  });
+});
+
+test('an unreachable card page ends the post-release busy state with exact-card recovery actions', async ({ page }) => {
+  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
+  await page.route('https://led.mandalacodes.com/**', async route => {
+    const requested = new URL(route.request().url());
+    const upstream = await page.request.fetch(`http://localhost:${testPort}${requested.pathname}${requested.search}`);
+    await route.fulfill({ response: upstream });
+  });
+  await serveJob(page);
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
+    window.__LW_PRODUCTION_DRIVER_FOR_TEST__ = {
+      preflightTimeoutMs: 250,
+      connectCard: async () => ({}),
+      disconnect: async () => {
+        localStorage.setItem('lw_test_unreachable_card_usb_released', '1');
+        return true;
+      },
+      inspectCard: async () => ({ cardId: 'lw-aabbccddeeff', chipName: 'ESP32-S3', flashSize: '16MB' }),
+    };
+    const unavailableCardTab = { closed: false, focus() {}, postMessage() {} };
+    window.__LW_UNREACHABLE_CARD_OPENS__ = 0;
+    window.open = () => {
+      window.__LW_UNREACHABLE_CARD_OPENS__ += 1;
+      return unavailableCardTab;
+    };
+  });
+
+  await page.goto('https://led.mandalacodes.com/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click({ noWaitAfter: true });
+
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_test_unreachable_card_usb_released'))).toBe('1');
+  const recovery = page.getByRole('region', { name: 'Safe recovery' });
+  await expect(recovery).toContainText('could not read the local card page', { timeout: 12_000 });
+  await expect(recovery.getByRole('button', { name: 'Reconnect the expected card page' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Reconnect same USB card to install verified firmware' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Releasing USB…' })).toHaveCount(0);
+  expect(await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun())).toMatchObject({
+    state: 'inspect', expectedCardId: 'lw-aabbccddeeff',
+  });
+  await recovery.getByRole('button', { name: 'Reconnect the expected card page' }).click({ noWaitAfter: true });
+  await expect.poll(() => page.evaluate(() => window.__LW_UNREACHABLE_CARD_OPENS__)).toBe(2);
 });
 
 test('missing LAN identity can retry the card-page handoff and exact evidence safely skips flash', async ({ page }) => {

@@ -122,7 +122,7 @@ export function requireLivePreviewAcknowledgement(response, look = {}, options =
     throw previewAckError('invalid-acknowledgement', 'The card returned an unreadable preview acknowledgement.');
   }
   if (response.ok !== true) {
-    throw previewAckError('preview-unconfirmed', 'The card did not confirm the physical preview.');
+    throw previewAckError('preview-unconfirmed', 'The card runtime did not accept the preview command.');
   }
 
   const expectedId = expectedPreviewCardId(options);
@@ -145,12 +145,12 @@ export function requireLivePreviewAcknowledgement(response, look = {}, options =
     response.patternId || response.confirmedPatternId || response.confirmedLook?.patternId || response.look?.patternId || '',
   ).trim();
   if (requestedRuntimePatternId && echoedPatternId && requestedRuntimePatternId !== echoedPatternId) {
-    throw previewAckError('preview-mismatch', 'The card confirmed a different physical look.');
+    throw previewAckError('preview-mismatch', 'The card runtime reported a different pattern.');
   }
   const requestedRevision = acknowledgementRevision(options.revision ?? look?.revision);
   const echoedRevision = acknowledgementRevision(response.revision ?? response.confirmedRevision);
   if (requestedRevision !== null && echoedRevision !== null && requestedRevision !== echoedRevision) {
-    throw previewAckError('preview-mismatch', 'The card confirmed a different preview revision.');
+    throw previewAckError('preview-mismatch', 'The card runtime reported a different preview revision.');
   }
   const hasConfirmedLook = Boolean(requestedRuntimePatternId && echoedPatternId === requestedRuntimePatternId);
   const hasConfirmedRevision = Boolean(requestedRevision !== null && echoedRevision === requestedRevision);
@@ -158,8 +158,8 @@ export function requireLivePreviewAcknowledgement(response, look = {}, options =
   const explicitlyLegacy = options.previewAcknowledgementCapability === 'legacy-ok-only';
   if (hasRequestedIntent && !hasConfirmedLook && !hasConfirmedRevision && !explicitlyLegacy) {
     throw previewAckError(
-      'physical-output-unconfirmed',
-      'The card answered, but did not confirm which physical preview it applied.',
+      'runtime-state-unconfirmed',
+      'The card answered, but did not report which pattern or revision it applied.',
     );
   }
   return response;
@@ -771,7 +771,7 @@ async function pushSectionPreviewToBridge(host, targets = [], options = {}) {
 
 function normalizePreviewError(host, error) {
   if (error instanceof CardPushError) return error;
-  if (['identity-missing', 'wrong-card', 'firmware-too-old', 'stale-host', 'bridge-missing', 'card-rejected', 'physical-output-unconfirmed'].includes(error?.reason)) {
+  if (['identity-missing', 'wrong-card', 'firmware-too-old', 'stale-host', 'bridge-missing', 'card-rejected', 'runtime-state-unconfirmed', 'physical-output-unconfirmed'].includes(error?.reason)) {
     return new CardPushError(error.reason, error.message, error);
   }
   if (['bridge-timeout', 'timeout', 'card-page-closed'].includes(error?.reason)) {

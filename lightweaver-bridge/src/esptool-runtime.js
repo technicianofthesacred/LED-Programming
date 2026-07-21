@@ -29,8 +29,8 @@ async function connectWithTrackedCleanup({ core, port, createTransport, createLo
   const trackedTransport = candidate => {
     const transport = createTransport(candidate);
     const disconnect = transport.disconnect.bind(transport);
-    transport.disconnect = async () => {
-      try { return await disconnect(); } catch (error) {
+    transport.disconnect = async (...args) => {
+      try { return await disconnect(...args); } catch (error) {
         releaseFailure ||= error;
         throw error;
       }
@@ -70,9 +70,9 @@ function createEsptoolRuntime({ selectPort, connect, reset }) {
       throw error;
     }
     const disconnect = connection.transport.disconnect.bind(connection.transport);
-    connection.transport.disconnect = async () => {
+    connection.transport.disconnect = async (...args) => {
       try {
-        const result = await disconnect();
+        const result = await disconnect(...args);
         ownedConnections.delete(connection);
         return result;
       } catch (error) { throw error; }
@@ -100,7 +100,7 @@ function createEsptoolRuntime({ selectPort, connect, reset }) {
           restorationError = runtimeFailure('card-restoration-failed', `Card restoration failed: ${error?.message || 'hard reset failed'}`, 'inspection-restoration');
         }
       } finally {
-        try { await connection.transport.disconnect(); } catch (error) {
+        try { await connection.transport.disconnect({ resetSignals: false }); } catch (error) {
           releaseError = usbReleaseFailure();
         }
       }
@@ -132,7 +132,7 @@ function createEsptoolRuntime({ selectPort, connect, reset }) {
       } catch (error) {
         primaryError = error;
       } finally {
-        try { await connection.transport.disconnect(); } catch { releaseError = usbReleaseFailure(); }
+        try { await connection.transport.disconnect({ resetSignals: false }); } catch { releaseError = usbReleaseFailure(); }
       }
       if (releaseError) throw releaseError;
       if (primaryError) throw primaryError;
@@ -164,7 +164,7 @@ async function createProductionDependencies() {
       createTransport: candidate => new NativeSerialTransport({ portInfo: candidate, tracing: false }),
       createLoader: ({ transport }) => new esptool.ESPLoader({ transport, baudrate: 115200, terminal }),
     }),
-    reset: connection => core.resetEspIntoApp(connection.transport),
+    reset: connection => core.resetEspIntoApp(connection.transport, connection.loader),
   });
   return Object.freeze({
     runtime,

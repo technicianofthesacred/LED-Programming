@@ -1,86 +1,84 @@
 # Lightweaver card provisioning — remaining work
 
-Paused on 2026-07-21. The implementation through commit `a65fb06` is saved on
-branch `led-density-per-meter`. It is not deployed and is not shipment-ready.
+Updated on 2026-07-21 after reproducing and correcting the post-inspection reset
+failure on the real ESP32-S3. The provisioning flow is still not
+shipment-ready.
 
 ## Current truth
 
-- Firmware Wi-Fi handoff/retry/recovery, Studio exact-card commissioning, live
-  asset freshness, the GPIO 18 production job, the audit, and the worker
-  checklist are implemented and independently reviewed.
-- The connected card is `lw-b0fe81f61b44`. Its saved project reports GPIO 18,
-  44 pixels, GRB, Aurora, and 1500 mA. The released whole-system Studio flow has
-  not visibly lit and passed the full strip.
-- The complete source gate is red. The interrupted run reached 233 passing
-  release-UI tests and found two real failures in `tests/patterns-v3.spec.ts`:
-  the current and legacy bridge preview tests did not receive a `control`
-  message. One later wiring test was interrupted and eight tests did not run.
-- The committed signed factory binary is expected to remain stale until the
-  protected signer rebuilds it from the merged firmware source.
+- The physical card's esptool/USB MAC is `44:1B:F6:81:FE:B0`. Its canonical
+  firmware/LAN identity is `lw-b0fe81f61b44`.
+- The former USB ingress result, `lw-441bf681feb0`, was a byte-order bug. The
+  browser Web Serial and native bridge mappings were fixed and regression
+  tested, the protected signed release containing the fix was deployed, and
+  live Studio verified `lw-b0fe81f61b44` for the real USB card.
+- That exact identity result proves only card selection and identity. It does
+  not prove USB release, application boot, network reachability, configuration,
+  command readiness, or physical output.
+- Serial evidence showed the post-release run briefly booted the app and then
+  re-entered `DOWNLOAD(USB/UART0)`. The ESP32-S3 RTC-watchdog restart fix
+  returned the real card with a new boot ID at its station address in about
+  nine seconds. It reported `knownGoodProject/configValid: false` and
+  `commandReady: false`, so Studio must call it blank rather than connected.
+- No factory beacon, boundary frame, full-strip Aurora, continued playback, or
+  other physical-light result was visually verified during diagnostic recovery.
 
-## 1. Close Production Setup review blockers
+## 1. Post-flash dead end — implemented, awaiting live publish
 
-- [ ] Replace the module-level HTTPS bridge harness with one actual
-      `ProductionScreen` browser test that completes the whole flow: USB-bound
-      identity, AP status, station retarget, exactly two fresh station status
-      envelopes, exactly one handoff acknowledgement, visible non-green blank
-      state, exactly one config, independent read-back, real guided frame,
-      human **Yes**, final fresh wiring/project reads, and a persisted pass.
-- [ ] Immediately demote the shared card link and footer when a config,
-      read-back, frame, or pass operation detects lease loss, mismatch, or
-      timeout. Tests must observe ready/green changing to disconnected or
-      revalidating without waiting for the normal polling interval.
-- [ ] Bind every asynchronous Production action to the run correlation that
-      started it. A stale tab or delayed run A handler must never transition,
-      record, or complete a replacement run B. Add a two-tab final-pass test.
-- [ ] Make the one config write exact-lease only: explicit host and transport,
-      `autoDiscover: false`, no second POST to a discovered host after an
-      ambiguous response. Thread `lease.transport` through wiring and frame
-      clients and test direct and HTTPS paths.
-- [ ] Await and surface asynchronous `onComplete` failures; cancel candidate
-      operations and countdown timers on unmount.
-- [ ] Re-run Task 6 spec and quality reviews until both approve.
+- [x] Reproduce the live sequence with the same explicit evidence boundaries:
+      exact USB identity succeeds, the release/reset transition starts, and no
+      later step is credited unless the operation actually completes.
+- [x] Give post-release exact-card discovery a bounded timeout and an error
+      state. The controls
+      must become usable again and explain whether release, reset, or
+      post-reset inspection failed.
+- [x] Preserve `lw-b0fe81f61b44` as the immutable expected identity across the
+      error. A retry, reload, delayed callback, or second tab must not replace it
+      with `lw-441bf681feb0` or another reachable card.
+- [x] Provide a same-card recovery action that can retry release/reset and, when
+      needed, guide a power cycle plus USB reinspection without blindly erasing
+      or reflashing an ambiguous result.
+- [x] Treat `ERR_NAME_NOT_RESOLVED`, failure at the prior LAN address, and an
+      absent AP as three failed routes—not as evidence of a successful boot,
+      handoff, or AP shutdown. Surface the route evidence to the worker.
+- [x] Resume the existing run only after the exact card returns through USB,
+      the expected AP, or complete verified LAN status. Otherwise quarantine
+      the card/run and leave every later gate incomplete.
 
-## 2. Repair and complete the source gate
+## 2. Recovery contracts — automated gates complete
 
-- [ ] Reproduce these tests individually and identify the cause before editing:
-      `patterns-v3.spec.ts:262` (current bridge preview) and
-      `patterns-v3.spec.ts:465` (legacy bridge preview). Both timed out waiting
-      for a source-bound `control` message during the combined suite.
-- [ ] If the new two-envelope/lifecycle contract intentionally invalidates the
-      old fixtures, update the fixtures to provide current exact evidence. If
-      behavior regressed, fix the production code. Do not weaken readiness.
-- [ ] Re-run the two focused tests repeatedly, then the complete
-      `npm run launch:source` from a clean worktree. Require zero failures and
-      allow all 244 release-UI tests to finish.
-- [ ] Compile firmware with `pio run -d firmware/lightweaver-controller -e
-      esp32-s3-n16r8` and run the firmware/native contract suites.
-- [ ] Run `git diff --check origin/main...HEAD` and review the full integrated
-      diff once.
+- [x] Add focused regression coverage for a stuck USB-release promise, release
+      timeout, reset failure, and successful same-card retry.
+- [x] Cover unavailable card-page routes. Assert that the
+      UI does not advance, does not show green, does not enable mutations, and
+      offers an actionable recovery path.
+- [x] Cover recovery after power cycle/reinspection with
+      `44:1B:F6:81:FE:B0` returning as `lw-b0fe81f61b44`; reject the old
+      byte-order ID and every different card.
+- [x] Re-run the complete source, Production Setup browser, native bridge, and
+      firmware contract gates without weakening the two-envelope/lifecycle
+      readiness requirements.
 
-## 3. Publish the protected release
+## 3. Publish the recovery release
 
-- [ ] Push the final reviewed branch and open/update a PR to `main`.
-- [ ] Merge only after the source gate is green.
-- [ ] Wait for the protected `build-firmware.yml` signer to rebuild the merged
-      factory image, signed manifest/provenance, and GPIO 18 production job on
-      `main`. Do not bypass `factory-bin-freshness`.
-- [ ] Confirm the signer bot commit lands, then require `npm run launch:check`
-      to pass on that exact checkout.
+- [ ] Merge only after the complete source gate is green.
+- [ ] Require the protected signer to publish a fresh signed factory release
+      for any firmware changes; do not bypass `factory-bin-freshness`.
 - [ ] Confirm the credentialed Cloudflare Pages deploy actually ran. A green
       workflow that reports **Production publish: NOT RUN** is not deployment.
-- [ ] Build and stage the exact checkout, then run
-      `PROD_CHECK_REQUIRED=1 npm run check:prod`. Require the live `/` bytes,
-      build graph, every JS/CSS asset, signed firmware, provenance, and indexed
-      job to match the checkout.
+- [ ] Run the required live production check and verify the root build graph,
+      every JS/CSS asset, signed firmware, provenance, and indexed job all match
+      the deployed checkout.
 
-## 4. Run the live erased-card acceptance
+## 4. Re-run the live erased-card acceptance
 
 Use `https://led.mandalacodes.com/#screen=production` and follow
 [`new-card-checklist.md`](new-card-checklist.md). No terminal, typed IP, direct
 HTTP command, board LED, or eight-pixel beacon can substitute for this run.
 
 - [ ] Fully erase and flash the blank ESP32-S3 through the live Studio.
+- [ ] Confirm USB MAC `44:1B:F6:81:FE:B0` is retained as canonical card ID
+      `lw-b0fe81f61b44`, then confirm USB release/reset actually completes.
 - [ ] Observe exactly the bounded eight-pixel/two-pulse amber factory beacon.
 - [ ] Confirm Studio says **Blank — load a project**, never green.
 - [ ] Complete the guided hotspot-to-LAN handoff in the same Studio flow; the

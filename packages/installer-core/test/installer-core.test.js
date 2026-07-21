@@ -18,6 +18,7 @@ import {
   flashFirmwareAndRelease,
   loadProductionFirmwareRelease,
   replaceInstallConnection,
+  resetEspIntoApp,
   validateProductionInstallRelease,
 } from '../src/index.js';
 
@@ -311,6 +312,25 @@ test('shared core preserves image, MD5, reset retry, connection, and release saf
     disconnectESP: async () => { cleanupAttempts += 1; throw new Error('release failed'); },
   }), /release failed/);
   assert.equal(cleanupAttempts, 1);
+});
+
+test('ESP32-S3 app restart uses the watchdog without toggling USB boot control lines', async () => {
+  const calls = [];
+  await resetEspIntoApp({
+    async setDTR(value) { calls.push(`dtr:${value}`); },
+    async setRTS(value) { calls.push(`rts:${value}`); },
+  }, {
+    chip: { CHIP_NAME: 'ESP32-S3' },
+    async writeReg(address, value) { calls.push([address, value]); },
+  });
+
+  assert.deepEqual(calls, [
+    'dtr:false',
+    [0x600080b0, 0x50d83aa1],
+    [0x6000809c, 2000],
+    [0x60008098, 0xd0000102],
+    [0x600080b0, 0],
+  ]);
 });
 
 test('canonicalization and pinned key are exposed from the package entrypoint', async () => {
