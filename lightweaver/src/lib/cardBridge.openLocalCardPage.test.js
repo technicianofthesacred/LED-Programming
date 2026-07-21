@@ -139,6 +139,7 @@ const handoffCorrelation = Object.freeze({
   expectedBootId: 'boot-current',
   handoffGeneration: 4,
 });
+const handoffFlowId = 'flow-open-local-card-1234';
 
 test('retarget reuses the tracked WindowProxy, revokes AP state, and rejects pending AP requests', async () => {
   const tab = fakeCardTab();
@@ -166,7 +167,7 @@ test('retarget reuses the tracked WindowProxy, revokes AP state, and rejects pen
   });
   const pendingResult = pendingAp.catch(error => error);
 
-  const result = retargetCardBridge(handoffCorrelation.host, handoffCorrelation);
+  const result = retargetCardBridge(handoffCorrelation.host, handoffCorrelation, { flowId: handoffFlowId });
   assert.equal(result.ok, true);
   assert.equal(result.state, 'retargeted');
   assert.equal(result.window, tab, 'the same tracked WindowProxy is navigated');
@@ -176,8 +177,8 @@ test('retarget reuses the tracked WindowProxy, revokes AP state, and rejects pen
   assert.equal(snapshots[0].verified, false, 'readiness is revoked before navigation assignment');
   assert.equal(snapshots[0].card, null, 'identity is revoked before navigation assignment');
   assert.equal(snapshots[0].host, handoffCorrelation.host);
-  assert.equal(values.get('lw_chip_card_host'), handoffCorrelation.host,
-    'the validated station target becomes the stored host');
+  assert.notEqual(values.get('lw_chip_card_host'), handoffCorrelation.host,
+    'retarget alone cannot persist a station host before final verification');
 
   const target = new URL(href);
   assert.equal(target.origin, `http://${handoffCorrelation.host}`);
@@ -203,7 +204,7 @@ test('retarget reuses the tracked WindowProxy, revokes AP state, and rejects pen
 test('retarget reports retryable missing and closed WindowProxy states', () => {
   stubWindow({ openResult: null });
   assert.deepEqual(
-    retargetCardBridge(handoffCorrelation.host, handoffCorrelation),
+    retargetCardBridge(handoffCorrelation.host, handoffCorrelation, { flowId: handoffFlowId }),
     { ok: false, state: 'missing-window', reason: 'bridge-missing', retryable: true },
   );
 
@@ -212,7 +213,7 @@ test('retarget reports retryable missing and closed WindowProxy states', () => {
   stubWindow({ openResult: closedTab });
   openLocalCardPage('192.168.4.1');
   assert.deepEqual(
-    retargetCardBridge(handoffCorrelation.host, handoffCorrelation),
+    retargetCardBridge(handoffCorrelation.host, handoffCorrelation, { flowId: handoffFlowId }),
     { ok: false, state: 'closed-window', reason: 'bridge-closed', retryable: true },
   );
 });
@@ -231,9 +232,9 @@ test('same correlation can retry through one WindowProxy while stale or changed 
   window.location.origin = 'https://led.mandalacodes.com';
   openLocalCardPage('192.168.4.1');
 
-  assert.equal(retargetCardBridge(handoffCorrelation.host, handoffCorrelation).ok, true);
+  assert.equal(retargetCardBridge(handoffCorrelation.host, handoffCorrelation, { flowId: handoffFlowId }).ok, true);
   const lifecycle = getCardBridgeState().lifecycle;
-  const retry = retargetCardBridge(handoffCorrelation.host, handoffCorrelation);
+  const retry = retargetCardBridge(handoffCorrelation.host, handoffCorrelation, { flowId: handoffFlowId });
   assert.equal(retry.ok, true);
   assert.equal(retry.repeated, true);
   assert.ok(getCardBridgeState().lifecycle > lifecycle,
@@ -244,13 +245,13 @@ test('same correlation can retry through one WindowProxy while stale or changed 
   const stale = retargetCardBridge(handoffCorrelation.host, {
     ...handoffCorrelation,
     handoffGeneration: 3,
-  });
+  }, { flowId: handoffFlowId });
   assert.equal(stale.ok, false);
   assert.equal(stale.reason, 'stale-correlation');
   const changedDuplicate = retargetCardBridge(handoffCorrelation.host, {
     ...handoffCorrelation,
     expectedBootId: 'boot-other',
-  });
+  }, { flowId: handoffFlowId });
   assert.equal(changedDuplicate.ok, false);
   assert.equal(changedDuplicate.reason, 'stale-correlation');
   assert.equal(assignments, 2, 'rejected correlations cannot navigate the bridge');

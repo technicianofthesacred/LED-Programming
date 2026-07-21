@@ -14,7 +14,11 @@ import {
 } from '../src/lib/cardLiveControl.js';
 import { prepareCardStoragePayload } from '../src/lib/cardStoragePayload.js';
 import { requestCardReboot } from '../src/lib/cardPushClient.js';
-import { bootstrapCardBridgeFromOpener, verifyCardBridgeIdentity } from '../src/lib/cardBridge.js';
+import {
+  bootstrapCardBridgeFromOpener,
+  sendCardBridgeRequest,
+  verifyCardBridgeIdentity,
+} from '../src/lib/cardBridge.js';
 
 const payload = buildLivePreviewControlPayload({
   patternId: 'ocean',
@@ -894,7 +898,14 @@ const bridgeWindow = {
           ok: true,
           response: message.type === 'firmware-info'
             ? { cardId: 'lw-live-preview', firmwareVersion: '1.0.0' }
-            : { ok: true, bridged: true, cardId: 'lw-live-preview', patternId: message.payload?.patternId, padding: bridgeControlPadding },
+            : message.type === 'status'
+              ? {
+                app: 'Lightweaver', provisioningContractVersion: 1,
+                cardId: 'lw-live-preview', firmwareVersion: '1.0.0', buildId: 'test-build',
+                bootId: 'test-boot', runtimePhase: 'ready', knownGoodProject: true,
+                commandReady: true, outputReady: true,
+              }
+              : { ok: true, bridged: true, cardId: 'lw-live-preview', patternId: message.payload?.patternId, padding: bridgeControlPadding },
         },
       });
     }, 0);
@@ -929,6 +940,7 @@ globalThis.CustomEvent = class CustomEvent {
 };
 bootstrapCardBridgeFromOpener();
 await verifyCardBridgeIdentity('lightweaver.local');
+await sendCardBridgeRequest('status', {}, { host: 'lightweaver.local' });
 bridgeMessages.length = 0;
 
 const bridgedPreview = await pushLivePreviewToCard({

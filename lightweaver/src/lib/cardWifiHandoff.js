@@ -173,16 +173,15 @@ export function acceptWifiHandoff(options = {}) {
   });
 }
 
-export function isFinalStationHandoff({ status, correlation } = {}) {
+export function inspectFinalStationHandoff({ status, correlation } = {}) {
   const expected = normalizeWifiHandoffCorrelation(correlation);
-  if (!expected || !status || typeof status !== 'object' || Array.isArray(status)) return false;
-  if (status.commandReady !== true) return false;
+  if (!expected || !status || typeof status !== 'object' || Array.isArray(status)) return null;
   const identity = {
     id: expected.expectedCardId,
     firmwareVersion: expected.expectedFirmwareVersion,
     buildId: expected.expectedBuildId,
   };
-  if (!readinessMatches(status, identity, expected.expectedBootId)) return false;
+  if (!readinessMatches(status, identity, expected.expectedBootId)) return null;
   const wifi = status.wifi;
   if (
     !wifi
@@ -193,9 +192,21 @@ export function isFinalStationHandoff({ status, correlation } = {}) {
     || wifi.transport !== 'station'
     || wifi.handoffGeneration !== expected.handoffGeneration
   ) {
-    return false;
+    return null;
   }
   const stationIp = normalizeWifiHandoffHost(wifi.stationIp);
   const activeIp = normalizeWifiHandoffHost(wifi.ip);
-  return stationIp === expected.host && activeIp === expected.host;
+  if (stationIp !== expected.host || activeIp !== expected.host) return null;
+  const readiness = classifyCardReadiness(status, { expectedCard: identity });
+  return Object.freeze({
+    verified: true,
+    commandReady: status.commandReady === true,
+    runtimeReady: readiness.connected === true,
+    blank: readiness.blank === true,
+    readinessState: readiness.state,
+  });
+}
+
+export function isFinalStationHandoff(options = {}) {
+  return Boolean(inspectFinalStationHandoff(options));
 }

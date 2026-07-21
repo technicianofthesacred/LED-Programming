@@ -330,7 +330,12 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
       return await sendCardBridgeRequest(
         'config',
         preparedPayload.config,
-        { host, timeoutMs: options.timeoutMs || 6000, reboot: pushOptions.reboot },
+        {
+          host,
+          timeoutMs: options.timeoutMs || 6000,
+          reboot: pushOptions.reboot,
+          commissioningFlowId: options.commissioningFlowId,
+        },
       );
     } catch (err) {
       if (err instanceof CardPushError) throw err;

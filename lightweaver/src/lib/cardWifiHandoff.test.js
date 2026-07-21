@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   acceptWifiHandoff,
+  inspectFinalStationHandoff,
   isFinalStationHandoff,
 } from './cardWifiHandoff.js';
 
@@ -179,12 +180,25 @@ test('final station correlation requires exact fresh status on the correlated st
     handoffStatus({ wifi: { ...status.wifi, transport: 'ap' } }),
     handoffStatus({ wifi: { ...status.wifi, stationIp: '192.168.18.71' } }),
     handoffStatus({ wifi: { ...status.wifi, ip: '192.168.18.71' } }),
-    handoffStatus({ commandReady: false, wifi: status.wifi }),
     handoffStatus({ commandReady: undefined, wifi: status.wifi }),
   ];
   for (const candidate of cases) {
     assert.equal(isFinalStationHandoff({ status: candidate, correlation }), false);
   }
+  assert.equal(isFinalStationHandoff({
+    status: handoffStatus({ commandReady: false, wifi: status.wifi }),
+    correlation,
+  }), true, 'an exact complete blank final station has configuration authority without runtime readiness');
+  assert.deepEqual(inspectFinalStationHandoff({
+    status: handoffStatus({ commandReady: false, wifi: status.wifi }),
+    correlation,
+  }), {
+    verified: true,
+    commandReady: false,
+    runtimeReady: false,
+    blank: true,
+    readinessState: 'blank',
+  });
   assert.equal(isFinalStationHandoff({
     status: { ...status, bootId: ` ${correlation.expectedBootId}` },
     correlation,

@@ -106,9 +106,11 @@ const wifiCorrelation = {
   expectedFirmwareVersion: '1.0.0', expectedBuildId: 'a'.repeat(40),
   expectedBootId: 'boot-1', handoffGeneration: 9,
 };
+const wifiFlowId = 'flow-a-commission-1234';
 const wifiRetargeted = reduceCardLink(bridged, {
   type: 'wifi-handoff-retargeted', host: wifiCorrelation.host,
   correlation: wifiCorrelation, bridgeLifecycle: 10,
+  flowId: wifiFlowId,
 });
 assert.equal(isCardLinkConnected(wifiRetargeted), false);
 assert.equal(wifiRetargeted.readiness, null);
@@ -118,14 +120,32 @@ assert.equal(wifiRetargeted.handoffEnvelopeCount, 0);
 const wifiOne = reduceCardLink(wifiRetargeted, {
   type: 'wifi-handoff-status', host: wifiCorrelation.host,
   correlation: wifiCorrelation, bridgeLifecycle: 11,
+  flowId: wifiFlowId,
   readiness: handoffEnvelope(wifiCorrelation),
 });
 assert.equal(wifiOne.handoffEnvelopeCount, 1);
 assert.equal(wifiOne.handoffAckReady, false);
 assert.equal(isCardLinkConnected(wifiOne), false);
+const replacementFlow = reduceCardLink(wifiOne, {
+  type: 'wifi-handoff-retargeted', host: wifiCorrelation.host,
+  correlation: wifiCorrelation, bridgeLifecycle: 11,
+  flowId: 'flow-b-commission-5678',
+});
+assert.equal(replacementFlow.handoffFlowId, 'flow-b-commission-5678');
+assert.equal(replacementFlow.handoffEnvelopeCount, 0,
+  'a replacement commissioning flow cannot inherit the earlier flow envelope');
+const staleFlowEnvelope = reduceCardLink(replacementFlow, {
+  type: 'wifi-handoff-status', host: wifiCorrelation.host,
+  correlation: wifiCorrelation, bridgeLifecycle: 11,
+  flowId: wifiFlowId,
+  readiness: handoffEnvelope(wifiCorrelation),
+});
+assert.equal(staleFlowEnvelope, replacementFlow,
+  'an earlier flow cannot advance a later flow even for the same card and generation');
 const wifiTwo = reduceCardLink(wifiOne, {
   type: 'wifi-handoff-status', host: wifiCorrelation.host,
   correlation: wifiCorrelation, bridgeLifecycle: 11,
+  flowId: wifiFlowId,
   readiness: handoffEnvelope(wifiCorrelation),
 });
 assert.equal(wifiTwo.handoffEnvelopeCount, 2);
@@ -135,6 +155,7 @@ assert.equal(isCardLinkConnected(wifiTwo), false);
 const wifiAckAttempted = reduceCardLink(wifiTwo, {
   type: 'wifi-handoff-ack-attempted', host: wifiCorrelation.host,
   correlation: wifiCorrelation, bridgeLifecycle: 11,
+  flowId: wifiFlowId,
 });
 assert.equal(wifiAckAttempted.handoffAckAttempted, true);
 assert.equal(wifiAckAttempted.handoffAckInFlight, true);
@@ -142,6 +163,7 @@ assert.equal(wifiAckAttempted.handoffAckReady, false);
 const wifiAcked = reduceCardLink(wifiAckAttempted, {
   type: 'wifi-handoff-ack-sent', host: wifiCorrelation.host,
   correlation: wifiCorrelation, bridgeLifecycle: 11,
+  flowId: 'flow-a-commission-1234',
 });
 assert.equal(wifiAcked.handoffAckSent, true);
 assert.equal(wifiAcked.handoffAckInFlight, false);
@@ -149,8 +171,9 @@ assert.equal(wifiAcked.handoffAckReady, false);
 const finalNotReady = reduceCardLink(wifiAcked, {
   type: 'wifi-handoff-status', host: wifiCorrelation.host,
   correlation: wifiCorrelation, bridgeLifecycle: 11,
+  flowId: wifiFlowId,
   readiness: handoffEnvelope(wifiCorrelation, {
-    commandReady: false,
+    runtimePhase: 'factory', knownGoodProject: false, commandReady: false,
     wifi: {
       transport: 'station', transition: 'station', transitionPending: false,
       apActive: false, stationIp: wifiCorrelation.host, ip: wifiCorrelation.host,
@@ -159,9 +182,13 @@ const finalNotReady = reduceCardLink(wifiAcked, {
   }),
 });
 assert.equal(isCardLinkConnected(finalNotReady), false, 'final transition without command readiness stays blocked');
+assert.equal(finalNotReady.state, 'connected-bridge');
+assert.equal(finalNotReady.cardBlank, true);
+assert.equal(cardLinkStatusText(finalNotReady), 'Blank — load a project');
 const wifiFinal = reduceCardLink(wifiAcked, {
   type: 'wifi-handoff-status', host: wifiCorrelation.host,
   correlation: wifiCorrelation, bridgeLifecycle: 11,
+  flowId: wifiFlowId,
   readiness: handoffEnvelope(wifiCorrelation, {
     wifi: {
       transport: 'station', transition: 'station', transitionPending: false,
@@ -182,6 +209,7 @@ assert.equal(isCardLinkConnected(lifecycleChangedDuringHandoff), false);
 const staleHandoffStatus = reduceCardLink(wifiRetargeted, {
   type: 'wifi-handoff-status', host: wifiCorrelation.host,
   correlation: wifiCorrelation, bridgeLifecycle: 11,
+  flowId: wifiFlowId,
   readiness: handoffEnvelope(wifiCorrelation, {
     wifi: {
       ...handoffEnvelope(wifiCorrelation).wifi,
@@ -195,9 +223,10 @@ assert.equal(isCardLinkConnected(staleHandoffStatus), false);
 const orchestratedLink = createCardLink({ host: wifiCorrelation.host, connectTimeoutMs: 0 });
 orchestratedLink.dispatch({
   type: 'wifi-handoff-retargeted', host: wifiCorrelation.host,
-  correlation: wifiCorrelation, bridgeLifecycle: 21,
+  correlation: wifiCorrelation, bridgeLifecycle: 21, flowId: wifiFlowId,
 });
 const orchestratedCalls = [];
+const orchestratedDelays = [];
 const orchestratedStatuses = [
   handoffEnvelope(wifiCorrelation),
   handoffEnvelope(wifiCorrelation),
@@ -212,18 +241,22 @@ const orchestratedStatuses = [
 await resumeCardWifiHandoff({
   link: orchestratedLink,
   correlation: wifiCorrelation,
+  flowId: wifiFlowId,
   bridgeLifecycle: 21,
   isCurrent: () => true,
+  wait: async delayMs => { orchestratedDelays.push(delayMs); },
   sendRequest: async type => {
     orchestratedCalls.push(type);
     return type === 'status' ? orchestratedStatuses.shift() : { ok: true };
   },
 });
 assert.deepEqual(orchestratedCalls, ['status', 'status', 'wifi-handoff-ack', 'status']);
+assert.deepEqual(orchestratedDelays, [500, 500], 'handoff envelope and final-status reads use bounded cadence');
 assert.equal(isCardLinkConnected(orchestratedLink.getState()), true);
 await resumeCardWifiHandoff({
   link: orchestratedLink,
   correlation: wifiCorrelation,
+  flowId: wifiFlowId,
   bridgeLifecycle: 21,
   isCurrent: () => true,
   sendRequest: async type => { orchestratedCalls.push(type); return null; },
@@ -234,7 +267,7 @@ orchestratedLink.destroy();
 const lostAckLink = createCardLink({ host: wifiCorrelation.host, connectTimeoutMs: 0 });
 lostAckLink.dispatch({
   type: 'wifi-handoff-retargeted', host: wifiCorrelation.host,
-  correlation: wifiCorrelation, bridgeLifecycle: 31,
+  correlation: wifiCorrelation, bridgeLifecycle: 31, flowId: wifiFlowId,
 });
 let lostAckRequests = 0;
 let lostAckStatusReads = 0;
@@ -260,6 +293,7 @@ const lostAckSendRequest = async type => {
 await resumeCardWifiHandoff({
   link: lostAckLink,
   correlation: wifiCorrelation,
+  flowId: wifiFlowId,
   bridgeLifecycle: 31,
   isCurrent: () => true,
   sendRequest: lostAckSendRequest,
@@ -267,6 +301,7 @@ await resumeCardWifiHandoff({
 await resumeCardWifiHandoff({
   link: lostAckLink,
   correlation: wifiCorrelation,
+  flowId: wifiFlowId,
   bridgeLifecycle: 31,
   isCurrent: () => true,
   sendRequest: lostAckSendRequest,
@@ -281,18 +316,56 @@ assert.ok(lostAckStatusReads >= 3,
 assert.equal(lostAckLink.getState().handoffAckAttempted, true);
 assert.equal(lostAckLink.getState().handoffAckInFlight, false);
 assert.equal(isCardLinkConnected(lostAckLink.getState()), false);
+lostAckLink.dispatch({
+  type: 'bridge-ready', host: wifiCorrelation.host, bridgeLifecycle: 32,
+});
+await resumeCardWifiHandoff({
+  link: lostAckLink,
+  correlation: wifiCorrelation,
+  flowId: wifiFlowId,
+  bridgeLifecycle: 32,
+  isCurrent: () => true,
+  wait: async () => {},
+  sendRequest: lostAckSendRequest,
+});
+assert.equal(lostAckRequests, 1,
+  'a card-page lifecycle change preserves the exact-correlation acknowledgement attempt latch');
 returnFinalStation = true;
 await resumeCardWifiHandoff({
   link: lostAckLink,
   correlation: wifiCorrelation,
-  bridgeLifecycle: 31,
+  flowId: wifiFlowId,
+  bridgeLifecycle: 32,
   isCurrent: () => true,
+  wait: async () => {},
   sendRequest: lostAckSendRequest,
 });
 assert.equal(lostAckRequests, 1);
 assert.equal(isCardLinkConnected(lostAckLink.getState()), true,
   'exact final station status completes an acknowledgement whose response was lost');
 lostAckLink.destroy();
+
+const scheduledHandoffDelays = [];
+const originalSetTimeout = globalThis.setTimeout;
+const originalClearTimeout = globalThis.clearTimeout;
+globalThis.setTimeout = (callback, delay = 0) => {
+  scheduledHandoffDelays.push(Number(delay));
+  return { callback, delay };
+};
+globalThis.clearTimeout = () => {};
+try {
+  const boundedLink = createCardLink({ host: wifiCorrelation.host, connectTimeoutMs: 0 });
+  boundedLink.dispatch({
+    type: 'wifi-handoff-retargeted', host: wifiCorrelation.host,
+    correlation: wifiCorrelation, bridgeLifecycle: 41, flowId: wifiFlowId,
+  });
+  assert.equal(scheduledHandoffDelays.some(delay => delay < 250), false,
+    'ordinary keepalive never schedules an immediate loop during a correlated handoff');
+  boundedLink.destroy();
+} finally {
+  globalThis.setTimeout = originalSetTimeout;
+  globalThis.clearTimeout = originalClearTimeout;
+}
 
 const repeatedBridgeVerification = reduceCardLink(bridged, {
   type: 'card-verified', via: 'bridge', host: '192.168.4.1',
@@ -996,8 +1069,8 @@ await bootstrapCardLink();
 assert.equal(getCardLinkState().cardBlank, true, 'authoritative factory bridge status is blank');
 assert.equal(isCardLinkConnected(getCardLinkState()), false);
 
-bridgeStatusFails = true;
-await bootstrapCardLink();
+  bridgeStatusFails = true;
+  await bootstrapCardLink();
 assert.equal(getCardLinkState().state, 'revalidating', 'failed status revokes readiness without inventing a disconnect identity');
 assert.equal(getCardLinkState().cardBlank, null, 'failed bridged status keeps blank state unknown');
 assert.equal(getCardLinkState().readiness, null, 'failed bridged status keeps readiness unknown');

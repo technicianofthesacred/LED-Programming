@@ -10,13 +10,19 @@ import {
 } from '../../lib/cardWiringSafety.js';
 import {
   connectCardLink,
+  cancelCardWifiHandoff,
   getCardLinkState,
   getSharedCardLink,
   isCardLinkConnected,
   reportCardStatusEnvelope,
   reportDirectCardStatus,
 } from '../../lib/cardLink.js';
-import { getCardBridgeState, retargetCardBridge, sendCardBridgeRequest } from '../../lib/cardBridge.js';
+import {
+  clearCardBridgeHandoff,
+  getCardBridgeState,
+  retargetCardBridge,
+  sendCardBridgeRequest,
+} from '../../lib/cardBridge.js';
 import { acceptWifiHandoff } from '../../lib/cardWifiHandoff.js';
 import { canPushDirectlyToCard, discoverCardStatus } from '../../lib/cardConnection.js';
 import { compileWiring } from '../../lib/wiringCompiler.js';
@@ -139,6 +145,8 @@ export function CardCommissioningPanel({
   const [bridgeHandoffStatus, setBridgeHandoffStatus] = useState(null);
   const markerSessionRef = useRef(null);
   const markerTimeoutRef = useRef(null);
+  const acknowledgementPersistenceRef = useRef('');
+  const activeFlowIdRef = useRef(initialState.flow?.flowId || '');
   const [failure, setFailure] = useState(initialState.error === 'corrupt'
     ? 'Saved card setup data is corrupt. Nothing was changed; restart the exact setup.'
     : initialState.error === 'invalid-lease'
@@ -169,6 +177,26 @@ export function CardCommissioningPanel({
   }, []);
 
   useEffect(() => {
+    const flowId = flow?.flowId || '';
+    activeFlowIdRef.current = flowId;
+    acknowledgementPersistenceRef.current = '';
+    return () => {
+      if (flowId) {
+        cancelCardWifiHandoff(flowId);
+        clearCardBridgeHandoff(flowId);
+      }
+      if (activeFlowIdRef.current === flowId) activeFlowIdRef.current = '';
+      acknowledgementPersistenceRef.current = '';
+    };
+  }, [flow?.flowId]);
+
+  useEffect(() => {
+    setBridgeHandoffStatus(previous => (
+      previous?.flowId && previous.flowId !== flow?.flowId ? null : previous
+    ));
+  }, [flow?.flowId]);
+
+  useEffect(() => {
     if (result?.status !== 'awaiting-card-acknowledgement') return;
     void (async () => { try {
       let current = readCardCommissioning({ flowId: result.flowId });
@@ -192,7 +220,10 @@ export function CardCommissioningPanel({
     const freshAfterSetupJoin = flow.networkState === 'setup-joined'
       && Number.isFinite(acknowledgedAt)
       && acknowledgedAt >= flow.updatedAt;
-    if (!isCardLinkConnected(link) || (setupNetworkReset && !freshAfterSetupJoin)) return null;
+    const exactStationAuthority = link?.handoffStationVerified === true
+      && link?.handoffFlowId === flow.flowId;
+    if ((!isCardLinkConnected(link) && !exactStationAuthority)
+      || (setupNetworkReset && !freshAfterSetupJoin)) return null;
     return acknowledgeCommissionedCardFromStatus(flow, link?.readiness || {});
   }, [flow, link]);
 
@@ -203,8 +234,13 @@ export function CardCommissioningPanel({
 
   const restorePreflight = useMemo(() => {
     if (!flow?.cardAcknowledgedAt) return { ok: false, reason: 'checking-card' };
-    if (!isCardLinkConnected(link)) return { ok: false, reason: 'checking-card' };
-    return preflightCardCommissioningMutation(flow, link.readiness);
+    const initialConfigAuthority = link?.handoffStationVerified === true
+      && link?.handoffFlowId === flow.flowId
+      && link?.cardBlank === true;
+    if (!isCardLinkConnected(link) && !initialConfigAuthority) return { ok: false, reason: 'checking-card' };
+    return preflightCardCommissioningMutation(flow, link.readiness, {
+      allowInitialConfig: initialConfigAuthority,
+    });
   }, [flow, link]);
 
   const lightCheckPreflight = useMemo(() => {
@@ -223,11 +259,21 @@ export function CardCommissioningPanel({
 
   useEffect(() => {
     if (!cardAcknowledgement?.ok || flow?.cardAcknowledgedAt) return;
+    const acknowledgementFlowId = flow?.flowId || '';
+    const persistenceKey = `${acknowledgementFlowId}:${cardAcknowledgement.flow?.updatedAt || ''}`;
+    if (!acknowledgementFlowId || acknowledgementPersistenceRef.current === persistenceKey) return;
+    acknowledgementPersistenceRef.current = persistenceKey;
     void (async () => { try {
       await writeCardCommissioning(cardAcknowledgement.flow);
-      setFlow(cardAcknowledgement.flow);
-    } catch (error) { setFailure(`Card setup could not be saved: ${error?.message || String(error)}`); } })();
-  }, [cardAcknowledgement, flow?.cardAcknowledgedAt]);
+      if (activeFlowIdRef.current === acknowledgementFlowId) setFlow(cardAcknowledgement.flow);
+    } catch (error) {
+      if (activeFlowIdRef.current === acknowledgementFlowId) {
+        setFailure(`Card setup could not be saved: ${error?.message || String(error)}`);
+      }
+    } finally {
+      if (acknowledgementPersistenceRef.current === persistenceKey) acknowledgementPersistenceRef.current = '';
+    } })();
+  }, [cardAcknowledgement, flow?.cardAcknowledgedAt, flow?.flowId]);
 
   useEffect(() => {
     if (
@@ -246,7 +292,7 @@ export function CardCommissioningPanel({
           host: '192.168.4.1', timeoutMs: 3000, retryOnTimeout: false,
         });
         if (active) {
-          setBridgeHandoffStatus(status);
+          setBridgeHandoffStatus({ flowId: flow.flowId, status });
           timer = window.setTimeout(poll, 2500);
         }
       } catch {
@@ -267,12 +313,13 @@ export function CardCommissioningPanel({
       !flow
       || flow.stage !== 'set-up-card'
       || flow.cardAcknowledgedAt
-      || !(link?.readiness || bridgeHandoffStatus)
+      || !(link?.readiness || bridgeHandoffStatus?.status)
     ) return;
     const bridge = getCardBridgeState();
     const existing = bridge.handoffCorrelation;
     const expectedCard = flow.expectedCard;
-    const status = bridgeHandoffStatus || link.readiness;
+    if (bridgeHandoffStatus && bridgeHandoffStatus.flowId !== flow.flowId) return;
+    const status = bridgeHandoffStatus?.status || link.readiness;
     let correlation = existing;
     if (!correlation) {
       correlation = acceptWifiHandoff({
@@ -286,11 +333,11 @@ export function CardCommissioningPanel({
       || correlation.expectedCardId !== expectedCard?.id
       || correlation.expectedFirmwareVersion !== expectedCard?.firmwareVersion
       || correlation.expectedBuildId !== expectedCard?.buildId) return;
-    const retargeted = retargetCardBridge(correlation.host, correlation);
+    const retargeted = retargetCardBridge(correlation.host, correlation, { flowId: flow.flowId });
     const lifecycle = getCardBridgeState().lifecycle;
     getSharedCardLink().dispatch({
       type: 'wifi-handoff-retargeted', host: correlation.host,
-      correlation, bridgeLifecycle: lifecycle,
+      correlation, flowId: flow.flowId, bridgeLifecycle: lifecycle,
     });
     setFailure(retargeted.ok ? '' : 'The card page could not move to the verified gallery-network address. Return to gallery WiFi, then retry this same card page.');
     setDetection({
@@ -392,7 +439,12 @@ export function CardCommissioningPanel({
       if (link.validatedBootId && freshStatus?.bootId !== link.validatedBootId) {
         throw new Error('Card restarted — verifying. Wait for Studio to finish checking it before restoring the project.');
       }
-      const freshPreflight = preflightCardCommissioningMutation(flow, freshStatus);
+      const initialConfigAuthority = link?.handoffStationVerified === true
+        && link?.handoffFlowId === flow.flowId
+        && link?.cardBlank === true;
+      const freshPreflight = preflightCardCommissioningMutation(flow, freshStatus, {
+        allowInitialConfig: initialConfigAuthority,
+      });
       if (!freshPreflight.ok) {
         throw new Error(freshPreflight.reason === 'wrong-card'
           ? 'Wrong card. Reconnect the exact installed card before restoring the project.'
@@ -444,6 +496,7 @@ export function CardCommissioningPanel({
         reboot: 'if-needed',
         allowProjectChange: true,
         allowLayoutChange: true,
+        commissioningFlowId: flow.flowId,
       });
       await recordCardRestorationResponse(flow, lease.id, mutation.fencingToken, response);
       const refreshedStatus = await readCardStatusEnvelope({
@@ -518,11 +571,11 @@ export function CardCommissioningPanel({
       setFailure('The verified Wi-Fi handoff is no longer available. Reconnect the exact card before retrying.');
       return;
     }
-    const result = retargetCardBridge(correlation.host, correlation);
+    const result = retargetCardBridge(correlation.host, correlation, { flowId: flow.flowId });
     const lifecycle = getCardBridgeState().lifecycle;
     getSharedCardLink().dispatch({
       type: 'wifi-handoff-retargeted', host: correlation.host,
-      correlation, bridgeLifecycle: lifecycle,
+      correlation, flowId: flow.flowId, bridgeLifecycle: lifecycle,
     });
     setFailure(result.ok ? '' : 'The verified card page is still unreachable. Return to gallery WiFi and retry this same card page.');
   };
@@ -708,7 +761,7 @@ export function CardCommissioningPanel({
           <h3>Set up card</h3>
           {!flow.cardAcknowledgedAt && detection.state === 'return-to-gallery' && (
             <div className="card-commissioning-network">
-              <p role="status"><strong>Wi-Fi saved on the exact card.</strong> Return this device to gallery WiFi. Studio is reusing the same card page and will continue only after the correlated station card is command-ready.</p>
+              <p role="status"><strong>Wi-Fi saved on the exact card.</strong> Return this device to gallery WiFi. Studio is reusing the same card page and will continue after it verifies this exact card on the gallery network.</p>
               {detection.retryable && <button type="button" className="btn" onClick={retryStationRetarget}>Retry verified card page</button>}
             </div>
           )}

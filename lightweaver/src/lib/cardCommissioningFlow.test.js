@@ -351,13 +351,26 @@ test('handoff-ready transport and incomplete station truth never acknowledge com
     { ...base, wifi: { ...base.wifi, transition: 'handoff-ready', transitionPending: true } },
     { ...base, wifi: { ...base.wifi, transitionPending: true } },
     { ...base, wifi: { ...base.wifi, transport: 'ap' } },
-    { ...base, commandReady: false },
   ]) {
     assert.deepEqual(
       acknowledgeCommissionedCardFromStatus(ready, status),
       { ok: false, reason: 'not-on-home-network' },
     );
   }
+
+  const blankStation = acknowledgeCommissionedCardFromStatus(ready, {
+    ...base,
+    runtimePhase: 'factory', knownGoodProject: false,
+    commandReady: false, outputReady: true,
+  });
+  assert.equal(blankStation.ok, true,
+    'exact complete blank station truth acknowledges station/config authority');
+  assert.equal(preflightCardCommissioningMutation(blankStation.flow, {
+    ...base,
+    runtimePhase: 'factory', knownGoodProject: false,
+    commandReady: false, outputReady: true,
+  }, { allowInitialConfig: true }).ok, true,
+    'blank station commissioning can preflight only the initial project config');
 });
 
 test('a card still on its setup AP (no station transport) is never mistaken for on-home-network', () => {
