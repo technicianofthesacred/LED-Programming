@@ -114,7 +114,10 @@ export function assertStudioBuildGraphMatches(expectedInput, actualInput) {
   return expected;
 }
 
-export async function verifyStudioBuildGraph(fetchImpl, cryptoImpl, graphUrl, expectedGraph) {
+export async function verifyStudioBuildGraph(fetchImpl, cryptoImpl, graphUrl, expectedGraph, rootBytes) {
+  if (!(rootBytes instanceof Uint8Array)) {
+    throw new Error('Verified Production Studio root bytes are required');
+  }
   const parsedGraphUrl = new URL(graphUrl);
   const graphResponse = await fetchImpl(parsedGraphUrl.href, { cache: 'no-store', redirect: 'manual' });
   if (!graphResponse.ok) {
@@ -123,15 +126,20 @@ export async function verifyStudioBuildGraph(fetchImpl, cryptoImpl, graphUrl, ex
   const liveGraph = parseStudioBuildGraph(await graphResponse.text());
   const graph = assertStudioBuildGraphMatches(expectedGraph, liveGraph);
   for (const expected of graph.files) {
-    const assetUrl = new URL(expected.path, `${parsedGraphUrl.origin}/`);
-    if (assetUrl.origin !== parsedGraphUrl.origin) {
-      throw new Error(`Studio build graph file escaped its production origin: ${expected.path}`);
+    let actualBytes;
+    if (expected.path === 'index.html') {
+      actualBytes = rootBytes;
+    } else {
+      const assetUrl = new URL(expected.path, `${parsedGraphUrl.origin}/`);
+      if (assetUrl.origin !== parsedGraphUrl.origin) {
+        throw new Error(`Studio build graph file escaped its production origin: ${expected.path}`);
+      }
+      const assetResponse = await fetchImpl(assetUrl.href, { cache: 'no-store', redirect: 'manual' });
+      if (!assetResponse.ok) {
+        throw new Error(`Production Studio asset ${expected.path} answered HTTP ${assetResponse.status} at\n  ${assetUrl.href}`);
+      }
+      actualBytes = new Uint8Array(await assetResponse.arrayBuffer());
     }
-    const assetResponse = await fetchImpl(assetUrl.href, { cache: 'no-store', redirect: 'manual' });
-    if (!assetResponse.ok) {
-      throw new Error(`Production Studio asset ${expected.path} answered HTTP ${assetResponse.status} at\n  ${assetUrl.href}`);
-    }
-    const actualBytes = new Uint8Array(await assetResponse.arrayBuffer());
     const actualHash = await sha256Hex(cryptoImpl, actualBytes);
     if (actualBytes.byteLength !== expected.bytes || actualHash !== expected.sha256) {
       throw new Error(
@@ -197,10 +205,12 @@ export async function assertStudioRoot(response, url) {
   if (!response.ok) {
     throw new Error(`Production Studio root answered HTTP ${response.status} at\n  ${url}`);
   }
-  const html = await response.text();
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const html = new TextDecoder().decode(bytes);
   if (!/id=["']root["']/.test(html)) {
     throw new Error(`Production root does not contain the Lightweaver Studio shell at\n  ${url}`);
   }
+  return bytes;
 }
 
 export async function assertLegacyRouteRemoved(response, url) {

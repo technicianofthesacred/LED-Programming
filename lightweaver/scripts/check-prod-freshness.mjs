@@ -86,7 +86,7 @@ let studioResponse;
 try {
   studioResponse = await fetch(studioUrl, {
     cache: 'no-store',
-    redirect: 'follow',
+    redirect: 'manual',
     signal: AbortSignal.timeout(20_000),
   });
 } catch (err) {
@@ -97,15 +97,16 @@ try {
   process.exit(0);
 }
 
+let studioRootBytes;
 try {
-  await assertStudioRoot(studioResponse, studioUrl);
+  studioRootBytes = await assertStudioRoot(studioResponse, studioUrl);
 } catch (err) {
   fail(err.message);
 }
 
 let studioBuildFileCount = 0;
 try {
-  const verifiedStudio = await verifyStudioBuildGraph(productionFetch, webcrypto, studioBuildGraphUrl, expectedStudioGraph);
+  const verifiedStudio = await verifyStudioBuildGraph(productionFetch, webcrypto, studioBuildGraphUrl, expectedStudioGraph, studioRootBytes);
   studioBuildFileCount = verifiedStudio.graph.files.length;
 } catch (err) {
   fail(
