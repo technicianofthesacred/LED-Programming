@@ -19,10 +19,10 @@ on:
       - 'scripts/build-production-job.mjs'
       - 'scripts/rebuild-production-jobs.mjs'
       - 'scripts/sign-release-artifacts.mjs'
-      - 'lightweaver/src/lib/firmwareRelease.js'
-      - 'lightweaver/src/lib/productionJobPackage.js'
-      - 'lightweaver/src/lib/cardCommissioningFlow.js'
-      - 'lightweaver/src/lib/cardRuntimeProject.js'
+      # Production-job generators import the Studio domain libraries. Watch the
+      # bounded lib tree so transitive job-shaping changes cannot leave jobs
+      # pinned to stale source; generated public artifacts are outside this path.
+      - 'lightweaver/src/lib/**'
       - 'packages/installer-core/**'
       - 'release/firmware-manifest.schema.json'
       - 'release/production-job.schema.json'

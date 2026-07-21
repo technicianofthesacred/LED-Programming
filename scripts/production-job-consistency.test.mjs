@@ -156,9 +156,7 @@ test('protected release rebuild watches job inputs without an artifact commit lo
     'release/production-job.schema.json',
     'scripts/build-production-job.mjs',
     'scripts/rebuild-production-jobs.mjs',
-    'lightweaver/src/lib/productionJobPackage.js',
-    'lightweaver/src/lib/cardCommissioningFlow.js',
-    'lightweaver/src/lib/cardRuntimeProject.js',
+    'lightweaver/src/lib/**',
   ]) {
     assert.ok(workflow.includes(`'${path}'`), `${path} must trigger the protected release rebuild`);
   }
