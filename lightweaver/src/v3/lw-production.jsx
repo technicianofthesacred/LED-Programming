@@ -92,6 +92,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
   const [release, setRelease] = useState({ state: 'idle', value: null, error: '' });
   const [hardware, setHardware] = useState(null);
   const [usbConnected, setUsbConnected] = useState(false);
+  const [usbOwnershipBlocked, setUsbOwnershipBlocked] = useState(false);
   const [firmwareDecision, setFirmwareDecision] = useState('uninspected');
   const [status, setStatus] = useState('Choose a verified artwork job to begin.');
   const [error, setError] = useState('');
@@ -106,6 +107,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
   const actionRef = useRef(null);
   const loaderRef = useRef(null);
   const transportRef = useRef(null);
+  const usbOwnershipRef = useRef({ connection: null, releasing: false, ownerRunId: '' });
   const restoreStartedRef = useRef(false);
   const savingPassRef = useRef(false);
   const previousStateRef = useRef(run?.state);
@@ -329,14 +331,57 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     return import.meta.env.DEV ? window.__LW_PRODUCTION_DRIVER_FOR_TEST__ : null;
   }
 
-  async function releaseUsbConnection(connection = { loader: loaderRef.current, transport: transportRef.current }) {
+  function retainUsbOwnership(connection, releasing = false) {
+    if (!connection) return;
+    const retained = usbOwnershipRef.current;
+    usbOwnershipRef.current = {
+      connection,
+      releasing,
+      ownerRunId: retained.connection === connection ? retained.ownerRunId : String(runRef.current?.runId || ''),
+    };
+    setUsbOwnershipBlocked(true);
+  }
+
+  function clearUsbOwnership(connection) {
+    if (usbOwnershipRef.current.connection !== connection) return;
+    usbOwnershipRef.current = { connection: null, releasing: false, ownerRunId: '' };
+    setUsbOwnershipBlocked(false);
+  }
+
+  async function releaseUsbConnection(connection = usbOwnershipRef.current.connection || { loader: loaderRef.current, transport: transportRef.current }) {
     if (!connection?.loader && !connection?.transport && !testDriver()) return true;
+    // This barrier is deliberately independent of a production-run lease. A
+    // storage event may replace the run while the physical port is releasing.
+    retainUsbOwnership(connection, true);
     try {
       const result = testDriver()?.disconnect
         ? await testDriver().disconnect(connection)
         : await disconnectESP(connection?.loader, connection?.transport);
-      return result !== false;
-    } catch { return false; }
+      const released = result !== false;
+      if (released) clearUsbOwnership(connection);
+      else retainUsbOwnership(connection, false);
+      return released;
+    } catch {
+      retainUsbOwnership(connection, false);
+      return false;
+    }
+  }
+
+  async function persistUsbOwnershipForCurrentRun({ released }) {
+    try {
+      const updated = await updateProductionRunAtomically(currentRun => {
+        const currentLease = correlation(currentRun);
+        const recoveryRun = transitionProductionRun(currentRun, 'recovery', {
+          correlation: currentLease, recoveryAction: 'release-usb', usbReleased: released,
+        });
+        return transitionProductionRun(recoveryRun, 'connect-card', {
+          correlation: correlation(recoveryRun), usbReleased: released,
+        });
+      });
+      runRef.current = updated;
+      if (mountedRef.current) setRun(updated);
+      return updated;
+    } catch { return null; }
   }
 
   async function persistUnreleasedUsb(origin) {
@@ -351,8 +396,33 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     } catch { return null; /* the visible recovery remains conservative even if persistence is unavailable */ }
   }
 
+  async function releaseRetainedUsbOwnership() {
+    if (busy || !usbOwnershipRef.current.connection) return;
+    const startingRunId = runRef.current?.runId;
+    const connection = usbOwnershipRef.current.connection;
+    setBusy(true);
+    try {
+      const released = await releaseUsbConnection(connection);
+      const updated = await persistUsbOwnershipForCurrentRun({ released });
+      if (!released) return;
+      if (loaderRef.current === connection.loader) loaderRef.current = null;
+      if (transportRef.current === connection.transport) transportRef.current = null;
+      if (updated?.runId === startingRunId) {
+        setUsbConnected(false);
+        setHardware(null);
+        setRecovery(null);
+        setStatus('USB release is confirmed. Connect one card to continue.');
+      }
+    } finally {
+      if (mountedRef.current) setBusy(false);
+    }
+  }
+
   async function connectCard() {
-    if (busy || release.state !== 'ready') return;
+    const retained = usbOwnershipRef.current;
+    const foreignUsbOwnership = Boolean(retained.connection
+      && (retained.ownerRunId !== runRef.current?.runId || runRef.current?.usbReleased === false));
+    if (busy || release.state !== 'ready' || foreignUsbOwnership) return;
     const runLease = captureRunLease();
     let activeRunLease = runLease;
     setBusy(true); setError(''); setRecovery(null); setStatus('Select the one Lightweaver card connected by USB.');
@@ -360,6 +430,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     try {
       const driver = testDriver();
       connection = driver?.connectCard ? await driver.connectCard() : await connectESP();
+      retainUsbOwnership(connection);
       assertActiveRunLease(runLease);
       const rawInspection = driver?.inspectCard ? await driver.inspectCard(connection) : await inspectConnectedESP(connection.loader, connection.chip);
       assertActiveRunLease(runLease);
@@ -385,14 +456,15 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     } catch (reason) {
       const acquired = Boolean(connection);
       const released = acquired ? await releaseUsbConnection(connection) : true;
-      if (reason?.code === 'stale-production-run' || !runLeaseIsCurrent(activeRunLease)) return;
+      const operationWasCurrent = runLeaseIsCurrent(activeRunLease);
+      if (!released) {
+        const ownershipRun = await persistUsbOwnershipForCurrentRun({ released: false });
+        if (operationWasCurrent && ownershipRun) activeRunLease = Object.freeze(correlation(ownershipRun));
+      }
+      if (reason?.code === 'stale-production-run' || !operationWasCurrent) return;
       loaderRef.current = released ? null : connection?.loader || null;
       transportRef.current = released ? null : connection?.transport || null;
       setUsbConnected(!released); setHardware(null);
-      if (!released) {
-        const ownershipRun = await persistUnreleasedUsb(activeRunLease);
-        if (ownershipRun) activeRunLease = Object.freeze(correlation(ownershipRun));
-      }
       if (!runLeaseIsCurrent(activeRunLease)) return;
       showRecovery(reason, { phase: run?.state || 'connect-card', cardChanged: 'no', usbReleased: released ? 'yes' : 'unknown' });
     }
@@ -405,9 +477,15 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     let activeRunLease = runLease;
     setBusy(true); setError('');
     try {
-      const connection = { loader: loaderRef.current, transport: transportRef.current };
+      const connection = usbOwnershipRef.current.connection || { loader: loaderRef.current, transport: transportRef.current };
       const released = await releaseUsbConnection(connection);
-      assertActiveRunLease(runLease);
+      const operationWasCurrent = runLeaseIsCurrent(runLease);
+      if (!released) {
+        const ownershipRun = await persistUsbOwnershipForCurrentRun({ released: false });
+        if (operationWasCurrent && ownershipRun) activeRunLease = Object.freeze(correlation(ownershipRun));
+      }
+      if (!operationWasCurrent) return;
+      assertActiveRunLease(activeRunLease);
       if (released) { loaderRef.current = null; transportRef.current = null; setUsbConnected(false); }
       if (!released) throw new Error('USB ownership could not be released.');
       activeRunLease = await readInstalledFirmwareEvidence(runLease) || runLease;
@@ -536,10 +614,12 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
 
   async function installOrContinue() {
     if (busy || !hardware || release.state !== 'ready') return;
+    const retained = usbOwnershipRef.current;
+    if (retained.connection && (retained.ownerRunId !== runRef.current?.runId || runRef.current?.usbReleased === false)) return;
     if (firmwareDecision !== 'install-required' || !usbConnected) return;
     setBusy(true); setError('');
     const runLease = captureRunLease();
-    const installConnection = { loader: loaderRef.current, transport: transportRef.current };
+    const installConnection = usbOwnershipRef.current.connection || { loader: loaderRef.current, transport: transportRef.current };
     let activeRunLease = runLease;
     let installLease = null;
     try {
@@ -568,7 +648,12 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     } catch (reason) {
       const released = await releaseUsbConnection(installConnection);
       const catchLease = activeRunLease;
-      if (reason?.code === 'stale-production-run' || !runLeaseIsCurrent(catchLease)) return;
+      const operationWasCurrent = runLeaseIsCurrent(catchLease);
+      if (!released) {
+        const ownershipRun = await persistUsbOwnershipForCurrentRun({ released: false });
+        if (operationWasCurrent && ownershipRun) activeRunLease = Object.freeze(correlation(ownershipRun));
+      }
+      if (reason?.code === 'stale-production-run' || !operationWasCurrent) return;
       if (released) { loaderRef.current = null; transportRef.current = null; setUsbConnected(false); }
       else setUsbConnected(true);
       setHardware(null);
@@ -952,6 +1037,9 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
   const currentStage = stageIndex(run?.state);
   const requestedJobCode = new URLSearchParams(window.location.hash.slice(1)).get('job') || '';
   const canChangeJob = Boolean(job && ['connect-card', 'inspect', 'restore'].includes(run?.state) && !run?.cardChanged && !restoreStartedRef.current);
+  const retainedUsb = usbOwnershipRef.current;
+  const usbOwnershipForeign = Boolean(usbOwnershipBlocked && retainedUsb.connection
+    && (retainedUsb.ownerRunId !== run?.runId || run?.usbReleased === false));
   return (
     <div className={embedded ? 'prod-screen prod-embedded' : 'screen prod-screen'}>
       <div className={embedded ? 'prod-embedded-scroll' : 'screen-scroll'}>
@@ -970,11 +1058,13 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
                 <p className="prod-status" role="status">{status}</p>
                 {release.state === 'loading' && <p>Verifying and preloading official firmware…</p>}
                 {release.state === 'error' && !recovery && <p className="prod-error" role="alert">Official firmware could not be preloaded. USB stays locked.</p>}
-                {!recovery && <>{run?.state === 'connect-card' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready'} onClick={connectCard}>{busy ? 'Inspecting card…' : 'Connect one USB card'}</button>}
-                {run?.state === 'inspect' && hardware && firmwareDecision === 'uninspected' && <button className="btn primary" type="button" disabled={busy || !usbConnected} onClick={inspectInstalledFirmware}>{busy ? 'Releasing USB…' : 'Release USB and inspect firmware'}</button>}
+                {!recovery && <>{run?.state === 'connect-card' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready' || usbOwnershipForeign} onClick={connectCard}>{busy ? 'Inspecting card…' : 'Connect one USB card'}</button>}
+                {usbOwnershipForeign && retainedUsb.connection && <button className="btn" type="button" disabled={busy || retainedUsb.releasing} onClick={() => void releaseRetainedUsbOwnership()}>{retainedUsb.releasing ? 'Releasing retained USB…' : 'Release retained USB safely'}</button>}
+                {run?.state === 'inspect' && !hardware && firmwareDecision === 'uninspected' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready' || usbOwnershipForeign} onClick={connectCard}>{busy ? 'Inspecting same card…' : 'Reconnect same USB card'}</button>}
+                {run?.state === 'inspect' && hardware && firmwareDecision === 'uninspected' && <button className="btn primary" type="button" disabled={busy || !usbConnected || usbOwnershipForeign} onClick={inspectInstalledFirmware}>{busy ? 'Releasing USB…' : 'Release USB and inspect firmware'}</button>}
                 {run?.state === 'inspect' && firmwareDecision === 'unproven' && <button className="btn primary" type="button" disabled={busy} onClick={retryInstalledFirmwareEvidence}>{busy ? 'Connecting to card page…' : 'Reconnect card page and retry'}</button>}
-                {run?.state === 'inspect' && firmwareDecision === 'install-required' && !usbConnected && <button className="btn primary" type="button" disabled={busy} onClick={connectCard}>{busy ? 'Inspecting same card…' : 'Reconnect same USB card'}</button>}
-                {run?.state === 'inspect' && hardware && firmwareDecision === 'install-required' && usbConnected && <button className="btn primary" type="button" disabled={busy} onClick={installOrContinue}>Install verified firmware</button>}
+                {run?.state === 'inspect' && firmwareDecision === 'install-required' && !usbConnected && <button className="btn primary" type="button" disabled={busy || usbOwnershipForeign} onClick={connectCard}>{busy ? 'Inspecting same card…' : 'Reconnect same USB card'}</button>}
+                {run?.state === 'inspect' && hardware && firmwareDecision === 'install-required' && usbConnected && <button className="btn primary" type="button" disabled={busy || usbOwnershipForeign} onClick={installOrContinue}>Install verified firmware</button>}
                 {run?.state === 'install' && <div className="prod-progress" role="progressbar" aria-label="Installing verified firmware" aria-valuenow={Math.round(progress * 100)}><span style={{ width: `${Math.round(progress * 100)}%` }} /></div>}
                 {run?.state === 'reconnect' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready'} onClick={reconnectAfterInstall}>{busy ? 'Checking same card…' : 'Reconnect same card'}</button>}
                 {run?.state === 'restore' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready' || restoreStartedRef.current || !configAuthority.ok} onClick={restoreArtwork}>{busy ? 'Loading artwork once…' : 'Load verified artwork'}</button>}

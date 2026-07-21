@@ -120,12 +120,15 @@ async function installDriver(page, {
         const attempts = Number(localStorage.getItem('lw_test_connect_attempts') || 0) + 1;
         localStorage.setItem('lw_test_connect_attempts', String(attempts));
         if (attempts === 1 && connectErrorOnce) throw new Error(connectErrorOnce);
-        return {};
+        return { testConnectionId: attempts };
       },
       connectLan: async () => {},
-      disconnect: async () => {
+      disconnect: async connection => {
         const count = Number(localStorage.getItem('lw_test_disconnect_count') || 0) + 1;
         localStorage.setItem('lw_test_disconnect_count', String(count));
+        const disconnected = JSON.parse(localStorage.getItem('lw_test_disconnect_connection_ids') || '[]');
+        disconnected.push(connection?.testConnectionId ?? null);
+        localStorage.setItem('lw_test_disconnect_connection_ids', JSON.stringify(disconnected));
         try {
           if (disconnectDelayMs) await new Promise(resolve => setTimeout(resolve, disconnectDelayMs));
           if (count === disconnectFailureAt) throw new Error('USB port did not release');
@@ -393,15 +396,16 @@ test('HTTPS production transport performs exact blank config then runtime frame 
     leaseModule.assertProductionCardLease(readbackLease, linkModule.getCardLinkState(), { mutation: 'readback' });
     bridge.adoptCommissionedCardBridgeIdentity(configLease.commissioningFlowId);
     const readyDeadline = Date.now() + 12000;
-    while (Date.now() < readyDeadline && !leaseModule.productionCardAuthority(linkModule.getCardLinkState(), expectedCardId, { mutation: 'runtime' }).ok) {
+    const runtimeOptions = { mutation: 'runtime', expectedFirmwareVersion: firmware.version, expectedBuildId: firmware.buildId };
+    while (Date.now() < readyDeadline && !leaseModule.productionCardAuthority(linkModule.getCardLinkState(), expectedCardId, runtimeOptions).ok) {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     const runtimeLink = linkModule.getCardLinkState();
-    const runtimeAuthority = leaseModule.productionCardAuthority(runtimeLink, expectedCardId, { mutation: 'runtime' });
+    const runtimeAuthority = leaseModule.productionCardAuthority(runtimeLink, expectedCardId, runtimeOptions);
     if (!runtimeAuthority.ok) throw new Error(`runtime link not ready: ${JSON.stringify(runtimeLink)} bridge=${JSON.stringify(bridge.getCardBridgeState())}`);
-    const runtimeLease = leaseModule.captureProductionCardLease(runtimeLink, expectedCardId, { mutation: 'runtime' });
+    const runtimeLease = leaseModule.captureProductionCardLease(runtimeLink, expectedCardId, runtimeOptions);
     await bridge.sendCardBridgeRequest('frame', { pixels: ['FFFF00'] }, { host: runtimeLease.host });
-    leaseModule.assertProductionCardLease(runtimeLease, linkModule.getCardLinkState(), { mutation: 'runtime' });
+    leaseModule.assertProductionCardLease(runtimeLease, linkModule.getCardLinkState(), runtimeOptions);
     const finalEvidence = await pushClient.readCardProjectEvidence({ host: runtimeLease.host, transport: 'bridge' });
     return {
       blankState: blankLink.cardBlank,
@@ -874,6 +878,62 @@ test('a run replacement during inspected-card USB release cannot start LAN evide
   const storedRun = await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun());
   expect(replacementRunId).not.toBe(staleRunId);
   expect(storedRun).toMatchObject({ runId: replacementRunId, state: 'connect-card' });
+});
+
+test('a failed stale USB release transfers the exact ownership lock to the replacement run until explicit release succeeds', async ({ page }) => {
+  const job = await serveJob(page);
+  await installDriver(page, { disconnectDelayMs: 200, disconnectFailureAt: 1 });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click({ noWaitAfter: true });
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_test_disconnect_count'))).toBe('1');
+
+  const replacementRunId = await page.evaluate(async digest => {
+    const module = await import('/src/lib/productionRun.js');
+    const replacement = await module.updateProductionRunAtomically(() => {
+      const created = module.createProductionRun({ jobDigest: digest });
+      const correlation = {
+        runId: created.runId, flowId: created.flowId, jobDigest: created.jobDigest,
+        operationId: created.operationId, expectedCardId: created.expectedCardId, generation: created.generation,
+      };
+      return module.transitionProductionRun(created, 'connect-card', { correlation });
+    });
+    window.dispatchEvent(new StorageEvent('storage', { key: module.PRODUCTION_RUN_COMMIT_A_KEY }));
+    return replacement.runId;
+  }, job.digest);
+
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_test_disconnect_settled_count'))).toBe('1');
+  await expect(page.getByRole('region', { name: 'Safe recovery' })).toHaveCount(0);
+  expect(await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun())).toMatchObject({
+    runId: replacementRunId, state: 'connect-card', usbReleased: false,
+  });
+  await expect(page.getByRole('button', { name: 'Connect one USB card' })).toBeDisabled();
+  const release = page.getByRole('button', { name: 'Release retained USB safely' });
+  await expect(release).toBeVisible();
+  await release.click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_test_disconnect_settled_count'))).toBe('2');
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('lw_test_disconnect_connection_ids') || '[]'))).toEqual([1, 1]);
+  expect(await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun())).toMatchObject({
+    runId: replacementRunId, state: 'connect-card', usbReleased: true,
+  });
+  await expect(page.getByRole('region', { name: 'Safe recovery' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Connect one USB card' })).toBeEnabled();
+});
+
+test('an inspected run resumed without transient hardware offers exact-card USB reconnection instead of a dead end', async ({ page }) => {
+  await serveJob(page);
+  await installDriver(page);
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await expect(page.getByRole('button', { name: 'Release USB and inspect firmware' })).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Reconnect same USB card' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Install verified firmware', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Reconnect same USB card' }).click();
+  await expect(page.getByRole('button', { name: 'Release USB and inspect firmware' })).toBeVisible();
 });
 
 test('install failure never claims USB release when cleanup fails', async ({ page }) => {
