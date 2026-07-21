@@ -126,6 +126,58 @@ ambiguous check quarantines that card; it does not authorize a manual shortcut.
 | Live build-graph mismatch | Site is stale or partially published | Stop; redeploy coherent artifact |
 | Wi-Fi loss but Studio stays green | Truthfulness regression | Stop the release |
 
+## Pattern Lab release acceptance
+
+Pattern Lab is a separate/private Studio workspace, but its delivery paths
+touch browser rendering, card streaming, microSD playback, physical wiring,
+and firmware capabilities. Complete these gates on the final integrated source
+and repeat the signed/live gates after protected CI publishes the release.
+
+Automated source gate:
+
+- [ ] Run the Pattern Lab unit tests, `LWSEQ1` package checks, and
+      `tests/pattern-lab-*.spec.ts` browser suite.
+- [ ] Run `npm run launch:source` from `lightweaver/` and `pio test -e native`
+      plus `pio run` from `firmware/lightweaver-controller/`.
+- [ ] Confirm existing Patterns, Layout, Playlist, Show, Card, installer,
+      Production Setup, persistence, migration, and recovery suites still pass.
+- [ ] On the protected signed release commit, run `npm run launch:check`; never
+      accept a feature-branch binary as current production firmware.
+
+Browser/operator gate:
+
+- [ ] Open `#screen=pattern-lab` on desktop and phone. Confirm the mapped
+      artwork and phone control drawer are usable and leaving the route changes
+      neither the active project nor connected card.
+- [ ] Create and reopen a private ten-minute draft, compare Source/Draft,
+      scrub Beginning/Middle/End, and confirm there is no obvious short loop.
+- [ ] Analyze a WAV locally and confirm only numeric lanes, settings, and a
+      fingerprint enter the recipe—never WAV bytes or an upload.
+- [ ] Bake the same canonical recipe/layout/seed/FPS twice and compare the
+      `.lwseq` bytes and sidecar hashes. Cancel must leave no partial export.
+- [ ] Confirm **Use in Project** reviews the exact addition, never overwrites a
+      built-in/existing look, and binds sequence metadata to the downloaded,
+      hash-verified controller package.
+- [ ] Keep Advanced Graph, Shader Bake, and card Art-Net recording disabled by
+      default. Exported xLights/MADRIX/Art-Net physical order must match wiring.
+
+Physical ESP32-S3 gate:
+
+- [ ] On the same installation LAN/card AP, verify Preview on Lights rollback
+      after Stop, navigation, delivery failure, and ownership supersession.
+- [ ] Compare a representative native recipe with Studio for geometry, seed,
+      timing, palette, brightness, and motion. Keep the descriptor's physical
+      parity flag unverified until this evidence is recorded.
+- [ ] Play a complex baked recipe from microSD for its complete duration and
+      verify physical order, clean loop/end behavior, stable FPS, reboot, and
+      power-loss recovery.
+- [ ] Record RGB order, gamma, white balance, brightness/current limits,
+      temperature, networking, SD stability, card/build identity, recipe hash,
+      physical-layout hash, and `.lwseq` hash with the installation record.
+
+See [the Pattern Lab operator guide](pattern-lab-user-guide.md) and
+[algorithm provenance](pattern-lab-algorithm-provenance.md).
+
 ## Current limiter
 
 As of 2026-07-21, source hardening is still being integrated. The current public

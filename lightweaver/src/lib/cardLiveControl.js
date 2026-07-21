@@ -230,6 +230,8 @@ export function buildLiveHardwareControlPayload(settings = {}) {
 export function buildLivePreviewControlPayload(look = {}) {
   const normalized = normalizeCardVisualLook(look);
   const runtimePatternId = getCardPatternRuntimeId(normalized.patternId) || normalized.patternId;
+  const driftMin = Number(look.driftHueMin);
+  const driftMax = Number(look.driftHueMax);
   return {
     cancelStream: true,
     ...(look.zone ? { zone: String(look.zone) } : {}),
@@ -243,6 +245,8 @@ export function buildLivePreviewControlPayload(look = {}) {
     saturation: normalized.customSaturation,
     breathe: normalized.customBreathe,
     drift: normalized.customDrift,
+    ...(Number.isFinite(driftMin) ? { driftMin: Math.max(0, Math.min(255, Math.trunc(driftMin))) } : {}),
+    ...(Number.isFinite(driftMax) ? { driftMax: Math.max(0, Math.min(255, Math.trunc(driftMax))) } : {}),
   };
 }
 

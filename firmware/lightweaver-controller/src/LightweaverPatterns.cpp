@@ -1,5 +1,7 @@
 #include "LightweaverPatterns.h"
 
+#include <cmath>
+
 static inline uint32_t scaleTime(uint32_t now, float speed) {
   if (speed <= 0.0f) return now;
   // Fixed-point Q10 scaling. The previous float path (`float(now) * speed`)
@@ -87,7 +89,166 @@ static inline uint8_t hash8(uint16_t value, uint16_t salt = 0) {
   return uint8_t(x & 0xff);
 }
 
-bool isSupportedProceduralPattern(const String& patternId) {
+static float recipeFract(float value) {
+  return value - floorf(value);
+}
+
+static CRGB recipeColor(const lightweaver::RecipeColor& color) {
+  return CRGB(color.red, color.green, color.blue);
+}
+
+static CRGB sampleRecipePalette(const lightweaver::NativeRecipe& recipe, float position) {
+  if (recipe.paletteCount == 0) return CRGB::Black;
+  if (recipe.paletteCount == 1) return recipeColor(recipe.palette[0]);
+  float normalized = recipeFract(position);
+  float scaled = normalized * float(recipe.paletteCount - 1);
+  uint8_t lower = static_cast<uint8_t>(scaled);
+  uint8_t upper = min<uint8_t>(recipe.paletteCount - 1, lower + 1);
+  uint8_t amount = static_cast<uint8_t>((scaled - float(lower)) * 255.0f);
+  return blend(recipeColor(recipe.palette[lower]), recipeColor(recipe.palette[upper]), amount);
+}
+
+static float transformedRecipeCoordinate(
+    float coordinate, const lightweaver::NativeRecipeLayer& layer) {
+  float value = coordinate;
+  for (uint8_t index = 0; index < layer.transformCount; index++) {
+    const lightweaver::RecipeTransform& transform = layer.transforms[index];
+    if (transform.node == lightweaver::RecipeTransformNode::Scale) {
+      value *= transform.amount;
+    } else if (transform.node == lightweaver::RecipeTransformNode::Offset) {
+      value += transform.amount;
+    } else if (transform.node == lightweaver::RecipeTransformNode::Repeat) {
+      value = recipeFract(value * transform.amount);
+    } else if (transform.node == lightweaver::RecipeTransformNode::Mirror) {
+      float folded = recipeFract(value * 0.5f) * 2.0f;
+      value = folded <= 1.0f ? folded : 2.0f - folded;
+    }
+  }
+  return recipeFract(value);
+}
+
+static float recipeModulation(const lightweaver::NativeRecipeLayer& layer,
+                              uint32_t now) {
+  float result = 0.0f;
+  for (uint8_t index = 0; index < layer.modulatorCount; index++) {
+    const lightweaver::RecipeModulator& modulator = layer.modulators[index];
+    uint32_t rateQ16 = static_cast<uint32_t>(modulator.rate * 65536.0f);
+    uint8_t phase = static_cast<uint8_t>(
+        ((static_cast<uint64_t>(now) * rateQ16) / 1000U +
+         (modulator.seed & 0xffffU)) >> 8);
+    float sampled = 0.0f;
+    if (modulator.node == lightweaver::RecipeModulatorNode::Lfo) {
+      sampled = float(sin8(phase)) / 255.0f;
+    } else {
+      sampled = float(inoise8(uint16_t(phase) << 8,
+                              uint16_t(modulator.seed & 0xffffU))) / 255.0f;
+    }
+    result += modulator.offset + ((sampled * 2.0f - 1.0f) * modulator.depth);
+  }
+  return result;
+}
+
+static float recipeMaskAlpha(float coordinate,
+                             const lightweaver::NativeRecipeLayer& layer) {
+  if (layer.mask == lightweaver::RecipeMaskNode::None) return 1.0f;
+  if (layer.mask == lightweaver::RecipeMaskNode::Radial) {
+    float distance = fabsf(coordinate - layer.maskCenter);
+    if (distance <= layer.maskRadius - layer.maskSoftness) return 1.0f;
+    if (distance >= layer.maskRadius) return 0.0f;
+    if (layer.maskSoftness <= 0.0f) return 0.0f;
+    return (layer.maskRadius - distance) / layer.maskSoftness;
+  }
+  if (coordinate < layer.maskStart || coordinate > layer.maskEnd) return 0.0f;
+  if (layer.maskSoftness <= 0.0f) return 1.0f;
+  float leading = (coordinate - layer.maskStart) / layer.maskSoftness;
+  float trailing = (layer.maskEnd - coordinate) / layer.maskSoftness;
+  return min(1.0f, max(0.0f, min(leading, trailing)));
+}
+
+static void compositeRecipeLayer(CRGB& destination, CRGB source, float alpha,
+                                 lightweaver::RecipeBlendMode blendMode,
+                                 bool firstLayer) {
+  uint8_t amount = static_cast<uint8_t>(constrain(int(alpha * 255.0f), 0, 255));
+  CRGB blended = destination;
+  if (blendMode == lightweaver::RecipeBlendMode::Add) {
+    blended.r = qadd8(destination.r, source.r);
+    blended.g = qadd8(destination.g, source.g);
+    blended.b = qadd8(destination.b, source.b);
+  } else if (blendMode == lightweaver::RecipeBlendMode::Max) {
+    blended.r = max(destination.r, source.r);
+    blended.g = max(destination.g, source.g);
+    blended.b = max(destination.b, source.b);
+  } else if (blendMode == lightweaver::RecipeBlendMode::Crossfade || firstLayer) {
+    blended = source;
+  } else {
+    blended.r = scale8(destination.r, source.r);
+    blended.g = scale8(destination.g, source.g);
+    blended.b = scale8(destination.b, source.b);
+  }
+  destination = blend(destination, blended, amount);
+}
+
+bool renderNativeRecipe(const lightweaver::NativeRecipe& recipe, CRGB* leds,
+                        uint16_t totalPixels, uint32_t now,
+                        const PatternModifiers& mods) {
+  if (!leds || totalPixels == 0 || recipe.version != lightweaver::LW_RECIPE_SCHEMA_VERSION ||
+      recipe.paletteCount < lightweaver::LW_RECIPE_MIN_PALETTE_COLORS ||
+      recipe.layerCount > lightweaver::LW_RECIPE_MAX_LAYERS) return false;
+  const uint32_t recipeNow = scaleTime(now, mods.speed);
+  const uint16_t denominator = totalPixels > 1 ? totalPixels - 1 : 1;
+  for (uint16_t pixel = 0; pixel < totalPixels; pixel++) {
+    float coordinate = float(pixel) / float(denominator);
+    CRGB composed = CRGB::Black;
+    for (uint8_t layerIndex = 0; layerIndex < recipe.layerCount; layerIndex++) {
+      const lightweaver::NativeRecipeLayer& layer = recipe.layers[layerIndex];
+      float x = transformedRecipeCoordinate(coordinate, layer);
+      float modulation = recipeModulation(layer, recipeNow);
+      float timePhase = (float(recipeNow % 3600000U) / 1000.0f) * layer.speed;
+      float samplePosition = x * layer.frequency + layer.phase + timePhase + modulation;
+      float intensity = 1.0f;
+      CRGB color;
+      if (layer.source == lightweaver::RecipeSourceNode::Solid) {
+        color = recipeColor(recipe.palette[layer.colorIndex % recipe.paletteCount]);
+      } else if (layer.source == lightweaver::RecipeSourceNode::Palette) {
+        color = sampleRecipePalette(recipe, samplePosition);
+      } else if (layer.source == lightweaver::RecipeSourceNode::Wave) {
+        uint8_t wave = sin8(static_cast<uint8_t>(recipeFract(samplePosition) * 255.0f));
+        intensity = float(wave) / 255.0f;
+        color = sampleRecipePalette(recipe, intensity);
+      } else if (layer.source == lightweaver::RecipeSourceNode::FastLedNoise) {
+        uint16_t noiseX = static_cast<uint16_t>(recipeFract(x * layer.scale) * 65535.0f);
+        uint16_t noiseT = static_cast<uint16_t>((recipeNow / 8U) + recipe.seed + layerIndex * 977U);
+        uint8_t noise = inoise8(noiseX, noiseT);
+        intensity = float(noise) / 255.0f;
+        color = sampleRecipePalette(recipe, intensity);
+      } else {
+        uint16_t frame = static_cast<uint16_t>(recipeNow / 50U);
+        uint8_t sparkle = hash8(pixel ^ uint16_t(recipe.seed), frame + layerIndex * 61U);
+        intensity = layer.density <= 0.0f ? 0.0f
+            : layer.density >= 1.0f ? 1.0f
+            : sparkle >= static_cast<uint8_t>((1.0f - layer.density) * 255.0f)
+                ? 1.0f : 0.0f;
+        color = intensity > 0.0f
+            ? recipeColor(recipe.palette[recipe.paletteCount - 1])
+            : recipeColor(recipe.palette[0]);
+      }
+      if (layer.thresholdEnabled && intensity < layer.threshold) intensity = 0.0f;
+      float alpha = constrain(layer.opacity * layer.brightness * intensity *
+                              recipeMaskAlpha(x, layer), 0.0f, 1.0f);
+      compositeRecipeLayer(composed, color, alpha, layer.blend, layerIndex == 0);
+    }
+    leds[pixel] = composed;
+    if (mods.hueShift != 0 && (leds[pixel].r || leds[pixel].g || leds[pixel].b)) {
+      CHSV hsv = rgb2hsv_approximate(leds[pixel]);
+      hsv.hue = shiftHue(hsv.hue, mods.hueShift);
+      leds[pixel] = hsv;
+    }
+  }
+  applyGlobalColorModifiers(leds, totalPixels, recipeNow, mods);
+  return true;
+}
+
+static bool isSupportedLegacyProceduralPattern(const String& patternId) {
   return patternId == "aurora" ||
          patternId == "custom-color" ||
          patternId == "ember" ||
@@ -120,6 +281,12 @@ bool isSupportedProceduralPattern(const String& patternId) {
          patternId == "wave";
 }
 
+bool isSupportedProceduralPattern(const String& patternId) {
+  return isSupportedLegacyProceduralPattern(patternId) ||
+         (!isSupportedPresetPattern(patternId) &&
+          lightweaver::findNativeRecipe(patternId.c_str()) != nullptr);
+}
+
 bool isSupportedPresetPattern(const String& patternId) {
   return patternId == "warm-white" ||
          patternId == "cool-white" ||
@@ -142,6 +309,10 @@ bool isSupportedCompiledPattern(const String& patternId) {
 
 bool renderProceduralPattern(const String& preset, CRGB* leds, uint16_t totalPixels, uint32_t now, const PatternModifiers& mods) {
   if (!isSupportedProceduralPattern(preset)) return false;
+  if (!isSupportedLegacyProceduralPattern(preset)) {
+    const lightweaver::NativeRecipe* recipe = lightweaver::findNativeRecipe(preset.c_str());
+    return recipe ? renderNativeRecipe(*recipe, leds, totalPixels, now, mods) : false;
+  }
   uint32_t t = scaleTime(now, mods.speed);
   if (preset == "custom-color") {
     uint8_t hue = mods.customHue;

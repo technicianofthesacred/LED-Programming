@@ -1,8 +1,7 @@
 import { test, expect } from '@playwright/test';
 
-// The Rail (src/v3/app.jsx) now also has a "Show" screen (the live LED
-// preview screen) alongside the original six.
-const SCREENS = ['Patterns', 'Playlist', 'Layout', 'Show', 'Card'];
+// Every primary Studio destination must retain the shared shell controls.
+const SCREENS = ['Patterns', 'Pattern Lab', 'Playlist', 'Layout', 'Show', 'Card'];
 
 test.beforeEach(async ({ page }) => {
   await page.route('http://lightweaver.local/**', route => route.abort());

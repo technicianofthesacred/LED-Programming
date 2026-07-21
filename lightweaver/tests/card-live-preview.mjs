@@ -29,6 +29,8 @@ const payload = buildLivePreviewControlPayload({
   customSaturation: 210,
   customBreathe: true,
   customDrift: false,
+  driftHueMin: 17,
+  driftHueMax: 203,
   zone: 'patch-inner',
   syncZones: false,
 });
@@ -93,6 +95,8 @@ assert.deepEqual(payload, {
   saturation: 210,
   breathe: true,
   drift: false,
+  driftMin: 17,
+  driftMax: 203,
 });
 
 let request = null;

@@ -18,6 +18,7 @@ import {
   STANDALONE_RUNTIME_MODES,
 } from './standaloneController.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
+import { normalizePatternLabSequenceAssets } from './patternLabHandoff.js';
 import { normalizeSavedLooks } from './sectionLookModel.js';
 import {
   createDefaultPatchBoard,
@@ -72,6 +73,10 @@ export function defaultStandaloneController(overrides = {}) {
     : DEFAULT_STANDALONE_RUNTIME_MODE;
   const defaultLook = normalizeCardVisualLook(overrides.defaultLook);
   const looks = normalizeSavedLooks(overrides.looks || []);
+  const sequenceAssets = normalizePatternLabSequenceAssets(overrides.sequenceAssets);
+  const activeSequenceAssetId = sequenceAssets.some(asset => asset.id === overrides.activeSequenceAssetId)
+    ? overrides.activeSequenceAssetId
+    : '';
   const controls = {
     ...DEFAULT_STANDALONE_CONTROLS,
     ...(overrides.controls || {}),
@@ -109,6 +114,8 @@ export function defaultStandaloneController(overrides = {}) {
     defaultLook,
     activeLookId: String(overrides.activeLookId || ''),
     looks,
+    activeSequenceAssetId,
+    sequenceAssets,
     playlist,
   };
 }

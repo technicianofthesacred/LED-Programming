@@ -1,9 +1,12 @@
+#include <ArduinoJson.h>
+
 #include "LightweaverWeb.h"
 #include "LightweaverRuntimeApi.h"
 #include "LightweaverWledJsonApi.h"
 #include "LightweaverWledRealtime.h"
 #include "LightweaverArtnet.h"
 #include "LightweaverConnectivityPolicy.h"
+#include "LightweaverRecipe.h"
 #include "LightweaverConnectivityOrchestrator.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
@@ -1966,10 +1969,17 @@ void handleFirmwareInfo() {
         uint8_t(c) == 0xEF || uint8_t(c) == 0xBB || uint8_t(c) == 0xBF) { brace++; continue; }
     break;
   }
-  if (brace < info.length() && info[brace] == '{' && info.indexOf("\"bridgeVersion\"") < 0) {
-    info = info.substring(0, brace + 1)
-         + "\"bridgeVersion\":" + String(LW_BRIDGE_VERSION) + ","
-         + info.substring(brace + 1);
+  if (brace < info.length() && info[brace] == '{') {
+    String injected;
+    if (info.indexOf("\"bridgeVersion\"") < 0) {
+      injected += "\"bridgeVersion\":" + String(LW_BRIDGE_VERSION) + ",";
+    }
+    if (info.indexOf("\"recipeCapabilities\"") < 0) {
+      injected += "\"recipeCapabilities\":" + runtimeRecipeCapabilities() + ",";
+    }
+    if (injected.length()) {
+      info = info.substring(0, brace + 1) + injected + info.substring(brace + 1);
+    }
   }
   server.send(200, "application/json", info);
 }
@@ -2324,6 +2334,15 @@ void maintainConnectivity() {
 // apps and curl send no Origin header and are unaffected; the card's own
 // pages are same-origin and need no CORS at all.
 // Global (declared in LightweaverWeb.h): the WLED-compat JSON API shares it.
+String runtimeRecipeCapabilities() {
+  JsonDocument doc;
+  lightweaver::writeNativeRecipeCapabilities(
+      doc.to<JsonObject>(), LW_FIRMWARE_VERSION, LW_BUILD_ID);
+  String serialized;
+  serializeJson(doc, serialized);
+  return serialized;
+}
+
 bool corsOriginAllowed(const String& origin) {
   if (!origin.length()) return false;
   // EXACT origins only. Suffix matching (".mandalacodes.com",
