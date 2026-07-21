@@ -1,4 +1,4 @@
-// Locks bridge protocol v1 in the card page's embedded bridge script:
+// Locks the versioned card page bridge (currently v2; frame shipped in v1):
 //
 // 1. VERSIONING — the card→Studio 'ready' postMessages and every relay reply
 //    carry `version:N` spliced from the single C++ constant LW_BRIDGE_VERSION
@@ -41,8 +41,8 @@ const web = readFileSync(resolve(here, '../src/LightweaverWeb.cpp'), 'utf8');
 // ── versioning ────────────────────────────────────────────────────────────
 assert.match(
   web,
-  /constexpr int LW_BRIDGE_VERSION = 1;/,
-  'LightweaverWeb.cpp should pin the bridge protocol version constant at 1',
+  /constexpr int LW_BRIDGE_VERSION = 2;/,
+  'LightweaverWeb.cpp should pin the bridge protocol version constant at 2',
 );
 
 // The version in every JS script string is spliced from the C++ constant —

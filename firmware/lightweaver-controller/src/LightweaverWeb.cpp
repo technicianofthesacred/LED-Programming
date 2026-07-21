@@ -66,11 +66,12 @@ void scheduleApTeardown(uint32_t generation);
 // Bridge protocol version — the card-page postMessage bridge contract shared
 // with Studio (lightweaver/src/lib/cardBridge.js). Bump when the bridge script
 // gains message types Studio must feature-detect. v1 added the 'frame' relay
-// (live pixel streaming) and version reporting itself; pre-v1 firmware sends
+// (live pixel streaming) and version reporting itself. v2 adds the correlated,
+// station-origin-only 'wifi-handoff-ack' relay; pre-v1 firmware sends
 // no version at all and Studio treats it as 0 (legacy). The bridge script
 // strings below splice String(LW_BRIDGE_VERSION) in, so this constant is the
 // single source of truth.
-constexpr int LW_BRIDGE_VERSION = 1;
+constexpr int LW_BRIDGE_VERSION = 2;
 
 String apSsid() {
   uint64_t mac = ESP.getEfuseMac();
@@ -190,21 +191,53 @@ String studioOpenScript() {
 
 String studioBridgeScript() {
   String script;
-  script.reserve(3900);
+  script.reserve(6800);
   const String bridgeVersion = String(LW_BRIDGE_VERSION);
   // Keep in sync with corsOriginAllowed(): production Studio, the studio
   // preview deployment (Pages branch subdomains), and local dev.
   // Bridge protocol (see LW_BRIDGE_VERSION, spliced in below): every reply and
   // the ready handshake carry version:N so Studio can feature-detect the frame
-  // relay.
+  // relay. The opener origin is carried in a bounded fragment and allowlisted
+  // before use, so even the ready handshake never needs postMessage('*').
   script += F("const LW_STUDIO_ORIGINS=['https://led.mandalacodes.com','https://lightweaver-edw.pages.dev'];"
               "const lwBridgeAllowed=o=>LW_STUDIO_ORIGINS.includes(o)||/^http:\\/\\/(localhost|127\\.0\\.0\\.1)(:\\d+)?$/.test(o)||/^https:\\/\\/[a-z0-9-]+\\.lightweaver-edw\\.pages\\.dev$/.test(o);"
+              "const lwBridgeParams=()=>{"
+                "const raw=(location.hash||'').replace(/^#/,'');if(!raw||raw.length>512)return null;"
+                "const p=new URLSearchParams(raw),o=p.get('studioOrigin')||'';"
+                "if(p.getAll('studioBridge').length!==1||p.get('studioBridge')!=='1'||p.getAll('studioOrigin').length!==1||!lwBridgeAllowed(o))return null;"
+                "return p"
+              "};"
+              "const lwBridgeLaunch=lwBridgeParams();"
+              "const lwPrivateStationIp=raw=>{"
+                "if(typeof raw!=='string'||!/^\\d{1,3}(?:\\.\\d{1,3}){3}$/.test(raw))return'';"
+                "const q=raw.split('.'),n=q.map(Number);if(n.some((v,i)=>v>255||String(v)!==q[i]))return'';"
+                "const ok=n[0]===10||(n[0]===172&&n[1]>=16&&n[1]<=31)||(n[0]===192&&n[1]===168);"
+                "return ok&&raw!=='192.168.4.1'?raw:''"
+              "};"
+              "const lwHandoffParams=()=>{"
+                "const p=lwBridgeLaunch;if(!p)return null;"
+                "const allowed=['studioBridge','wifiHandoff','expectedCardId','expectedBootId','studioOrigin'];"
+                "if([...p.keys()].some(k=>!allowed.includes(k))||allowed.some(k=>p.getAll(k).length!==1))return null;"
+                "const g=p.get('wifiHandoff')||'',expectedCardId=p.get('expectedCardId')||'',expectedBootId=p.get('expectedBootId')||'',studioOrigin=p.get('studioOrigin')||'';"
+                "const handoffGeneration=/^[1-9]\\d{0,9}$/.test(g)?Number(g):0;"
+                "if(!Number.isInteger(handoffGeneration)||handoffGeneration>4294967295||!/^lw-[A-Za-z0-9][A-Za-z0-9._:-]{0,60}$/.test(expectedCardId)||!expectedBootId||expectedBootId.length>96||!lwBridgeAllowed(studioOrigin))return null;"
+                "return{handoffGeneration,expectedCardId,expectedBootId,studioOrigin}"
+              "};"
+              "const lwRelayWifiHandoffAck=async ev=>{"
+                "const h=lwHandoffParams();if(!h||ev.origin!==h.studioOrigin)throw new Error('invalid handoff correlation');"
+                "const pageIp=lwPrivateStationIp(location.hostname);if(!pageIp)throw new Error('handoff acknowledgement requires station IP');"
+                "const r=await fetch('/api/status',{cache:'no-store'});const s=await r.json().catch(()=>null);"
+                "if(!r.ok||!s||s.app!=='Lightweaver'||s.provisioningContractVersion!==1||typeof s.firmwareVersion!=='string'||!s.firmwareVersion||typeof s.buildId!=='string'||!s.buildId||typeof s.knownGoodProject!=='boolean'||typeof s.commandReady!=='boolean'||typeof s.outputReady!=='boolean')throw new Error('fresh card status incomplete');"
+                "const w=s.wifi||{};"
+                "if(location.hostname===w.stationIp&&pageIp===w.stationIp&&w.transition==='handoff-ready'&&w.transitionPending===true&&w.apActive===true&&s.cardId===h.expectedCardId&&s.bootId===h.expectedBootId&&w.handoffGeneration===h.handoffGeneration)return post('/api/wifi/handoff-ack',{bootId:h.expectedBootId,handoffGeneration:h.handoffGeneration});"
+                "throw new Error('fresh card status did not match handoff')"
+              "};"
               "const lwBridgeReply=(ev,msg)=>{try{ev.source&&ev.source.postMessage(Object.assign({app:'LightweaverCardBridge',version:");
   script += bridgeVersion;
   script += F("},msg),ev.origin)}catch(_){}};"
-              "if(window.opener){try{window.opener.postMessage({app:'LightweaverCardBridge',type:'ready',version:");
+              "if(window.opener&&lwBridgeLaunch){try{window.opener.postMessage({app:'LightweaverCardBridge',type:'ready',version:");
   script += bridgeVersion;
-  script += F(",href:location.href,host:location.host},'*')}catch(_){}};"
+  script += F(",href:location.href,host:location.host},lwBridgeLaunch.get('studioOrigin'))}catch(_){}};"
               // Frame relay (bridge v1): Studio posts {type:'frame',payload:{pixels:['RRGGBB',...],seg?:n}}
               // and this page forwards it into ONE persistent same-origin WebSocket
               // (ws://<own-host>:81/ws) as {seg:[{i:pixels}]} — the firmware's WLED
@@ -250,6 +283,7 @@ String studioBridgeScript() {
                   "if(m.type==='status'||m.type==='ping'){response=await get('/api/status')}"
                   "else if(m.type==='zones'){response=await get('/api/zones')}"
                   "else if(m.type==='firmware-info'){response=await get('/api/firmware-info')}"
+                  "else if(m.type==='wifi-handoff-ack'){response=await lwRelayWifiHandoffAck(ev)}"
                   "else if(m.type==='frame'){const sent=lwFrameSend(m.payload||{});response={ok:true,relayed:sent,wsOpen:!!(lwFrameWs&&lwFrameWs.readyState===1)}}"
                   "else if(m.type==='control'){const c=m.payload||{};if(c.cancelStream)lwFrameCancel();response=await post('/api/control',c)}"
                   "else if(m.type==='recover-lights'){response=await post('/api/recover-lights',m.payload||{})}"

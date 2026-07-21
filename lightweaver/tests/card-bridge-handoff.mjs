@@ -10,6 +10,7 @@ import {
   isCardBridgeLaunch,
   openCardBridge,
   openLocalCardPage,
+  retargetCardBridge,
   sendCardBridgeRequest,
   rePairDiscoveredCardBridgeIdentity,
   verifyCardBridgeIdentity,
@@ -53,7 +54,12 @@ const handoffUrl = buildCardBridgeLaunchUrl(
 );
 const handoff = new URL(handoffUrl);
 assert.equal(handoff.origin, 'http://192.168.18.70');
-assert.equal(handoff.hash, '#studioBridge=1');
+assert.equal(new URLSearchParams(handoff.hash.slice(1)).get('studioBridge'), '1');
+assert.equal(
+  new URLSearchParams(handoff.hash.slice(1)).get('studioOrigin'),
+  'https://led.mandalacodes.com',
+  'the card ready handshake receives only the allowlisted opener origin',
+);
 assert.equal(handoff.search, '', 'Studio must not pass an auto-open URL through the card query string');
 assert.equal(handoff.searchParams.has('studioAutoOpen'), false);
 assert.equal(handoff.searchParams.has('studioUrl'), false);
@@ -690,5 +696,135 @@ assert.equal(blockedVisitHarness.opened.length, 1);
 assert.deepEqual(openLocalCardPage('evil.example.com'), { ok: false, reason: 'invalid-host' });
 assert.deepEqual(openLocalCardPage('192.168.18.79', { path: '//evil.example/' }), { ok: false, reason: 'invalid-host' });
 assert.equal(blockedVisitHarness.opened.length, 1, 'invalid hosts and paths never reach window.open');
+
+// A station page reached through the correlated WiFi handoff cannot restore
+// command authority with a wrong/stale status envelope. Only an exact fresh
+// station status for the card, boot, generation, firmware, and build unlocks it.
+const apHost = '192.168.4.1';
+const stationHost = '192.168.18.90';
+const handoffIdentity = {
+  id: 'lw-handoff090',
+  firmwareVersion: '1.2.3',
+  buildId: 'build-handoff-090',
+};
+const handoffCorrelation = {
+  host: stationHost,
+  expectedCardId: handoffIdentity.id,
+  expectedFirmwareVersion: handoffIdentity.firmwareVersion,
+  expectedBuildId: handoffIdentity.buildId,
+  expectedBootId: 'boot-handoff-090',
+  handoffGeneration: 9,
+};
+let stationStatus = null;
+let handoffHarness;
+let handoffNavigationCount = 0;
+let handoffHref = '';
+const handoffTab = {
+  closed: false,
+  location: {
+    get href() { return handoffHref; },
+    set href(value) { handoffHref = String(value); handoffNavigationCount += 1; },
+  },
+  postMessage(message) {
+    const response = message.type === 'firmware-info'
+      ? { cardId: handoffIdentity.id, firmwareVersion: handoffIdentity.firmwareVersion, buildId: handoffIdentity.buildId }
+      : message.type === 'status'
+        ? stationStatus
+        : { ok: true };
+    setTimeout(() => handoffHarness.emitMessage({
+      origin: `http://${stationHost}`,
+      source: handoffTab,
+      data: { app: 'LightweaverCardBridge', version: 2, id: message.id, ok: true, response },
+    }), 0);
+  },
+  focus() {},
+};
+handoffHarness = bridgeWindowHarness({ host: apHost, openResult: handoffTab });
+handoffHarness.win.location.href = 'https://led.mandalacodes.com/#screen=production';
+handoffHarness.win.location.origin = 'https://led.mandalacodes.com';
+handoffHarness.storageValues.set('lw_card_identity_v1', JSON.stringify({
+  version: 1,
+  ...handoffIdentity,
+}));
+globalThis.window = handoffHarness.win;
+assert.equal(openLocalCardPage(apHost).ok, true);
+await assert.rejects(
+  sendCardBridgeRequest('wifi-handoff-ack', {}, { host: apHost, timeoutMs: 25 }),
+  error => error?.reason === 'handoff-correlation',
+  'the AP page can never relay a handoff acknowledgement',
+);
+assert.equal(retargetCardBridge(stationHost, handoffCorrelation).ok, true);
+assert.equal(handoffHarness.opened.length, 1, 'handoff reuses the AP WindowProxy');
+
+stationStatus = {
+  app: 'Lightweaver', provisioningContractVersion: 1,
+  cardId: handoffIdentity.id,
+  firmwareVersion: handoffIdentity.firmwareVersion,
+  buildId: handoffIdentity.buildId,
+  bootId: 'boot-stale', runtimePhase: 'factory', knownGoodProject: false,
+  commandReady: false, outputReady: true,
+  wifi: {
+    transport: 'station', transition: 'station', transitionPending: false,
+    stationIp: stationHost, ip: stationHost, handoffGeneration: 9,
+  },
+};
+handoffHarness.emitMessage({
+  origin: `http://${stationHost}`,
+  source: handoffTab,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: stationHost, version: 2 },
+});
+await new Promise(resolve => setTimeout(resolve, 5));
+assert.equal(getCardBridgeState().identityVerified, false,
+  'a stale station boot cannot restore command authority');
+await assert.rejects(
+  sendCardBridgeRequest('control', {}, { host: stationHost, timeoutMs: 25 }),
+  error => error?.reason === 'handoff-correlation',
+);
+
+stationStatus = {
+  ...stationStatus,
+  bootId: handoffCorrelation.expectedBootId,
+  wifi: {
+    ...stationStatus.wifi,
+    transport: 'ap',
+    transition: 'handoff-ready',
+    transitionPending: true,
+    apActive: true,
+  },
+};
+handoffHarness.emitMessage({
+  origin: `http://${stationHost}`,
+  source: handoffTab,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: stationHost, version: 2 },
+});
+await new Promise(resolve => setTimeout(resolve, 5));
+assert.equal(getCardBridgeState().identityVerified, false,
+  'handoff-ready proof grants only acknowledgement authority');
+assert.equal(getCardBridgeState().handoffAckReady, true);
+await assert.rejects(
+  sendCardBridgeRequest('control', {}, { host: stationHost, timeoutMs: 25 }),
+  error => error?.reason === 'handoff-awaiting-ack',
+  'normal commands remain locked before final station state',
+);
+await sendCardBridgeRequest('wifi-handoff-ack', {}, { host: stationHost, timeoutMs: 100 });
+
+stationStatus = {
+  ...stationStatus,
+  wifi: {
+    ...stationStatus.wifi,
+    transport: 'station',
+    transition: 'station',
+    transitionPending: false,
+    apActive: false,
+    ip: stationHost,
+  },
+};
+await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().identityVerified, true,
+  'an exact fresh station status restores the expected card authority');
+const completedRepeat = retargetCardBridge(stationHost, handoffCorrelation);
+assert.equal(completedRepeat.state, 'already-retargeted');
+assert.equal(handoffNavigationCount, 1,
+  'duplicate AP evidence cannot reload a station bridge that already answered');
 
 console.log('card-bridge-handoff tests passed');

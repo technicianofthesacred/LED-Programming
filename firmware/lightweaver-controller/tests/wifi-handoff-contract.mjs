@@ -101,6 +101,32 @@ assert.match(initialAttempt, /issueStationAttempt[\s\S]*recordStationAttempt/,
 assert.doesNotMatch(web, /WiFi\.setAutoReconnect\(true\)/,
   'no firmware lifecycle may silently return retry ownership to the SDK');
 
+assert.match(web, /constexpr int LW_BRIDGE_VERSION\s*=\s*2/,
+  'bridge v2 must advertise station-origin WiFi handoff acknowledgement support');
+const bridgeScript = functionBody(web, /String\s+studioBridgeScript\s*\(/);
+assert.match(bridgeScript, /m\.type==='wifi-handoff-ack'/,
+  'the card-page bridge must expose the privileged acknowledgement request');
+assert.match(bridgeScript, /location\.hash[\s\S]*512/,
+  'handoff correlation must be parsed from a bounded fragment');
+for (const field of ['wifiHandoff', 'expectedCardId', 'expectedBootId', 'studioOrigin']) {
+  assert.match(bridgeScript, new RegExp(field),
+    `handoff fragment must require ${field}`);
+}
+assert.match(bridgeScript, /fetch\('\/api\/status'[\s\S]*cache:'no-store'/,
+  'the station page must fetch fresh same-origin status before acknowledgement');
+assert.match(bridgeScript, /location\.hostname[\s\S]*stationIp/,
+  'the page hostname must exactly match the status station IP');
+assert.match(bridgeScript, /transition==='handoff-ready'[\s\S]*transitionPending===true[\s\S]*apActive===true/,
+  'the relay must require complete handoff-ready AP keepalive evidence');
+assert.match(bridgeScript, /s\.cardId[\s\S]*expectedCardId[\s\S]*s\.bootId[\s\S]*expectedBootId[\s\S]*handoffGeneration/,
+  'the relay must correlate exact card, boot, and generation');
+assert.match(bridgeScript, /post\('\/api\/wifi\/handoff-ack',[\s\S]*bootId[\s\S]*handoffGeneration/,
+  'the verified station page must POST the exact correlation same-origin');
+assert.match(bridgeScript, /192\.168\.4\.1/,
+  'the setup AP page must be explicitly ineligible to acknowledge');
+assert.doesNotMatch(bridgeScript, /postMessage\([^)]*,\s*['"]\*['"]\)/,
+  'the card-page bridge must never post a handshake or reply to a wildcard origin');
+
 const ack = functionBody(web, /void\s+handleWifiHandoffAck\s*\(/);
 assert.match(ack, /handoffGeneration/,
   'handoff acknowledgement must require a generation');
