@@ -191,7 +191,7 @@ String studioOpenScript() {
 
 String studioBridgeScript() {
   String script;
-  script.reserve(6800);
+  script.reserve(7600);
   const String bridgeVersion = String(LW_BRIDGE_VERSION);
   // Keep in sync with corsOriginAllowed(): production Studio, the studio
   // preview deployment (Pages branch subdomains), and local dev.
@@ -201,13 +201,18 @@ String studioBridgeScript() {
   // before use, so even the ready handshake never needs postMessage('*').
   script += F("const LW_STUDIO_ORIGINS=['https://led.mandalacodes.com','https://lightweaver-edw.pages.dev'];"
               "const lwBridgeAllowed=o=>LW_STUDIO_ORIGINS.includes(o)||/^http:\\/\\/(localhost|127\\.0\\.0\\.1)(:\\d+)?$/.test(o)||/^https:\\/\\/[a-z0-9-]+\\.lightweaver-edw\\.pages\\.dev$/.test(o);"
-              "const lwBridgeParams=()=>{"
+              "const lwBridgeRawParams=()=>{"
                 "const raw=(location.hash||'').replace(/^#/,'');if(!raw||raw.length>512)return null;"
-                "const p=new URLSearchParams(raw),o=p.get('studioOrigin')||'';"
-                "if(p.getAll('studioBridge').length!==1||p.get('studioBridge')!=='1'||p.getAll('studioOrigin').length!==1||!lwBridgeAllowed(o))return null;"
+                "const p=new URLSearchParams(raw);if(p.getAll('studioBridge').length!==1||p.get('studioBridge')!=='1')return null;"
                 "return p"
               "};"
+              "const lwBridgeParams=()=>{const p=lwBridgeRawParams(),o=p&&p.get('studioOrigin')||'';return p&&p.getAll('studioOrigin').length===1&&lwBridgeAllowed(o)?p:null};"
               "const lwBridgeLaunch=lwBridgeParams();"
+              "const lwBridgeReadyOrigin=()=>{"
+                "if(lwBridgeLaunch)return lwBridgeLaunch.get('studioOrigin');"
+                "const p=lwBridgeRawParams();return p&&[...p.keys()].every(k=>k==='studioBridge')?'https://led.mandalacodes.com':''"
+              "};"
+              "const lwReadyOrigin=lwBridgeReadyOrigin();"
               "const lwPrivateStationIp=raw=>{"
                 "if(typeof raw!=='string'||!/^\\d{1,3}(?:\\.\\d{1,3}){3}$/.test(raw))return'';"
                 "const q=raw.split('.'),n=q.map(Number);if(n.some((v,i)=>v>255||String(v)!==q[i]))return'';"
@@ -220,24 +225,29 @@ String studioBridgeScript() {
                 "if([...p.keys()].some(k=>!allowed.includes(k))||allowed.some(k=>p.getAll(k).length!==1))return null;"
                 "const g=p.get('wifiHandoff')||'',expectedCardId=p.get('expectedCardId')||'',expectedBootId=p.get('expectedBootId')||'',studioOrigin=p.get('studioOrigin')||'';"
                 "const handoffGeneration=/^[1-9]\\d{0,9}$/.test(g)?Number(g):0;"
-                "if(!Number.isInteger(handoffGeneration)||handoffGeneration>4294967295||!/^lw-[A-Za-z0-9][A-Za-z0-9._:-]{0,60}$/.test(expectedCardId)||!expectedBootId||expectedBootId.length>96||!lwBridgeAllowed(studioOrigin))return null;"
+                "if(!Number.isInteger(handoffGeneration)||handoffGeneration>4294967295||!/^lw-[A-Za-z0-9][A-Za-z0-9._:-]{0,60}$/.test(expectedCardId)||(!/^[A-Za-z0-9][A-Za-z0-9._:+-]{0,95}$/.test(expectedBootId))||!lwBridgeAllowed(studioOrigin))return null;"
                 "return{handoffGeneration,expectedCardId,expectedBootId,studioOrigin}"
               "};"
+              "let lwHandoffAckFlight=null,lwHandoffAckResult=null;"
               "const lwRelayWifiHandoffAck=async ev=>{"
-                "const h=lwHandoffParams();if(!h||ev.origin!==h.studioOrigin)throw new Error('invalid handoff correlation');"
-                "const pageIp=lwPrivateStationIp(location.hostname);if(!pageIp)throw new Error('handoff acknowledgement requires station IP');"
-                "const r=await fetch('/api/status',{cache:'no-store'});const s=await r.json().catch(()=>null);"
-                "if(!r.ok||!s||s.app!=='Lightweaver'||s.provisioningContractVersion!==1||typeof s.firmwareVersion!=='string'||!s.firmwareVersion||typeof s.buildId!=='string'||!s.buildId||typeof s.knownGoodProject!=='boolean'||typeof s.commandReady!=='boolean'||typeof s.outputReady!=='boolean')throw new Error('fresh card status incomplete');"
-                "const w=s.wifi||{};"
-                "if(location.hostname===w.stationIp&&pageIp===w.stationIp&&w.transition==='handoff-ready'&&w.transitionPending===true&&w.apActive===true&&s.cardId===h.expectedCardId&&s.bootId===h.expectedBootId&&w.handoffGeneration===h.handoffGeneration)return post('/api/wifi/handoff-ack',{bootId:h.expectedBootId,handoffGeneration:h.handoffGeneration});"
-                "throw new Error('fresh card status did not match handoff')"
+                "const h=lwHandoffParams();if(!h||ev.source!==window.opener||ev.origin!==h.studioOrigin)throw new Error('invalid handoff correlation');"
+                "if(lwHandoffAckResult)return lwHandoffAckResult;if(lwHandoffAckFlight)return lwHandoffAckFlight;"
+                "lwHandoffAckFlight=(async()=>{"
+                  "const pageIp=lwPrivateStationIp(location.hostname);if(!pageIp)throw new Error('handoff acknowledgement requires station IP');"
+                  "const r=await fetch('/api/status',{cache:'no-store'});const s=await r.json().catch(()=>null);"
+                  "if(!r.ok||!s||s.app!=='Lightweaver'||s.provisioningContractVersion!==1||typeof s.firmwareVersion!=='string'||(!/^[A-Za-z0-9][A-Za-z0-9._:+-]{0,47}$/.test(s.firmwareVersion))||typeof s.buildId!=='string'||(!/^[A-Za-z0-9][A-Za-z0-9._:+-]{0,95}$/.test(s.buildId))||typeof s.knownGoodProject!=='boolean'||typeof s.commandReady!=='boolean'||typeof s.outputReady!=='boolean')throw new Error('fresh card status incomplete');"
+                  "const w=s.wifi||{};"
+                  "if(location.hostname===w.stationIp&&pageIp===w.stationIp&&w.transition==='handoff-ready'&&w.transitionPending===true&&w.apActive===true&&s.cardId===h.expectedCardId&&s.bootId===h.expectedBootId&&w.handoffGeneration===h.handoffGeneration)return post('/api/wifi/handoff-ack',{bootId:h.expectedBootId,handoffGeneration:h.handoffGeneration});"
+                  "throw new Error('fresh card status did not match handoff')"
+                "})();"
+                "try{lwHandoffAckResult=await lwHandoffAckFlight;return lwHandoffAckResult}finally{lwHandoffAckFlight=null}"
               "};"
               "const lwBridgeReply=(ev,msg)=>{try{ev.source&&ev.source.postMessage(Object.assign({app:'LightweaverCardBridge',version:");
   script += bridgeVersion;
   script += F("},msg),ev.origin)}catch(_){}};"
-              "if(window.opener&&lwBridgeLaunch){try{window.opener.postMessage({app:'LightweaverCardBridge',type:'ready',version:");
+              "if(window.opener&&lwReadyOrigin){try{window.opener.postMessage({app:'LightweaverCardBridge',type:'ready',version:");
   script += bridgeVersion;
-  script += F(",href:location.href,host:location.host},lwBridgeLaunch.get('studioOrigin'))}catch(_){}};"
+  script += F(",href:location.href,host:location.host},lwReadyOrigin)}catch(_){}};"
               // Frame relay (bridge v1): Studio posts {type:'frame',payload:{pixels:['RRGGBB',...],seg?:n}}
               // and this page forwards it into ONE persistent same-origin WebSocket
               // (ws://<own-host>:81/ws) as {seg:[{i:pixels}]} — the firmware's WLED
@@ -1324,6 +1334,10 @@ void handleWifiHandoffAck() {
       server.client().localIP() == WiFi.localIP();
   if (!stationOrigin) {
     server.send(409, "application/json", "{\"ok\":false,\"error\":\"acknowledgement must arrive through the station interface\"}");
+    return;
+  }
+  if (apTeardownScheduled && apTeardownGeneration == generation) {
+    server.send(200, "application/json", "{\"ok\":true,\"accepted\":true,\"duplicate\":true}");
     return;
   }
   server.send(200, "application/json", "{\"ok\":true,\"accepted\":true}");

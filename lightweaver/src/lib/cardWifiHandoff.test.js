@@ -91,6 +91,29 @@ test('rejects wrong card, firmware, build, and current boot', () => {
   assert.equal(accept(handoffStatus({ bootId: 'boot-changed' })), null);
 });
 
+test('compares raw bounded identity and boot evidence without trimming or truncation aliases', () => {
+  assert.equal(accept(handoffStatus({ bootId: ' boot-current ' })), null);
+  assert.equal(accept(handoffStatus(), { expectedBootId: ' boot-current ' }), null);
+  assert.equal(accept(handoffStatus({ cardId: ` ${expectedCard.id}` })), null);
+  assert.equal(accept(handoffStatus(), {
+    expectedCard: { ...expectedCard, firmwareVersion: '1.0.0 ' },
+  }), null);
+  assert.equal(accept(handoffStatus({ buildId: `${expectedCard.buildId} ` })), null);
+
+  const exactBoot = 'b'.repeat(96);
+  assert.equal(accept(handoffStatus({ bootId: `${exactBoot}x` }), {
+    expectedBootId: exactBoot,
+  }), null, 'an overlength actual boot must not truncate to the expected boot');
+  assert.equal(accept(handoffStatus({ bootId: exactBoot }), {
+    expectedBootId: `${exactBoot}x`,
+  }), null, 'an overlength expected boot must not truncate to the actual boot');
+
+  const exactBuild = 'a'.repeat(96);
+  assert.equal(accept(handoffStatus({ buildId: `${exactBuild}x` }), {
+    expectedCard: { ...expectedCard, buildId: exactBuild },
+  }), null, 'an overlength actual build must not truncate to the expected build');
+});
+
 test('requires the exact reachable handoff-ready AP state', () => {
   assert.equal(accept(handoffStatus({ wifi: { transition: 'station' } })), null);
   assert.equal(accept(handoffStatus({ wifi: { transitionPending: false } })), null);
@@ -160,4 +183,8 @@ test('final station correlation requires exact fresh status on the correlated st
   for (const candidate of cases) {
     assert.equal(isFinalStationHandoff({ status: candidate, correlation }), false);
   }
+  assert.equal(isFinalStationHandoff({
+    status: { ...status, bootId: ` ${correlation.expectedBootId}` },
+    correlation,
+  }), false, 'final station boot comparison is exact and non-lossy');
 });

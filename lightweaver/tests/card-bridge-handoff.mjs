@@ -540,7 +540,7 @@ switchHarness.storageValues.set('lw_card_identity_v1', JSON.stringify({ version:
 openCardBridge(switchHostB);
 assert.equal(getCardBridgeState().card, null, 'A→B target switch synchronously revokes A identity');
 respondFromSwitchHost(delayedAInfo, switchHostA, { cardId: 'lw-1921681875', firmwareVersion: '1.0.0' });
-await assert.rejects(delayedARequest, error => error?.reason === 'stale-host');
+await assert.rejects(delayedARequest, error => error?.reason === 'bridge-navigated');
 assert.equal(getCardBridgeState().card, null, 'delayed A response cannot restore verified identity');
 assert.equal(getCardBridgeState().discoveredCard, null, 'delayed A response cannot restore discovered identity');
 
@@ -655,8 +655,16 @@ assert.equal(cardPageTab.postMessageCalls, 0, 'no privileged command reaches the
 // stale handshake (the shared named tab navigated) rather than corrupting it.
 const revisitHost = '192.168.18.78';
 let revisitHarness;
+let delayedRevisitStatus = null;
 const revisitParent = {
+  closed: false,
+  postMessageCalls: 0,
   postMessage(message) {
+    this.postMessageCalls += 1;
+    if (message.type === 'status') {
+      delayedRevisitStatus = message;
+      return;
+    }
     if (message.type !== 'firmware-info') return;
     setTimeout(() => revisitHarness.emitMessage({
       origin: `http://${revisitHost}`,
@@ -667,9 +675,9 @@ const revisitParent = {
       },
     }), 0);
   },
+  focus() {},
 };
-const revisitTab = { closed: false, postMessageCalls: 0, postMessage() { this.postMessageCalls += 1; }, focus() {} };
-revisitHarness = bridgeWindowHarness({ host: revisitHost, parent: revisitParent, openResult: revisitTab });
+revisitHarness = bridgeWindowHarness({ host: revisitHost, parent: revisitParent, openResult: revisitParent });
 globalThis.window = revisitHarness.win;
 assert.equal(bootstrapCardBridgeFromOpener(), true);
 revisitHarness.emitMessage({
@@ -679,14 +687,42 @@ revisitHarness.emitMessage({
 });
 await verifyCardBridgeIdentity(revisitHost);
 assert.equal(getCardBridgeState().identityVerified, true);
+const preNavigationLifecycle = getCardBridgeState().lifecycle;
+const revisitPostsBeforeNavigation = revisitParent.postMessageCalls;
+let preNavigationRejection = '';
+const delayedPreNavigationRequest = sendCardBridgeRequest('status', {}, {
+  host: revisitHost,
+  timeoutMs: 1000,
+  retryOnTimeout: false,
+}).then(() => null, error => {
+  preNavigationRejection = error?.reason || '';
+  return error;
+});
+assert.ok(delayedRevisitStatus, 'same-host request is held before navigation');
 assert.equal(openLocalCardPage(revisitHost).ok, true);
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.equal(preNavigationRejection, 'bridge-navigated',
+  'navigation synchronously rejects the prior page lifecycle');
+assert.equal((await delayedPreNavigationRequest)?.reason, 'bridge-navigated');
+assert.ok(getCardBridgeState().lifecycle > preNavigationLifecycle);
 assert.equal(getCardBridgeState().verified, false, 'the plain visit revokes the stale bridge handshake');
 assert.equal(getCardBridgeState().card, null, 'verified identity is dropped until the new page re-verifies');
+revisitHarness.emitMessage({
+  origin: `http://${revisitHost}`,
+  source: revisitParent,
+  data: {
+    app: 'LightweaverCardBridge', id: delayedRevisitStatus.id, ok: true,
+    response: { cardId: 'lw-1921681878' },
+  },
+});
+assert.equal(getCardBridgeState().card, null,
+  'a delayed reply from the pre-navigation page cannot restore identity');
 await assert.rejects(
   sendCardBridgeRequest('control', { patternId: 'fire' }, { host: revisitHost, timeoutMs: 25 }),
   error => error?.reason === 'identity-missing',
 );
-assert.equal(revisitTab.postMessageCalls, 0);
+assert.equal(revisitParent.postMessageCalls, revisitPostsBeforeNavigation + 1,
+  'only the intentionally delayed status was posted after verification');
 
 // Blocked popups and non-local hosts fail closed with caller-visible reasons.
 const blockedVisitHarness = bridgeWindowHarness({ host: '192.168.18.79', openResult: null });

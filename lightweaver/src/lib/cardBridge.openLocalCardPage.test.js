@@ -92,6 +92,7 @@ test('repeat visits reuse the one named card tab, same handle, and focus it', ()
   assert.equal(first.window, tab);
   assert.equal(opened.length, 1);
   assert.deepEqual(opened[0], { url: 'http://192.168.50.4/', name: CARD_BRIDGE_WINDOW_NAME });
+  const firstLifecycle = getCardBridgeState().lifecycle;
 
   const second = openLocalCardPage('192.168.50.4', { path: '/settings', reason: 'open-card-page' });
   assert.equal(second.ok, true);
@@ -99,6 +100,8 @@ test('repeat visits reuse the one named card tab, same handle, and focus it', ()
   assert.equal(opened.length, 2);
   assert.deepEqual(opened[1], { url: 'http://192.168.50.4/settings', name: CARD_BRIDGE_WINDOW_NAME });
   assert.equal(tab.focusCalls, 2, 'an already-open tab is focused');
+  assert.ok(getCardBridgeState().lifecycle > firstLifecycle,
+    'same-window same-host navigation starts a new revoked lifecycle');
 });
 
 test('a plain card-page visit never grants bridge verification or command authority', async () => {
@@ -233,8 +236,8 @@ test('same correlation can retry through one WindowProxy while stale or changed 
   const retry = retargetCardBridge(handoffCorrelation.host, handoffCorrelation);
   assert.equal(retry.ok, true);
   assert.equal(retry.repeated, true);
-  assert.equal(getCardBridgeState().lifecycle, lifecycle,
-    'retrying the same authority does not create another lifecycle');
+  assert.ok(getCardBridgeState().lifecycle > lifecycle,
+    'retry navigation revokes the prior page lifecycle without changing correlation authority');
   assert.equal(assignments, 2, 'the same proxy can retry navigation after the network switch');
   assert.equal(opened.length, 1);
 

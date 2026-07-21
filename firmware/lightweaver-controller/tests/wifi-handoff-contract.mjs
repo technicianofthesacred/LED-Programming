@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import vm from 'node:vm';
 
 const root = resolve(import.meta.dirname, '..');
 const read = (name) => readFileSync(resolve(root, name), 'utf8');
@@ -126,6 +127,89 @@ assert.match(bridgeScript, /192\.168\.4\.1/,
   'the setup AP page must be explicitly ineligible to acknowledge');
 assert.doesNotMatch(bridgeScript, /postMessage\([^)]*,\s*['"]\*['"]\)/,
   'the card-page bridge must never post a handshake or reply to a wildcard origin');
+assert.match(bridgeScript, /ev\.source\s*!==\s*window\.opener/,
+  'only the tracked Studio opener may request the handoff acknowledgement');
+assert.match(bridgeScript, /lwHandoffAck(?:Flight|InFlight)/,
+  'concurrent acknowledgement messages must share one in-flight relay');
+assert.match(bridgeScript, /lwHandoffAck(?:Done|Result)/,
+  'a successful acknowledgement must latch against duplicate endpoint posts');
+
+// Execute the emitted ready-handshake prefix with browser-like globals. A v1
+// Studio launch has only #studioBridge=1; v2 firmware must still announce v2
+// to the hard-coded production target without ever using a wildcard.
+function decodeCppStrings(source) {
+  return [...source.matchAll(/"(?:\\.|[^"\\])*"/g)]
+    .map(match => JSON.parse(match[0]))
+    .join('');
+}
+const bridgeStart = bridgeScript.indexOf('script += F(');
+const beforeFrames = bridgeScript.slice(bridgeStart, bridgeScript.indexOf('// Frame relay'));
+const versionParts = beforeFrames.split('script += bridgeVersion;');
+assert.equal(versionParts.length, 3, 'ready prefix should have two version splice points');
+const emittedReadyPrefix = versionParts.map(decodeCppStrings).join('2');
+const readyPosts = [];
+const legacyWindow = {
+  opener: { postMessage(message, targetOrigin) { readyPosts.push({ message, targetOrigin }); } },
+  addEventListener() {},
+};
+vm.runInNewContext(emittedReadyPrefix, {
+  window: legacyWindow,
+  location: { hash: '#studioBridge=1', href: 'http://192.168.4.1/#studioBridge=1', host: '192.168.4.1', hostname: '192.168.4.1' },
+  URLSearchParams,
+  fetch: async () => ({ ok: false, json: async () => null }),
+  post: async () => ({}),
+});
+assert.equal(readyPosts.length, 1, 'legacy production Studio still receives the v2 ready handshake');
+assert.equal(readyPosts[0].targetOrigin, 'https://led.mandalacodes.com');
+assert.equal(readyPosts[0].message.version, 2, 'legacy Studio can feature-detect v2 firmware');
+
+const stationOpener = { postMessage() {} };
+let statusFetches = 0;
+let acknowledgementPosts = 0;
+const ackContext = {
+  window: { opener: stationOpener, addEventListener() {} },
+  location: {
+    hash: '#studioBridge=1&wifiHandoff=9&expectedCardId=lw-b0fe81f61b44&expectedBootId=boot-current&studioOrigin=https%3A%2F%2Fled.mandalacodes.com',
+    href: 'http://192.168.18.70/', host: '192.168.18.70', hostname: '192.168.18.70',
+  },
+  URLSearchParams,
+  fetch: async () => {
+    statusFetches += 1;
+    return {
+      ok: true,
+      json: async () => ({
+        app: 'Lightweaver', provisioningContractVersion: 1,
+        cardId: 'lw-b0fe81f61b44', firmwareVersion: '1.0.0', buildId: 'build-exact',
+        bootId: 'boot-current', knownGoodProject: false, commandReady: false, outputReady: true,
+        wifi: {
+          transition: 'handoff-ready', transitionPending: true, apActive: true,
+          stationIp: '192.168.18.70', handoffGeneration: 9,
+        },
+      }),
+    };
+  },
+  post: async (path, body) => {
+    acknowledgementPosts += 1;
+    assert.equal(path, '/api/wifi/handoff-ack');
+    assert.equal(JSON.stringify(body), '{"bootId":"boot-current","handoffGeneration":9}');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    return { ok: true, accepted: true };
+  },
+};
+vm.runInNewContext(`${emittedReadyPrefix};globalThis.relayHandoffAck=lwRelayWifiHandoffAck`, ackContext);
+await assert.rejects(
+  ackContext.relayHandoffAck({ source: {}, origin: 'https://led.mandalacodes.com' }),
+  /invalid handoff correlation/,
+  'an allowlisted but non-opener source cannot relay acknowledgement',
+);
+const ackEvent = { source: stationOpener, origin: 'https://led.mandalacodes.com' };
+await Promise.all([
+  ackContext.relayHandoffAck(ackEvent),
+  ackContext.relayHandoffAck(ackEvent),
+]);
+await ackContext.relayHandoffAck(ackEvent);
+assert.equal(statusFetches, 1, 'concurrent and post-success duplicates share one fresh status read');
+assert.equal(acknowledgementPosts, 1, 'concurrent and post-success duplicates relay one endpoint POST');
 
 const ack = functionBody(web, /void\s+handleWifiHandoffAck\s*\(/);
 assert.match(ack, /handoffGeneration/,
@@ -148,6 +232,12 @@ assert.ok(sent !== -1 && scheduled > sent,
   'acknowledgement must be sent before deferred AP teardown is scheduled');
 assert.doesNotMatch(ack, /\.flush\s*\(/,
   'WiFiClient::flush clears RX in this ESP32 core and must not be treated as TX proof');
+assert.match(ack, /apTeardownScheduled[\s\S]*apTeardownGeneration\s*==\s*generation/,
+  'duplicate current acknowledgements in the settle window must be detected');
+assert.match(ack, /duplicate/,
+  'an idempotent duplicate acknowledgement must return explicit success');
+assert.equal((ack.match(/scheduleApTeardown\s*\(/g) || []).length, 1,
+  'a duplicate acknowledgement must not reschedule or extend the teardown deadline');
 
 const scheduleTeardown = functionBody(web, /void\s+scheduleApTeardown\s*\([^;]*\)\s*\{/);
 assert.match(scheduleTeardown, /LW_HANDOFF_RESPONSE_SETTLE_MS/,

@@ -4,10 +4,20 @@ import { classifyCardReadiness, normalizeCardReadiness } from './cardReadiness.j
 
 const UINT32_MAX = 0xffffffff;
 
-function cleanText(value, maxLength) {
-  if (typeof value !== 'string') return '';
-  const text = value.trim();
-  return text.length > 0 && text.length <= maxLength ? text : '';
+const CARD_ID_PATTERN = /^lw-[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const VERSION_BUILD_BOOT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:+-]*$/;
+
+function exactText(value, maxLength, pattern = VERSION_BUILD_BOOT_PATTERN) {
+  if (
+    typeof value !== 'string'
+    || value.length === 0
+    || value.length > maxLength
+    || value !== value.trim()
+    || (pattern && !pattern.test(value))
+  ) {
+    return '';
+  }
+  return value;
 }
 
 function isUint32(value, { allowZero = true } = {}) {
@@ -40,19 +50,22 @@ export function normalizeWifiHandoffHost(rawHost = '') {
 export function normalizeWifiHandoffCorrelation(raw = {}) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const host = normalizeWifiHandoffHost(raw.host ?? raw.stationIp);
+  const expectedCardId = exactText(raw.expectedCardId ?? raw.cardId, 64, CARD_ID_PATTERN);
+  const expectedFirmwareVersion = exactText(raw.expectedFirmwareVersion ?? raw.firmwareVersion, 48);
+  const expectedBuildId = exactText(raw.expectedBuildId ?? raw.buildId, 96);
+  const expectedBootId = exactText(raw.expectedBootId ?? raw.bootId, 96);
+  if (!expectedCardId || !expectedFirmwareVersion || !expectedBuildId || !expectedBootId) return null;
   const expected = normalizeCardIdentity({
-    cardId: raw.expectedCardId ?? raw.cardId,
-    firmwareVersion: raw.expectedFirmwareVersion ?? raw.firmwareVersion,
-    buildId: raw.expectedBuildId ?? raw.buildId,
+    cardId: expectedCardId,
+    firmwareVersion: expectedFirmwareVersion,
+    buildId: expectedBuildId,
   });
-  const expectedBootId = cleanText(raw.expectedBootId ?? raw.bootId, 96);
   const handoffGeneration = raw.handoffGeneration;
   if (
     !host
-    || !/^lw-[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(expected.id)
-    || !expected.firmwareVersion
-    || !expected.buildId
-    || !expectedBootId
+    || expected.id !== expectedCardId
+    || expected.firmwareVersion !== expectedFirmwareVersion
+    || expected.buildId !== expectedBuildId
     || !isUint32(handoffGeneration, { allowZero: false })
   ) {
     return null;
@@ -69,20 +82,39 @@ export function normalizeWifiHandoffCorrelation(raw = {}) {
 
 function expectedIdentity(options = {}) {
   const source = options.expectedCard || {};
-  return normalizeCardIdentity({
-    cardId: source.id ?? source.cardId ?? options.expectedCardId,
-    firmwareVersion: source.firmwareVersion ?? options.expectedFirmwareVersion,
-    buildId: source.buildId ?? source.firmwareBuild ?? source.build ?? options.expectedBuildId,
+  const id = exactText(source.id ?? source.cardId ?? options.expectedCardId, 64, CARD_ID_PATTERN);
+  const firmwareVersion = exactText(source.firmwareVersion ?? options.expectedFirmwareVersion, 48);
+  const buildId = exactText(
+    source.buildId ?? source.firmwareBuild ?? source.build ?? options.expectedBuildId,
+    96,
+  );
+  if (!id || !firmwareVersion || !buildId) return null;
+  const normalized = normalizeCardIdentity({
+    cardId: id,
+    firmwareVersion,
+    buildId,
   });
-}
-
-function hasCompleteExpectedIdentity(identity) {
-  return /^lw-[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(identity.id)
-    && Boolean(identity.firmwareVersion)
-    && Boolean(identity.buildId);
+  return normalized.id === id
+      && normalized.firmwareVersion === firmwareVersion
+      && normalized.buildId === buildId
+    ? normalized
+    : null;
 }
 
 function readinessMatches(status, expected, expectedBootId) {
+  if (!expected) return false;
+  const rawCardId = exactText(status?.cardId ?? status?.id, 64, CARD_ID_PATTERN);
+  const rawFirmwareVersion = exactText(status?.firmwareVersion, 48);
+  const rawBuildId = exactText(status?.buildId, 96);
+  const rawBootId = exactText(status?.bootId, 96);
+  if (
+    rawCardId !== expected.id
+    || rawFirmwareVersion !== expected.firmwareVersion
+    || rawBuildId !== expected.buildId
+    || rawBootId !== expectedBootId
+  ) {
+    return false;
+  }
   const normalized = normalizeCardReadiness(status);
   if (!normalized.contractSupported || !normalized.identityValid) return false;
   if (
@@ -104,10 +136,10 @@ export function acceptWifiHandoff(options = {}) {
   const status = options.status;
   if (!status || typeof status !== 'object' || Array.isArray(status)) return null;
   const expected = expectedIdentity(options);
-  const expectedBootId = cleanText(options.expectedBootId, 96);
+  const expectedBootId = exactText(options.expectedBootId, 96);
   const lastGeneration = options.lastGeneration ?? 0;
   if (
-    !hasCompleteExpectedIdentity(expected)
+    !expected
     || !expectedBootId
     || !isUint32(lastGeneration)
     || !readinessMatches(status, expected, expectedBootId)

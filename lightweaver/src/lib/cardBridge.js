@@ -163,6 +163,42 @@ function rejectPendingBridgeRequests(reason, message) {
   }
 }
 
+// Every navigation of the tracked named window crosses a page lifecycle even
+// when WindowProxy, host, and origin stay identical. Revoke the old page before
+// invoking window.open or assigning location so no response can arrive in the
+// browser's navigation gap with stale command authority.
+function revokeBridgeForNavigation({
+  host = bridgeHost,
+  origin = bridgeOrigin,
+  reason = 'bridge-navigated',
+  message = 'The tracked card page started a new navigation.',
+  preserveHandoff = false,
+} = {}) {
+  rejectPendingBridgeRequests(reason, message);
+  bridgeLifecycle += 1;
+  bridgeConnected = false;
+  bridgeReady = false;
+  bridgeVersion = 0;
+  bridgeCard = null;
+  bridgeDiscoveredCard = null;
+  bridgeIdentityError = '';
+  bridgeHandoffAckReady = false;
+  if (!preserveHandoff) bridgeHandoffCorrelation = null;
+  if (host) bridgeHost = normalizeCardHost(host);
+  if (origin) bridgeOrigin = origin;
+  dispatchBridgeChange();
+}
+
+function trackNavigatedBridgeWindow(source, { host, origin, persistHost = true } = {}) {
+  if (source) bridgeWindow = source;
+  if (origin) bridgeOrigin = origin;
+  if (host) {
+    bridgeHost = normalizeCardHost(host);
+    if (persistHost) writeStoredCardHost(bridgeHost);
+  }
+  dispatchBridgeChange();
+}
+
 function sameHandoffCorrelation(left, right) {
   return Boolean(left && right)
     && left.host === right.host
@@ -447,11 +483,10 @@ export function openCardBridge(rawHost = '', {
   const host = normalizeCardHost(rawHost || readStoredCardHost());
   const origin = cardHostToUrl(host);
   const bridgeUrl = buildCardBridgeLaunchUrl(host, studioUrl);
+  revokeBridgeForNavigation({ host, origin });
   const opened = win.open(bridgeUrl, CARD_BRIDGE_WINDOW_NAME);
   if (opened) {
-    bridgeHandoffCorrelation = null;
-    bridgeHandoffAckReady = false;
-    setBridgeState({ source: opened, origin, host, connected: false, ready: false });
+    trackNavigatedBridgeWindow(opened, { host, origin });
   }
   return opened;
 }
@@ -486,13 +521,12 @@ export function openLocalCardPage(rawHost = '', { path = '/', reason = 'open-car
   if (url.origin !== origin) return { ok: false, reason: 'invalid-host' };
   if (!win?.open) return { ok: false, reason: 'popup-blocked' };
   attachCardBridgeListener();
+  revokeBridgeForNavigation({ host, origin });
   const opened = win.open(url.href, CARD_BRIDGE_WINDOW_NAME);
   if (!opened) return { ok: false, reason: 'popup-blocked' };
   // Same bookkeeping as openCardBridge: adopt the (possibly reused) named
   // window and drop any prior handshake so identity must re-verify.
-  bridgeHandoffCorrelation = null;
-  bridgeHandoffAckReady = false;
-  setBridgeState({ source: opened, origin, host, connected: false, ready: false });
+  trackNavigatedBridgeWindow(opened, { host, origin });
   try {
     opened.focus?.();
   } catch {
@@ -547,20 +581,12 @@ export function retargetCardBridge(rawHost = '', rawCorrelation = {}) {
     // Settle every AP promise and revoke its lifecycle synchronously before the
     // cross-origin location assignment. A delayed AP response can no longer
     // mutate identity or readiness after this point.
-    rejectPendingBridgeRequests(
-      'bridge-retargeted',
-      'The setup-AP bridge was replaced by the correlated station target.',
-    );
-    bridgeLifecycle += 1;
-    bridgeConnected = false;
-    bridgeReady = false;
-    bridgeVersion = 0;
-    bridgeCard = null;
-    bridgeDiscoveredCard = null;
-    bridgeIdentityError = '';
-    bridgeHandoffAckReady = false;
-    bridgeOrigin = origin;
-    bridgeHost = host;
+    revokeBridgeForNavigation({
+      host,
+      origin,
+      reason: 'bridge-retargeted',
+      message: 'The setup-AP bridge was replaced by the correlated station target.',
+    });
     bridgeHandoffCorrelation = correlation;
     // Persistence is intentionally after all correlation/origin validation.
     writeStoredCardHost(host);
@@ -589,6 +615,9 @@ export function retargetCardBridge(rawHost = '', rawCorrelation = {}) {
       correlation,
       repeated: true,
     };
+  }
+  if (repeated) {
+    revokeBridgeForNavigation({ host, origin, preserveHandoff: true });
   }
   try {
     target.location.href = url.href;
