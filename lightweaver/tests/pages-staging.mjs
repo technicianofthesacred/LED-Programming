@@ -42,7 +42,7 @@ assert.equal(pkg.scripts['test:prod-deploy'], 'node --test src/lib/productionDep
 assert.equal(pkg.scripts['test:build-graph'], 'node --test scripts/generate-studio-build-graph.test.mjs');
 assert.match(pkg.scripts['launch:source'], /npm run test:build-graph/);
 assert.equal(pkg.scripts['test:screen-recovery'], 'playwright test tests/screen-recovery.spec.ts');
-assert.equal(pkg.scripts['test:production'], 'playwright test tests/production-setup.spec.ts --project=chromium --workers=1');
+assert.equal(pkg.scripts['test:production'], 'playwright test tests/production-setup.spec.ts tests/production-physical-unmount.spec.ts --project=chromium --workers=1');
 assert.match(pkg.scripts['launch:source'], /npm run test:prod-deploy && npm run test:build-graph && npm run test:show && npm run test:screen-recovery && npm run test:production/);
 assert.match(pkg.scripts['launch:source'], /^npm run test:core:source/);
 assert.equal(pkg.scripts['launch:check'], 'npm run launch:source && npm run firmware:check-bin');
