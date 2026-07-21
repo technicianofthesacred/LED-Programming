@@ -18,6 +18,7 @@ import {
   bootstrapCardBridgeFromOpener,
   getCardBridgeState,
   openCardBridge,
+  restoreCardBridgeHandoff,
   sendCardBridgeRequest,
   verifyCardBridgeIdentity,
 } from './cardBridge.js';
@@ -33,7 +34,9 @@ import { isCardLinkConnected as isFreshCardLinkConnected } from './cardConnectio
 import { classifyCardReadiness } from './cardReadiness.js';
 import {
   acceptWifiHandoff,
+  clearWifiHandoffRecovery,
   inspectFinalStationHandoff,
+  markWifiHandoffAckAttempted,
   normalizeWifiHandoffCorrelation,
 } from './cardWifiHandoff.js';
 
@@ -80,6 +83,7 @@ export function initialCardLinkState(host = '') {
     handoffAckSent: false,
     handoffBridgeLifecycle: null,
     handoffStationVerified: false,
+    handoffReloadRecovery: false,
   };
 }
 
@@ -109,6 +113,7 @@ function clearedLiveEvidence(prev, additions = {}, {
     handoffAckSent: false,
     handoffBridgeLifecycle: null,
     handoffStationVerified: false,
+    handoffReloadRecovery: false,
     ...additions,
   };
 }
@@ -291,12 +296,15 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
         ...(prev.handoffCorrelation ? {
           handoffCorrelation: prev.handoffCorrelation,
           handoffFlowId: prev.handoffFlowId,
-          handoffEnvelopeCount: prev.handoffAckAttempted ? 2 : 0,
+          handoffEnvelopeCount: prev.handoffReloadRecovery
+            ? prev.handoffEnvelopeCount
+            : prev.handoffAckAttempted ? 2 : 0,
           handoffAckReady: false,
           handoffAckAttempted: prev.handoffAckAttempted,
           handoffAckInFlight: false,
           handoffAckSent: prev.handoffAckSent,
           handoffStationVerified: false,
+          handoffReloadRecovery: prev.handoffReloadRecovery,
           handoffBridgeLifecycle: event.bridgeLifecycle ?? null,
         } : {}),
       }, { requireStable: Boolean(prev.validatedBootId || prev.requiresStableRevalidation) });
@@ -329,6 +337,26 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
         } : {}),
       }, { clearValidatedBoot: true });
     }
+    case 'wifi-handoff-restored': {
+      const correlation = normalizeWifiHandoffCorrelation(event.correlation);
+      const flowId = normalizeHandoffFlowId(event.flowId);
+      if (!correlation || correlation.host !== host || !flowId || typeof event.ackAttempted !== 'boolean') return prev;
+      return clearedLiveEvidence(prev, {
+        state: 'revalidating', reason: 'checking-card', transport: 'bridge',
+        host, card: null, expectedCard: {
+          id: correlation.expectedCardId,
+          firmwareVersion: correlation.expectedFirmwareVersion,
+          buildId: correlation.expectedBuildId,
+        },
+        missedPings: 0, bridgeLifecycle: event.bridgeLifecycle ?? null,
+        handoffCorrelation: correlation, handoffFlowId: flowId,
+        handoffBridgeLifecycle: event.bridgeLifecycle ?? null,
+        handoffEnvelopeCount: 0, handoffAckReady: false,
+        handoffAckAttempted: event.ackAttempted, handoffAckInFlight: false,
+        handoffAckSent: false, handoffStationVerified: false,
+        handoffReloadRecovery: event.ackAttempted,
+      }, { clearValidatedBoot: true });
+    }
     case 'wifi-handoff-status': {
       const correlation = normalizeWifiHandoffCorrelation(event.correlation);
       const flowId = normalizeHandoffFlowId(event.flowId);
@@ -354,6 +382,20 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
       const status = event.readiness;
       const finalAuthority = inspectFinalStationHandoff({ status, correlation });
       if ((prev.handoffAckAttempted || prev.handoffStationVerified) && finalAuthority) {
+        const reloadEnvelopeCount = prev.handoffReloadRecovery
+          ? Math.min(2, (prev.handoffEnvelopeCount || 0) + 1)
+          : prev.handoffEnvelopeCount;
+        if (prev.handoffReloadRecovery && reloadEnvelopeCount < 2) {
+          return {
+            ...prev,
+            state: 'revalidating', reason: 'checking-card', transport: 'bridge', host,
+            readiness: null, cardBlank: null, acknowledgedAt: '', activity: 'idle',
+            bridgeLifecycle: lifecycle, handoffBridgeLifecycle: lifecycle,
+            handoffEnvelopeCount: reloadEnvelopeCount,
+            handoffAckReady: false, handoffAckInFlight: false,
+            handoffStationVerified: false,
+          };
+        }
         const expectedCard = {
           id: correlation.expectedCardId,
           firmwareVersion: correlation.expectedFirmwareVersion,
@@ -371,9 +413,11 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
           requiresStableRevalidation: false,
           acknowledgedAt: event.acknowledgedAt || new Date().toISOString(),
           activity: 'idle', bridgeLifecycle: lifecycle,
-          handoffAckReady: false, handoffAckAttempted: false,
+          handoffEnvelopeCount: reloadEnvelopeCount,
+          handoffAckReady: false, handoffAckAttempted: prev.handoffAckAttempted,
           handoffAckInFlight: false, handoffAckSent: true,
           handoffStationVerified: true,
+          handoffReloadRecovery: false,
           handoffBridgeLifecycle: lifecycle,
         };
       }
@@ -1012,6 +1056,7 @@ export async function resumeCardWifiHandoff({
   }
 
   const beforeAck = link.getState();
+  if (beforeAck.handoffStationVerified) return beforeAck;
   if (!beforeAck.handoffAckAttempted) {
     if (!beforeAck.handoffAckReady) return beforeAck;
     // Latch before the privileged write. A timeout is ambiguous: the card may
@@ -1023,6 +1068,7 @@ export async function resumeCardWifiHandoff({
     });
     const attempted = link.getState();
     if (!attempted.handoffAckInFlight) return attempted;
+    markWifiHandoffAckAttempted({ flowId, correlation });
     try {
       await sendRequest('wifi-handoff-ack', {}, {
         host, timeoutMs: CARD_LINK_PING_TIMEOUT_MS, retryOnTimeout: false,
@@ -1090,13 +1136,36 @@ async function advanceSharedWifiHandoff(correlation, lifecycle, flowId) {
 export function cancelCardWifiHandoff(rawFlowId = '') {
   const flowId = normalizeHandoffFlowId(rawFlowId);
   if (!flowId) return false;
+  suspendCardWifiHandoff(flowId);
+  clearWifiHandoffRecovery(flowId);
+  getSharedCardLink().dispatch({ type: 'wifi-handoff-cancelled', flowId });
+  return true;
+}
+
+export function suspendCardWifiHandoff(rawFlowId = '') {
+  const flowId = normalizeHandoffFlowId(rawFlowId);
+  if (!flowId) return false;
   for (const [key, timer] of sharedHandoffRetryTimers) {
     if (!key.startsWith(`${flowId}|`)) continue;
     clearTimeout(timer);
     sharedHandoffRetryTimers.delete(key);
   }
-  getSharedCardLink().dispatch({ type: 'wifi-handoff-cancelled', flowId });
   return true;
+}
+
+export function restoreCardWifiHandoff(rawFlowId = '') {
+  const flowId = normalizeHandoffFlowId(rawFlowId);
+  if (!flowId) return { ok: false, reason: 'invalid-flow' };
+  const restored = restoreCardBridgeHandoff(flowId);
+  if (!restored.ok) return restored;
+  if (restored.state === 'already-restored') return restored;
+  getSharedCardLink().dispatch({
+    type: 'wifi-handoff-restored', host: restored.correlation.host,
+    correlation: restored.correlation, flowId,
+    bridgeLifecycle: restored.lifecycle,
+    ackAttempted: restored.ackAttempted,
+  });
+  return restored;
 }
 
 // The bridge is the ONLY live transport on HTTPS (led.mandalacodes.com), where
@@ -1175,7 +1244,10 @@ export function getSharedCardLink() {
           bridgeLifecycle: detail.lifecycle,
         });
       }
-      if (detail.connected && detail.verified && detail.handoffAckReady) {
+      const latestHandoff = sharedLink.getState();
+      if (detail.connected && detail.verified && (
+        detail.handoffAckReady || latestHandoff.handoffReloadRecovery
+      )) {
         void advanceSharedWifiHandoff(
           detail.handoffCorrelation,
           detail.lifecycle,

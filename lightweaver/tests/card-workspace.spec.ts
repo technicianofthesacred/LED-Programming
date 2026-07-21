@@ -985,20 +985,21 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
     const bridge = await import('/src/lib/cardBridge.js');
     const handoff = await import('/src/lib/cardWifiHandoff.js');
     const cardLink = await import('/src/lib/cardLink.js');
+    const commissioning = await import('/src/lib/cardCommissioningFlow.js');
 
     const priorCard = {
       version: 1,
-      id: 'lw-prior-card-a',
+      id: 'lw-aaaaaaaaaaaa',
       firmwareVersion: '1.0.0',
-      buildId: 'prior-build-a',
+      buildId: 'a'.repeat(40),
     };
     localStorage.setItem('lw_card_identity_v1', JSON.stringify(priorCard));
     localStorage.removeItem('lw_chip_card_host');
 
     const expectedCard = {
-      id: 'lw-replacement-card-b',
+      id: 'lw-bbbbbbbbbbbb',
       firmwareVersion: '2.0.0',
-      buildId: 'replacement-build-b',
+      buildId: 'b'.repeat(40),
     };
     const stationHost = '192.168.18.91';
     const bootId = 'boot-replacement-b';
@@ -1006,7 +1007,31 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
     const flowId = 'flow-browser-wifi-123456789';
     const replacementFlowId = 'flow-browser-wifi-987654321';
     const messageTypes: string[] = [];
+    let configured = false;
     let activeHost = '192.168.4.1';
+    const projectRevision = 23;
+    const projectRecord = {
+      id: 'browser-blank-project-record',
+      updatedAt: 100,
+      project: {
+        version: 3,
+        id: 'browser-blank-project',
+        name: 'Browser blank project',
+        layout: { strips: [{ id: 'strip-1', pixelCount: 44 }], wiring: null, patchBoard: null },
+        devices: { standaloneController: {} },
+      },
+    };
+    const startedAt = Date.now();
+    let commissioningFlow = commissioning.completeCardInstall(commissioning.beginCardCommissioning({
+      source: 'web-serial', operation: 'install-current-release', strategy: 'clean-recovery',
+      projectRecord, projectRevision, flowId, now: startedAt,
+    }), {
+      operation: 'install-current-release', cardId: expectedCard.id,
+      firmwareVersion: expectedCard.firmwareVersion, buildId: expectedCard.buildId,
+    }, { now: startedAt + 1 });
+    commissioningFlow = commissioning.confirmCardSetupNetworkJoined(commissioningFlow, { now: startedAt + 2 });
+    await commissioning.writeCardCommissioning(commissioningFlow, { locks: null });
+    const projectFingerprint = commissioningFlow.project.fingerprint;
     let status = {
       app: 'Lightweaver',
       provisioningContractVersion: 1,
@@ -1070,11 +1095,25 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
           setTimeout(emitReady, 25);
           return;
         }
+        if (type === 'config') {
+          configured = true;
+          status = {
+            ...status,
+            runtimePhase: 'ready', knownGoodProject: true,
+            commandReady: true, outputReady: true,
+          };
+        }
         const response = type === 'firmware-info'
-          ? { cardId: expectedCard.id, firmwareVersion: expectedCard.firmwareVersion, buildId: expectedCard.buildId }
+          ? {
+            app: 'Lightweaver',
+            cardId: expectedCard.id,
+            firmwareVersion: expectedCard.firmwareVersion,
+            buildId: expectedCard.buildId,
+            ...(configured ? { projectRevision, projectFingerprint } : {}),
+          }
           : type === 'status'
             ? status
-            : { ok: true };
+            : { ok: true, saved: type === 'config' };
         setTimeout(() => emit({
           app: 'LightweaverCardBridge', version: 2, id: message.id,
           ok: true, response,
@@ -1086,7 +1125,11 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
         },
       },
     } as unknown as Window;
-    window.open = (() => fakeCardTab) as typeof window.open;
+    window.open = ((url?: string | URL) => {
+      if (url) activeHost = new URL(String(url)).hostname;
+      if (activeHost === stationHost) setTimeout(emitReady, 0);
+      return fakeCardTab;
+    }) as typeof window.open;
 
     const opened = bridge.openLocalCardPage('192.168.4.1');
     if (!opened.ok) throw new Error(`could not open setup card: ${opened.reason}`);
@@ -1110,46 +1153,7 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
     }
     const linkAfterFinal = cardLink.getCardLinkState();
     const bridgeAfterFinal = bridge.getCardBridgeState();
-
-    let wrongFlowReason = '';
-    try {
-      await bridge.sendCardBridgeRequest('config', { project: 'wrong-flow' }, {
-        host: stationHost,
-        commissioningFlowId: replacementFlowId,
-      });
-    } catch (error) {
-      wrongFlowReason = (error as { reason?: string }).reason || '';
-    }
-    await bridge.sendCardBridgeRequest('config', { project: 'initial' }, {
-      host: stationHost,
-      commissioningFlowId: flowId,
-    });
-    let secondConfigReason = '';
-    let controlReason = '';
-    try {
-      await bridge.sendCardBridgeRequest('config', { project: 'second' }, {
-        host: stationHost,
-        commissioningFlowId: flowId,
-      });
-    } catch (error) {
-      secondConfigReason = (error as { reason?: string }).reason || '';
-    }
-    try {
-      await bridge.sendCardBridgeRequest('control', { on: true }, { host: stationHost });
-    } catch (error) {
-      controlReason = (error as { reason?: string }).reason || '';
-    }
-
-    const replacementCorrelation = { ...correlation, handoffGeneration: generation + 1 };
-    const replacement = bridge.retargetCardBridge(stationHost, replacementCorrelation, {
-      flowId: replacementFlowId,
-    });
-    const replacementState = cardLink.getCardLinkState();
-    const stateBeforeStaleEnvelope = replacementState;
-    cardLink.getSharedCardLink().dispatch({
-      type: 'wifi-handoff-status', host: stationHost, correlation, flowId,
-      bridgeLifecycle: bridgeAfterFinal.lifecycle, readiness: status,
-    });
+    (window as any).__blankProductionPath = { messageTypes, flowId, replacementFlowId, correlation };
 
     return {
       protocol: location.protocol,
@@ -1158,14 +1162,7 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
       priorIdentity: JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null'),
       linkAfterFinal,
       bridgeAfterFinal,
-      wrongFlowReason,
-      secondConfigReason,
-      controlReason,
-      replacement,
-      replacementState,
-      staleEnvelopeIgnored: cardLink.getCardLinkState() === stateBeforeStaleEnvelope,
       ackCount: messageTypes.filter(type => type === 'wifi-handoff-ack').length,
-      configCount: messageTypes.filter(type => type === 'config').length,
       statusCount: messageTypes.filter(type => type === 'status').length,
     };
   });
@@ -1173,7 +1170,7 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
   expect(result.protocol).toBe('https:');
   expect(result.hostBeforeFinal).toBe('192.168.4.1');
   expect(result.persistedHost).toBe('192.168.18.91');
-  expect(result.priorIdentity.id).toBe('lw-prior-card-a');
+  expect(result.priorIdentity.id).toBe('lw-aaaaaaaaaaaa');
   expect(result.ackCount).toBe(1);
   expect(result.statusCount).toBeLessThanOrEqual(8);
   expect(result.linkAfterFinal).toMatchObject({
@@ -1189,16 +1186,218 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
     initialConfigAuthority: true,
     handoffFlowId: 'flow-browser-wifi-123456789',
   });
-  expect(result.wrongFlowReason).toBe('runtime-not-ready');
-  expect(result.configCount).toBe(1);
-  expect(result.secondConfigReason).toBe('runtime-not-ready');
-  expect(result.controlReason).toBe('runtime-not-ready');
-  expect(result.replacement).toMatchObject({ ok: true, state: 'retargeted' });
-  expect(result.replacementState).toMatchObject({
+  await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
+  await expect.poll(() => page.evaluate(async () => {
+    const bridge = await import('/src/lib/cardBridge.js');
+    const link = await import('/src/lib/cardLink.js');
+    return {
+      bridge: bridge.getCardBridgeState(),
+      link: link.getCardLinkState(),
+    };
+  })).toMatchObject({
+    bridge: { initialConfigAuthority: true, handoffFlowId: 'flow-browser-wifi-123456789' },
+    link: { handoffStationVerified: true, cardBlank: true },
+  });
+  await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeEnabled();
+  const beforeWizardPush = await page.evaluate(() => (window as any).__blankProductionPath.messageTypes.length);
+  await page.getByRole('button', { name: 'Restore saved project', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Check lights', exact: true })).toBeVisible();
+  const productionPath = await page.evaluate(async (start) => {
+    const bridge = await import('/src/lib/cardBridge.js');
+    const cardLink = await import('/src/lib/cardLink.js');
+    const fixture = (window as any).__blankProductionPath;
+    const types = fixture.messageTypes.slice(start);
+    const recoveryCleared = sessionStorage.getItem('lw_wifi_handoff_recovery_v1') == null;
+    const replacementCorrelation = {
+      ...fixture.correlation,
+      handoffGeneration: fixture.correlation.handoffGeneration + 1,
+    };
+    const replacement = bridge.retargetCardBridge(fixture.correlation.host, replacementCorrelation, {
+      flowId: fixture.replacementFlowId,
+    });
+    const replacementState = cardLink.getCardLinkState();
+    const stateBeforeStaleEnvelope = replacementState;
+    cardLink.getSharedCardLink().dispatch({
+      type: 'wifi-handoff-status', host: fixture.correlation.host,
+      correlation: fixture.correlation, flowId: fixture.flowId,
+      bridgeLifecycle: bridge.getCardBridgeState().lifecycle, readiness: {},
+    });
+    return {
+      types,
+      recoveryCleared,
+      replacement,
+      replacementState,
+      staleEnvelopeIgnored: cardLink.getCardLinkState() === stateBeforeStaleEnvelope,
+    };
+  }, beforeWizardPush);
+  expect(productionPath.types.filter(type => type === 'config')).toHaveLength(1);
+  expect(productionPath.types).not.toContain('wiring-candidate');
+  const configIndex = productionPath.types.indexOf('config');
+  expect(configIndex).toBeGreaterThanOrEqual(0);
+  expect(productionPath.types.slice(0, configIndex)).not.toContain('firmware-info');
+  expect(productionPath.types.slice(configIndex + 1)).toContain('firmware-info');
+  expect(productionPath.recoveryCleared).toBe(true);
+  expect(productionPath.replacement).toMatchObject({ ok: true, state: 'retargeted' });
+  expect(productionPath.replacementState).toMatchObject({
     handoffFlowId: 'flow-browser-wifi-987654321',
     handoffEnvelopeCount: 0,
     handoffAckAttempted: false,
     handoffStationVerified: false,
   });
-  expect(result.staleEnvelopeIgnored).toBe(true);
+  expect(productionPath.staleEnvelopeIgnored).toBe(true);
+});
+
+test('HTTPS Studio reload reacquires an acknowledged blank handoff without replaying the acknowledgement', async ({ page }) => {
+  await page.addInitScript(() => {
+    const stationHost = '192.168.18.92';
+    const expectedCard = {
+      id: 'lw-cccccccccccc',
+      firmwareVersion: '2.1.0',
+      buildId: 'c'.repeat(40),
+    };
+    const appendType = (type: string) => {
+      const prior = JSON.parse(sessionStorage.getItem('__reload_bridge_types') || '[]');
+      prior.push(type);
+      sessionStorage.setItem('__reload_bridge_types', JSON.stringify(prior));
+    };
+    const emit = (source: Window, data: Record<string, unknown>) => {
+      const event = new Event('message');
+      Object.defineProperties(event, {
+        data: { value: data },
+        origin: { value: `http://${stationHost}` },
+        source: { value: source },
+      });
+      window.dispatchEvent(event);
+    };
+    const tab = {
+      closed: false,
+      focus() {},
+      postMessage(message: Record<string, unknown>) {
+        const type = String(message.type || '');
+        appendType(type);
+        if (type === 'config') sessionStorage.setItem('__reload_configured', '1');
+        const configured = sessionStorage.getItem('__reload_configured') === '1';
+        const response = type === 'firmware-info'
+          ? {
+            app: 'Lightweaver', cardId: expectedCard.id,
+            firmwareVersion: expectedCard.firmwareVersion, buildId: expectedCard.buildId,
+            ...(configured ? {
+              projectRevision: Number(sessionStorage.getItem('__reload_revision')),
+              projectFingerprint: sessionStorage.getItem('__reload_fingerprint'),
+            } : {}),
+          }
+          : type === 'status'
+            ? {
+              app: 'Lightweaver', provisioningContractVersion: 1,
+              cardId: expectedCard.id, firmwareVersion: expectedCard.firmwareVersion,
+              buildId: expectedCard.buildId, bootId: 'boot-reload-blank',
+              runtimePhase: configured ? 'ready' : 'factory',
+              knownGoodProject: configured, commandReady: configured, outputReady: configured,
+              wifi: {
+                transport: 'station', transition: 'station', transitionPending: false,
+                apActive: false, stationIp: stationHost, ip: stationHost,
+                handoffGeneration: 21,
+              },
+            }
+            : { ok: true, saved: type === 'config' };
+        setTimeout(() => emit(tab as unknown as Window, {
+          app: 'LightweaverCardBridge', version: 2, id: message.id,
+          ok: true, response,
+        }), 0);
+      },
+      location: { set href(_value: string) {} },
+    };
+    window.open = ((_url?: string | URL) => {
+      setTimeout(() => emit(tab as unknown as Window, {
+        app: 'LightweaverCardBridge', type: 'ready', version: 2, host: stationHost,
+      }), 0);
+      return tab as unknown as Window;
+    }) as typeof window.open;
+  });
+  await page.route('https://led.mandalacodes.com/**', async route => {
+    const requested = new URL(route.request().url());
+    const upstream = await page.request.fetch(`http://localhost:9997${requested.pathname}${requested.search}`);
+    await route.fulfill({ response: upstream });
+  });
+  await page.goto('https://led.mandalacodes.com/#screen=card&section=install', {
+    waitUntil: 'domcontentloaded',
+  });
+
+  const seeded = await page.evaluate(async () => {
+    const commissioning = await import('/src/lib/cardCommissioningFlow.js');
+    const handoff = await import('/src/lib/cardWifiHandoff.js');
+    const connection = await import('/src/lib/cardConnection.js');
+    const expectedCard = {
+      id: 'lw-cccccccccccc', firmwareVersion: '2.1.0', buildId: 'c'.repeat(40),
+    };
+    const flowId = 'flow-reload-wifi-123456789';
+    const now = Date.now();
+    const projectRecord = {
+      id: 'reload-blank-project-record', updatedAt: now,
+      project: {
+        version: 3, id: 'reload-blank-project', name: 'Reload blank project',
+        layout: { strips: [{ id: 'strip-1', pixelCount: 36 }], wiring: null, patchBoard: null },
+        devices: { standaloneController: {} },
+      },
+    };
+    let flow = commissioning.completeCardInstall(commissioning.beginCardCommissioning({
+      source: 'web-serial', operation: 'install-current-release', strategy: 'clean-recovery',
+      projectRecord, projectRevision: 31, flowId, now,
+    }), {
+      operation: 'install-current-release', cardId: expectedCard.id,
+      firmwareVersion: expectedCard.firmwareVersion, buildId: expectedCard.buildId,
+    }, { now: now + 1 });
+    flow = commissioning.confirmCardSetupNetworkJoined(flow, { now: now + 2 });
+    flow = commissioning.acknowledgeCommissionedCard(flow, expectedCard, { now: now + 3 }).flow;
+    await commissioning.writeCardCommissioning(flow, { locks: null });
+    const correlation = {
+      host: '192.168.18.92', expectedCardId: expectedCard.id,
+      expectedFirmwareVersion: expectedCard.firmwareVersion,
+      expectedBuildId: expectedCard.buildId, expectedBootId: 'boot-reload-blank',
+      handoffGeneration: 21,
+    };
+    connection.writeStoredCardHost(correlation.host);
+    handoff.writeWifiHandoffRecovery({ correlation, flowId, ackAttempted: true });
+    sessionStorage.setItem('__reload_revision', String(flow.project.revision));
+    sessionStorage.setItem('__reload_fingerprint', flow.project.fingerprint);
+    sessionStorage.setItem('__reload_bridge_types', '[]');
+    return { flowId, correlation };
+  });
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect.poll(() => page.evaluate(async () => {
+    const bridge = await import('/src/lib/cardBridge.js');
+    const link = await import('/src/lib/cardLink.js');
+    return { bridge: bridge.getCardBridgeState(), link: link.getCardLinkState() };
+  })).toMatchObject({
+    bridge: {
+      initialConfigAuthority: true,
+      handoffFlowId: seeded.flowId,
+      handoffReloadRecovery: false,
+      handoffReloadEnvelopeCount: 2,
+    },
+    link: {
+      handoffFlowId: seeded.flowId,
+      handoffStationVerified: true,
+      handoffAckAttempted: true,
+      cardBlank: true,
+    },
+  });
+  const afterReload = await page.evaluate(() => JSON.parse(sessionStorage.getItem('__reload_bridge_types') || '[]'));
+  expect(afterReload.filter((type: string) => type === 'wifi-handoff-ack')).toHaveLength(0);
+  expect(afterReload.filter((type: string) => type === 'status').length).toBeGreaterThanOrEqual(2);
+
+  await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeEnabled();
+  const beforePush = afterReload.length;
+  await page.getByRole('button', { name: 'Restore saved project', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Check lights', exact: true })).toBeVisible();
+  const pushed = await page.evaluate((start) => ({
+    types: JSON.parse(sessionStorage.getItem('__reload_bridge_types') || '[]').slice(start),
+    recovery: sessionStorage.getItem('lw_wifi_handoff_recovery_v1'),
+  }), beforePush);
+  expect(pushed.types.filter((type: string) => type === 'config')).toHaveLength(1);
+  expect(pushed.types).not.toContain('wifi-handoff-ack');
+  expect(pushed.types).not.toContain('wiring-candidate');
+  expect(pushed.types.indexOf('config')).toBeLessThan(pushed.types.indexOf('firmware-info'));
+  expect(pushed.recovery).toBeNull();
 });

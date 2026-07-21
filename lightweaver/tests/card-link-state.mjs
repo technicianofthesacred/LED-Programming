@@ -200,6 +200,37 @@ const wifiFinal = reduceCardLink(wifiAcked, {
 assert.equal(wifiFinal.state, 'connected-bridge');
 assert.equal(isCardLinkConnected(wifiFinal), true);
 
+const restoredAfterReload = reduceCardLink(initialCardLinkState(wifiCorrelation.host), {
+  type: 'wifi-handoff-restored', host: wifiCorrelation.host,
+  correlation: wifiCorrelation, bridgeLifecycle: 30,
+  flowId: wifiFlowId, ackAttempted: true,
+});
+assert.equal(restoredAfterReload.handoffAckAttempted, true);
+assert.equal(restoredAfterReload.handoffEnvelopeCount, 0);
+assert.equal(restoredAfterReload.handoffReloadRecovery, true);
+const restoredBridgeReady = reduceCardLink(restoredAfterReload, {
+  type: 'bridge-ready', host: wifiCorrelation.host, bridgeLifecycle: 30,
+});
+assert.equal(restoredBridgeReady.handoffEnvelopeCount, 0);
+assert.equal(restoredBridgeReady.handoffReloadRecovery, true,
+  'the reacquired card-page handshake preserves reload recovery until fresh final status');
+const restoredFinalOne = reduceCardLink(restoredBridgeReady, {
+  type: 'wifi-handoff-status', host: wifiCorrelation.host,
+  correlation: wifiCorrelation, bridgeLifecycle: 30, flowId: wifiFlowId,
+  readiness: finalNotReady.readiness,
+});
+assert.equal(restoredFinalOne.handoffEnvelopeCount, 1);
+assert.equal(restoredFinalOne.handoffStationVerified, false,
+  'one final envelope after reload cannot recreate blank config authority');
+const restoredFinalTwo = reduceCardLink(restoredFinalOne, {
+  type: 'wifi-handoff-status', host: wifiCorrelation.host,
+  correlation: wifiCorrelation, bridgeLifecycle: 30, flowId: wifiFlowId,
+  readiness: finalNotReady.readiness,
+});
+assert.equal(restoredFinalTwo.handoffStationVerified, true,
+  'two exact final envelopes re-prove the restored handoff without another acknowledgement');
+assert.equal(restoredFinalTwo.cardBlank, true);
+
 const lifecycleChangedDuringHandoff = reduceCardLink(wifiOne, {
   type: 'bridge-ready', host: wifiCorrelation.host, bridgeLifecycle: 12,
 });
@@ -253,6 +284,29 @@ await resumeCardWifiHandoff({
 assert.deepEqual(orchestratedCalls, ['status', 'status', 'wifi-handoff-ack', 'status']);
 assert.deepEqual(orchestratedDelays, [500, 500], 'handoff envelope and final-status reads use bounded cadence');
 assert.equal(isCardLinkConnected(orchestratedLink.getState()), true);
+
+const restoredOrchestratedLink = createCardLink({ host: wifiCorrelation.host, connectTimeoutMs: 0 });
+restoredOrchestratedLink.dispatch({
+  type: 'wifi-handoff-restored', host: wifiCorrelation.host,
+  correlation: wifiCorrelation, bridgeLifecycle: 31,
+  flowId: wifiFlowId, ackAttempted: true,
+});
+const restoredCalls = [];
+await resumeCardWifiHandoff({
+  link: restoredOrchestratedLink,
+  correlation: wifiCorrelation,
+  flowId: wifiFlowId,
+  bridgeLifecycle: 31,
+  isCurrent: () => true,
+  wait: async () => {},
+  sendRequest: async type => {
+    restoredCalls.push(type);
+    return finalNotReady.readiness;
+  },
+});
+assert.deepEqual(restoredCalls, ['status', 'status'],
+  'reload recovery re-proves final station truth without duplicating the ambiguous acknowledgement');
+assert.equal(restoredOrchestratedLink.getState().handoffStationVerified, true);
 await resumeCardWifiHandoff({
   link: orchestratedLink,
   correlation: wifiCorrelation,
@@ -1092,7 +1146,7 @@ async function refreshBridgeStatus(payload) {
   });
   await waitFor(
     () => !payload.bootId
-      ? getCardLinkState().state === 'revalidating'
+      ? ['revalidating', 'disconnected'].includes(getCardLinkState().state)
       : payload.knownGoodProject === false
         ? getCardLinkState().cardBlank === true
         : isCardLinkConnected(getCardLinkState()),

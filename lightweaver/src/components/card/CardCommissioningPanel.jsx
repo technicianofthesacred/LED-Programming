@@ -16,6 +16,8 @@ import {
   isCardLinkConnected,
   reportCardStatusEnvelope,
   reportDirectCardStatus,
+  restoreCardWifiHandoff,
+  suspendCardWifiHandoff,
 } from '../../lib/cardLink.js';
 import {
   clearCardBridgeHandoff,
@@ -147,6 +149,7 @@ export function CardCommissioningPanel({
   const markerTimeoutRef = useRef(null);
   const acknowledgementPersistenceRef = useRef('');
   const activeFlowIdRef = useRef(initialState.flow?.flowId || '');
+  const handoffFlowIdRef = useRef('');
   const [failure, setFailure] = useState(initialState.error === 'corrupt'
     ? 'Saved card setup data is corrupt. Nothing was changed; restart the exact setup.'
     : initialState.error === 'invalid-lease'
@@ -178,17 +181,21 @@ export function CardCommissioningPanel({
 
   useEffect(() => {
     const flowId = flow?.flowId || '';
+    const previousFlowId = handoffFlowIdRef.current;
+    if (previousFlowId && previousFlowId !== flowId) {
+      cancelCardWifiHandoff(previousFlowId);
+      clearCardBridgeHandoff(previousFlowId);
+    }
+    handoffFlowIdRef.current = flowId;
     activeFlowIdRef.current = flowId;
     acknowledgementPersistenceRef.current = '';
+    if (flowId && flow?.stage === 'set-up-card') restoreCardWifiHandoff(flowId);
     return () => {
-      if (flowId) {
-        cancelCardWifiHandoff(flowId);
-        clearCardBridgeHandoff(flowId);
-      }
+      if (flowId) suspendCardWifiHandoff(flowId);
       if (activeFlowIdRef.current === flowId) activeFlowIdRef.current = '';
       acknowledgementPersistenceRef.current = '';
     };
-  }, [flow?.flowId]);
+  }, [flow?.flowId, flow?.stage]);
 
   useEffect(() => {
     setBridgeHandoffStatus(previous => (
@@ -319,6 +326,21 @@ export function CardCommissioningPanel({
     const existing = bridge.handoffCorrelation;
     const expectedCard = flow.expectedCard;
     if (bridgeHandoffStatus && bridgeHandoffStatus.flowId !== flow.flowId) return;
+    // Once this exact flow has attempted its one acknowledgement, mounting a
+    // different Studio section must not replay the AP -> station navigation.
+    // Recovery from that point is status-only (and a real reload goes through
+    // restoreCardWifiHandoff above); the explicit retry button remains the
+    // user's bounded way to navigate the retained WindowProxy again.
+    if (existing
+      && bridge.handoffFlowId === flow.flowId
+      && (link?.handoffAckAttempted || link?.handoffStationVerified)) {
+      setDetection(previous => (
+        previous.state === 'return-to-gallery'
+          ? previous
+          : { state: 'return-to-gallery', correlation: existing, retryable: true }
+      ));
+      return;
+    }
     const status = bridgeHandoffStatus?.status || link.readiness;
     let correlation = existing;
     if (!correlation) {

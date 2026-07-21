@@ -15,6 +15,8 @@ import {
   rePairDiscoveredCardBridgeIdentity,
   verifyCardBridgeIdentity,
 } from '../src/lib/cardBridge.js';
+import { pushConfigToCard } from '../src/lib/cardPushClient.js';
+import { makeCardRuntimePackage } from '../src/lib/cardRuntimeContract.js';
 
 globalThis.CustomEvent = class CustomEvent {
   constructor(type, options = {}) {
@@ -783,7 +785,10 @@ const handoffCorrelation = {
   handoffGeneration: 9,
 };
 let stationStatus = null;
+let stationFirmwareIdentity = handoffIdentity;
+let suppressStationStatus = false;
 let handoffHarness;
+const handoffMessages = [];
 let handoffNavigationCount = 0;
 let handoffHref = '';
 const handoffTab = {
@@ -793,8 +798,14 @@ const handoffTab = {
     set href(value) { handoffHref = String(value); handoffNavigationCount += 1; },
   },
   postMessage(message) {
+    handoffMessages.push({ message });
+    if (message.type === 'status' && suppressStationStatus) return;
     const response = message.type === 'firmware-info'
-      ? { cardId: handoffIdentity.id, firmwareVersion: handoffIdentity.firmwareVersion, buildId: handoffIdentity.buildId }
+      ? {
+        cardId: stationFirmwareIdentity.id,
+        firmwareVersion: stationFirmwareIdentity.firmwareVersion,
+        buildId: stationFirmwareIdentity.buildId,
+      }
       : message.type === 'status'
         ? stationStatus
         : { ok: true };
@@ -893,11 +904,44 @@ await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 })
 assert.equal(getCardBridgeState().identityVerified, true,
   'exact blank final station verifies identity without granting runtime write authority');
 assert.equal(getCardBridgeState().runtimeCommandReady, false);
-const initialConfig = await sendCardBridgeRequest('config', { project: 'commissioned-card-b' }, {
-  host: stationHost, timeoutMs: 100, commissioningFlowId,
+assert.equal(getCardBridgeState().initialConfigAuthority, true);
+await sendCardBridgeRequest('firmware-info', {}, { host: stationHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().identityVerified, true,
+  'an exact same-card firmware read preserves current-lifecycle station identity authority');
+assert.equal(getCardBridgeState().initialConfigAuthority, true,
+  'an exact same-card firmware read preserves current-lifecycle blank config authority');
+
+stationFirmwareIdentity = { ...handoffIdentity, buildId: 'hostile-partial-build' };
+await sendCardBridgeRequest('firmware-info', {}, { host: stationHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().identityVerified, false,
+  'mismatched read-only identity evidence revokes station authority');
+assert.equal(getCardBridgeState().initialConfigAuthority, false,
+  'mismatched read-only identity evidence revokes config authority');
+stationFirmwareIdentity = handoffIdentity;
+await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
+
+const blankRuntimePackage = makeCardRuntimePackage({
+  projectName: 'Commissioned card B',
+  mode: 'website-flash',
+  led: {
+    pixels: 44,
+    colorOrder: 'GRB',
+    brightnessLimit: 0.5,
+    outputs: [{ id: 'main', name: 'Main', pin: 16, pixels: 44 }],
+  },
+});
+const messagesBeforeInitialPush = handoffMessages.length;
+const initialConfig = await pushConfigToCard(blankRuntimePackage, {
+  host: stationHost, timeoutMs: 100, reboot: 'if-needed',
+  commissioningFlowId, allowProjectChange: true, allowLayoutChange: true,
 });
 assert.equal(initialConfig.ok, true,
   'exact blank final station authority permits the one initial commissioning config');
+const initialPushTypes = handoffMessages
+  .slice(messagesBeforeInitialPush)
+  .map(entry => entry.message.type);
+assert.deepEqual(initialPushTypes, ['config'],
+  'blank commissioning sends one complete config without firmware/layout or wiring-candidate probes');
 await assert.rejects(
   sendCardBridgeRequest('config', { project: 'duplicate' }, {
     host: stationHost, timeoutMs: 25, commissioningFlowId,
@@ -928,6 +972,35 @@ assert.equal(getCardBridgeState().runtimeCommandReady, true);
 assert.equal(handoffHarness.storageValues.get('lw_chip_card_host'), stationHost,
   'preferred host persists only after exact final station verification');
 await sendCardBridgeRequest('control', {}, { host: stationHost, timeoutMs: 100 });
+const messagesBeforeTimeout = handoffMessages.length;
+suppressStationStatus = true;
+await assert.rejects(
+  sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 15, retryOnTimeout: false }),
+  error => error?.reason === 'bridge-timeout',
+);
+assert.equal(getCardBridgeState().connected, false);
+assert.equal(getCardBridgeState().identityVerified, false,
+  'status timeout synchronously revokes station identity authority');
+assert.equal(getCardBridgeState().runtimeCommandReady, false,
+  'status timeout synchronously revokes runtime command authority');
+assert.equal(getCardBridgeState().initialConfigAuthority, false,
+  'status timeout synchronously revokes initial config authority');
+await assert.rejects(
+  sendCardBridgeRequest('control', {}, { host: stationHost, timeoutMs: 15 }),
+  error => ['identity-missing', 'runtime-not-ready', 'bridge-timeout'].includes(error?.reason),
+);
+await assert.rejects(
+  sendCardBridgeRequest('config', {}, {
+    host: stationHost, timeoutMs: 15, commissioningFlowId,
+  }),
+  error => ['identity-missing', 'runtime-not-ready', 'bridge-timeout'].includes(error?.reason),
+);
+assert.deepEqual(
+  handoffMessages.slice(messagesBeforeTimeout).map(entry => entry.message.type),
+  ['status'],
+  'no mutation is posted after liveness loss',
+);
+suppressStationStatus = false;
 stationStatus = { ...stationStatus, commandReady: false };
 await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
 assert.equal(getCardBridgeState().runtimeCommandReady, false);

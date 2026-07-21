@@ -15,7 +15,10 @@ import {
   readStoredCardHost,
   writeStoredCardHost,
 } from './cardConnection.js';
-import { sendCardBridgeRequest } from './cardBridge.js';
+import {
+  hasCardBridgeInitialConfigAuthority,
+  sendCardBridgeRequest,
+} from './cardBridge.js';
 import { guardDirectCardMutation, normalizeCardProjectEvidence } from './cardIdentity.js';
 import {
   CardConfigCapacityError,
@@ -297,7 +300,36 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
   // over-capacity configuration never causes an external side effect.
   const preparedPayload = prepareCardStoragePayload(runtimePackage);
   const host = options.host || getCardHostname();
-  if (!isMixedContentBlocked()) {
+  const mixedContentBlocked = isMixedContentBlocked();
+  const initialBridgeConfig = mixedContentBlocked && hasCardBridgeInitialConfigAuthority({
+    host,
+    flowId: options.commissioningFlowId,
+  });
+  // A factory-blank card has no known-good layout to protect or compare. The
+  // exact final handoff envelope already proves card/version/build/boot and
+  // grants one lifecycle-scoped config write. Keep that write atomic: no
+  // firmware-info preflight and no wiring candidate can intervene between the
+  // proof and the complete first project.
+  if (initialBridgeConfig) {
+    try {
+      return await sendCardBridgeRequest('config', preparedPayload.config, {
+        host,
+        timeoutMs: options.timeoutMs || 6000,
+        reboot: options.reboot === true,
+        commissioningFlowId: options.commissioningFlowId,
+      });
+    } catch (err) {
+      if (err instanceof CardPushError) throw err;
+      throw new CardPushError(
+        'mixed-content',
+        err?.reason === 'bridge-missing' || err?.reason === 'bridge-timeout'
+          ? 'Open the card page once by clicking Card disconnected, then return to Studio so it can save through the local bridge.'
+          : 'Browser blocked the connection (mixed content). Use the local card installer handoff.',
+        err,
+      );
+    }
+  }
+  if (!mixedContentBlocked) {
     await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: Math.min(options.timeoutMs || 6000, 1500) });
   }
   const rebootPlan = await resolveConfigRebootForCard(host, runtimePackage, options);
@@ -325,7 +357,7 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
     reboot: options.reboot === 'if-needed' ? rebootPlan.reboot : options.reboot,
     preparedPayload,
   };
-  if (isMixedContentBlocked()) {
+  if (mixedContentBlocked) {
     try {
       return await sendCardBridgeRequest(
         'config',

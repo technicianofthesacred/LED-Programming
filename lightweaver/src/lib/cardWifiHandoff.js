@@ -3,6 +3,9 @@ import { normalizeCardIdentity } from './cardIdentity.js';
 import { classifyCardReadiness, normalizeCardReadiness } from './cardReadiness.js';
 
 const UINT32_MAX = 0xffffffff;
+export const WIFI_HANDOFF_RECOVERY_KEY = 'lw_wifi_handoff_recovery_v1';
+const WIFI_HANDOFF_RECOVERY_VERSION = 1;
+const WIFI_HANDOFF_RECOVERY_MAX_BYTES = 1024;
 
 const CARD_ID_PATTERN = /^lw-[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 const VERSION_BUILD_BOOT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:+-]*$/;
@@ -18,6 +21,18 @@ function exactText(value, maxLength, pattern = VERSION_BUILD_BOOT_PATTERN) {
     return '';
   }
   return value;
+}
+
+function exactFlowId(value) {
+  return exactText(value, 96, /^[A-Za-z0-9_-]{16,96}$/);
+}
+
+function browserSessionStorage() {
+  try {
+    return typeof window !== 'undefined' ? window.sessionStorage : null;
+  } catch {
+    return null;
+  }
 }
 
 function isUint32(value, { allowZero = true } = {}) {
@@ -209,4 +224,96 @@ export function inspectFinalStationHandoff({ status, correlation } = {}) {
 
 export function isFinalStationHandoff(options = {}) {
   return Boolean(inspectFinalStationHandoff(options));
+}
+
+export function writeWifiHandoffRecovery({ correlation: rawCorrelation, flowId: rawFlowId, ackAttempted = false } = {}, {
+  storage = browserSessionStorage(),
+} = {}) {
+  const correlation = normalizeWifiHandoffCorrelation(rawCorrelation);
+  const flowId = exactFlowId(rawFlowId);
+  if (!storage || !correlation || !flowId || typeof ackAttempted !== 'boolean') return false;
+  const record = {
+    version: WIFI_HANDOFF_RECOVERY_VERSION,
+    flowId,
+    correlation,
+    ackAttempted,
+  };
+  const serialized = JSON.stringify(record);
+  if (serialized.length > WIFI_HANDOFF_RECOVERY_MAX_BYTES) return false;
+  try {
+    storage.setItem(WIFI_HANDOFF_RECOVERY_KEY, serialized);
+    return storage.getItem(WIFI_HANDOFF_RECOVERY_KEY) === serialized;
+  } catch {
+    return false;
+  }
+}
+
+export function readWifiHandoffRecovery({ flowId: rawFlowId = '', storage = browserSessionStorage() } = {}) {
+  if (!storage) return null;
+  let raw = '';
+  try {
+    raw = storage.getItem(WIFI_HANDOFF_RECOVERY_KEY) || '';
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  const requestedFlowId = exactFlowId(rawFlowId);
+  try {
+    if (raw.length > WIFI_HANDOFF_RECOVERY_MAX_BYTES) throw new Error('oversized');
+    const parsed = JSON.parse(raw);
+    const flowId = exactFlowId(parsed?.flowId);
+    const correlation = normalizeWifiHandoffCorrelation(parsed?.correlation);
+    if (
+      parsed?.version !== WIFI_HANDOFF_RECOVERY_VERSION
+      || !flowId
+      || !correlation
+      || typeof parsed.ackAttempted !== 'boolean'
+    ) throw new Error('invalid');
+    if (requestedFlowId && requestedFlowId !== flowId) {
+      storage.removeItem(WIFI_HANDOFF_RECOVERY_KEY);
+      return null;
+    }
+    return Object.freeze({
+      version: WIFI_HANDOFF_RECOVERY_VERSION,
+      flowId,
+      correlation,
+      ackAttempted: parsed.ackAttempted,
+    });
+  } catch {
+    try { storage.removeItem(WIFI_HANDOFF_RECOVERY_KEY); } catch { /* noop */ }
+    return null;
+  }
+}
+
+export function markWifiHandoffAckAttempted({ flowId: rawFlowId, correlation: rawCorrelation } = {}, {
+  storage = browserSessionStorage(),
+} = {}) {
+  const flowId = exactFlowId(rawFlowId);
+  const correlation = normalizeWifiHandoffCorrelation(rawCorrelation);
+  const current = readWifiHandoffRecovery({ flowId, storage });
+  if (!current || !correlation || !sameRecoveryCorrelation(current.correlation, correlation)) return false;
+  return writeWifiHandoffRecovery({ correlation, flowId, ackAttempted: true }, { storage });
+}
+
+export function clearWifiHandoffRecovery(rawFlowId = '', { storage = browserSessionStorage() } = {}) {
+  if (!storage) return false;
+  const flowId = exactFlowId(rawFlowId);
+  const current = readWifiHandoffRecovery({ storage });
+  if (!current || (flowId && current.flowId !== flowId)) return false;
+  try {
+    storage.removeItem(WIFI_HANDOFF_RECOVERY_KEY);
+    return storage.getItem(WIFI_HANDOFF_RECOVERY_KEY) == null;
+  } catch {
+    return false;
+  }
+}
+
+function sameRecoveryCorrelation(left, right) {
+  return Boolean(left && right)
+    && left.host === right.host
+    && left.expectedCardId === right.expectedCardId
+    && left.expectedFirmwareVersion === right.expectedFirmwareVersion
+    && left.expectedBuildId === right.expectedBuildId
+    && left.expectedBootId === right.expectedBootId
+    && left.handoffGeneration === right.handoffGeneration;
 }

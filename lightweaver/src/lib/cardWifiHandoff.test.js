@@ -3,8 +3,13 @@ import test from 'node:test';
 
 import {
   acceptWifiHandoff,
+  clearWifiHandoffRecovery,
   inspectFinalStationHandoff,
   isFinalStationHandoff,
+  markWifiHandoffAckAttempted,
+  readWifiHandoffRecovery,
+  WIFI_HANDOFF_RECOVERY_KEY,
+  writeWifiHandoffRecovery,
 } from './cardWifiHandoff.js';
 
 const expectedCard = Object.freeze({
@@ -203,4 +208,42 @@ test('final station correlation requires exact fresh status on the correlated st
     status: { ...status, bootId: ` ${correlation.expectedBootId}` },
     correlation,
   }), false, 'final station boot comparison is exact and non-lossy');
+});
+
+test('session recovery persists only bounded correlation, flow, and ack-attempt state', () => {
+  const values = new Map();
+  const storage = {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: key => values.delete(key),
+  };
+  const correlation = accept();
+  const flowId = 'flow-session-recovery-123456';
+  assert.equal(writeWifiHandoffRecovery({ correlation, flowId, ackAttempted: false }, { storage }), true);
+  assert.deepEqual(readWifiHandoffRecovery({ flowId, storage }), {
+    version: 1,
+    flowId,
+    correlation,
+    ackAttempted: false,
+  });
+  assert.equal(readWifiHandoffRecovery({ flowId: 'flow-different-123456789', storage }), null,
+    'another active commissioning flow cannot inherit the session correlation');
+  assert.equal(values.has(WIFI_HANDOFF_RECOVERY_KEY), false,
+    'changing commissioning flow clears the stale session correlation');
+  assert.equal(writeWifiHandoffRecovery({ correlation, flowId, ackAttempted: false }, { storage }), true);
+  assert.equal(markWifiHandoffAckAttempted({ flowId, correlation }, { storage }), true);
+  assert.equal(readWifiHandoffRecovery({ flowId, storage }).ackAttempted, true);
+  const raw = values.get(WIFI_HANDOFF_RECOVERY_KEY);
+  assert.doesNotMatch(raw, /password|credential|ssid/i,
+    'the recovery record contains no WiFi credentials or broad authority');
+  assert.equal(clearWifiHandoffRecovery(flowId, { storage }), true);
+  assert.equal(readWifiHandoffRecovery({ flowId, storage }), null);
+
+  values.set(WIFI_HANDOFF_RECOVERY_KEY, JSON.stringify({
+    version: 1, flowId, correlation: { ...correlation, host: 'evil.example.com' }, ackAttempted: true,
+  }));
+  assert.equal(readWifiHandoffRecovery({ flowId, storage }), null,
+    'hostile persisted correlation fails closed');
+  assert.equal(values.has(WIFI_HANDOFF_RECOVERY_KEY), false,
+    'invalid persisted recovery is removed rather than retried');
 });
