@@ -10,6 +10,7 @@ const storageHeader = read('src/LightweaverStorage.h');
 const runtimeApi = read('src/LightweaverRuntimeApi.h');
 const main = read('src/main.cpp');
 const web = read('src/LightweaverWeb.cpp');
+const orchestrator = read('src/LightweaverConnectivityOrchestrator.h');
 const artnet = read('src/LightweaverArtnet.cpp');
 const artnetHeader = read('src/LightweaverArtnet.h');
 const wled = read('src/LightweaverWledRealtime.cpp');
@@ -34,6 +35,8 @@ function functionBody(source, signature) {
 
 assert.match(web, /#include "LightweaverConnectivityPolicy\.h"/,
   'firmware orchestration must use the native-tested connectivity policy');
+assert.match(web, /#include "LightweaverConnectivityOrchestrator\.h"/,
+  'firmware maintenance must use the native-tested production orchestrator');
 assert.match(types, /struct WifiRuntimeState\s*{[\s\S]*ConnectivityState[\s\S]*stationIp[\s\S]*lastError[\s\S]*attemptCount[\s\S]*};/,
   'transient WiFi truth must be separate from saved credentials and include transition/retry metadata');
 assert.match(types, /struct RuntimeConfig\s*{[\s\S]*WifiConfig wifi;[\s\S]*WifiRuntimeState wifiRuntime;/,
@@ -85,18 +88,16 @@ assert.match(setupWeb, /startApMode\s*\([\s\S]*beginStationJoin\s*\(/,
 const beginJoin = functionBody(web, /void\s+beginStationJoin\s*\([^;]*\)\s*\{/);
 assert.match(beginJoin, /apTeardownScheduled\s*=\s*false[\s\S]*attemptCount\s*=\s*0[\s\S]*CredentialsAccepted/,
   'new credentials must replace pending teardown and retry metadata before starting a new generation');
-for (const signature of [
-  /void\s+startStationAttempt\s*\(/,
-  /void\s+startStationReconnect\s*\(/,
-]) {
-  const body = functionBody(web, signature);
-  assert.match(body, /WiFi\.setAutoReconnect\(false\)/,
-    'all policy-owned station attempts must disable SDK auto-reconnect');
-  assert.doesNotMatch(body, /WiFi\.setAutoReconnect\(true\)/,
-    'the SDK must never own retries alongside the connectivity policy');
-  assert.match(body, /recordStationAttempt/,
-    'attempt timestamps must be recorded only when production issues a real attempt');
-}
+const issueAttempt = functionBody(web, /bool\s+issueStationAttempt\s*\(/);
+assert.match(issueAttempt, /WiFi\.setAutoReconnect\(false\)/,
+  'the shared hardware attempt adapter must disable SDK auto-reconnect');
+assert.match(issueAttempt, /ConnectivityStationAttempt::Reconnect[\s\S]*WiFi\.reconnect/,
+  'the hardware adapter must distinguish explicit reconnect actions');
+assert.match(issueAttempt, /ConnectivityStationAttempt::Begin[\s\S]*WiFi\.begin/,
+  'the hardware adapter must distinguish explicit initial/pre-ack actions');
+const initialAttempt = functionBody(web, /void\s+startStationAttempt\s*\(/);
+assert.match(initialAttempt, /issueStationAttempt[\s\S]*recordStationAttempt/,
+  'initial attempts must use the shared hardware adapter and record a real action receipt');
 assert.doesNotMatch(web, /WiFi\.setAutoReconnect\(true\)/,
   'no firmware lifecycle may silently return retry ownership to the SDK');
 
@@ -188,26 +189,22 @@ assert.ok(maximumEscapedWifiBody.length > 256 && maximumEscapedWifiBody.length <
   'the raised bound must fit fully escaped validator-maximum WiFi fields');
 
 const connectivity = functionBody(web, /void\s+maintainConnectivity\s*\(/);
-assert.match(connectivity, /advanceConnectivity\s*\(/,
-  'runtime lifecycle must be driven by the tested pure policy');
+assert.match(connectivity, /runConnectivityOrchestrator\s*\(/,
+  'runtime lifecycle must execute the exact native-tested action runner');
+assert.doesNotMatch(connectivity, /advanceConnectivity\s*\(/,
+  'runtime maintenance must not duplicate event/action planning around the orchestrator');
 assert.match(connectivity,
-  /bool\s+stationReady\s*=\s*connected[\s\S]{0,180}0\.0\.0\.0[\s\S]*if\s*\(stationReady[\s\S]*recordStationAssociation/,
+  /bool\s+stationReady\s*=\s*connected[\s\S]{0,180}0\.0\.0\.0[\s\S]*ConnectivityObservation/,
   'recovery must not retire its AP or restore readiness until station DHCP is usable');
 assert.match(connectivity, /processScheduledApTeardown\(cfg, state, now\);\s*if\s*\(apTeardownScheduled\)\s*return;/,
   'an accepted ACK deadline must fence grace-based teardown until response settlement');
-assert.match(connectivity, /WL_CONNECTED[\s\S]*HandoffReady|StationAssociated/,
-  'association must enter handoff-ready while AP remains available');
-assert.match(connectivity, /station association timed out[\s\S]*startApMode|SetupAp[\s\S]*startApMode/,
-  'failed initial association must leave or restore a reachable setup AP');
-const associated = functionBody(web, /void\s+recordStationAssociation\s*\(/);
+assert.match(connectivity, /apRadioStarted\s*&&\s*dnsServerActive/,
+  'the orchestrator must observe both AP radio and captive DNS readiness');
+const associated = functionBody(web, /void\s+applyStationAssociation\s*\(/);
 assert.match(associated, /WiFi\.setAutoReconnect\(false\)/,
   'association and recovery must leave SDK auto-reconnect disabled');
-assert.match(associated, /announceMdns[\s\S]*wledRealtimeRebind/,
-  'association must refresh mDNS and existing realtime binding');
-assert.match(associated, /wledRealtimeRebind[\s\S]*artnetRebind/,
-  'every association and reassociation must refresh both UDP listeners');
-assert.ok(associated.indexOf('artnetRebind()') < associated.indexOf('syncWifiReadiness(config)'),
-  'command readiness may return only after all runtime UDP bindings are refreshed');
+assert.match(associated, /announceMdns/,
+  'association hardware effects must refresh mDNS');
 assert.match(artnetHeader, /bool\s+artnetRebind\s*\(\s*\)/,
   'Art-Net rebind must report actual bind success');
 assert.match(wledHeader, /bool\s+wledRealtimeRebind\s*\(\s*\)/,
@@ -232,9 +229,9 @@ assert.match(wled, /elapsed\s*\(/,
 const readiness = functionBody(web, /void\s+syncWifiReadiness\s*\(/);
 assert.match(readiness, /connectivityTransitionPending/,
   'production readiness must consume the native-tested binding-pending policy');
-assert.match(connectivity, /networkBindingsRetryDue[\s\S]*refreshNetworkBindings/,
-  'station-up listener failures must retry without blocking connectivity maintenance');
-const refreshBindings = functionBody(web, /void\s+refreshNetworkBindings\s*\(/);
+const refreshBindings = functionBody(web, /ConnectivityBindingResult\s+refreshNetworkBindings\s*\(/);
+assert.match(refreshBindings, /force[\s\S]*wledRealtimeRebind[\s\S]*artnetRebind/,
+  'forced association refreshes and lazy listener retries must share one hardware adapter');
 assert.doesNotMatch(refreshBindings, /ensureRecoveryAp|softAP/,
   'listener-only failure must not reopen the recovery AP');
 const recoveryAp = functionBody(web, /void\s+ensureRecoveryAp\s*\([^;]*\)\s*\{/);
@@ -243,21 +240,27 @@ assert.match(recoveryAp, /apActive\s*=\s*apRadioStarted/,
 assert.match(recoveryAp,
   /activeIp\s*=\s*apRadioStarted\s*\?\s*WiFi\.softAPIP\(\)\.toString\(\)\s*:\s*String\(\)/,
   'recovery AP status must not publish a dead soft-AP address');
-assert.match(connectivity, /kHandoffGraceMs|advanceConnectivity[\s\S]*Tick/,
-  'a still-associated station may retire the AP after the tested grace period');
-assert.match(connectivity, /ConnectivityPhase::Station[\s\S]*ConnectivityEvent::StationLost[\s\S]*syncWifiReadiness[\s\S]*(?:WiFi\.reconnect|startStationReconnect)/,
-  'completed Station loss must enter policy Reconnecting, fail readiness closed, and retry immediately');
-assert.match(connectivity,
-  /ConnectivityPhase::Station[\s\S]*currentStationIp\s*!=\s*cfg\.wifiRuntime\.stationIp[\s\S]*recordStationAssociation/,
-  'a changed station address must refresh mDNS and both UDP bindings even without an observed disconnect');
-assert.match(connectivity, /advanceConnectivity[\s\S]*ConnectivityEvent::Tick[\s\S]*reconnectDue[\s\S]*(?:WiFi\.reconnect|startStationReconnect)/,
-  'policy reconnectDue ticks must actively retry the station association');
-assert.match(connectivity, /ConnectivityPhase::RecoveryAp[\s\S]*(?:ensureRecoveryAp|startRecoveryAp)/,
-  'the 60-second policy transition must enable the recovery AP');
-assert.match(connectivity, /ConnectivityPhase::Reconnecting[\s\S]*ConnectivityPhase::RecoveryAp[\s\S]*recordStationAssociation/,
-  'both runtime recovery phases must accept reassociation without replaying initial handoff');
-assert.match(connectivity, /ConnectivityPhase::HandoffReady[\s\S]*ConnectivityEvent::StationLost[\s\S]*stationIp\s*=\s*""[\s\S]*activeTransport\s*=\s*WIFI_TRANSPORT_AP[\s\S]*activeIp\s*=\s*WiFi\.softAPIP\(\)\.toString\(\)[\s\S]*activeHostname\s*=\s*""/,
-  'pre-ack loss must immediately restore legacy AP transport, IP, and hostname truth');
+for (const action of [
+  'StationLost', 'StationAssociated', 'ConnectivityStationAttempt::Reconnect',
+  'ConnectivityStationAttempt::Begin', 'networkBindingsRetryDue',
+  'ensureSetupAp', 'ensureRecoveryAp', 'retireRecoveryAp',
+]) {
+  assert.ok(orchestrator.includes(action),
+    `production orchestrator must plan ${action}`);
+}
+assert.match(orchestrator,
+  /refreshNetworkBindings[\s\S]*recordNetworkBindingAttempt[\s\S]*retireSetupAp/,
+  'the production runner must apply binding truth before safe AP retirement');
+assert.match(orchestrator,
+  /setReadinessPending[\s\S]*issueStationAttempt[\s\S]*recordStationAttempt/,
+  'the production runner must fail readiness closed before issuing and recording station attempts');
+const hardwareAdapter = functionBody(web, /class\s+WebConnectivityHardwareAdapter/);
+assert.match(hardwareAdapter,
+  /stationLost[\s\S]*stationAssociated[\s\S]*refreshNetworkBindings[\s\S]*ensureSetupAp[\s\S]*ensureRecoveryAp[\s\S]*retireSetupAp[\s\S]*issueStationAttempt[\s\S]*setReadinessPending/,
+  'Web.cpp must implement every hardware effect consumed by the tested orchestrator');
+assert.match(hardwareAdapter,
+  /preAck[\s\S]*activeTransport\s*=\s*WIFI_TRANSPORT_AP[\s\S]*WiFi\.softAPIP\(\)\.toString\(\)/,
+  'pre-ack loss hardware effects must immediately restore AP transport truth');
 
 assert.match(runtimeApi, /void\s+runtimeSetWifiTransitionPending\s*\(bool pending\)/,
   'web orchestration must expose a dedicated WiFi readiness interlock');

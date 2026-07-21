@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
 const read = (name) => readFileSync(resolve(root, name), 'utf8');
 const web = read('src/LightweaverWeb.cpp');
+const orchestrator = read('src/LightweaverConnectivityOrchestrator.h');
 const main = read('src/main.cpp');
 
 function functionBody(source, signature) {
@@ -23,10 +24,12 @@ function functionBody(source, signature) {
 
 const recoveryFunctions = [
   functionBody(web, /void\s+maintainConnectivity\s*\(/),
-  functionBody(web, /void\s+recordStationAssociation\s*\(/),
+  functionBody(web, /void\s+applyStationAssociation\s*\(/),
   functionBody(web, /void\s+(?:ensureRecoveryAp|startRecoveryAp)\s*\([^;]*\)\s*\{/),
-  functionBody(web, /void\s+startStationReconnect\s*\(/),
+  functionBody(web, /bool\s+issueStationAttempt\s*\(/),
   functionBody(web, /void\s+retireSetupAp\s*\(/),
+  functionBody(web, /class\s+WebConnectivityHardwareAdapter/),
+  orchestrator,
 ].join('\n');
 
 for (const destructive of [
