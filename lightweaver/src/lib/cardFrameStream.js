@@ -441,8 +441,11 @@ export function createCardFrameStream({
 
   function push(pixels) {
     if (yielded || !Array.isArray(pixels) || !pixels.length) return false;
+    // Frame producers intentionally reuse their pixel buffers. Keep our own
+    // immutable snapshot so a later render cannot alter a queued/in-flight
+    // frame.
     if (latestDirty) droppedFrames += 1; // previous frame never made the wire
-    latest = pixels;
+    latest = pixels.slice();
     latestDirty = true;
     return true;
   }

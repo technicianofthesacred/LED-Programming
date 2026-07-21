@@ -142,6 +142,28 @@ assert.equal(clampFrameFps('nope'), 18, 'garbage fps falls back to the default')
   await stream.stop();
 }
 
+// ── producer buffers are snapshotted before the next render ─────────
+{
+  const clock = makeClock();
+  const { transport, sends } = makeTransport(clock);
+  const stream = createCardFrameStream({
+    transport,
+    setIntervalImpl: clock.setIntervalImpl,
+    clearIntervalImpl: clock.clearIntervalImpl,
+    now: clock.now,
+  });
+  const reusable = FRAME(4);
+  const firstSnapshot = [...reusable];
+  stream.start();
+  stream.push(reusable);
+  reusable[0] = 'FFFFFF';
+  await clock.advance(60);
+  assert.deepEqual(sends[0].pixels, firstSnapshot,
+    'push snapshots a reusable producer buffer before it can be mutated again');
+
+  await stream.stop();
+}
+
 // ── keepalive: no >2s gap while active (card watchdog would revert) ──────
 {
   const clock = makeClock();
