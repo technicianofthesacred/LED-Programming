@@ -30,6 +30,25 @@ export function productionCardAuthority(link = {}, expectedCardId = '', {
     return exactHandoff ? { ok: true, readback: true } : fail('The exact post-config card handoff is not ready for read-back.');
   }
   const connectedTransport = link.state === 'connected-bridge' || link.state === 'connected-direct';
+  if (mutation === 'observed-identity') {
+    if (!connectedTransport || !actual) return fail('No verified Lightweaver card identity is available to inspect.');
+    if (!normalizeCardHost(link.host) || !String(link.validatedBootId || '')) {
+      return fail('The observed card link is missing a verified host or boot.');
+    }
+    if (!Number.isSafeInteger(link.operationGeneration) || link.operationGeneration < 0) {
+      return fail('The observed card link operation generation is not verified.');
+    }
+    if (link.state === 'connected-bridge' && !Number.isSafeInteger(link.bridgeLifecycle)) {
+      return fail('The observed card page lifecycle is not verified.');
+    }
+    const observedReadiness = link.readiness || {};
+    const observedIsSelfConsistent = observedReadiness.app === 'Lightweaver'
+      && String(observedReadiness.cardId || observedReadiness.id || '').trim().toLowerCase() === actual
+      && String(observedReadiness.bootId || '') === String(link.validatedBootId || '');
+    return observedIsSelfConsistent
+      ? { ok: true, readOnly: true, observedCardId: actual }
+      : fail('The observed card identity status is not internally consistent.');
+  }
   if (!expected || !connectedTransport) return fail('The exact card link is not ready.');
   if (!actual || actual !== expected || (expectedByLink && expectedByLink !== expected)) {
     return fail('The exact USB-inspected card is not on this card link.');

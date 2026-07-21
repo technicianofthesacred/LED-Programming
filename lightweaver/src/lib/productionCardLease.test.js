@@ -59,6 +59,26 @@ test('identity authority permits exact read-only firmware evidence without grant
   assert.equal(productionCardAuthority({ ...oldFactory, readiness: { ...oldFactory.readiness, cardId: 'lw-other' } }, expectedCardId, { mutation: 'identity' }).ok, false);
 });
 
+test('observed identity authority can name a different verified card without granting expected-card authority', () => {
+  const observedCardId = 'lw-112233445566';
+  const observed = link({
+    card: { id: observedCardId },
+    readiness: { ...link().readiness, cardId: observedCardId },
+  });
+  const authority = productionCardAuthority(observed, expectedCardId, { mutation: 'observed-identity' });
+  assert.equal(authority.ok, true);
+  assert.equal(authority.observedCardId, observedCardId);
+  assert.equal(productionCardAuthority(observed, expectedCardId, { mutation: 'identity' }).ok, false);
+  assert.equal(productionCardAuthority(observed, expectedCardId, { mutation: 'config', ...signedFirmware }).ok, false);
+
+  const lease = captureProductionCardLease(observed, observedCardId, { mutation: 'observed-identity' });
+  assert.doesNotThrow(() => assertProductionCardLease(lease, observed, { mutation: 'observed-identity' }));
+  assert.throws(() => assertProductionCardLease(lease, {
+    ...observed,
+    readiness: { ...observed.readiness, cardId: 'lw-another-card' },
+  }, { mutation: 'observed-identity' }), /not ready/i);
+});
+
 test('an exact blank card grants config-only authority', () => {
   const blank = link({
     cardBlank: true,

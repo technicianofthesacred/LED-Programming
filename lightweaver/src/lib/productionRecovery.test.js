@@ -94,7 +94,7 @@ test('browser and transport errors map to bounded worker-safe classifications wi
     [new Error('Permission denied opening /dev/ttyUSB0'), { phase: 'connect-card', os: 'linux' }, 'linux-permissions'],
     [new Error('USB serial driver was not found'), { phase: 'connect-card' }, 'missing-driver'],
     [new Error('ESP32-C3 is not supported'), { phase: 'inspect' }, 'unsupported-card'],
-    [new Error('The same card could not be verified'), { phase: 'reconnect' }, 'wrong-card-reconnect'],
+    [new Error('The exact card did not complete WiFi setup before the bounded setup wait ended.'), { phase: 'reconnect' }, 'card-page-unavailable'],
     [new Error('Response lost after card accepted restore'), { phase: 'restore' }, 'restore-failure'],
   ];
   for (const [error, context, expected] of examples) {

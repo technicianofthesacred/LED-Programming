@@ -532,8 +532,23 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     const setupDeadline = Date.now() + setupTimeoutMs;
     let handoff = null;
     let finalStationSeen = false;
+    const stationAuthorityIsReady = () => {
+      const observed = currentCardLink();
+      const wifi = observed?.readiness?.wifi;
+      return wifi?.transport === 'station'
+        && Boolean(wifi.stationIp || wifi.ip)
+        && productionCardAuthority(observed, runLease.expectedCardId, authorityOptions(authority)).ok;
+    };
     while (Date.now() < setupDeadline && !handoff && !finalStationSeen) {
       assertActiveRunLease(runLease);
+      // The card-page lifecycle can refresh the shared verified-card link before
+      // this call's bridge request receives a reply (the timing observed on the
+      // production S3). Consume that fresh station evidence on every poll; do
+      // not make a healthy returned card wait for an AP-specific response.
+      if (stationAuthorityIsReady()) {
+        finalStationSeen = true;
+        break;
+      }
       try {
         const apStatus = await sendCardBridgeRequest('status', { cache: 'no-store', nonce: Date.now() }, {
           host: initialHost, timeoutMs: 1500, retryOnTimeout: false,
@@ -560,12 +575,17 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
         // The card may be switching radios; keep the bounded setup wait
         // attached to this immutable production run and exact host.
       }
+      // A status request can outlive the remaining setup deadline while the
+      // card independently finishes its station return. Re-check the shared
+      // exact-card evidence after the request before classifying a timeout.
+      if (!handoff && !finalStationSeen && stationAuthorityIsReady()) finalStationSeen = true;
       if (!handoff && !finalStationSeen) {
         await new Promise(resolve => setTimeout(resolve, 750));
         assertActiveRunLease(runLease);
       }
     }
     assertActiveRunLease(runLease);
+    if (!handoff && !finalStationSeen && stationAuthorityIsReady()) finalStationSeen = true;
     if (!handoff && !finalStationSeen) throw new Error('The exact card did not complete WiFi setup before the bounded setup wait ended.');
 
     if (handoff) {
@@ -721,11 +741,14 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     let lease = null;
     try {
       const driver = testDriver();
-      if (!driver?.readEvidence) await connectCardPageThroughWifi(runLease, '192.168.4.1', { authority: 'config' });
+      if (!driver?.readEvidence) await connectCardPageThroughWifi(runLease, '192.168.4.1', { authority: 'observed-identity' });
       assertActiveRunLease(runLease);
-      lease = captureCardLease('config', runLease);
+      const observedLink = currentCardLink();
+      const observedCardId = String(observedLink?.card?.id || observedLink?.card?.cardId
+        || observedLink?.readiness?.cardId || observedLink?.readiness?.id || '').trim().toLowerCase();
+      lease = captureProductionCardLease(observedLink, observedCardId, { mutation: 'observed-identity' });
       const evidence = driver?.readEvidence ? await driver.readEvidence('reconnect') : await readCardProjectEvidence({ host: lease.host, transport: lease.transport });
-      assertCardLease(lease, 'config');
+      assertProductionCardLease(lease, currentCardLink(), { mutation: 'observed-identity' });
       assertActiveRunLease(runLease);
       if (evidence.cardId !== runLease.expectedCardId) throw new Error(`Wrong card. Reconnect ${runLease.expectedCardId}; the online card is ${evidence.cardId}.`);
       if (evidence.firmwareVersion !== release.value.manifest.firmwareVersion || evidence.buildId !== release.value.manifest.buildId) {
@@ -735,6 +758,9 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
         } });
         return;
       }
+      // Read-only observation may identify a wrong card or mismatched firmware,
+      // but only the exact signed blank-card envelope can authorize restore.
+      captureCardLease('config', runLease);
       const restoringRun = await advance('restore', { usbReleased: true }, runLease);
       activeRunLease = Object.freeze(correlation(restoringRun));
       assertActiveRunLease(activeRunLease);

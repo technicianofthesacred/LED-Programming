@@ -139,7 +139,10 @@ export function inferProductionFailure(reason, context = {}) {
   if (!kind && context.phase === 'physical') kind = 'physical-failure';
   if (!kind && context.phase === 'restore') kind = 'restore-failure';
   if (!kind && context.phase === 'signed-release') kind = 'signed-release-failure';
-  if (!kind && context.phase === 'reconnect') kind = 'wrong-card-reconnect';
+  // Reconnect is a transport phase, not identity evidence. An AP/LAN timeout
+  // means the expected card page is unavailable; call it the wrong card only
+  // when the response itself explicitly proves a different identity above.
+  if (!kind && context.phase === 'reconnect') kind = 'card-page-unavailable';
   if (!kind && /not supported|unsupported|wrong chip|flash size|needs 16 mb|not an esp32-s3|nothing was erased/.test(message)) kind = 'unsupported-card';
   if (!kind && /driver/.test(message)) kind = 'missing-driver';
   if (!kind && context.os === 'linux' && /permission|denied|dialout|udev/.test(message)) kind = 'linux-permissions';

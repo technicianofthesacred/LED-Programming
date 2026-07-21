@@ -22,8 +22,13 @@ shipment-ready.
   `commandReady: false`, so Studio must call it blank rather than connected.
 - No factory beacon, boundary frame, full-strip Aurora, continued playback, or
   other physical-light result was visually verified during diagnostic recovery.
+- The protected signer published build `df20968`, the strict live verifier
+  proved all 51 deployed files, and live Studio flashed that signed image to the
+  exact USB card with confirmed USB release. After the erase, the old station
+  route disappeared and the card-page tab targeted `192.168.4.1`; the setup-AP
+  join and every later physical gate remain open.
 
-## 1. Post-flash dead end — implemented, awaiting live publish
+## 1. Post-flash dead end — deployed, USB transition verified
 
 - [x] Reproduce the live sequence with the same explicit evidence boundaries:
       exact USB identity succeeds, the release/reset transition starts, and no
@@ -61,12 +66,12 @@ shipment-ready.
 
 ## 3. Publish the recovery release
 
-- [ ] Merge only after the complete source gate is green.
-- [ ] Require the protected signer to publish a fresh signed factory release
+- [x] Merge only after the complete source gate is green.
+- [x] Require the protected signer to publish a fresh signed factory release
       for any firmware changes; do not bypass `factory-bin-freshness`.
-- [ ] Confirm the credentialed Cloudflare Pages deploy actually ran. A green
+- [x] Confirm the credentialed Cloudflare Pages deploy actually ran. A green
       workflow that reports **Production publish: NOT RUN** is not deployment.
-- [ ] Run the required live production check and verify the root build graph,
+- [x] Run the required live production check and verify the root build graph,
       every JS/CSS asset, signed firmware, provenance, and indexed job all match
       the deployed checkout.
 
@@ -76,8 +81,8 @@ Use `https://led.mandalacodes.com/#screen=production` and follow
 [`new-card-checklist.md`](new-card-checklist.md). No terminal, typed IP, direct
 HTTP command, board LED, or eight-pixel beacon can substitute for this run.
 
-- [ ] Fully erase and flash the blank ESP32-S3 through the live Studio.
-- [ ] Confirm USB MAC `44:1B:F6:81:FE:B0` is retained as canonical card ID
+- [x] Fully erase and flash the blank ESP32-S3 through the live Studio.
+- [x] Confirm USB MAC `44:1B:F6:81:FE:B0` is retained as canonical card ID
       `lw-b0fe81f61b44`, then confirm USB release/reset actually completes.
 - [ ] Observe exactly the bounded eight-pixel/two-pulse amber factory beacon.
 - [ ] Confirm Studio says **Blank — load a project**, never green.

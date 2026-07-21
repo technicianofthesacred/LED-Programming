@@ -188,17 +188,16 @@ See [the Pattern Lab operator guide](pattern-lab-user-guide.md) and
 
 ## Current limiter
 
-As of 2026-07-21, the USB ingress byte-order fix is signed, deployed, and
-verified by live Studio against the physical card: esptool MAC
-`44:1B:F6:81:FE:B0` correctly produced `lw-b0fe81f61b44`. The later dead end was
-traced to an ESP32-S3 reset returning to the ROM downloader. The source now uses
-an RTC-watchdog restart with GPIO0 released, and the real card returned at its
-station address with a new boot ID and truthful blank state. Studio source also
-accepts an already verified station card during firmware preflight and bounds
-the unavailable-card recovery path. These corrections still need a protected
-signed release, live deployment, and the uninterrupted acceptance above. No
-physical-light gate was verified during diagnostic recovery, so Lightweaver is
-**not ready to ship** yet.
+As of 2026-07-21, the USB byte-order and ESP32-S3 RTC-watchdog restart fixes are
+signed, deployed, and exercised by live Studio against the physical card.
+Esptool MAC `44:1B:F6:81:FE:B0` produced `lw-b0fe81f61b44`; the exact signed
+release flashed; USB released; and Production Setup reached the setup-network
+handoff without the former ROM-downloader dead end. The strict live verifier
+also proved the signed image and all 51 Studio build-graph files. After the full
+erase, the old station route disappeared and the card page targeted
+`192.168.4.1`, as expected before joining the factory AP. The AP join, project
+load, patterns, visible strip, power-cycle, and Wi-Fi recovery checks are still
+open, so Lightweaver is **not ready to ship** yet.
 
 ## Deferred lanes
 

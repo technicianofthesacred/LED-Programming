@@ -32,11 +32,15 @@ reported a blank, non-command-ready project. Studio's source flow now also
 accepts an already verified exact station card for firmware inspection instead
 of forcing it back through a nonexistent setup AP.
 
-Those fixes still require a new protected signed firmware release, a live
-Studio deployment, and one uninterrupted erased-card acceptance. No factory
-beacon, guided boundary, Aurora, or recovery light result was visually verified
-in the diagnostic recovery. Source correctness and API readback are not
-shipment evidence.
+The protected signer published firmware build `df20968`, Cloudflare published
+the matching Studio, and the strict live verifier proved the signed image plus
+all 51 build-graph files. Live Studio then flashed that release to the exact
+USB card and advanced with USB released instead of leaving the S3 in its ROM
+downloader. After the full erase, the old station route disappeared and the
+card-page handoff correctly targeted `192.168.4.1`; joining the setup Wi-Fi and
+all later physical gates remain incomplete. No factory beacon, guided boundary,
+Aurora, or recovery light result was visually verified. Deployment correctness
+and API readback are not shipment evidence.
 
 ## Full-flow audit
 
@@ -79,9 +83,10 @@ the busy state with same-card recovery actions. Tests cover restart ordering,
 lost reset response, unreachable card page, stale runs, and retained USB
 ownership.
 
-**Remaining gap.** This correction must be signed, deployed, and exercised by
-the live worker flow after a full erase. Source tests and diagnostic recovery
-cannot prove the production browser, cable, application boot, or visible output.
+**Live result.** The correction is signed and deployed. The production browser
+inspected `lw-b0fe81f61b44`, flashed the exact release, released USB, and reached
+**Reconnect same card** without the former downloader dead end. Application/AP
+readiness and visible output still require the following gates.
 
 ### 2. Prove the factory card is blank and visibly alive
 
@@ -145,6 +150,16 @@ evidence for preflight; it no longer tries to correlate an old installed build
 to the not-yet-installed release's factory AP lifecycle. A card that does not
 return still exits the bounded wait and offers exact-card recovery without
 advancing.
+
+The live run showed an additional timing boundary: a fresh exact station link
+can arrive after opening the card page but before that individual bridge request
+answers. Production now consumes verified station evidence on every bounded
+poll. A post-install AP/LAN timeout is classified as **card page unavailable**;
+reconnect phase alone is never evidence that another card answered.
+Reconnect inspection also uses read-only observed-card authority first, so an
+actual different card or signed-firmware mismatch can be named truthfully before
+the exact-card configuration authority is required. Observation never grants a
+project write.
 
 **Remaining gap.** The live HTTPS path—including popup permission, an actual
 blank-card network switch, retarget, and return to the same Studio tab—must pass
@@ -289,10 +304,11 @@ credentials is explicitly **not deployed** and cannot authorize shipment.
 
 ## Current release limiter
 
-The USB byte-order fix is deployed and verified. The ESP32-S3 restart and
-station-preflight corrections are implemented and verified in source and on the
-real card at the transport/status level, but are not yet in the protected live
-release described here. The current limiter is publish plus one uninterrupted
-live acceptance. Do not mark a card ready to ship until an erased card completes
-[`new-card-checklist.md`](new-card-checklist.md), including human physical-light
-and recovery checks; none was verified in the diagnostic recovery.
+The USB identity and ESP32-S3 restart corrections are deployed and verified on
+the real USB card through signed flash and confirmed release. The live run is
+paused at the required setup-network handoff: the erased card is no longer on
+its old station address, and Studio has not credited Wi-Fi, project, command, or
+light success. The current limiter is completing one uninterrupted live
+acceptance from setup AP through visible output and recovery. Do not mark a card
+ready to ship until it completes [`new-card-checklist.md`](new-card-checklist.md),
+including the human physical-light checks.
