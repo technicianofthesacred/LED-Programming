@@ -316,7 +316,11 @@ export function createCardFrameStream({
   clearIntervalImpl = (...args) => clearInterval(...args),
   now = () => Date.now(),
 } = {}) {
-  const wire = transport || defaultFrameTransport(host);
+  const wire = transport === 'bridge'
+    ? createBridgeFrameTransport(host)
+    : transport === 'direct'
+      ? createDirectFrameTransport(host)
+      : transport || defaultFrameTransport(host);
   const ownershipHost = normalizeCardHost(host || readStoredCardHost());
   let frameFps = clampFrameFps(fps);
   let timer = null;

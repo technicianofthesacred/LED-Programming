@@ -2,6 +2,7 @@ import React, { useEffect, useReducer, useRef, useState } from 'react';
 import { ProductionRecovery } from './ProductionRecovery.jsx';
 import { createCardFrameStream } from '../../lib/cardFrameStream.js';
 import { readCardProjectEvidence } from '../../lib/cardPushClient.js';
+import { invalidateCardLinkOperationLease } from '../../lib/cardLink.js';
 import {
   activateAndWaitForCardWiring, confirmCardWiringCandidate, getCardWiringStatus,
   readCardWiringCandidateEvidence, rollbackCardWiringCandidate, stageCardWiringCandidate,
@@ -46,6 +47,7 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
   const streamRef = useRef(null);
   const timerRef = useRef(null);
   const generationRef = useRef(0);
+  const candidateOperationRef = useRef(0);
   const mountedRef = useRef(true);
   const tabRefs = useRef([]);
   const cardLinkRef = useRef(cardLink);
@@ -57,6 +59,7 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
   function currentCardLink() { return productionDriver()?.getCardLink?.() || cardLinkRef.current || {}; }
   function captureLease() { return captureProductionCardLease(currentCardLink(), expectedCardId, { mutation: 'runtime' }); }
   function assertLease(lease) { return assertProductionCardLease(lease, currentCardLink(), { mutation: 'runtime' }); }
+  function invalidateLease(lease, reason = 'production-physical-operation-failed') { return invalidateCardLinkOperationLease(lease, { reason }); }
   async function reacquireAfterCardReboot(priorLease, timeoutMs = 15000) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -83,15 +86,16 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
     mountedRef.current = true;
     let cancelled = false;
     (async () => {
+      let lease = null;
       try {
-        const lease = captureLease();
+        lease = captureLease();
         let status = await readWiringStatus(lease);
         assertLease(lease);
         if (!exactIdentity(status, job, expectedCardId)) throw new Error('Card wiring status does not belong to this exact card and job.');
         if (['staged', 'testing'].includes(status.state)) {
           if (!status.activationId) throw new Error('The card has temporary wiring without an activation identifier.');
           const driver = productionDriver();
-          const rolledBack = driver?.rollbackCandidate ? await driver.rollbackCandidate(status.activationId) : await rollbackCardWiringCandidate(status.activationId, { host: lease.host });
+          const rolledBack = driver?.rollbackCandidate ? await driver.rollbackCandidate(status.activationId) : await rollbackCardWiringCandidate(status.activationId, { host: lease.host, transport: lease.transport });
           if (rolledBack?.activationId && rolledBack.activationId !== status.activationId) throw new Error('Reload cleanup answered for another wiring candidate.');
           const rebootLease = await reacquireAfterCardReboot(lease);
           let rollbackReadError = null;
@@ -113,13 +117,14 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
         dispatch({ type: 'reset', source: reconciled.snapshot, results: reconciled.results });
         setReady(true);
       } catch (reason) {
+        if (lease) invalidateLease(lease, 'production-wiring-readback-failed');
         if (!cancelled) {
           setError(`${reason?.message || reason} Restore the verified artwork and recheck every boundary.`);
           setRoute({ action: 'restore-project', title: 'Wiring truth could not be restored', guidance: 'No light frame was started. Restore this job before physical verification.' });
         }
       }
     })();
-    return () => { cancelled = true; mountedRef.current = false; generationRef.current += 1; clearInterval(timerRef.current); void stopStream({ invalidate: false }); };
+    return () => { cancelled = true; mountedRef.current = false; generationRef.current += 1; candidateOperationRef.current += 1; clearInterval(timerRef.current); void stopStream({ invalidate: false }); };
   }, [runId, job.digest, expectedCardId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -152,7 +157,7 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
   }, [ready, state.activeBoundaryId, knownGood]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function stopStream({ invalidate = true } = {}) { if (invalidate) generationRef.current += 1; const stream = streamRef.current; streamRef.current = null; try { await stream?.stop?.(); } catch { /* recovery remains explicit */ } }
-  async function readWiringStatus(lease = captureLease()) { const driver = productionDriver(); return driver?.readWiringStatus ? driver.readWiringStatus() : getCardWiringStatus({ host: lease.host }); }
+  async function readWiringStatus(lease = captureLease()) { const driver = productionDriver(); return driver?.readWiringStatus ? driver.readWiringStatus() : getCardWiringStatus({ host: lease.host, transport: lease.transport }); }
   async function reconcileKnownGood(status) {
     if (!Number.isSafeInteger(status.wiringRevision) || status.wiringRevision < 1 || !/^[a-f0-9]{64}$/.test(status.wiringDigest || '')
       || !Number.isSafeInteger(status.maxMilliamps) || status.maxMilliamps < 100 || status.maxMilliamps > 20000) throw new Error('Card read-back is missing persistent wiring/current evidence.');
@@ -208,9 +213,11 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
     const evidence = await readIdentity(lease);
     assertLease(lease);
     if (evidence?.firmwareVersion !== job.firmware.version || evidence?.buildId !== job.firmware.buildId) {
+      invalidateLease(lease, 'production-physical-firmware-mismatch');
       setRoute(classifyProductionPhysicalObservation('flashing-or-frozen', { firmwareTrusted: false })); return STREAM_RESULT.firmwareBlocked;
     }
     if (!exactIdentity(evidence, job, expectedCardId)) {
+      invalidateLease(lease, 'production-physical-identity-mismatch');
       setRoute(classifyProductionPhysicalObservation('nothing-lit', { cardIdentityMatches: false })); return STREAM_RESULT.identityBlocked;
     }
     return STREAM_RESULT.verified;
@@ -221,8 +228,9 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
     await stopStream({ invalidate: false }); setError('');
     if (!boundary || generation !== generationRef.current || !mountedRef.current) return STREAM_RESULT.cancelled;
     dispatch({ type: 'delivery-started', boundaryId: boundary.id, generation });
+    let lease = null;
     try {
-      const lease = captureLease();
+      lease = captureLease();
       const identityResult = await verifyIdentity(lease);
       if (identityResult !== STREAM_RESULT.verified) return identityResult;
       if (generation !== generationRef.current || !mountedRef.current) return STREAM_RESULT.cancelled;
@@ -240,16 +248,21 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
       const stream = createCardFrameStream({ host: lease.host, fps: 4, onHealth: health => {
         if (generation !== generationRef.current || !mountedRef.current) { void stream.stop(); return; }
         try { assertLease(lease); } catch (reason) {
+          invalidateLease(lease, 'production-frame-lease-lost');
           recordDeliveryFailure(boundary.id, generation, reason.message);
           void stopStream();
           return;
         }
         if (health.delivered) dispatch({ type: 'delivered', boundaryId: boundary.id, generation });
         else { recordDeliveryFailure(boundary.id, generation); void stopStream(); }
-      } });
+      }, transport: lease.transport });
       if (generation !== generationRef.current || !mountedRef.current) { await stream.stop(); return STREAM_RESULT.cancelled; }
       streamRef.current = stream; stream.start(); stream.push(frame); return STREAM_RESULT.delivered;
-    } catch (reason) { if (generation === generationRef.current && mountedRef.current) recordDeliveryFailure(boundary.id, generation, reason?.message || String(reason)); return STREAM_RESULT.deliveryFailed; }
+    } catch (reason) {
+      if (lease) invalidateLease(lease, 'production-frame-delivery-failed');
+      if (generation === generationRef.current && mountedRef.current) recordDeliveryFailure(boundary.id, generation, reason?.message || String(reason));
+      return STREAM_RESULT.deliveryFailed;
+    }
   }
 
   async function readConfirmedKnownGood(snapshot) {
@@ -258,7 +271,7 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
     let lastReason = null;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       try {
-        const status = driver?.readWiringStatus ? await driver.readWiringStatus() : await getCardWiringStatus({ host: lease.host });
+        const status = driver?.readWiringStatus ? await driver.readWiringStatus() : await getCardWiringStatus({ host: lease.host, transport: lease.transport });
         assertLease(lease);
         if (status?.state === 'known-good' && exactIdentity(status, job, expectedCardId) && status.colorOrder === snapshot.config.led.colorOrder
           && status.maxMilliamps === snapshot.config.led.maxMilliamps && status.wiringRevision === snapshot.wiringRevision
@@ -273,7 +286,7 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
   async function rollbackExactCandidate(candidate, snapshot = knownGood) {
     const driver = productionDriver();
     const lease = captureLease();
-    const response = driver?.rollbackCandidate ? await driver.rollbackCandidate(candidate.activationId) : await rollbackCardWiringCandidate(candidate.activationId, { host: lease.host });
+    const response = driver?.rollbackCandidate ? await driver.rollbackCandidate(candidate.activationId) : await rollbackCardWiringCandidate(candidate.activationId, { host: lease.host, transport: lease.transport });
     if (response?.activationId && response.activationId !== candidate.activationId) throw new Error('Rollback response belonged to another candidate.');
     await reacquireAfterCardReboot(lease);
     return readConfirmedKnownGood(snapshot);
@@ -289,20 +302,22 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
     if (candidate) {
       if (candidate.boundaryId !== state.activeBoundaryId) { setError('This candidate belongs to another boundary and cannot be confirmed here.'); return; }
       setBusy(true);
+      let confirmLease = null;
       try {
         const lease = captureLease();
+        confirmLease = lease;
         const driver = productionDriver();
-        const confirmed = driver?.confirmCandidate ? await driver.confirmCandidate(candidate.activationId) : await confirmCardWiringCandidate(candidate.activationId, { host: lease.host });
+        const confirmed = driver?.confirmCandidate ? await driver.confirmCandidate(candidate.activationId) : await confirmCardWiringCandidate(candidate.activationId, { host: lease.host, transport: lease.transport });
         assertLease(lease);
         if (confirmed?.state !== 'known-good' || (confirmed?.activationId && confirmed.activationId !== candidate.activationId)) throw new Error('The card did not confirm this exact candidate.');
-        const readback = driver?.readWiringStatus ? await driver.readWiringStatus() : await getCardWiringStatus({ host: lease.host });
+        const readback = driver?.readWiringStatus ? await driver.readWiringStatus() : await getCardWiringStatus({ host: lease.host, transport: lease.transport });
         assertLease(lease);
         if (readback?.state !== 'known-good' || !exactIdentity(readback, job, expectedCardId) || readback.colorOrder !== candidate.config.led.colorOrder
           || readback.maxMilliamps !== candidate.config.led.maxMilliamps || readback.wiringRevision !== candidate.snapshot.wiringRevision
           || readback.wiringDigest !== candidate.snapshot.wiringDigest || !sameOutputs(readback.outputs, candidate.config.led.outputs)) throw new Error('Final card evidence did not match the exact confirmed candidate.');
         const invalidated = productionCorrectionAffectedBoundaryIds(knownGood, candidate.boundaryId, candidate.correction);
         setKnownGood(candidate.snapshot); dispatch({ type: 'candidate-confirmed', boundaryIds: invalidated }); clearInterval(timerRef.current); setCountdown(0);
-      } catch (reason) { setError(`${reason?.message || reason} The candidate remains temporary and will roll back.`); setBusy(false); return; }
+      } catch (reason) { if (confirmLease) invalidateLease(confirmLease, 'production-wiring-confirm-failed'); setError(`${reason?.message || reason} The candidate remains temporary and will roll back.`); setBusy(false); return; }
       setBusy(false);
     }
     dispatch({ type: 'observe', boundaryId: state.activeBoundaryId, observation, activationId: candidate?.activationId });
@@ -312,25 +327,35 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
     if (busy || state.candidate) return;
     setBusy(true); setError('');
     let stagedCandidate = null;
+    let operationLease = null;
+    const operation = candidateOperationRef.current + 1;
+    candidateOperationRef.current = operation;
+    const assertCandidateOperation = () => {
+      if (!mountedRef.current || candidateOperationRef.current !== operation) throw new Error('The temporary wiring operation was cancelled.');
+    };
     try {
       const lease = captureLease();
+      operationLease = lease;
       if (await verifyIdentity(lease) !== STREAM_RESULT.verified) throw new Error('Card evidence changed before the candidate test.');
       const candidate = buildProductionBoundaryCandidate(knownGood, state.activeBoundaryId, correction);
       await assignProductionWiringIdentity(candidate.config, { revision: knownGood.wiringRevision + 1 });
       candidate.snapshot.wiringRevision = candidate.config.wiringRevision;
       candidate.snapshot.wiringDigest = candidate.config.wiringDigest;
       const driver = productionDriver();
-      const staged = driver?.stageCandidate ? await driver.stageCandidate(candidate) : await stageCardWiringCandidate(candidate.config, { host: lease.host });
+      const staged = driver?.stageCandidate ? await driver.stageCandidate(candidate) : await stageCardWiringCandidate(candidate.config, { host: lease.host, transport: lease.transport });
+      assertCandidateOperation();
       assertLease(lease);
       if (!staged?.activationId || staged.state !== 'staged') throw new Error('The card did not acknowledge a staged candidate.');
       stagedCandidate = { ...candidate, activationId: staged.activationId, phase: 'staged' };
       dispatch({ type: 'candidate', candidate: stagedCandidate });
-      const evidence = driver?.readCandidateEvidence ? await driver.readCandidateEvidence(staged.activationId) : await readCardWiringCandidateEvidence(staged.activationId, { host: lease.host });
+      const evidence = driver?.readCandidateEvidence ? await driver.readCandidateEvidence(staged.activationId) : await readCardWiringCandidateEvidence(staged.activationId, { host: lease.host, transport: lease.transport });
+      assertCandidateOperation();
       assertLease(lease);
       if (!exactIdentity(evidence, job, expectedCardId) || evidence.activationId !== staged.activationId || evidence.colorOrder !== candidate.config.led.colorOrder
         || evidence.maxMilliamps !== candidate.config.led.maxMilliamps || evidence.wiringRevision !== candidate.config.wiringRevision
         || evidence.wiringDigest !== candidate.config.wiringDigest || !sameOutputs(evidence.candidateOutputs, candidate.config.led.outputs)) throw new Error('Staged candidate evidence did not match this exact card, job, boundary, config, current cap, and wiring digest.');
-      const testing = driver?.activateCandidate ? await driver.activateCandidate(staged.activationId) : await activateAndWaitForCardWiring(staged.activationId, { host: lease.host });
+      const testing = driver?.activateCandidate ? await driver.activateCandidate(staged.activationId) : await activateAndWaitForCardWiring(staged.activationId, { host: lease.host, transport: lease.transport });
+      assertCandidateOperation();
       if (testing?.activationId !== staged.activationId || testing?.state !== 'testing') throw new Error('The exact candidate did not enter its 90-second test.');
       await reacquireAfterCardReboot(lease);
       const locked = { ...candidate, activationId: staged.activationId, phase: 'testing' };
@@ -361,7 +386,7 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
           setRoute({ action: 'candidate-recovery', title: 'Temporary candidate is still locked', guidance: 'Studio could not prove rollback. Keep this boundary locked and use Restore last confirmed wiring again.' });
           setError(`${reason?.message || reason} Cleanup was not confirmed: ${rollbackReason?.message || rollbackReason}. Do not continue or disconnect this card.`);
         }
-      } else setError(`${reason?.message || reason} The last confirmed wiring remains protected.`);
+      } else { if (operationLease) invalidateLease(operationLease, 'production-wiring-candidate-failed'); setError(`${reason?.message || reason} The last confirmed wiring remains protected.`); }
     }
     finally { setBusy(false); }
   }
@@ -383,6 +408,18 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
       else if (result === STREAM_RESULT.deliveryFailed) requireBoundaryRestart('Boundary restart did not complete', 'The new exact frame was not acknowledged. Keep this boundary locked and restart it again.');
       else if ([STREAM_RESULT.identityBlocked, STREAM_RESULT.firmwareBlocked].includes(result)) { setFailedObservation(''); setRecoveryEntered(false); }
     } finally { setBusy(false); }
+  }
+  async function completePhysical() {
+    if (busy) return;
+    setBusy(true); setError('');
+    try {
+      assertLease(captureLease());
+      await onComplete?.(buildProductionPhysicalResults(knownGood, state.results));
+    } catch (reason) {
+      if (mountedRef.current) setError(reason?.message || String(reason));
+    } finally {
+      if (mountedRef.current) setBusy(false);
+    }
   }
   const currentIndex = knownGood.boundaries.findIndex(boundary => boundary.id === active.id);
   const locked = Boolean(state.candidate);
@@ -420,6 +457,6 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
     </>}
     {state.candidate && <div className="prod-candidate" role="status"><strong>{state.candidate.phase === 'testing' ? `Temporary boundary test · ${countdown}s` : 'Temporary candidate cleanup required'}</strong><p>{active.label} is locked to activation {state.candidate.activationId}. It cannot be bypassed or confirmed from another boundary.</p><button type="button" disabled={busy} onClick={() => void rollback()}>Restore last confirmed wiring</button></div>}
     {error && <p className="prod-error" role="alert">{error}</p>}
-    {state.canComplete && !physicalRecovery && <button className="btn primary" type="button" disabled={!deliveryConfirmed} onClick={() => { try { assertLease(captureLease()); onComplete?.(buildProductionPhysicalResults(knownGood, state.results)); } catch (reason) { setError(reason.message); } }}>Continue to pass record</button>}
+    {state.canComplete && !physicalRecovery && <button className="btn primary" type="button" disabled={!deliveryConfirmed || busy} onClick={() => void completePhysical()}>Continue to pass record</button>}
   </section>;
 }

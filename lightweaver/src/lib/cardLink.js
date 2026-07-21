@@ -22,7 +22,7 @@ import {
   sendCardBridgeRequest,
   verifyCardBridgeIdentity,
 } from './cardBridge.js';
-import { cardHostToUrl, readStoredCardHost, rememberCardHost, writeStoredCardHost } from './cardConnection.js';
+import { cardHostToUrl, normalizeCardHost, readStoredCardHost, rememberCardHost, writeStoredCardHost } from './cardConnection.js';
 import {
   compareCardIdentity,
   normalizeCardIdentity,
@@ -572,6 +572,16 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
         transport: 'direct', host, missedPings,
       });
     }
+    case 'operation-boundary-lost': {
+      if (prev.state !== 'connected-bridge' && prev.state !== 'connected-direct') return prev;
+      return clearedLiveEvidence(prev, {
+        state: 'revalidating',
+        reason: event.reason || 'card-stopped-answering',
+        transport: prev.transport,
+        host: prev.host,
+        missedPings: 0,
+      });
+    }
     case 'bridge-lost': {
       // The card page window closed or never answered. Direct links are a
       // separate transport and are unaffected.
@@ -1019,9 +1029,15 @@ export async function resumeCardWifiHandoff({
     || typeof sendRequest !== 'function' || typeof wait !== 'function') {
     throw new Error('A correlated card link and bridge request transport are required.');
   }
-  if (isCardLinkConnected(link.getState())
-    && sameWifiHandoffCorrelation(link.getState().handoffCorrelation, correlation)
-    && link.getState().handoffFlowId === flowId) return link.getState();
+  const entryState = link.getState();
+  const refreshConfiguredBlank = isCardLinkConnected(entryState)
+    && sameWifiHandoffCorrelation(entryState.handoffCorrelation, correlation)
+    && entryState.handoffFlowId === flowId
+    && entryState.cardBlank === true;
+  if (isCardLinkConnected(entryState)
+    && sameWifiHandoffCorrelation(entryState.handoffCorrelation, correlation)
+    && entryState.handoffFlowId === flowId
+    && !refreshConfiguredBlank) return entryState;
   const host = correlation.host;
   const assertCurrent = () => {
     if (!isCurrent()) {
@@ -1056,7 +1072,11 @@ export async function resumeCardWifiHandoff({
   }
 
   const beforeAck = link.getState();
-  if (beforeAck.handoffStationVerified) return beforeAck;
+  // A verified factory card remains under the same commissioning correlation
+  // after its one allowed config write. Do not mistake that stale blank
+  // envelope for final runtime authority: read one fresh status below so the
+  // exact lifecycle can prove the newly configured command-ready state.
+  if (beforeAck.handoffStationVerified && !refreshConfiguredBlank) return beforeAck;
   if (!beforeAck.handoffAckAttempted) {
     if (!beforeAck.handoffAckReady) return beforeAck;
     // Latch before the privileged write. A timeout is ambiguous: the card may
@@ -1254,7 +1274,9 @@ export function getSharedCardLink() {
       }
       const latestHandoff = sharedLink.getState();
       if (detail.connected && detail.verified && (
-        detail.handoffAckReady || latestHandoff.handoffReloadRecovery
+        detail.handoffAckReady
+        || latestHandoff.handoffReloadRecovery
+        || (latestHandoff.cardBlank === true && detail.runtimeCommandReady === true)
       )) {
         void advanceSharedWifiHandoff(
           detail.handoffCorrelation,
@@ -1327,6 +1349,32 @@ export function subscribeCardLink(listener) {
 
 export function getCardLinkState() {
   return getSharedCardLink().getState();
+}
+
+// An operation timeout/failure is stronger evidence than the background
+// keepalive cadence. Demote immediately, but only when the failing operation's
+// immutable lease still names the exact current card lifecycle. A late failure
+// from an old tab/boot/host must never knock a newer valid card link offline.
+export function invalidateCardLinkOperationLease(lease, {
+  link = getSharedCardLink(),
+  reason = 'card-stopped-answering',
+} = {}) {
+  if (!lease || !link?.getState || !link?.dispatch) return false;
+  const current = link.getState();
+  const currentTransport = current.transport || (current.state === 'connected-bridge' ? 'bridge' : current.state === 'connected-direct' ? 'direct' : '');
+  const currentCardId = String(current.card?.id || current.card?.cardId || '').trim().toLowerCase();
+  const expectedCardId = String(lease.expectedCardId || '').trim().toLowerCase();
+  const exact = (current.state === 'connected-bridge' || current.state === 'connected-direct')
+    && expectedCardId && currentCardId === expectedCardId
+    && normalizeCardHost(current.host) === normalizeCardHost(lease.host)
+    && currentTransport === lease.transport
+    && Number.isSafeInteger(lease.operationGeneration)
+    && current.operationGeneration === lease.operationGeneration
+    && String(current.validatedBootId || '') === String(lease.validatedBootId || '')
+    && (lease.transport !== 'bridge' || current.bridgeLifecycle === lease.bridgeLifecycle);
+  if (!exact) return false;
+  link.dispatch({ type: 'operation-boundary-lost', reason });
+  return true;
 }
 
 // Feed direct-transport results (useCardStatus on http/file) into the machine.

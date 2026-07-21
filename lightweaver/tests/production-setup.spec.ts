@@ -417,6 +417,204 @@ test('HTTPS production transport performs exact blank config then runtime frame 
   });
 });
 
+test('HTTPS ProductionScreen commissions a blank card through bridge, human light checks, final reads, and pass', async ({ page }) => {
+  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
+  await page.route('https://led.mandalacodes.com/**', async route => {
+    const requested = new URL(route.request().url());
+    const upstream = await page.request.fetch(`http://localhost:${testPort}${requested.pathname}${requested.search}`);
+    await route.fulfill({ response: upstream });
+  });
+  const job = await serveJob(page);
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
+    window.__LW_PRODUCTION_DRIVER_FOR_TEST__ = {
+      connectCard: async () => ({}),
+      disconnect: async () => true,
+      inspectCard: async () => ({ cardId: 'lw-aabbccddeeff', chipName: 'ESP32-S3', flashSize: '16MB' }),
+      connectLan: async () => {
+        try { return await window.__LW_START_REAL_PRODUCTION_BRIDGE__(); }
+        catch (reason) {
+          if (window.__LW_REAL_PRODUCTION_BRIDGE_STATS__) window.__LW_REAL_PRODUCTION_BRIDGE_STATS__.connectError = reason?.message || String(reason);
+          throw reason;
+        }
+      },
+    };
+  });
+  await page.goto('https://led.mandalacodes.com/#screen=production');
+
+  await page.evaluate(async ({ firmware, project, jobId, digest }) => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-prior-card-a' }));
+    const bridge = await import('/src/lib/cardBridge.js');
+    const handoff = await import('/src/lib/cardWifiHandoff.js');
+    const linkModule = await import('/src/lib/cardLink.js');
+    const expectedCardId = 'lw-aabbccddeeff';
+    const stationHost = '192.168.18.77';
+    const bootId = 'boot-production-ui-1';
+    const flowId = 'flow-production-ui-123456';
+    const handoffGeneration = 8;
+    let activeHost = '192.168.4.1';
+    let configured = null;
+    let acked = false;
+    const stats = {
+      apStatus: 0, stationStatusBeforeAck: 0, ack: 0, config: 0,
+      firmwareInfo: 0, wiringStatus: 0, frame: 0,
+    };
+    window.__LW_REAL_PRODUCTION_BRIDGE_STATS__ = stats;
+
+    const statusEnvelope = () => ({
+      app: 'Lightweaver', provisioningContractVersion: 1,
+      cardId: expectedCardId, firmwareVersion: firmware.version, buildId: firmware.buildId,
+      bootId,
+      runtimePhase: configured ? 'ready' : acked ? 'factory' : 'ready',
+      knownGoodProject: Boolean(configured),
+      commandReady: Boolean(configured), outputReady: Boolean(configured),
+      wifi: acked
+        ? { transport: 'station', transition: 'station', transitionPending: false, apActive: false, stationIp: stationHost, ip: stationHost, handoffGeneration }
+        : { transport: 'station', transition: 'handoff-ready', transitionPending: true, apActive: true, stationIp: stationHost, ip: stationHost, handoffGeneration },
+    });
+    const firmwareInfo = () => ({
+      app: 'Lightweaver', cardId: expectedCardId,
+      firmwareVersion: firmware.version, buildId: firmware.buildId,
+      ...(configured ? {
+        projectRevision: project.revision,
+        projectFingerprint: project.fingerprint,
+        productionJobId: jobId,
+        productionJobDigest: digest,
+      } : {}),
+      outputs: configured?.led?.outputs || [],
+    });
+    const wiringStatus = () => ({
+      app: 'Lightweaver', state: 'known-good', cardId: expectedCardId,
+      firmwareVersion: firmware.version, buildId: firmware.buildId,
+      projectRevision: project.revision, projectFingerprint: project.fingerprint,
+      productionJobId: jobId, productionJobDigest: digest,
+      colorOrder: configured?.led?.colorOrder,
+      maxMilliamps: configured?.led?.maxMilliamps,
+      wiringRevision: configured?.wiringRevision,
+      wiringDigest: configured?.wiringDigest,
+      outputs: configured?.led?.outputs || [],
+    });
+    const emit = (data, host = activeHost) => {
+      const event = new Event('message');
+      Object.defineProperties(event, {
+        data: { value: data }, origin: { value: `http://${host}` }, source: { value: fakeCardTab },
+      });
+      window.dispatchEvent(event);
+    };
+    const emitReady = () => emit({ app: 'LightweaverCardBridge', type: 'ready', version: 2, host: activeHost });
+    const fakeCardTab = {
+      closed: false,
+      focus() {},
+      postMessage(message) {
+        const type = String(message.type || '');
+        let response = { ok: true };
+        if (type === 'status') {
+          if (activeHost === stationHost && !acked) stats.stationStatusBeforeAck += 1;
+          else if (activeHost !== stationHost) stats.apStatus += 1;
+          response = statusEnvelope();
+        } else if (type === 'firmware-info') {
+          stats.firmwareInfo += 1;
+          response = firmwareInfo();
+        } else if (type === 'wifi-handoff-ack') {
+          stats.ack += 1;
+          stats.handoffEnvelopeCountAtAck = linkModule.getCardLinkState().handoffEnvelopeCount;
+          acked = true;
+          response = { ok: true, handoffGeneration };
+        } else if (type === 'config') {
+          stats.config += 1;
+          configured = structuredClone(message.payload);
+          response = { ok: true, saved: true, requiresReboot: false };
+        } else if (type === 'wiring-status') {
+          stats.wiringStatus += 1;
+          response = wiringStatus();
+        } else if (type === 'frame') {
+          stats.frame += 1;
+          response = { ok: true, wsOpen: true };
+        } else if (type === 'control') {
+          response = { ok: true, wsOpen: true };
+        }
+        queueMicrotask(() => {
+          emit({ app: 'LightweaverCardBridge', version: 2, id: message.id, ok: true, response });
+        });
+      },
+      location: { set href(value) { activeHost = new URL(value).hostname; } },
+    };
+    window.open = url => {
+      if (url) activeHost = new URL(String(url)).hostname;
+      return fakeCardTab;
+    };
+    window.__LW_START_REAL_PRODUCTION_BRIDGE__ = async () => {
+      stats.stage = 'starting';
+      const opened = bridge.openLocalCardPage('192.168.4.1');
+      stats.stage = 'opened';
+      if (!opened.ok) throw new Error(opened.reason);
+      const apStatus = await bridge.sendCardBridgeRequest('status', {}, { host: '192.168.4.1' });
+      stats.stage = 'status-ready';
+      let correlation;
+      try {
+        correlation = handoff.acceptWifiHandoff({
+          status: apStatus,
+          expectedCard: { id: expectedCardId, firmwareVersion: firmware.version, buildId: firmware.buildId },
+          expectedBootId: bootId,
+          lastGeneration: handoffGeneration - 1,
+        });
+      } catch (reason) {
+        stats.handoffError = reason?.message || String(reason);
+        throw reason;
+      }
+      stats.apEnvelope = apStatus;
+      stats.correlationAccepted = Boolean(correlation);
+      if (!correlation) throw new Error('AP handoff correlation was not accepted');
+      const retargeted = bridge.retargetCardBridge(stationHost, correlation, { flowId });
+      if (!retargeted.ok) throw new Error(retargeted.reason);
+      setTimeout(emitReady, 0);
+      const blankDeadline = Date.now() + 8000;
+      while (Date.now() < blankDeadline && linkModule.getCardLinkState().cardBlank !== true) await new Promise(resolve => setTimeout(resolve, 20));
+      if (linkModule.getCardLinkState().cardBlank !== true) {
+        stats.finalLink = linkModule.getCardLinkState();
+        stats.finalBridge = bridge.getCardBridgeState();
+        throw new Error(`blank card did not rejoin: ${JSON.stringify(linkModule.getCardLinkState())}`);
+      }
+    };
+  }, { firmware: job.firmware, project: job.project, jobId: job.jobId, digest: job.digest });
+
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await expect(page.getByRole('button', { name: 'Load verified artwork' })).toBeVisible({ timeout: 12_000 });
+  await expect(page.getByRole('button', { name: /Needs project/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Needs project/ })).not.toHaveClass(/connected/);
+  await page.getByRole('button', { name: 'Load verified artwork' }).click();
+  await page.getByRole('button', { name: 'Verify card read-back' }).click();
+  await expect(page.getByText('Test delivered to this exact boundary. Look at the real LEDs — this is not a pass.')).toBeVisible({ timeout: 12_000 });
+  await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
+  await page.getByRole('tab', { name: /Inner ring/ }).click();
+  await expect(page.getByText('Test delivered to this exact boundary. Look at the real LEDs — this is not a pass.')).toBeVisible();
+  await page.getByRole('button', { name: 'Yes, this boundary is correct' }).click();
+  await page.getByRole('button', { name: 'Continue to pass record' }).click();
+  await page.getByLabel('Worker initials or ID').fill('AR');
+  await page.getByRole('button', { name: 'Save pass record' }).click();
+  await expect(page.getByText('Artwork passed')).toBeVisible();
+
+  const result = await page.evaluate(async () => ({
+    stats: window.__LW_REAL_PRODUCTION_BRIDGE_STATS__,
+    pairedIdentity: JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null')?.id,
+    run: (await import('/src/lib/productionRun.js')).readProductionRun(),
+    records: (await import('/src/lib/productionRecords.js')).readProductionRecords(),
+  }));
+  expect(result.stats.stationStatusBeforeAck).toBe(3);
+  expect(result.stats.handoffEnvelopeCountAtAck).toBe(2);
+  expect(result.stats.ack).toBe(1);
+  expect(result.stats.config).toBe(1);
+  expect(result.stats.frame).toBeGreaterThanOrEqual(1);
+  expect(result.stats.firmwareInfo).toBeGreaterThanOrEqual(4);
+  expect(result.stats.wiringStatus).toBeGreaterThanOrEqual(2);
+  expect(result.pairedIdentity).toBe('lw-aabbccddeeff');
+  expect(result.run).toMatchObject({ state: 'complete', expectedCardId: 'lw-aabbccddeeff' });
+  expect(result.records).toHaveLength(1);
+  expect(result.records[0]).toMatchObject({ runId: result.run.runId, cardId: 'lw-aabbccddeeff', workerId: 'AR' });
+});
+
 test('USB failure shows one safe action and exports only bounded redacted diagnostics', async ({ page }) => {
   await serveJob(page);
   await installDriver(page, { connectErrorOnce: 'No device found. This may be a charge-only data cable. card lw-secret job moon-batch-7' });
@@ -1214,6 +1412,47 @@ test('pass save is single-flight and a readable failure can be retried without d
   await expect(page.getByText('Artwork passed')).toBeVisible();
   const count = await page.evaluate(async () => (await import('/src/lib/productionRecords.js')).readProductionRecords().length);
   expect(count).toBe(1);
+});
+
+test('a stale tab cannot append a pass or complete a replacement production run', async ({ page }) => {
+  const job = await serveJob(page);
+  await installDriver(page, { recordDelayMs: 150 });
+  await page.goto('/#screen=production');
+  await reachPassRecord(page);
+  const originalRunId = await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun().runId);
+  await page.getByLabel('Worker initials or ID').fill('STALE');
+  await page.getByRole('button', { name: 'Save pass record' }).click({ noWaitAfter: true });
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_test_record_attempts'))).toBe('1');
+
+  const replacementRunId = await page.evaluate(async digest => {
+    const module = await import('/src/lib/productionRun.js');
+    const bind = run => ({
+      runId: run.runId, flowId: run.flowId, jobDigest: run.jobDigest,
+      operationId: run.operationId, expectedCardId: run.expectedCardId,
+      generation: run.generation,
+    });
+    const replacement = await module.updateProductionRunAtomically(() => {
+      let run = module.createProductionRun({ jobDigest: digest });
+      run = module.transitionProductionRun(run, 'connect-card', { correlation: bind(run) });
+      run = module.transitionProductionRun(run, 'inspect', { correlation: bind(run), expectedCardId: 'lw-aabbccddeeff' });
+      run = module.transitionProductionRun(run, 'restore', { correlation: bind(run) });
+      run = module.transitionProductionRun(run, 'verify-card', { correlation: bind(run) });
+      run = module.transitionProductionRun(run, 'check-lights', { correlation: bind(run) });
+      return module.transitionProductionRun(run, 'record', { correlation: bind(run) });
+    });
+    window.dispatchEvent(new StorageEvent('storage', { key: module.PRODUCTION_RUN_COMMIT_A_KEY }));
+    return replacement.runId;
+  }, job.digest);
+
+  await expect(page.getByRole('alert')).toContainText(/production run changed|Pass was not completed/i);
+  const state = await page.evaluate(async () => {
+    const runModule = await import('/src/lib/productionRun.js');
+    const recordModule = await import('/src/lib/productionRecords.js');
+    return { run: runModule.readProductionRun(), records: recordModule.readProductionRecords() };
+  });
+  expect(replacementRunId).not.toBe(originalRunId);
+  expect(state.run).toMatchObject({ runId: replacementRunId, state: 'record' });
+  expect(state.records.filter(record => record.runId === originalRunId || record.runId === replacementRunId)).toEqual([]);
 });
 
 test('Change job safely cancels before mutation and firmware preload retry preserves the run', async ({ page }) => {
