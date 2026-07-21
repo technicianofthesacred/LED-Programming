@@ -327,6 +327,10 @@ test('pausing with lights active atomically pushes the displayed frame and freez
     }
     return (hash >>> 0).toString(16).padStart(8, '0') === frozen;
   }, { beforePauseCount, frozen })).toBe(true);
+  // The stream may already have one copy of the displayed frame in flight
+  // when Pause queues the authoritative frozen copy. Let both identical
+  // deliveries drain before asserting that the stream itself has stopped.
+  await page.waitForTimeout(200);
   const count = await page.evaluate(() => (window as any).__frames.length);
   await page.waitForTimeout(200);
   expect(await page.evaluate(() => (window as any).__frames.length)).toBe(count);
