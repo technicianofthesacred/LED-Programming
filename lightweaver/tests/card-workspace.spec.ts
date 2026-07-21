@@ -147,6 +147,20 @@ test('wide desktop footer keeps card identity, telemetry, and test controls in s
 });
 
 test('Card overview persists WiFi progress, gates the setup address, and resumes after reload', async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as any).__commissioningOpens = [];
+    (window as any).__commissioningFetches = [];
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes('/api/status')) (window as any).__commissioningFetches.push(url);
+      return originalFetch(input, init);
+    }) as typeof window.fetch;
+    window.open = ((url?: string | URL, target?: string, features?: string) => {
+      (window as any).__commissioningOpens.push({ url: String(url || ''), target, features });
+      return { closed: false, postMessage() {}, focus() {}, location: { href: String(url || '') } } as unknown as Window;
+    }) as typeof window.open;
+  });
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await seedCommissioningFlow(page, 'wifi');
   await page.reload({ waitUntil: 'domcontentloaded' });
@@ -161,12 +175,61 @@ test('Card overview persists WiFi progress, gates the setup address, and resumes
   await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
   await expect(page).toHaveURL(/#screen=card&section=install$/);
   await expect(page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true })).toBeVisible();
-  await expect(page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toHaveCount(0);
   await page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true }).click();
-  await expect(page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
+  const setupButton = page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i });
+  await expect(setupButton).toBeVisible();
+  await setupButton.click();
+  await expect.poll(() => page.evaluate(() => (window as any).__commissioningOpens.at(-1))).toMatchObject({
+    target: 'lightweaver-card-bridge',
+  });
+  expect(await page.evaluate(() => (window as any).__commissioningOpens.at(-1)?.features || '')).not.toContain('noopener');
 
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
+});
+
+test('commissioning reconnect preserves the verified host instead of falling back to the setup AP', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: {} });
+  });
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'wifi');
+  const reconnectHost = await page.evaluate(async () => {
+    const mainSource = await (await fetch('/src/main.jsx')).text();
+    const domUrl = mainSource.match(/["']([^"']*react-dom_client[^"']*)["']/)?.[1];
+    const panelSource = await (await fetch('/src/components/card/CardCommissioningPanel.jsx')).text();
+    const reactUrl = panelSource.match(/["']([^"']*\/deps\/react\.js[^"']*)["']/)?.[1];
+    if (!domUrl || !reactUrl) throw new Error('could not resolve React module URLs');
+    const [{ CardCommissioningPanel }, { ProjectProvider }, reactModule, domModule] = await Promise.all([
+      import('/src/components/card/CardCommissioningPanel.jsx'),
+      import('/src/state/ProjectContext.jsx'),
+      import(reactUrl),
+      import(domUrl),
+    ]);
+    const React = reactModule.default ?? reactModule;
+    const createRoot = domModule.createRoot ?? domModule.default?.createRoot;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    let received = '';
+    const root = createRoot(host);
+    root.render(React.createElement(ProjectProvider, null,
+      React.createElement(CardCommissioningPanel, {
+        result: null,
+        link: { state: 'disconnected', host: '192.168.18.90', transport: 'bridge' },
+        onReconnect: value => { received = value; },
+      }),
+    ));
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const button = [...host.querySelectorAll('button')].find(node => node.textContent?.trim() === 'Reconnect installed card');
+    if (!button) throw new Error('commissioning reconnect action not rendered');
+    button.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    root.unmount();
+    host.remove();
+    return received;
+  });
+  expect(reconnectHost).toBe('192.168.18.90');
 });
 
 test('reality-driven detection replaces the dead 192.168.4.1 link with the restore path once the card rejoins the LAN', async ({ page }) => {
@@ -180,7 +243,7 @@ test('reality-driven detection replaces the dead 192.168.4.1 link with the resto
   // While the card is still on its setup AP (unreachable on the LAN — the
   // beforeEach aborts every card host) the dead-AP fallback link is the only
   // setup affordance and the restore path is not yet offered.
-  const setupLink = page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i });
+  const setupLink = page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i });
   await expect(setupLink).toBeVisible();
   await expect(page.getByText(/Waiting for the card to rejoin your network/i)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toHaveCount(0);
@@ -192,11 +255,11 @@ test('reality-driven detection replaces the dead 192.168.4.1 link with the resto
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({
-      ok: true,
-      cardId: 'lw-aabbccddeeff',
-      firmwareVersion: '1.2.3',
-      buildId: 'a'.repeat(40),
-      wifi: { transport: 'station', ip: '192.168.18.70' },
+      ...readyStatus('lw-aabbccddeeff', { firmwareVersion: '1.2.3' }),
+      wifi: {
+        transport: 'station', transition: 'station', transitionPending: false,
+        stationIp: '192.168.18.70', ip: '192.168.18.70', handoffGeneration: 7,
+      },
     }),
   }));
 
@@ -221,16 +284,16 @@ test('a wrong card answering on the LAN never auto-advances setup past the ident
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({
-      ok: true,
-      cardId: 'lw-ffffffffffff',
-      firmwareVersion: '9.9.9',
-      buildId: 'f'.repeat(40),
-      wifi: { transport: 'station', ip: '192.168.18.71' },
+      ...readyStatus('lw-ffffffffffff', { firmwareVersion: '9.9.9', buildId: 'f'.repeat(40) }),
+      wifi: {
+        transport: 'station', transition: 'station', transitionPending: false,
+        stationIp: '192.168.18.71', ip: '192.168.18.71', handoffGeneration: 7,
+      },
     }),
   }));
 
   await expect(page.getByText(/Waiting for the card to rejoin your network/i)).toBeVisible();
-  await expect(page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
   // Give the poll several cycles; the mismatched card must never unlock restore.
   await page.waitForTimeout(3_000);
   await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toHaveCount(0);
@@ -242,7 +305,13 @@ test('retained pre-install card identity cannot bypass the explicit WiFi handoff
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
     acknowledgedAt: '2026-01-01T00:00:00.000Z',
     card: { id: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
-    readiness: readyStatus('lw-aabbccddeeff', { firmwareVersion: '1.2.3' }),
+    readiness: readyStatus('lw-aabbccddeeff', {
+      firmwareVersion: '1.2.3',
+      wifi: {
+        transport: 'station', transition: 'station', transitionPending: false,
+        stationIp: '192.168.18.90', ip: '192.168.18.90', handoffGeneration: 7,
+      },
+    }),
   }]);
   await seedCommissioningFlow(page, 'wifi');
 
@@ -255,7 +324,13 @@ test('retained pre-install card identity cannot bypass the explicit WiFi handoff
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
     acknowledgedAt: new Date(Date.now() + 5_000).toISOString(),
     card: { id: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
-    readiness: readyStatus('lw-aabbccddeeff', { firmwareVersion: '1.2.3' }),
+    readiness: readyStatus('lw-aabbccddeeff', {
+      firmwareVersion: '1.2.3',
+      wifi: {
+        transport: 'station', transition: 'station', transitionPending: false,
+        stationIp: '192.168.18.90', ip: '192.168.18.90', handoffGeneration: 7,
+      },
+    }),
   }]);
   await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeVisible();
 });

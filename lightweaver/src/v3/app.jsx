@@ -503,7 +503,7 @@ function Shell() {
     setBridgeResult(outcome === 'complete' ? { kind: 'complete' } : null);
   }, []);
   const onConnectCard = useCallback((host = '') => {
-    if (directCardControl) return cardStatus.connect?.();
+    if (directCardControl) return cardStatus.connect?.(host);
     return connectCardLink(host);
   }, [directCardControl, cardStatus.connect]);
 

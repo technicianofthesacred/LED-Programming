@@ -250,13 +250,23 @@ export function preflightCardCommissioningMutation(flow, status = null) {
 export function acknowledgeCommissionedCardFromStatus(flow, status = {}, { now = Date.now() } = {}) {
   requireFlow(flow);
   if (flow.stage !== 'set-up-card') return { ok: false, reason: 'not-awaiting-card' };
-  const transport = String(status?.wifi?.transport || status?.transport || '').toLowerCase();
-  if (transport !== 'station') return { ok: false, reason: 'not-on-home-network' };
-  return acknowledgeCommissionedCard(flow, {
+  const wifi = status?.wifi;
+  const transport = String(wifi?.transport || '').toLowerCase();
+  if (
+    transport !== 'station'
+    || wifi?.transition !== 'station'
+    || wifi?.transitionPending !== false
+  ) return { ok: false, reason: 'not-on-home-network' };
+  const identityAcknowledgement = acknowledgeCommissionedCard(flow, {
     id: status.cardId || status.id,
     firmwareVersion: status.firmwareVersion,
     buildId: status.buildId || status.firmwareBuild || status.build,
   }, { now });
+  if (!identityAcknowledgement.ok) return identityAcknowledgement;
+  const readiness = classifyCardReadiness(status, { expectedCard: flow.expectedCard });
+  return readiness.connected
+    ? identityAcknowledgement
+    : { ok: false, reason: 'not-on-home-network' };
 }
 
 export function resumeInstalledCardAfterInterruption(flow, card = {}, { now = Date.now() } = {}) {

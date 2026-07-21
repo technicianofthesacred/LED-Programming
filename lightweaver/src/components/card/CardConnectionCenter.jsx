@@ -300,7 +300,7 @@ export function CardConnectionCenter({
         <BridgeResumePanel
           result={bridgeResult}
           link={link}
-          onReconnect={() => connect()}
+          onReconnect={(reconnectHost = '') => connect(reconnectHost || link?.handoffCorrelation?.host || link?.host || 'lightweaver.local')}
           onRetry={launchBridge}
           onDismiss={onClearBridgeResult}
           onComplete={() => onClearBridgeResult?.('complete')}

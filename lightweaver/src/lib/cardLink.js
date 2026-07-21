@@ -31,6 +31,11 @@ import {
 } from './cardIdentity.js';
 import { isCardLinkConnected as isFreshCardLinkConnected } from './cardConnectionFlow.js';
 import { classifyCardReadiness } from './cardReadiness.js';
+import {
+  acceptWifiHandoff,
+  isFinalStationHandoff,
+  normalizeWifiHandoffCorrelation,
+} from './cardWifiHandoff.js';
 
 export const CARD_LINK_PING_INTERVAL_MS = 5000;
 export const CARD_LINK_DIRECT_PING_INTERVAL_MS = 20000;
@@ -66,6 +71,11 @@ export function initialCardLinkState(host = '') {
     requiresStableRevalidation: false,
     revalidationGeneration: 0,
     operationGeneration: 0,
+    handoffCorrelation: null,
+    handoffEnvelopeCount: 0,
+    handoffAckReady: false,
+    handoffAckSent: false,
+    handoffBridgeLifecycle: null,
   };
 }
 
@@ -86,8 +96,39 @@ function clearedLiveEvidence(prev, additions = {}, {
     acknowledgedAt: '',
     activity: 'idle',
     operationGeneration: (prev.operationGeneration || 0) + 1,
+    handoffCorrelation: null,
+    handoffEnvelopeCount: 0,
+    handoffAckReady: false,
+    handoffAckSent: false,
+    handoffBridgeLifecycle: null,
     ...additions,
   };
+}
+
+function sameWifiHandoffCorrelation(left, right) {
+  const a = normalizeWifiHandoffCorrelation(left);
+  const b = normalizeWifiHandoffCorrelation(right);
+  return Boolean(a && b)
+    && a.host === b.host
+    && a.expectedCardId === b.expectedCardId
+    && a.expectedFirmwareVersion === b.expectedFirmwareVersion
+    && a.expectedBuildId === b.expectedBuildId
+    && a.expectedBootId === b.expectedBootId
+    && a.handoffGeneration === b.handoffGeneration;
+}
+
+function matchingHandoffReadyStatus(status, correlation) {
+  const accepted = acceptWifiHandoff({
+    status,
+    expectedCard: {
+      id: correlation.expectedCardId,
+      firmwareVersion: correlation.expectedFirmwareVersion,
+      buildId: correlation.expectedBuildId,
+    },
+    expectedBootId: correlation.expectedBootId,
+    lastGeneration: correlation.handoffGeneration - 1,
+  });
+  return sameWifiHandoffCorrelation(accepted, correlation);
 }
 
 function readinessReason(classified = {}) {
@@ -235,7 +276,98 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
         state: 'connecting', reason: '', transport: 'bridge', host, missedPings: 0,
         card: null,
         bridgeLifecycle: event.bridgeLifecycle ?? null,
+        ...(prev.handoffCorrelation ? {
+          handoffCorrelation: prev.handoffCorrelation,
+          handoffBridgeLifecycle: event.bridgeLifecycle ?? null,
+        } : {}),
       }, { requireStable: Boolean(prev.validatedBootId || prev.requiresStableRevalidation) });
+    }
+    case 'wifi-handoff-retargeted': {
+      const correlation = normalizeWifiHandoffCorrelation(event.correlation);
+      if (!correlation || correlation.host !== host) return prev;
+      return clearedLiveEvidence(prev, {
+        state: 'revalidating', reason: 'wifi-network-switch', transport: 'bridge',
+        host, card: null, expectedCard: {
+          id: correlation.expectedCardId,
+          firmwareVersion: correlation.expectedFirmwareVersion,
+          buildId: correlation.expectedBuildId,
+        },
+        missedPings: 0,
+        bridgeLifecycle: event.bridgeLifecycle ?? null,
+        handoffCorrelation: correlation,
+        handoffBridgeLifecycle: event.bridgeLifecycle ?? null,
+      }, { clearValidatedBoot: true });
+    }
+    case 'wifi-handoff-status': {
+      const correlation = normalizeWifiHandoffCorrelation(event.correlation);
+      if (!correlation || !sameWifiHandoffCorrelation(correlation, prev.handoffCorrelation) || host !== correlation.host) return prev;
+      const lifecycle = event.bridgeLifecycle ?? null;
+      if (prev.handoffBridgeLifecycle !== lifecycle) {
+        if (prev.handoffEnvelopeCount > 0 || prev.handoffAckSent) {
+          return clearedLiveEvidence(prev, {
+            state: 'revalidating', reason: 'checking-card', transport: 'bridge', host,
+            expectedCard: prev.expectedCard, bridgeLifecycle: lifecycle,
+            handoffCorrelation: correlation, handoffBridgeLifecycle: lifecycle,
+          }, { clearValidatedBoot: true });
+        }
+      }
+      const status = event.readiness;
+      if (prev.handoffAckSent && prev.handoffEnvelopeCount >= 2
+        && isFinalStationHandoff({ status, correlation })) {
+        const expectedCard = {
+          id: correlation.expectedCardId,
+          firmwareVersion: correlation.expectedFirmwareVersion,
+          buildId: correlation.expectedBuildId,
+        };
+        const classified = classifyCardReadiness(status, { expectedCard });
+        if (!classified.connected) {
+          return {
+            ...prev, state: 'revalidating', reason: 'checking-card', readiness: null,
+            cardBlank: typeof classified.blank === 'boolean' ? classified.blank : null,
+            acknowledgedAt: '', activity: 'idle', bridgeLifecycle: lifecycle,
+            handoffBridgeLifecycle: lifecycle,
+          };
+        }
+        return {
+          ...prev,
+          state: 'connected-bridge', reason: '', transport: 'bridge', host,
+          missedPings: 0,
+          card: normalizeCardIdentity(status, host), expectedCard,
+          discoveredCard: null, readiness: status, cardBlank: false,
+          validatedBootId: classified.bootId, candidateBootId: '',
+          requiresStableRevalidation: false,
+          acknowledgedAt: event.acknowledgedAt || new Date().toISOString(),
+          activity: 'idle', bridgeLifecycle: lifecycle,
+          handoffAckReady: false, handoffBridgeLifecycle: lifecycle,
+        };
+      }
+      if (!matchingHandoffReadyStatus(status, correlation)) {
+        return {
+          ...prev, state: 'revalidating', reason: 'checking-card', readiness: null,
+          cardBlank: null, acknowledgedAt: '', activity: 'idle',
+          handoffEnvelopeCount: 0, handoffAckReady: false,
+          handoffBridgeLifecycle: lifecycle, bridgeLifecycle: lifecycle,
+        };
+      }
+      const handoffEnvelopeCount = Math.min(2, (prev.handoffEnvelopeCount || 0) + 1);
+      return {
+        ...prev, state: 'revalidating', reason: 'wifi-network-switch',
+        transport: 'bridge', host, readiness: null, cardBlank: null,
+        acknowledgedAt: '', activity: 'idle', bridgeLifecycle: lifecycle,
+        handoffBridgeLifecycle: lifecycle, handoffEnvelopeCount,
+        handoffAckReady: handoffEnvelopeCount >= 2 && !prev.handoffAckSent,
+      };
+    }
+    case 'wifi-handoff-ack-sent': {
+      if (!prev.handoffAckReady
+        || !sameWifiHandoffCorrelation(event.correlation, prev.handoffCorrelation)
+        || host !== prev.host
+        || (event.bridgeLifecycle ?? null) !== prev.handoffBridgeLifecycle) return prev;
+      return {
+        ...prev, state: 'revalidating', reason: 'checking-card',
+        readiness: null, cardBlank: null, acknowledgedAt: '', activity: 'idle',
+        handoffAckReady: false, handoffAckSent: true,
+      };
     }
     case 'card-verified': {
       if (!event.card?.id) return clearedLiveEvidence(prev, { state: 'disconnected', reason: 'identity-missing', transport: '', missedPings: 0, card: null });
@@ -300,6 +432,13 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
       return clearedLiveEvidence(prev, {
         state: 'reconnecting-bridge', reason: 'card-stopped-answering',
         transport: 'bridge', host, missedPings,
+        ...(prev.handoffCorrelation ? {
+          handoffCorrelation: prev.handoffCorrelation,
+          handoffEnvelopeCount: prev.handoffEnvelopeCount,
+          handoffAckReady: prev.handoffAckReady,
+          handoffAckSent: prev.handoffAckSent,
+          handoffBridgeLifecycle: prev.handoffBridgeLifecycle,
+        } : {}),
       });
     }
     case 'direct-ping-ok': {
@@ -685,6 +824,122 @@ export function createCardLink({
 
 // ── shared browser instance ────────────────────────────────────────────────
 let sharedLink = null;
+let sharedHandoffAdvance = null;
+let sharedHandoffRetryTimer = null;
+
+function currentBridgeStillOwnsHandoff(correlation, lifecycle) {
+  const bridge = getCardBridgeState();
+  return bridge.open
+    && bridge.verified
+    && bridge.lifecycle === lifecycle
+    && sameWifiHandoffCorrelation(bridge.handoffCorrelation, correlation);
+}
+
+function scheduleSharedHandoffRetry(correlation, lifecycle) {
+  if (sharedHandoffRetryTimer != null) clearTimeout(sharedHandoffRetryTimer);
+  sharedHandoffRetryTimer = setTimeout(() => {
+    sharedHandoffRetryTimer = null;
+    if (currentBridgeStillOwnsHandoff(correlation, lifecycle)) {
+      void advanceSharedWifiHandoff(correlation, lifecycle);
+    }
+  }, 1000);
+}
+
+export async function resumeCardWifiHandoff({
+  link,
+  correlation: rawCorrelation,
+  bridgeLifecycle,
+  sendRequest,
+  isCurrent = () => true,
+} = {}) {
+  const correlation = normalizeWifiHandoffCorrelation(rawCorrelation);
+  if (!link?.getState || !link?.dispatch || !correlation || typeof sendRequest !== 'function') {
+    throw new Error('A correlated card link and bridge request transport are required.');
+  }
+  if (isCardLinkConnected(link.getState())
+    && sameWifiHandoffCorrelation(link.getState().handoffCorrelation, correlation)
+    && link.getState().handoffAckSent) return link.getState();
+  const host = correlation.host;
+  const assertCurrent = () => {
+    if (!isCurrent()) {
+      const error = new Error('The card bridge changed during WiFi handoff.');
+      error.reason = 'stale-host';
+      throw error;
+    }
+  };
+  const readStatus = async () => {
+    assertCurrent();
+    const readiness = await sendRequest('status', { cache: 'no-store', nonce: Date.now() }, {
+      host, timeoutMs: CARD_LINK_PING_TIMEOUT_MS, retryOnTimeout: false,
+    });
+    assertCurrent();
+    link.dispatch({
+      type: 'wifi-handoff-status', host, correlation,
+      bridgeLifecycle, readiness,
+    });
+    return readiness;
+  };
+
+  while ((link.getState().handoffEnvelopeCount || 0) < 2) {
+    await readStatus();
+    const current = link.getState();
+    if (!sameWifiHandoffCorrelation(current.handoffCorrelation, correlation)
+      || current.handoffBridgeLifecycle !== bridgeLifecycle) return current;
+    if (!current.handoffAckReady && (current.handoffEnvelopeCount || 0) === 0) return current;
+  }
+
+  const beforeAck = link.getState();
+  if (!beforeAck.handoffAckSent) {
+    if (!beforeAck.handoffAckReady) return beforeAck;
+    await sendRequest('wifi-handoff-ack', {}, {
+      host, timeoutMs: CARD_LINK_PING_TIMEOUT_MS, retryOnTimeout: false,
+    });
+    assertCurrent();
+    link.dispatch({
+      type: 'wifi-handoff-ack-sent', host, correlation,
+      bridgeLifecycle,
+    });
+  }
+
+  await readStatus();
+  return link.getState();
+}
+
+async function advanceSharedWifiHandoff(correlation, lifecycle) {
+  if (sharedHandoffAdvance) return sharedHandoffAdvance;
+  const run = resumeCardWifiHandoff({
+    link: getSharedCardLink(), correlation, bridgeLifecycle: lifecycle,
+    sendRequest: sendCardBridgeRequest,
+    isCurrent: () => currentBridgeStillOwnsHandoff(correlation, lifecycle),
+  }).then(async state => {
+    if (!isCardLinkConnected(state)) {
+      scheduleSharedHandoffRetry(correlation, lifecycle);
+      return;
+    }
+    const acknowledgedAt = state.acknowledgedAt || new Date().toISOString();
+    persistCardIdentity(state.card, { acknowledgedAt });
+    rememberCardHost(correlation.host);
+    writeStoredCardHost(correlation.host);
+    // The low-level bridge intentionally kept privileged authority locked while
+    // there was no persisted pairing. Re-run exact identity/final-status
+    // verification only after the commissioning state machine reached final
+    // station truth, so the immediately following restore uses the same card.
+    await verifyCardBridgeIdentity(correlation.host);
+  }).catch((error) => {
+    const link = getSharedCardLink();
+    if (currentBridgeStillOwnsHandoff(correlation, lifecycle)) {
+      link.dispatch({
+        type: 'bridge-ping-missed', host: correlation.host,
+        reason: error?.reason || 'card-stopped-answering',
+      });
+      scheduleSharedHandoffRetry(correlation, lifecycle);
+    }
+  }).finally(() => {
+    if (sharedHandoffAdvance === run) sharedHandoffAdvance = null;
+  });
+  sharedHandoffAdvance = run;
+  return run;
+}
 
 // The bridge is the ONLY live transport on HTTPS (led.mandalacodes.com), where
 // the browser blocks direct HTTP to the card. Its verify/keepalive carries card
@@ -742,6 +997,27 @@ export function getSharedCardLink() {
   const win = browserWindow();
   win?.addEventListener?.(CARD_BRIDGE_CHANGED_EVENT, (event) => {
     const detail = event?.detail || {};
+    if (detail.handoffCorrelation) {
+      const current = sharedLink.getState();
+      if (!sameWifiHandoffCorrelation(current.handoffCorrelation, detail.handoffCorrelation)) {
+        sharedLink.dispatch({
+          type: 'wifi-handoff-retargeted', host: detail.handoffCorrelation.host,
+          correlation: detail.handoffCorrelation, bridgeLifecycle: detail.lifecycle,
+        });
+      } else if (current.handoffBridgeLifecycle !== detail.lifecycle) {
+        sharedLink.dispatch({
+          type: 'bridge-ready', host: detail.handoffCorrelation.host,
+          bridgeLifecycle: detail.lifecycle,
+        });
+      }
+      if (detail.connected && detail.verified && detail.handoffAckReady) {
+        void advanceSharedWifiHandoff(detail.handoffCorrelation, detail.lifecycle);
+      }
+      // During a correlated handoff, ordinary ready/identity events are only
+      // transport evidence. The orchestrator above owns the exact two-envelope,
+      // one-ack, final-status transition back to command authority.
+      return;
+    }
     if (detail.connected && detail.verified) {
       if (detail.discoveredCard?.id && !readPersistedCardIdentity()) {
         sharedLink.dispatch({
@@ -852,6 +1128,15 @@ export function reportCardStatusEnvelope({ host = '', status = null, transport =
   if (!status || typeof status !== 'object' || Array.isArray(status)) return getCardLinkState();
   if (transport === 'bridge') {
     const link = getSharedCardLink();
+    if (link.getState().handoffCorrelation) {
+      link.dispatch({
+        type: 'wifi-handoff-status', host,
+        correlation: link.getState().handoffCorrelation,
+        bridgeLifecycle: link.getState().handoffBridgeLifecycle,
+        readiness: status,
+      });
+      return link.getState();
+    }
     const expectedCard = readPersistedCardIdentity() || link.getState().expectedCard || null;
     link.dispatch({
       type: 'bridge-ping-ok', host, readiness: status,

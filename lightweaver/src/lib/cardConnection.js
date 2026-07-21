@@ -164,10 +164,12 @@ export function candidateCardHosts(preferredHost = '', expectedCard = readPersis
 }
 
 function hostFromStatus(status, fallbackHost) {
+  const wifi = status?.wifi;
+  const finalStation = wifi?.transport === 'station'
+    && wifi?.transition === 'station'
+    && wifi?.transitionPending === false;
   const candidate = normalizeCardHost(
-    status?.wifi?.ip ||
-    status?.ip ||
-    status?.network?.ip ||
+    (finalStation && (wifi?.ip || wifi?.stationIp || status?.ip || status?.network?.ip)) ||
     fallbackHost,
   );
   return isLocalCardHost(candidate) ? candidate : normalizeCardHost(fallbackHost);

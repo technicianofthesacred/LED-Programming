@@ -88,6 +88,23 @@ assert.deepEqual(probed.slice(0, 2), [
   'http://192.168.4.1/api/status',
 ]);
 
+const handoffProbe = await discoverCardStatus({
+  preferredHost: '192.168.4.1',
+  timeoutMs: 25,
+  persist: false,
+  fetchImpl: async () => ({
+    ok: true,
+    json: async () => ({
+      ok: true,
+      wifi: {
+        transport: 'ap', transition: 'handoff-ready', transitionPending: true,
+        ip: '192.168.18.90', stationIp: '192.168.18.90', handoffGeneration: 9,
+      },
+    }),
+  }),
+});
+assert.equal(handoffProbe.host, '192.168.4.1', 'handoff-ready keeps the actual probed AP host');
+
 const parallelStart = Date.now();
 const parallelDiscovered = await discoverCardStatus({
   preferredHost: 'lightweaver.local',
