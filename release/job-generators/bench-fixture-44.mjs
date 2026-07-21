@@ -28,7 +28,24 @@ import { fingerprintCommissioningProject } from '../../lightweaver/src/lib/cardC
 import { buildCardRuntimePackageFromProject } from '../../lightweaver/src/lib/cardRuntimeProject.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const manifest = JSON.parse(await readFile(resolve(repoRoot, 'lightweaver/public/firmware/release-manifest.json'), 'utf8'));
+
+function parsePaths(values) {
+  const paths = new Map();
+  for (let index = 0; index < values.length; index += 2) {
+    const flag = values[index];
+    const value = values[index + 1];
+    if (!['--manifest', '--output'].includes(flag) || !value) {
+      throw new Error(`Usage: ${process.argv[1]} [--manifest PATH --output PATH]`);
+    }
+    paths.set(flag.slice(2), resolve(value));
+  }
+  return paths;
+}
+
+const paths = parsePaths(process.argv.slice(2));
+const manifestPath = paths.get('manifest') || resolve(repoRoot, 'lightweaver/public/firmware/release-manifest.json');
+const outPath = paths.get('output') || resolve(repoRoot, 'release/job-sources/bench-fixture-44.json');
+const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 
 const PIXELS = 44;
 const DATA_PIN = 18;
@@ -111,7 +128,6 @@ const source = {
   expectedOutputs: [{ id: 'out1', label: 'Bench strip', pin: DATA_PIN, pixels: PIXELS, direction: 'forward', colorOrder: 'GRB' }],
 };
 
-const outPath = resolve(repoRoot, 'release/job-sources/bench-fixture-44.json');
 await mkdir(dirname(outPath), { recursive: true });
 await writeFile(outPath, `${JSON.stringify(source, null, 2)}\n`);
-console.log(JSON.stringify({ outPath, jobId: JOB_ID, firmware: source.firmware }, null, 2));
+console.log(JSON.stringify({ manifestPath, outPath, jobId: JOB_ID, firmware: source.firmware }, null, 2));

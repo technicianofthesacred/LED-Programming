@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import test from 'node:test';
 
@@ -72,6 +75,51 @@ test('published bench artifact and index match the canonical source', async () =
   assert.deepEqual(fixtureFacts(artifact), expectedFixture);
 });
 
+test('generator and job builder reproduce the committed source, artifact, and index metadata', async () => {
+  const temporary = await mkdtemp(resolve(tmpdir(), 'lightweaver-production-job-'));
+  try {
+    const generatedSourcePath = resolve(temporary, 'bench-fixture-44.json');
+    const temporaryPublicRoot = resolve(temporary, 'public');
+    execFileSync(process.execPath, [
+      resolve(repoRoot, 'release/job-generators/bench-fixture-44.mjs'),
+      '--manifest', resolve(repoRoot, 'lightweaver/public/firmware/release-manifest.json'),
+      '--output', generatedSourcePath,
+    ], { cwd: repoRoot, stdio: 'pipe' });
+
+    const [generatedSource, committedSource] = await Promise.all([
+      readFile(generatedSourcePath),
+      readFile(resolve(repoRoot, 'release/job-sources/bench-fixture-44.json')),
+    ]);
+    assert.deepEqual(generatedSource, committedSource, 'committed job source must be exact generator output');
+
+    execFileSync(process.execPath, [
+      resolve(repoRoot, 'scripts/build-production-job.mjs'),
+      '--input', generatedSourcePath,
+      '--public-root', temporaryPublicRoot,
+    ], { cwd: repoRoot, stdio: 'pipe' });
+
+    const temporaryIndex = JSON.parse(await readFile(resolve(temporaryPublicRoot, 'production/jobs/index.json'), 'utf8'));
+    assert.equal(temporaryIndex.jobs.length, 1);
+    const generatedEntry = temporaryIndex.jobs[0];
+    assert.equal(generatedEntry.jobId, 'bench-fixture-44');
+    assert.equal(generatedEntry.url, `/production/jobs/${generatedEntry.digest}.lwjob.json`);
+
+    const generatedArtifact = await readFile(resolve(temporaryPublicRoot, generatedEntry.url.slice(1)));
+    const generatedArtifactJson = JSON.parse(generatedArtifact);
+    assert.equal(generatedArtifactJson.digest, generatedEntry.digest);
+    assert.equal(generatedEntry.size, generatedArtifact.byteLength);
+    assert.equal(generatedEntry.artifactSha256, createHash('sha256').update(generatedArtifact).digest('hex'));
+
+    const committedIndex = await readJson('lightweaver/public/production/jobs/index.json');
+    const committedEntry = committedIndex.jobs.find(job => job.jobId === 'bench-fixture-44');
+    assert.deepEqual(generatedEntry, committedEntry, 'committed index metadata must be exact builder output');
+    const committedArtifact = await readFile(resolve(repoRoot, `lightweaver/public${committedEntry.url}`));
+    assert.deepEqual(generatedArtifact, committedArtifact, 'committed artifact must be exact builder output');
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
 test('always-on tests watch every production-job and signing input', async () => {
   const workflow = await readFile(resolve(repoRoot, '.github/workflows/test.yml'), 'utf8');
   for (const path of [
@@ -109,6 +157,8 @@ test('protected release rebuild watches job inputs without an artifact commit lo
     'scripts/build-production-job.mjs',
     'scripts/rebuild-production-jobs.mjs',
     'lightweaver/src/lib/productionJobPackage.js',
+    'lightweaver/src/lib/cardCommissioningFlow.js',
+    'lightweaver/src/lib/cardRuntimeProject.js',
   ]) {
     assert.ok(workflow.includes(`'${path}'`), `${path} must trigger the protected release rebuild`);
   }

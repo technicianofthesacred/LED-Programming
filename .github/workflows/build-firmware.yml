@@ -21,6 +21,8 @@ on:
       - 'scripts/sign-release-artifacts.mjs'
       - 'lightweaver/src/lib/firmwareRelease.js'
       - 'lightweaver/src/lib/productionJobPackage.js'
+      - 'lightweaver/src/lib/cardCommissioningFlow.js'
+      - 'lightweaver/src/lib/cardRuntimeProject.js'
       - 'packages/installer-core/**'
       - 'release/firmware-manifest.schema.json'
       - 'release/production-job.schema.json'
