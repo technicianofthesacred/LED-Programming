@@ -133,3 +133,17 @@ jobs:
             fi
             sleep 10
           done
+
+      - name: Record publish result
+        if: always()
+        env:
+          PUBLISH_ENABLED: ${{ steps.creds.outputs.enabled }}
+        run: |
+          if [ "$PUBLISH_ENABLED" = "true" ]; then
+            echo "## Production publish" >> "$GITHUB_STEP_SUMMARY"
+            echo "Cloudflare upload ran and the live freshness check passed before this job could succeed." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## Production publish: NOT RUN" >> "$GITHUB_STEP_SUMMARY"
+            echo "Cloudflare credentials were unavailable. This successful CI result is not a deployment and must not be used as shipment evidence." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::No production publish occurred. Shipment still requires a credentialed deploy and passing live freshness check."
+          fi

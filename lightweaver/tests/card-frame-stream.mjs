@@ -142,6 +142,28 @@ assert.equal(clampFrameFps('nope'), 18, 'garbage fps falls back to the default')
   await stream.stop();
 }
 
+// ── producer buffers are snapshotted before the next render ─────────
+{
+  const clock = makeClock();
+  const { transport, sends } = makeTransport(clock);
+  const stream = createCardFrameStream({
+    transport,
+    setIntervalImpl: clock.setIntervalImpl,
+    clearIntervalImpl: clock.clearIntervalImpl,
+    now: clock.now,
+  });
+  const reusable = FRAME(4);
+  const firstSnapshot = [...reusable];
+  stream.start();
+  stream.push(reusable);
+  reusable[0] = 'FFFFFF';
+  await clock.advance(60);
+  assert.deepEqual(sends[0].pixels, firstSnapshot,
+    'push snapshots a reusable producer buffer before it can be mutated again');
+
+  await stream.stop();
+}
+
 // ── keepalive: no >2s gap while active (card watchdog would revert) ──────
 {
   const clock = makeClock();
@@ -536,8 +558,15 @@ const parentBridge = {
           type: message.type,
           ok: true,
           response: message.type === 'firmware-info'
-            ? { cardId: 'lw-frame-test', firmwareVersion: '1.0.0' }
-            : { ok: true, relayed: message.type === 'frame' },
+            ? { cardId: 'lw-frame-test', firmwareVersion: '1.0.0', buildId: 'frame-test-build' }
+            : message.type === 'status'
+              ? {
+                app: 'Lightweaver', provisioningContractVersion: 1,
+                cardId: 'lw-frame-test', firmwareVersion: '1.0.0', buildId: 'frame-test-build',
+                bootId: 'frame-test-boot', runtimePhase: 'ready', knownGoodProject: true,
+                commandReady: true, outputReady: true,
+              }
+              : { ok: true, relayed: message.type === 'frame' },
         },
       });
     }, 0);
@@ -584,6 +613,7 @@ await assert.rejects(
   'transport-ready bridge refuses frames before identity verification',
 );
 await verifyCardBridgeIdentity('192.168.18.70');
+await sendCardBridgeRequest('status', {}, { host: '192.168.18.70' });
 posted.length = 0;
 
 // A frame request relays through the bridge and its versioned reply clears the gap.

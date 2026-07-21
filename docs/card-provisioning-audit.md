@@ -1,244 +1,247 @@
 # Lightweaver card-provisioning audit
 
-## Scope and acceptance rule
+## Scope and release status
 
-This audit describes the current ESP32-S3-only production path on this branch. Studio may reach a card by direct LAN HTTP when Studio is served from `http:` or `file:`, or through the local card-page `postMessage` bridge when Studio is served from `https://led.mandalacodes.com`. The public site is not a cloud control plane and the customer/gallery path remains zero-login.
+This is the ESP32-S3-only production path. Studio runs at
+`https://led.mandalacodes.com`; commands stay on the local network through the
+card-page bridge. A Studio served over plain local HTTP may use direct LAN HTTP,
+but direct requests, a terminal, and typed card addresses are diagnostics, not
+the worker flow or shipment evidence. The gallery remains zero-login.
 
-The governing rule is:
+The invariant for every screen and mutation is:
 
-> A transport connection is not a usable card. “Connected” requires the expected card identity and a complete, current readiness envelope proving that the running firmware can accept commands and drive its configured outputs.
+> Reachable, paired, flashed, or acknowledged is not connected. Green/connected
+> requires the expected physical card, a current complete status contract, two
+> fresh envelopes from one boot and bridge lifecycle, and command/output
+> readiness. A reachable factory card is **Blank — load a project** and never
+> green.
 
-The current branch implements that rule. One real card completed the hardware acceptance sequence described below. The remaining risks are listed explicitly; this document does not treat human visual confirmation as automated sensing.
+Firmware source and automated contracts on this branch implement the
+deterministic network handoff and recovery described below. A real card has
+shown the bounded factory beacon, and direct diagnostic control has lit its
+GPIO 18 strip. The released Studio has **not yet** completed the full erased-card
+Production Setup flow on that card, and the user has reported the whole-system
+flow still failing/dark. A protected signed firmware release, live build-graph
+freshness proof, and one uninterrupted real-card run are still required. This
+branch is not shipment evidence by itself.
 
-## End-to-end audit
+## Full-flow audit
 
-### 1. Select the card and flash firmware
+### 1. Select one card and flash the signed factory image
 
-#### Intended production step
+**Required flow.** Production Setup loads an immutable job, verifies the signed
+firmware release, asks the worker to select one USB serial device, derives the
+stable card ID from the ESP eFuse MAC, validates ESP32-S3/16 MB hardware, erases
+the chip, writes the merged factory image at `0x0`, verifies the write, resets,
+and releases USB.
 
-1. Studio saves the project that must be restored after a clean install.
-2. The operator selects the serial device.
-3. Studio inspects the target before erase, derives the stable card ID from the ESP eFuse MAC, and accepts only an ESP32-S3 with 16 MB flash.
-4. Studio verifies the production release manifest signature, target, image size, image SHA-256, merged-image structure, and ESP image magic.
-5. After explicit erase confirmation, Studio performs a full-chip erase, writes the merged factory image at address `0x0`, verifies the flash write through esptool-js, resets into the application, and releases the serial port.
+**Failure modes and former assumptions.** The chooser can select the wrong USB
+device. A firmware URL can return HTML with status 200. An unsigned, altered,
+truncated, wrong-target, app-only, or stale image can be written. A serial
+disconnect can leave the result unknown. A verified write can be mistaken for
+a running application. Retrying an ambiguous erase/write can repeat a
+destructive operation.
 
-#### Failure modes and prior success assumptions
+**Verification replacing assumption.** Studio validates manifest signature,
+target, image size, SHA-256, merged-image structure, and ESP image magic before
+erase. The inspected eFuse identity is bound to the immutable production run.
+The writer uses esptool verification and releases the port on every exit.
+Resume inspects the same card/build instead of blindly flashing again. “Flash
+written” is not “card alive”: the next gate requires the factory beacon or a
+fresh runtime status from that exact card.
 
-- The selected serial port could be a different USB device.
-- A missing firmware URL could return an HTML page with HTTP 200.
-- A truncated, altered, unsigned, wrong-target, app-only, or wrong-address image could erase a working card and leave it unbootable.
-- A write could fail while the browser retained the serial port.
-- “The bytes were written” could be mistaken for “the application booted and is serving its runtime API.”
-- A browser interruption could cause Studio to repeat a destructive install whose outcome was unknown.
+**Remaining gap.** The protected signer must rebuild the committed factory
+artifact after these firmware changes. The live Studio must then flash an
+erased card; source tests cannot prove Web Serial, cable, boot, or board power.
 
-#### Implemented verification
+### 2. Prove the factory card is blank and visibly alive
 
-- Hardware inspection must report the exact supported chip and flash size before erase.
-- The release loader verifies signature and image digest before installation; the flash plan rejects implausible or incomplete factory images.
-- The flash writer supplies an MD5 implementation to esptool-js, and the serial transport is released on success or failure.
-- The commissioning record binds the saved project to the derived card ID, firmware version, build ID, and exact install operation.
-- An interrupted flow reconnects and inspects the exact card/build; it does not automatically flash again.
+**Required flow.** With no known-good project, firmware reports factory state,
+`knownGoodProject: false`, and no normal command/output readiness. It advertises
+`Lightweaver-XXXX`. A separate safe beacon tests the approved output pins with
+at most eight dim amber pixels and two pulses, so a worker can distinguish a
+running blank card from a dead card.
 
-#### Remaining risk
+**Failure modes and former assumptions.** Factory defaults can target the wrong
+GPIO, making valid commands appear ineffective. A green board LED can be
+mistaken for strip output. A normal-looking default can hide that no customer
+project is installed. Beacon code can fight a stream or config transaction.
+Fresh NVS reads can create a hot error loop.
 
-The Web Serial UI records flash completion after verified write/reset, before it has received a runtime `/api/status` envelope from the newly booted application. The later network stage does verify the running application before any project mutation, and the factory beacon provides a visible boot signal, but the flash screen itself does not yet provide an automated post-reset application heartbeat. Production wording and the operator checklist must therefore reserve “card alive” for the beacon or runtime status, not for write completion alone.
+**Verification replacing assumption.** Factory status is explicit and fails
+closed. Normal mutations require the narrower authority appropriate to the
+operation; a blank exact card may accept one project configuration but may not
+accept ordinary runtime commands. Beacon timing, pins, pixel count, brightness,
+current, and ownership are bounded. It yields during setup, discovery,
+streaming, candidates, or recovery. Missing-key reads and safety polling are
+bounded.
 
-### 2. Boot blank, show life, and join permanent Wi-Fi
+**Visible distinction.** Eight amber pixels prove only the factory beacon path.
+They do not prove the 44-pixel project, correct GPIO, color order, or customer
+readiness.
 
-#### Intended production step
+### 3. Join Wi-Fi without losing the card
 
-1. An erased card boots with no normal project outputs, looks, or zones.
-2. It advertises `Lightweaver-XXXX` and serves setup at `http://192.168.4.1`.
-3. While genuinely factory blank, it cycles a deliberately bounded beacon over supported output GPIOs 16, 17, 18, and 21: no more than eight amber pixels, two short pulses per step, at bounded brightness and current.
-4. The operator joins the setup network and enters the permanent Wi-Fi credentials.
-5. The card leaves its AP and joins the permanent LAN.
+**Required flow.** The worker joins the guided setup hotspot and enters the
+gallery/home credentials. Firmware runs AP+STA through explicit phases:
+`setup-ap`, `joining`, `handoff-ready`, `station`, `reconnecting`, and
+`recovery-ap`. It does not reboot merely to save credentials. The setup AP stays
+available until the station API is actually ready and Studio acknowledges the
+exact handoff.
 
-#### Failure modes and prior success assumptions
+The handoff proof contains the exact card ID, boot ID, handoff generation, and
+private station IPv4 address. The card-page bridge retargets its one named
+window from the AP to that verified station address. Studio acknowledges only
+the same identity, boot, generation, and station interface. AP shutdown is
+delayed and revalidated after that acknowledgement.
 
-- Factory defaults could create a normal-looking LED configuration on the wrong pin, leaving the real strip dark while the API still accepted commands.
-- A green board LED could be mistaken for proof that the external strip and its data path work.
-- Reading absent NVS keys on every beacon frame could flood serial logs and consume runtime time on a freshly erased card.
-- The card could leave the AP before Studio saved enough progress to recover.
-- Studio could continue pointing at `192.168.4.1` after the AP disappeared.
-- A card answering at a familiar hostname could be the wrong physical card.
+**Failure modes and former assumptions.** “Credentials saved” can be mistaken
+for joined. The AP can disappear before Studio learns where the card went. A
+setup tab can remain stranded on the dead AP page. An old acknowledgement can
+close a new AP lifecycle. Another Lightweaver on the LAN can be adopted. The
+listener can fail to bind even though Wi-Fi reports associated.
 
-#### Implemented verification
+**Verification replacing assumption.** `202 joining` is progress, not success.
+`handoff-ready` requires the station address plus runtime listener readiness.
+Acknowledgement is exact and one lifecycle only; malformed, stale, AP-origin,
+wrong-boot, wrong-generation, or wrong-card messages fail closed. Same-window
+navigation revokes old bridge authority. The worker never types or discovers a
+local IP.
 
-- Factory defaults are explicitly `runtimePhase: "factory"`, `knownGoodProject: false`, and `commandReady: false`; normal control and identify requests fail closed with HTTP 423.
-- The beacon is separate from normal project output. Its pin list, pixel count, brightness, current limit, timing, and output ownership are bounded in firmware policy.
-- Beacon ownership stops during command activity, Wi-Fi transition, candidate activation, discovery, streaming, or recovery so it cannot fight another output source.
-- Missing NVS keys are checked without triggering `Preferences.getString()` errors, and beacon safety state is polled at a bounded interval rather than on every 10 ms frame.
-- Commissioning progress is persisted across the network switch.
-- On direct-capable Studio origins, a background poll looks for the expected card and advances only when `/api/status` reports station transport plus the exact card ID, firmware version, and build ID. An AP-mode response cannot satisfy this gate.
+**Remaining gap.** The live HTTPS browser path—including popup permission,
+network switch, retarget, and return to the same Studio tab—must pass on the
+real card. Direct LAN polling does not substitute for this test.
 
-#### Remaining risks
+### 4. Recognize the exact card and classify blank versus usable
 
-- Direct LAN discovery tries card-specific hostname/address hints, remembered addresses, `lightweaver.local`, and `192.168.4.1`; it does not scan an unknown subnet. If mDNS fails and DHCP gives a never-seen address, an operator must supply or discover that address.
-- A public HTTPS page cannot directly poll an HTTP card because of browser mixed-content rules. At `led.mandalacodes.com`, the local card page is the bridge. After a Wi-Fi transition, the bridge must be reopened or re-established before Studio can receive verified status. This is an intentional browser boundary, not evidence that the card is offline.
+**Required evidence.** A complete status envelope includes stable identity and
+release fields, per-boot `bootId`, provisioning contract version, Wi-Fi phase
+and interface, handoff generation, runtime phase, and explicit
+`knownGoodProject`, `commandReady`, and `outputReady` booleans. Studio requires
+two fresh, complete, monotonically newer station envelopes from the same boot,
+host, operation generation, and bridge lifecycle.
 
-### 3. Recognize the exact card and decide whether it is usable
+**Failure modes and former assumptions.** HTTP success, a bridge hello, stored
+pairing, a remembered host, a partial status object, or one response can all be
+shown as “connected.” Stale status can survive a reset or silent network loss.
+A previously paired card A can authorize a newly flashed card B.
 
-#### Intended production step
+**Verification replacing assumption.** Missing fields never default true.
+Wrong identity/release/boot/lifecycle responses revoke authority. The status
+model separates reachability, exact-card presence, blank config-only authority,
+and full runtime command readiness. A factory card reads **Blank — load a
+project**, not green. Deliberate USB inspection binds a new production run to
+that card; stored authority for another card cannot cross the boundary.
 
-Studio reads a versioned readiness envelope containing at least:
+### 5. Load exactly one project and independently verify it
 
-- `app`, `cardId`, `firmwareVersion`, and `buildId`;
-- a per-boot `bootId`;
-- `provisioningContractVersion`;
-- `runtimePhase`;
-- explicit booleans for `knownGoodProject`, `commandReady`, and `outputReady`.
+**Required flow.** The immutable job for the current physical fixture compiles
+one runtime package. For the canonical bench fixture it is GPIO 18, 44 pixels,
+GRB, Aurora, 1500 mA, and brightness limit 0.35. Studio obtains a short-lived
+operation lease bound to card ID, host, boot ID, bridge lifecycle, operation
+generation, job, and flow. The blank card receives one configuration request.
+Studio independently reads the installed state and compares job digest,
+project revision/fingerprint, wiring digest/revision, outputs, count, color
+order, and current limit.
 
-The expected card ID and firmware/build must match. A factory card remains reachable but is presented as blank/needs a project. It is not presented as ready.
+**Failure modes and former assumptions.** POST 200 can be mistaken for installed.
+A preflight can accidentally revoke the blank card's one legitimate config
+authority. A lost response can cause a duplicate write. A link can change after
+button render but before or during mutation. A wiring-changing candidate can be
+made permanent before anyone sees the strip.
 
-#### Failure modes and prior success assumptions
+**Verification replacing assumption.** Blank/config authority is narrower than
+runtime-command authority and is consumed atomically by the production push
+path. Correlation records are bounded and do not grant broad authority after a
+reload. Every mutation checks its lease before and after I/O; lifecycle,
+generation, host, boot, flow, or identity change cancels it and cannot produce
+a pass. Read-back is independent of the POST acknowledgement. Wiring changes
+remain candidate transactions until the physical check confirms them; failure
+or timeout restores the last known-good state.
 
-- TCP/HTTP or bridge handshake success could be shown as green “Connected.”
-- A paired identity stored in `localStorage` could be treated as live readiness.
-- A partial or old status payload could default missing readiness fields to true.
-- Studio could silently adopt the first Lightweaver card found on a shared LAN.
-- A different firmware build at the same address could be accepted.
-- A reboot could leave stale readiness and output state visible in Studio.
+### 6. Prove the physical strip, not merely the API
 
-#### Implemented verification
+**Required flow.** Studio sends the bounded guided light frames through the same
+verified card-page bridge used in production. The worker observes the real
+strip: named output only, first pixel blue, final pixel red, all pixels between
+dimly lit, and everything outside the boundary dark. The final Aurora check
+must visibly light the complete 44-pixel strip. Only the worker's explicit
+answer can complete the physical gate.
 
-- Readiness booleans must be actual booleans; missing or malformed evidence stays “checking.”
-- Unsupported contract, invalid identity, incomplete evidence, wrong card, wrong firmware version, or wrong build cannot become connected.
-- Factory or non-known-good state is classified as blank even when reachable and paired.
-- Unpaired discovery is an explicit operator adoption step; passive discovery does not overwrite an existing pairing.
-- Both direct HTTP and bridge paths use the same readiness classifier and preserve the same fail-closed states.
-- `bootId` changes cause revalidation rather than immediate reconnection.
+**Failure modes and former assumptions.** A delivered frame, HTTP 200, board
+LED, factory eight-pixel beacon, browser preview, or a few flickers can be
+mistaken for correct light. Wrong GPIO, count, direction, color order, power,
+ground, or DATA-IN orientation can leave all or part dark. Network loss during
+the frame can leave Studio displaying stale success.
 
-### 4. Stay truthful through drops, resets, and transport changes
+**Verification replacing assumption.** Frame delivery remains distinct from
+human observation. The operation lease is checked around every frame and is
+invalidated immediately when card-link truth is lost. Loss demotes the footer,
+cancels streaming, and cannot create a pass. Temporary corrections are bounded
+and roll back unless the real boundary is confirmed.
 
-#### Intended production step
+**Remaining gap.** There is no optical sensor. A human must see and confirm the
+entire real strip. The user has not yet reported this succeeding through the
+released whole-system flow, so shipment acceptance remains open.
 
-Once paired, Studio continuously proves the card remains the same usable runtime. Direct HTTP is polled every 20 seconds; the bridge is pinged every 5 seconds. Two misses clear live authority and move the link into recovery rather than leaving a green state behind.
+### 7. Power and network recovery
 
-#### Failure modes and prior success assumptions
+**Required flow.** After pass, power-cycle the finished card. It must return to
+the saved Aurora project without Studio assistance, then provide two new status
+envelopes for the changed boot before Studio becomes green. During a Wi-Fi
+outage, LED playback must continue. Firmware owns deterministic station retry
+at 10-second intervals. If still offline, it opens the recovery AP by 60
+seconds without erasing the project, and automatically returns to station when
+the network returns.
 
-- Card power loss, Wi-Fi loss, crash, or reset could leave Studio showing connected indefinitely.
-- The first reply after a miss could be stale or arrive out of order across a reboot.
-- One successful bridge lifecycle event could be mistaken for command readiness.
-- A mutation could start using readiness that became stale between rendering the button and sending the request.
+**Failure modes and former assumptions.** SDK auto-reconnect and application
+retry can race. A reset can preserve a stale green UI. Recovery AP can erase or
+replace known-good output. Listener failure can be called connected. Network
+loss can stop local playback.
 
-#### Implemented verification
+**Verification replacing assumption.** Firmware has one retry owner and reports
+truthful phases. Station readiness includes local control listener readiness.
+Studio revokes control authority on misses, reset, or lifecycle change and
+requires two new complete envelopes. Recovery does not take LED ownership and
+does not discard the project.
 
-- Misses clear readiness, acknowledgement time, and mutation authority.
-- Recovery requires two complete status envelopes with the same candidate `bootId`; one reply is insufficient.
-- Responses from an older or different boot cannot complete another boot's stable pair.
-- A bridge lifecycle change also clears readiness and requires stable revalidation.
-- Commissioning restore and light-check mutations perform a fresh status read immediately before mutation and bind the operation to the current host, validated boot ID, link generation, commissioning flow, and a short-lived fenced lease.
-- If identity, boot, generation, or readiness changes, the mutation is refused with “nothing was changed.”
+**Remaining gap.** The 10-second retry, recovery AP at or before 60 seconds,
+continued playback, and automatic LAN return must be timed on the released
+real card.
 
-#### Remaining risk
+### 8. Record and hand off
 
-Detection is bounded by the polling intervals and two-miss policy; Studio may take roughly one direct polling cycle plus retry, or two bridge ping failures, to demote an idle link. This is deliberate tolerance for transient LAN loss. Command-time commissioning preflights are stricter and do not rely only on the idle indicator.
+A shipment pass is issued only after the exact card/release/job read-back,
+human full-strip result, new-boot revalidation, post-reboot command, recovery
+checks, and exported production record are all present. The worker disconnects
+the finished card before beginning the next immutable run.
 
-### 5. Load the project without making unverified wiring permanent
+The deployed bundle is part of the product. Source checks run before signing;
+the protected workflow signs firmware and rebuilds jobs; deployment publishes
+Studio; the live checker fetches the build graph and verifies the root plus
+every reachable JS/CSS asset. A green CI run that skipped Cloudflare for missing
+credentials is explicitly **not deployed** and cannot authorize shipment.
 
-#### Intended production step
+## Success assumptions removed
 
-1. Studio rebuilds the runtime package from the project snapshot retained before flashing.
-2. Immediately before sending, Studio verifies the exact card/build is command-ready on the current boot.
-3. A wiring-changing config is stored as a candidate with a card-issued `activationId`, not as known-good.
-4. Studio independently reads `/api/wiring/status` and requires the same activation ID plus exact card, firmware/build, project revision/fingerprint, production job identity when present, wiring revision/digest, output layout, color order, and current limit.
-5. Activation reboots into a bounded probation state. A lost reboot response is treated as ambiguous; Studio polls the card-owned transaction state after reconnect.
-6. Only a successful physical light check promotes the candidate to known-good. “No lights” rolls it back.
-
-#### Failure modes and prior success assumptions
-
-- HTTP 200 from `POST /api/config` could be treated as proof of persistence or activation.
-- An interrupted POST could be repeated, producing two different candidates.
-- A config could persist while the old output topology remained active.
-- Wrong GPIO, pixel count, color order, or current limit could become permanent before anyone saw light.
-- Power loss during promotion could leave a corrupt mix of candidate and known-good data.
-- SD/NVS corruption could silently fall back to an unrelated config or factory defaults.
-
-#### Implemented verification
-
-- Runtime configs are size-bounded and strictly validated before storage.
-- Wiring changes use staged, booting, awaiting-confirmation, confirmed, or rollback states with activation-ID matching.
-- The candidate read-back is independent of the POST response and exact to the saved commissioning project.
-- A durable restore claim and recorded attempt prevent tabs or retries from sending the same uncertain mutation twice.
-- Promotion journals the previous known-good config and restores it on failed/incomplete promotion; candidate state is cleared before destructive cleanup on rollback.
-- Boot loading treats NVS read/type/metadata failures as recovery, not as success, and only permits SD fallback under explicit safe conditions.
-- Normal runtime commands are admitted only when `runtimePhase` is ready, the config is valid and known-good, the web server and LED outputs are ready, and no restart transition is pending.
-- Operation acknowledgements identify the card/boot, report the affected output scope/count, and reject commands that affect zero outputs.
-
-### 6. Discover the output and perform the physical light check
-
-#### Intended production step
-
-For an unknown connector pin, Studio/firmware tests one approved GPIO at a time. Each discovery step persists only a temporary discovery marker, reboots into a bounded eight-pixel amber pulse on that one GPIO, and does not persist project wiring. The operator answers whether the expected pixels lit. After the matching GPIO is known, Studio stages and activates the real project, then asks the operator whether the full strip is visibly correct.
-
-#### Failure modes and prior success assumptions
-
-- Testing every output concurrently could create electrical contention or make the observed pin ambiguous.
-- An API acknowledgement could be mistaken for proof that photons appeared.
-- Seeing only eight factory pixels could be mistaken for a completed 44-pixel project.
-- The operator could confirm the wrong strip, wrong count, or wrong color order.
-- A failed light check could strand the card on temporary wiring.
-
-#### Implemented verification
-
-- Discovery is sequential across GPIO 16, 17, 18, and 21 and bounded to eight dim amber pixels.
-- Discovery state reports the exact step/pin and remains separate from project persistence.
-- Project activation is an exact, ID-bound temporary transaction with reconnect polling.
-- “Yes, lights are correct” calls the confirm endpoint; “No lights” calls rollback and returns the flow to setup.
-- Candidate probation and recovery endpoints protect the previous known-good state when a test times out or is interrupted.
-- After promotion and reboot, Studio requires a new `bootId`, two stable ready envelopes, and a fresh acknowledged command before the card can be treated as ready for handoff.
-
-#### Remaining risk
-
-The ESP32 has no optical sensor and this hardware does not measure whether the external strip emitted the requested pattern. The final light result is therefore a human observation. Software can prove which command and configuration were active, but it must never convert an HTTP acknowledgement into “lights verified.” Production records and handoff must retain the operator's explicit physical answer.
-
-### 7. Handoff
-
-A card is customer-ready only after all of these independent facts are present:
-
-- exact card ID and expected firmware/build;
-- known-good project identity and wiring read-back;
-- current-limit and output configuration;
-- human-confirmed full-strip light result;
-- successful reboot with a changed boot ID;
-- two stable post-reboot ready envelopes; and
-- a post-reboot command acknowledgement from that exact card/boot.
-
-The board's green power LED, a serial write completion, a bridge handshake, a single status response, or a control HTTP 200 by itself is not a handoff gate.
-
-## Assumptions that are no longer permitted
-
-| Old assumption | Current required evidence |
+| Former assumption | Evidence now required |
 | --- | --- |
-| Serial write completed, therefore firmware is running | Verified write plus later factory beacon or runtime status |
-| AP disappeared, therefore setup succeeded | Expected identity reporting station transport on the LAN |
-| A Lightweaver answered, therefore it is our card | Exact stored card ID, firmware version, and build ID |
-| Paired or reachable means connected | Complete current readiness contract with ready/known-good/command/output truth |
-| One post-reset response is enough | Two complete envelopes for the same new `bootId` |
-| Config POST returned 200, therefore the project is installed | Card-issued activation ID plus independent exact candidate read-back |
-| Activation response dropped, therefore activation failed | Reconnect and query card-owned transaction state |
-| Command was acknowledged, therefore LEDs lit | Explicit human observation of the physical strip |
-| Green board LED means strip data works | Factory/discovery beacon or full-project light check |
+| Flash write finished | Verified write plus factory beacon or exact runtime status |
+| Green board LED means the strip works | Human observation of the commanded external strip |
+| AP disappeared, so Wi-Fi setup worked | Exact handoff-ready proof, exact acknowledgement, and two station envelopes |
+| A Lightweaver answered | Expected card ID, release, boot, generation, host, and bridge lifecycle |
+| Paired/reachable means connected | Complete current command/output readiness; blank stays non-green |
+| One status response is current | Two fresh complete responses for one lifecycle and boot |
+| Config POST succeeded | One correlated write plus independent exact read-back |
+| Frame was acknowledged, so LEDs lit | Explicit human full-strip observation |
+| Reset did not change the screen, so it survived | New boot ID plus two new ready envelopes and a fresh command |
+| CI was green, so the site deployed | Credentialed publish plus live build-graph freshness proof |
+| Eight amber pixels means finished | Beacon only; full 44-pixel project check still required |
 
-## Real-card acceptance evidence — 2026-07-20
+## Current release limiter
 
-This session used one physical card and strip:
-
-- Card ID: `lw-b0fe81f61b44`
-- ESP eFuse MAC: `44:1b:f6:81:fe:b0`
-- LAN address after setup: `192.168.18.70`
-
-Observed sequence:
-
-1. The exact serial device was selected, fully erased, and flashed with the current development firmware.
-2. On the erased factory boot, the operator saw the intended eight-pixel, two-pulse amber beacon. This was a human observation.
-3. Serial monitoring exposed repeated reads of absent known-good/candidate NVS keys in the factory beacon loop. The code was fixed to avoid missing-key reads and to bound safety polling, then rebuilt and reflashed. The recurring error storm was absent after reflash.
-4. The card joined the LAN and answered at `192.168.18.70` as the exact card ID above. It truthfully reported blank/not command-ready before a project was known-good.
-5. Sequential discovery produced these human answers: GPIO 16 — no; GPIO 17 — no; GPIO 18 — yes. Each positive/negative result was supplied by the operator, not detected by software.
-6. A project candidate for GPIO 18, 44 pixels, GRB order, 1500 mA limit, and the Aurora look was staged and read back.
-7. After temporary activation, the operator confirmed that the full 44-pixel strip was visibly lit and animating. This was a human observation.
-8. The exact candidate was promoted to known-good.
-9. The card rebooted, reported a new `bootId`, returned two stable command/output-ready envelopes, and accepted a fresh post-reboot command.
-10. The operator confirmed the full-strip Aurora pattern returned after reboot. This was a human observation.
-
-This is strong acceptance evidence for the firmware, LAN API, transaction, GPIO discovery, persistence, restart, and physical strip path on that card. It is not an automated optical test, and it is not yet statistical evidence across a production batch. Repeating the checklist on multiple blank cards remains the production repeatability test.
+The software release sequence and the real-card acceptance are both unfinished.
+Do not mark a card ready to ship until the protected signer publishes the new
+firmware/jobs, the live Studio passes build-graph freshness, and an erased card
+completes [`new-card-checklist.md`](new-card-checklist.md) through the live
+Production Setup route with the full GPIO 18 strip visibly correct.

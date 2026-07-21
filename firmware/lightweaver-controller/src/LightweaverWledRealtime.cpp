@@ -4,6 +4,7 @@
 #include <WiFiUdp.h>
 
 #include "LightweaverFrameSource.h"
+#include "LightweaverConnectivityPolicy.h"
 
 // WLED realtime UDP listens on port 21324 by default.
 static constexpr uint16_t WLED_REALTIME_PORT = 21324;
@@ -19,11 +20,20 @@ WiFiUDP g_udp;
 CRGB* g_leds = nullptr;
 uint16_t g_totalPixels = 0;
 bool g_started = false;
+bool g_bindAttempted = false;
+uint32_t g_lastBindAttemptMs = 0;
 // Heuristic for "we've already warned about this unsupported protocol id
 // recently" — avoids spamming the serial log when a designer points a non-
 // DRGB stream at us. Reset on every new protocol id we see.
 uint8_t g_lastUnsupportedProto = 0xFF;
 uint32_t g_lastUnsupportedWarnAt = 0;
+
+bool bindRealtimeSocket(uint32_t now) {
+  g_started = g_udp.begin(WLED_REALTIME_PORT);
+  g_bindAttempted = true;
+  g_lastBindAttemptMs = now;
+  return g_started;
+}
 }
 
 void setupWledRealtime(CRGB* leds, uint16_t totalPixels) {
@@ -34,8 +44,7 @@ void setupWledRealtime(CRGB* leds, uint16_t totalPixels) {
     // We log a hint so it's obvious in serial if streaming never starts.
     if (Serial) Serial.println("WLED realtime: WiFi not connected yet at setup; will bind anyway");
   }
-  if (g_udp.begin(WLED_REALTIME_PORT)) {
-    g_started = true;
+  if (bindRealtimeSocket(millis())) {
     if (Serial) {
       Serial.print("WLED realtime listening on UDP ");
       Serial.println(WLED_REALTIME_PORT);
@@ -45,18 +54,33 @@ void setupWledRealtime(CRGB* leds, uint16_t totalPixels) {
   }
 }
 
-void wledRealtimeRebind() {
+bool wledRealtimeRebind() {
   // Drop any stale socket and re-bind. Safe to call repeatedly.
   g_udp.stop();
-  g_started = g_udp.begin(WLED_REALTIME_PORT);
+  g_started = false;
+  bindRealtimeSocket(millis());
   if (Serial) {
     Serial.println(g_started ? "WLED realtime: rebound after reconnect"
                              : "WLED realtime: rebind failed");
   }
+  return g_started;
+}
+
+bool wledRealtimeIsListening() {
+  return g_started;
 }
 
 void handleWledRealtime() {
-  if (!g_started || g_leds == nullptr || g_totalPixels == 0) return;
+  if (!g_started) {
+    uint32_t now = millis();
+    if (!g_bindAttempted ||
+        lightweaver::elapsed(
+            now, g_lastBindAttemptMs, lightweaver::kNetworkBindingRetryMs)) {
+      bindRealtimeSocket(now);
+    }
+    if (!g_started) return;
+  }
+  if (g_leds == nullptr || g_totalPixels == 0) return;
 
   // Drain every queued packet; we always want the freshest frame, not the
   // oldest. If a sender outpaces us we'd rather drop intermediate frames

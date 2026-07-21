@@ -217,7 +217,7 @@ export function acknowledgeCommissionedCard(flow, card = {}, { now = Date.now() 
   };
 }
 
-export function preflightCardCommissioningMutation(flow, status = null) {
+export function preflightCardCommissioningMutation(flow, status = null, { allowInitialConfig = false } = {}) {
   requireFlow(flow);
   if (!flow.cardAcknowledgedAt || !['set-up-card', 'check-lights'].includes(flow.stage)) {
     return { ok: false, reason: 'mutation-not-authorized' };
@@ -229,6 +229,9 @@ export function preflightCardCommissioningMutation(flow, status = null) {
   if (readiness.reason === 'unexpected-card') return { ok: false, reason: 'wrong-card' };
   if (readiness.reason === 'unexpected-firmware-version') return { ok: false, reason: 'wrong-firmware-version' };
   if (readiness.reason === 'unexpected-firmware-build') return { ok: false, reason: 'wrong-firmware-build' };
+  if (allowInitialConfig && flow.stage === 'set-up-card' && readiness.state === 'blank') {
+    return { ok: true, readiness, authority: 'initial-config' };
+  }
   if (!readiness.connected) {
     return {
       ok: false,
@@ -250,13 +253,23 @@ export function preflightCardCommissioningMutation(flow, status = null) {
 export function acknowledgeCommissionedCardFromStatus(flow, status = {}, { now = Date.now() } = {}) {
   requireFlow(flow);
   if (flow.stage !== 'set-up-card') return { ok: false, reason: 'not-awaiting-card' };
-  const transport = String(status?.wifi?.transport || status?.transport || '').toLowerCase();
-  if (transport !== 'station') return { ok: false, reason: 'not-on-home-network' };
-  return acknowledgeCommissionedCard(flow, {
+  const wifi = status?.wifi;
+  const transport = String(wifi?.transport || '').toLowerCase();
+  if (
+    transport !== 'station'
+    || wifi?.transition !== 'station'
+    || wifi?.transitionPending !== false
+  ) return { ok: false, reason: 'not-on-home-network' };
+  const identityAcknowledgement = acknowledgeCommissionedCard(flow, {
     id: status.cardId || status.id,
     firmwareVersion: status.firmwareVersion,
     buildId: status.buildId || status.firmwareBuild || status.build,
   }, { now });
+  if (!identityAcknowledgement.ok) return identityAcknowledgement;
+  const readiness = classifyCardReadiness(status, { expectedCard: flow.expectedCard });
+  return readiness.connected || readiness.state === 'blank'
+    ? identityAcknowledgement
+    : { ok: false, reason: 'not-on-home-network' };
 }
 
 export function resumeInstalledCardAfterInterruption(flow, card = {}, { now = Date.now() } = {}) {

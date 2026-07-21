@@ -10,10 +10,13 @@ import {
   isCardBridgeLaunch,
   openCardBridge,
   openLocalCardPage,
+  retargetCardBridge,
   sendCardBridgeRequest,
   rePairDiscoveredCardBridgeIdentity,
   verifyCardBridgeIdentity,
 } from '../src/lib/cardBridge.js';
+import { pushConfigToCard } from '../src/lib/cardPushClient.js';
+import { makeCardRuntimePackage } from '../src/lib/cardRuntimeContract.js';
 
 globalThis.CustomEvent = class CustomEvent {
   constructor(type, options = {}) {
@@ -53,7 +56,12 @@ const handoffUrl = buildCardBridgeLaunchUrl(
 );
 const handoff = new URL(handoffUrl);
 assert.equal(handoff.origin, 'http://192.168.18.70');
-assert.equal(handoff.hash, '#studioBridge=1');
+assert.equal(new URLSearchParams(handoff.hash.slice(1)).get('studioBridge'), '1');
+assert.equal(
+  new URLSearchParams(handoff.hash.slice(1)).get('studioOrigin'),
+  'https://led.mandalacodes.com',
+  'the card ready handshake receives only the allowlisted opener origin',
+);
 assert.equal(handoff.search, '', 'Studio must not pass an auto-open URL through the card query string');
 assert.equal(handoff.searchParams.has('studioAutoOpen'), false);
 assert.equal(handoff.searchParams.has('studioUrl'), false);
@@ -62,6 +70,7 @@ assert.equal(handoff.href.includes('deployCheck=123'), false, 'arbitrary Studio 
 const messages = [];
 const storedIdentityValues = new Map([['lw_chip_card_host', '192.168.18.70']]);
 let firmwareCardId = 'lw-handoff-test';
+let parentStatusOverrides = {};
 let delayFirmwareResponse = false;
 let releaseFirmwareResponse = null;
 const parentBridge = {
@@ -83,6 +92,7 @@ const parentBridge = {
                   cardId: firmwareCardId, firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
                   bootId: 'boot-handoff', runtimePhase: 'ready', knownGoodProject: true,
                   commandReady: true, outputReady: true, fromParentBridge: true,
+                  ...parentStatusOverrides,
                 }
               : { ok: true, fromParentBridge: true },
         },
@@ -166,6 +176,20 @@ await assert.rejects(
 assert.equal(messages.length, messagesBeforeMismatchedControl, 'mismatched privileged command never reaches postMessage');
 await rePairDiscoveredCardBridgeIdentity('192.168.18.70');
 assert.equal(JSON.parse(storedIdentityValues.get('lw_card_identity_v1')).id, 'lw-handoff-test', 're-pair requires its explicit replacement API');
+
+parentStatusOverrides = {
+  runtimePhase: 'factory', knownGoodProject: false, commandReady: false,
+};
+await sendCardBridgeRequest('status', {}, { host: '192.168.18.70', timeoutMs: 100 });
+await assert.rejects(
+  sendCardBridgeRequest('config', { project: 'not-commissioning' }, {
+    host: '192.168.18.70', timeoutMs: 25,
+  }),
+  error => error?.reason === 'runtime-not-ready',
+  'a noncommissioning blank bridge has no configuration mutation authority',
+);
+parentStatusOverrides = {};
+await sendCardBridgeRequest('status', {}, { host: '192.168.18.70', timeoutMs: 100 });
 
 // The card page can reload without changing its WindowProxy or host. A new
 // ready lifecycle must revoke the prior card synchronously while fresh identity
@@ -311,7 +335,12 @@ const stageTimeoutParent = {
     if (message.type === 'status') {
       setTimeout(() => wiringRetryListeners.get('message')?.({
         origin: 'http://192.168.18.70', source: stageTimeoutParent,
-        data: { app: 'LightweaverCardBridge', id: message.id, ok: true, response: { ok: true } },
+        data: { app: 'LightweaverCardBridge', id: message.id, ok: true, response: {
+          app: 'Lightweaver', provisioningContractVersion: 1,
+          cardId: 'lw-handoff-test', firmwareVersion: '1.0.0', buildId: 'build-stage-timeout',
+          bootId: 'boot-stage-timeout', runtimePhase: 'ready', knownGoodProject: true,
+          commandReady: true, outputReady: true,
+        } },
       }), 0);
       return;
     }
@@ -321,6 +350,7 @@ const stageTimeoutParent = {
 globalThis.window.parent = stageTimeoutParent;
 assert.equal(bootstrapCardBridgeFromOpener(), true);
 await verifyCardBridgeIdentity('192.168.18.70');
+await sendCardBridgeRequest('status', {}, { host: '192.168.18.70', timeoutMs: 100 });
 await assert.rejects(
   sendCardBridgeRequest('wiring-candidate', { candidate: {} }, {
     host: '192.168.18.70',
@@ -357,6 +387,7 @@ function bridgeWindowHarness({
     ['lw_chip_card_host', host],
     ['lw_card_identity_v1', JSON.stringify({ version: 1, id: identityId })],
   ]);
+  const sessionValues = new Map();
   const win = {
     location: {
       href: 'https://led.mandalacodes.com/#screen=patterns',
@@ -368,6 +399,11 @@ function bridgeWindowHarness({
       getItem: key => storageValues.get(key) ?? null,
       setItem: (key, value) => storageValues.set(key, value),
       removeItem: key => storageValues.delete(key),
+    },
+    sessionStorage: {
+      getItem: key => sessionValues.get(key) ?? null,
+      setItem: (key, value) => sessionValues.set(key, value),
+      removeItem: key => sessionValues.delete(key),
     },
     addEventListener(type, listener) {
       const listenersForType = eventListeners.get(type) || new Set();
@@ -393,6 +429,7 @@ function bridgeWindowHarness({
     win,
     opened,
     storageValues,
+    sessionValues,
     emitMessage(event) {
       for (const listener of eventListeners.get('message') || []) listener(event);
     },
@@ -534,7 +571,7 @@ switchHarness.storageValues.set('lw_card_identity_v1', JSON.stringify({ version:
 openCardBridge(switchHostB);
 assert.equal(getCardBridgeState().card, null, 'A→B target switch synchronously revokes A identity');
 respondFromSwitchHost(delayedAInfo, switchHostA, { cardId: 'lw-1921681875', firmwareVersion: '1.0.0' });
-await assert.rejects(delayedARequest, error => error?.reason === 'stale-host');
+await assert.rejects(delayedARequest, error => error?.reason === 'bridge-navigated');
 assert.equal(getCardBridgeState().card, null, 'delayed A response cannot restore verified identity');
 assert.equal(getCardBridgeState().discoveredCard, null, 'delayed A response cannot restore discovered identity');
 
@@ -553,6 +590,15 @@ assert.equal(switchMessages.length, messagesBeforeBIdentity, 'B receives no priv
 respondFromSwitchHost(freshBInfo, switchHostB, { cardId: 'lw-1921681876', firmwareVersion: '1.0.0' });
 await new Promise(resolve => setTimeout(resolve, 0));
 assert.equal(getCardBridgeState().card?.id, 'lw-1921681876', 'fresh matching B identity restores authority');
+const freshBStatus = sendCardBridgeRequest('status', {}, { host: switchHostB, timeoutMs: 1000 });
+const bStatusMessage = switchMessages.at(-1);
+respondFromSwitchHost(bStatusMessage, switchHostB, {
+  app: 'Lightweaver', provisioningContractVersion: 1,
+  cardId: 'lw-1921681876', firmwareVersion: '1.0.0', buildId: 'build-switch-b',
+  bootId: 'boot-switch-b', runtimePhase: 'ready', knownGoodProject: true,
+  commandReady: true, outputReady: true,
+});
+await freshBStatus;
 const allowedBControl = sendCardBridgeRequest('control', { patternId: 'fire' }, { host: switchHostB, timeoutMs: 1000 });
 const bControlMessage = switchMessages.at(-1);
 respondFromSwitchHost(bControlMessage, switchHostB, { ok: true });
@@ -649,8 +695,16 @@ assert.equal(cardPageTab.postMessageCalls, 0, 'no privileged command reaches the
 // stale handshake (the shared named tab navigated) rather than corrupting it.
 const revisitHost = '192.168.18.78';
 let revisitHarness;
+let delayedRevisitStatus = null;
 const revisitParent = {
+  closed: false,
+  postMessageCalls: 0,
   postMessage(message) {
+    this.postMessageCalls += 1;
+    if (message.type === 'status') {
+      delayedRevisitStatus = message;
+      return;
+    }
     if (message.type !== 'firmware-info') return;
     setTimeout(() => revisitHarness.emitMessage({
       origin: `http://${revisitHost}`,
@@ -661,9 +715,9 @@ const revisitParent = {
       },
     }), 0);
   },
+  focus() {},
 };
-const revisitTab = { closed: false, postMessageCalls: 0, postMessage() { this.postMessageCalls += 1; }, focus() {} };
-revisitHarness = bridgeWindowHarness({ host: revisitHost, parent: revisitParent, openResult: revisitTab });
+revisitHarness = bridgeWindowHarness({ host: revisitHost, parent: revisitParent, openResult: revisitParent });
 globalThis.window = revisitHarness.win;
 assert.equal(bootstrapCardBridgeFromOpener(), true);
 revisitHarness.emitMessage({
@@ -673,14 +727,42 @@ revisitHarness.emitMessage({
 });
 await verifyCardBridgeIdentity(revisitHost);
 assert.equal(getCardBridgeState().identityVerified, true);
+const preNavigationLifecycle = getCardBridgeState().lifecycle;
+const revisitPostsBeforeNavigation = revisitParent.postMessageCalls;
+let preNavigationRejection = '';
+const delayedPreNavigationRequest = sendCardBridgeRequest('status', {}, {
+  host: revisitHost,
+  timeoutMs: 1000,
+  retryOnTimeout: false,
+}).then(() => null, error => {
+  preNavigationRejection = error?.reason || '';
+  return error;
+});
+assert.ok(delayedRevisitStatus, 'same-host request is held before navigation');
 assert.equal(openLocalCardPage(revisitHost).ok, true);
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.equal(preNavigationRejection, 'bridge-navigated',
+  'navigation synchronously rejects the prior page lifecycle');
+assert.equal((await delayedPreNavigationRequest)?.reason, 'bridge-navigated');
+assert.ok(getCardBridgeState().lifecycle > preNavigationLifecycle);
 assert.equal(getCardBridgeState().verified, false, 'the plain visit revokes the stale bridge handshake');
 assert.equal(getCardBridgeState().card, null, 'verified identity is dropped until the new page re-verifies');
+revisitHarness.emitMessage({
+  origin: `http://${revisitHost}`,
+  source: revisitParent,
+  data: {
+    app: 'LightweaverCardBridge', id: delayedRevisitStatus.id, ok: true,
+    response: { cardId: 'lw-1921681878' },
+  },
+});
+assert.equal(getCardBridgeState().card, null,
+  'a delayed reply from the pre-navigation page cannot restore identity');
 await assert.rejects(
   sendCardBridgeRequest('control', { patternId: 'fire' }, { host: revisitHost, timeoutMs: 25 }),
   error => error?.reason === 'identity-missing',
 );
-assert.equal(revisitTab.postMessageCalls, 0);
+assert.equal(revisitParent.postMessageCalls, revisitPostsBeforeNavigation + 1,
+  'only the intentionally delayed status was posted after verification');
 
 // Blocked popups and non-local hosts fail closed with caller-visible reasons.
 const blockedVisitHarness = bridgeWindowHarness({ host: '192.168.18.79', openResult: null });
@@ -690,5 +772,270 @@ assert.equal(blockedVisitHarness.opened.length, 1);
 assert.deepEqual(openLocalCardPage('evil.example.com'), { ok: false, reason: 'invalid-host' });
 assert.deepEqual(openLocalCardPage('192.168.18.79', { path: '//evil.example/' }), { ok: false, reason: 'invalid-host' });
 assert.equal(blockedVisitHarness.opened.length, 1, 'invalid hosts and paths never reach window.open');
+
+// A station page reached through the correlated WiFi handoff cannot restore
+// command authority with a wrong/stale status envelope. Only an exact fresh
+// station status for the card, boot, generation, firmware, and build unlocks it.
+const apHost = '192.168.4.1';
+const stationHost = '192.168.18.90';
+const handoffIdentity = {
+  id: 'lw-handoff090',
+  firmwareVersion: '1.2.3',
+  buildId: 'build-handoff-090',
+};
+const handoffCorrelation = {
+  host: stationHost,
+  expectedCardId: handoffIdentity.id,
+  expectedFirmwareVersion: handoffIdentity.firmwareVersion,
+  expectedBuildId: handoffIdentity.buildId,
+  expectedBootId: 'boot-handoff-090',
+  handoffGeneration: 9,
+};
+let stationStatus = null;
+let stationFirmwareIdentity = handoffIdentity;
+let suppressStationStatus = false;
+let handoffHarness;
+const handoffMessages = [];
+let handoffNavigationCount = 0;
+let handoffHref = '';
+const handoffTab = {
+  closed: false,
+  location: {
+    get href() { return handoffHref; },
+    set href(value) { handoffHref = String(value); handoffNavigationCount += 1; },
+  },
+  postMessage(message) {
+    handoffMessages.push({ message });
+    if (message.type === 'status' && suppressStationStatus) return;
+    const response = message.type === 'firmware-info'
+      ? {
+        cardId: stationFirmwareIdentity.id,
+        firmwareVersion: stationFirmwareIdentity.firmwareVersion,
+        buildId: stationFirmwareIdentity.buildId,
+      }
+      : message.type === 'status'
+        ? stationStatus
+        : { ok: true };
+    setTimeout(() => handoffHarness.emitMessage({
+      origin: `http://${stationHost}`,
+      source: handoffTab,
+      data: { app: 'LightweaverCardBridge', version: 2, id: message.id, ok: true, response },
+    }), 0);
+  },
+  focus() {},
+};
+handoffHarness = bridgeWindowHarness({ host: apHost, openResult: handoffTab });
+handoffHarness.win.location.href = 'https://led.mandalacodes.com/#screen=production';
+handoffHarness.win.location.origin = 'https://led.mandalacodes.com';
+handoffHarness.storageValues.set('lw_card_identity_v1', JSON.stringify({
+  version: 1,
+  id: 'lw-prior-card-a', firmwareVersion: '1.2.3', buildId: 'build-prior-card-a',
+}));
+globalThis.window = handoffHarness.win;
+assert.equal(openLocalCardPage(apHost).ok, true);
+await assert.rejects(
+  sendCardBridgeRequest('wifi-handoff-ack', {}, { host: apHost, timeoutMs: 25 }),
+  error => error?.reason === 'handoff-correlation',
+  'the AP page can never relay a handoff acknowledgement',
+);
+const commissioningFlowId = 'flow-card-b-commission-1234';
+assert.equal(retargetCardBridge(stationHost, handoffCorrelation, { flowId: commissioningFlowId }).ok, true);
+assert.equal(handoffHarness.opened.length, 1, 'handoff reuses the AP WindowProxy');
+assert.notEqual(handoffHarness.storageValues.get('lw_chip_card_host'), stationHost,
+  'AP handoff evidence alone cannot persist the preferred station host');
+
+stationStatus = {
+  app: 'Lightweaver', provisioningContractVersion: 1,
+  cardId: handoffIdentity.id,
+  firmwareVersion: handoffIdentity.firmwareVersion,
+  buildId: handoffIdentity.buildId,
+  bootId: handoffCorrelation.expectedBootId, runtimePhase: 'factory', knownGoodProject: false,
+  commandReady: false, outputReady: true,
+  wifi: {
+    transport: 'ap', transition: 'handoff-ready', transitionPending: true,
+    apActive: true, stationIp: stationHost, ip: stationHost, handoffGeneration: 9,
+  },
+};
+handoffHarness.emitMessage({
+  origin: `http://${stationHost}`,
+  source: handoffTab,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: stationHost, version: 2 },
+});
+await new Promise(resolve => setTimeout(resolve, 5));
+assert.equal(getCardBridgeState().identityVerified, false,
+  'handoff-ready proof grants only acknowledgement authority');
+assert.equal(getCardBridgeState().handoffAckReady, true);
+await assert.rejects(
+  sendCardBridgeRequest('control', {}, { host: stationHost, timeoutMs: 25 }),
+  error => error?.reason === 'handoff-awaiting-ack',
+  'normal commands remain locked before final station state',
+);
+const messagesBeforeAckTimeout = handoffMessages.length;
+suppressStationStatus = true;
+await assert.rejects(
+  sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 15, retryOnTimeout: false }),
+  error => error?.reason === 'bridge-timeout',
+);
+assert.equal(getCardBridgeState().handoffAckReady, false,
+  'any bridge timeout revokes the current-lifecycle acknowledgement latch');
+suppressStationStatus = false;
+await sendCardBridgeRequest('ping', {}, { host: stationHost, timeoutMs: 100 });
+await sendCardBridgeRequest('firmware-info', {}, { host: stationHost, timeoutMs: 100 });
+await assert.rejects(
+  sendCardBridgeRequest('wifi-handoff-ack', {}, { host: stationHost, timeoutMs: 25 }),
+  error => error?.reason === 'handoff-correlation',
+  'identity-free transport recovery cannot restore acknowledgement authority',
+);
+assert.equal(
+  handoffMessages.slice(messagesBeforeAckTimeout).filter(entry => entry.message.type === 'wifi-handoff-ack').length,
+  0,
+  'no acknowledgement is posted after timeout without fresh exact status evidence',
+);
+handoffHarness.emitMessage({
+  origin: `http://${stationHost}`,
+  source: handoffTab,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: stationHost, version: 2 },
+});
+await new Promise(resolve => setTimeout(resolve, 5));
+assert.equal(getCardBridgeState().handoffAckReady, true,
+  'fresh exact handoff status in the current lifecycle can grant a new acknowledgement latch');
+await sendCardBridgeRequest('wifi-handoff-ack', {}, { host: stationHost, timeoutMs: 100 });
+
+stationStatus = {
+  ...stationStatus,
+  wifi: {
+    ...stationStatus.wifi,
+    transport: 'station',
+    transition: 'station',
+    transitionPending: false,
+    apActive: false,
+    ip: stationHost,
+  },
+};
+await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().identityVerified, true,
+  'exact blank final station verifies identity without granting runtime write authority');
+assert.equal(getCardBridgeState().runtimeCommandReady, false);
+assert.equal(getCardBridgeState().initialConfigAuthority, true);
+await sendCardBridgeRequest('firmware-info', {}, { host: stationHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().identityVerified, true,
+  'an exact same-card firmware read preserves current-lifecycle station identity authority');
+assert.equal(getCardBridgeState().initialConfigAuthority, true,
+  'an exact same-card firmware read preserves current-lifecycle blank config authority');
+
+const blankRuntimePackage = makeCardRuntimePackage({
+  projectName: 'Commissioned card B',
+  mode: 'website-flash',
+  led: {
+    pixels: 44,
+    colorOrder: 'GRB',
+    brightnessLimit: 0.5,
+    outputs: [{ id: 'main', name: 'Main', pin: 16, pixels: 44 }],
+  },
+});
+const messagesBeforeInitialPush = handoffMessages.length;
+const initialConfig = await pushConfigToCard(blankRuntimePackage, {
+  host: stationHost, timeoutMs: 100, reboot: 'if-needed',
+  commissioningFlowId, allowProjectChange: true, allowLayoutChange: true,
+});
+assert.equal(initialConfig.ok, true,
+  'exact blank final station authority permits the one initial commissioning config');
+const initialPushTypes = handoffMessages
+  .slice(messagesBeforeInitialPush)
+  .map(entry => entry.message.type);
+assert.deepEqual(initialPushTypes, ['config'],
+  'blank commissioning sends one complete config without firmware/layout or wiring-candidate probes');
+assert.equal(
+  JSON.parse(handoffHarness.sessionValues.get('lw_wifi_handoff_recovery_v1')).configAttempted,
+  true,
+  'the one-way config attempt is durable before the response can be trusted',
+);
+await assert.rejects(
+  sendCardBridgeRequest('config', { project: 'duplicate' }, {
+    host: stationHost, timeoutMs: 25, commissioningFlowId,
+  }),
+  error => error?.reason === 'runtime-not-ready',
+  'blank-card config authority is consumed before the first write response',
+);
+await assert.rejects(
+  sendCardBridgeRequest('control', {}, { host: stationHost, timeoutMs: 25 }),
+  error => error?.reason === 'runtime-not-ready',
+  'the lower bridge write guard remains locked until commandReady is explicitly true',
+);
+await assert.rejects(
+  sendCardBridgeRequest('frame', {}, { host: stationHost, timeoutMs: 25 }),
+  error => error?.reason === 'runtime-not-ready',
+  'blank-card commissioning authority never grants light/frame mutation authority',
+);
+
+stationStatus = { ...stationStatus, bootId: 'boot-stale-after-config' };
+await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().identityVerified, false,
+  'a stale station boot immediately revokes current-lifecycle authority');
+stationStatus = { ...stationStatus, bootId: handoffCorrelation.expectedBootId };
+await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
+
+stationFirmwareIdentity = { ...handoffIdentity, buildId: 'hostile-partial-build' };
+await sendCardBridgeRequest('firmware-info', {}, { host: stationHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().identityVerified, false,
+  'mismatched read-only identity evidence revokes station authority');
+assert.equal(getCardBridgeState().initialConfigAuthority, false,
+  'mismatched read-only identity evidence revokes config authority');
+stationFirmwareIdentity = handoffIdentity;
+await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
+
+stationStatus = {
+  ...stationStatus,
+  runtimePhase: 'ready', knownGoodProject: true,
+  commandReady: true,
+};
+await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().identityVerified, true,
+  'an exact fresh station status restores the expected card authority');
+assert.equal(getCardBridgeState().runtimeCommandReady, true);
+assert.equal(handoffHarness.storageValues.get('lw_chip_card_host'), stationHost,
+  'preferred host persists only after exact final station verification');
+await sendCardBridgeRequest('control', {}, { host: stationHost, timeoutMs: 100 });
+const messagesBeforeTimeout = handoffMessages.length;
+suppressStationStatus = true;
+await assert.rejects(
+  sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 15, retryOnTimeout: false }),
+  error => error?.reason === 'bridge-timeout',
+);
+assert.equal(getCardBridgeState().connected, false);
+assert.equal(getCardBridgeState().identityVerified, false,
+  'status timeout synchronously revokes station identity authority');
+assert.equal(getCardBridgeState().runtimeCommandReady, false,
+  'status timeout synchronously revokes runtime command authority');
+assert.equal(getCardBridgeState().initialConfigAuthority, false,
+  'status timeout synchronously revokes initial config authority');
+await assert.rejects(
+  sendCardBridgeRequest('control', {}, { host: stationHost, timeoutMs: 15 }),
+  error => ['identity-missing', 'runtime-not-ready', 'bridge-timeout'].includes(error?.reason),
+);
+await assert.rejects(
+  sendCardBridgeRequest('config', {}, {
+    host: stationHost, timeoutMs: 15, commissioningFlowId,
+  }),
+  error => ['identity-missing', 'runtime-not-ready', 'bridge-timeout'].includes(error?.reason),
+);
+assert.deepEqual(
+  handoffMessages.slice(messagesBeforeTimeout).map(entry => entry.message.type),
+  ['status'],
+  'no mutation is posted after liveness loss',
+);
+suppressStationStatus = false;
+stationStatus = { ...stationStatus, commandReady: false };
+await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().runtimeCommandReady, false);
+await assert.rejects(
+  sendCardBridgeRequest('control', {}, { host: stationHost, timeoutMs: 25 }),
+  error => error?.reason === 'runtime-not-ready',
+  'a later commandReady:false status immediately revokes runtime mutation authority',
+);
+const completedRepeat = retargetCardBridge(stationHost, handoffCorrelation, { flowId: commissioningFlowId });
+assert.equal(completedRepeat.state, 'already-retargeted');
+assert.equal(handoffNavigationCount, 1,
+  'duplicate AP evidence cannot reload a station bridge that already answered');
 
 console.log('card-bridge-handoff tests passed');

@@ -288,8 +288,15 @@ test('production bridge transport sends only the newest selection to the source-
                   ok: true,
                   version: 1,
                   response: message.type === 'firmware-info'
-                    ? { cardId: 'lw-bridge-test', firmwareVersion: '1.0.0' }
-                    : { ok: true, cardId: 'lw-bridge-test', patternId: message.payload?.patternId, revision: message.payload?.revision },
+                    ? { cardId: 'lw-bridge-test', firmwareVersion: '1.0.0', buildId: 'bridge-test-build' }
+                    : message.type === 'status'
+                      ? {
+                          app: 'Lightweaver', provisioningContractVersion: 1,
+                          cardId: 'lw-bridge-test', firmwareVersion: '1.0.0', buildId: 'bridge-test-build',
+                          bootId: 'bridge-test-boot', runtimePhase: 'ready', knownGoodProject: true,
+                          commandReady: true, outputReady: true,
+                        }
+                      : { ok: true, cardId: 'lw-bridge-test', patternId: message.payload?.patternId, revision: message.payload?.revision },
                 },
               }));
             });
@@ -303,7 +310,9 @@ test('production bridge transport sends only the newest selection to the source-
   await page.evaluate(() => {
     localStorage.clear();
     localStorage.setItem('lw_local_chip_default', '1');
-    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-bridge-test' }));
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1, id: 'lw-bridge-test', firmwareVersion: '1.0.0', buildId: 'bridge-test-build',
+    }));
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
 
@@ -330,6 +339,9 @@ test('production bridge transport sends only the newest selection to the source-
 
   await expect.poll(() => page.evaluate(() => (window as any).__bridgeMessages.some((entry: any) => entry.message.type === 'control'))).toBe(true);
   const bridgeRequest = await page.evaluate(() => (window as any).__bridgeMessages.find((entry: any) => entry.message.type === 'control'));
+  const bridgeMessageTypes = await page.evaluate(() => (window as any).__bridgeMessages.map((entry: any) => entry.message.type));
+  expect(bridgeMessageTypes.indexOf('status')).toBeGreaterThanOrEqual(0);
+  expect(bridgeMessageTypes.indexOf('status')).toBeLessThan(bridgeMessageTypes.indexOf('control'));
   expect(bridgeRequest.targetOrigin).toBe('http://lightweaver.local');
   expect(bridgeRequest.message.app).toBe('LightweaverStudioBridge');
   expect(bridgeRequest.message.type).toBe('control');
@@ -484,8 +496,15 @@ test('an already-verified legacy bridge is gated before sending a pattern', asyn
               ok: true,
               ...((window as any).__legacyReplyVersion ? { version: 1 } : {}),
               response: message.type === 'firmware-info'
-                ? { cardId: 'lw-legacy-test', firmwareVersion: '1.0.0' }
-                : { ok: true, cardId: 'lw-legacy-test', patternId: message.payload?.patternId, revision: message.payload?.revision },
+                ? { cardId: 'lw-legacy-test', firmwareVersion: '1.0.0', buildId: 'legacy-test-build' }
+                : message.type === 'status'
+                  ? {
+                      app: 'Lightweaver', provisioningContractVersion: 1,
+                      cardId: 'lw-legacy-test', firmwareVersion: '1.0.0', buildId: 'legacy-test-build',
+                      bootId: 'legacy-test-boot', runtimePhase: 'ready', knownGoodProject: true,
+                      commandReady: true, outputReady: true,
+                    }
+                  : { ok: true, cardId: 'lw-legacy-test', patternId: message.payload?.patternId, revision: message.payload?.revision },
             },
           }));
         });
@@ -497,7 +516,9 @@ test('an already-verified legacy bridge is gated before sending a pattern', asyn
   await page.evaluate(() => {
     localStorage.clear();
     localStorage.setItem('lw_local_chip_default', '1');
-    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-legacy-test' }));
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1, id: 'lw-legacy-test', firmwareVersion: '1.0.0', buildId: 'legacy-test-build',
+    }));
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
 
@@ -515,6 +536,9 @@ test('an already-verified legacy bridge is gated before sending a pattern', asyn
     }));
   });
   await expect.poll(() => page.evaluate(() => (window as any).__legacyBridgeMessages.some((entry: any) => entry.message.type === 'control'))).toBe(true);
+  const legacyMessageTypes = await page.evaluate(() => (window as any).__legacyBridgeMessages.map((entry: any) => entry.message.type));
+  expect(legacyMessageTypes.indexOf('status')).toBeGreaterThanOrEqual(0);
+  expect(legacyMessageTypes.indexOf('status')).toBeLessThan(legacyMessageTypes.indexOf('control'));
   await page.evaluate(() => { (window as any).__legacyBridgeMessages.length = 0; });
 
   await page.evaluate(() => {

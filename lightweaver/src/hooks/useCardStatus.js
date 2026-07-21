@@ -43,11 +43,11 @@ export function useCardStatus({
     return result;
   }, [enabled, missLimit, timeoutMs]);
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (preferredHost = '') => {
     if (!enabled) return { connected: false, host: readStoredCardHost(), error: new Error('direct card access disabled') };
     setState(prev => ({ ...prev, checking: true, reconnecting: true, error: null }));
     const result = await discoverCardStatus({
-      preferredHost: readStoredCardHost(),
+      preferredHost: preferredHost || readStoredCardHost(),
       expectedCard: readPersistedCardIdentity(),
       timeoutMs: Math.max(timeoutMs, 12000),
       persist: true,

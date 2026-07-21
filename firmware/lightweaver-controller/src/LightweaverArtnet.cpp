@@ -1,4 +1,5 @@
 #include "LightweaverArtnet.h"
+#include "LightweaverConnectivityPolicy.h"
 #include "LightweaverFrameSource.h"
 
 #include <Arduino.h>
@@ -12,6 +13,8 @@ CRGB* gLeds = nullptr;
 uint16_t gTotalPixels = 0;
 WiFiUDP gUdp;
 bool gListening = false;
+bool gBindAttempted = false;
+uint32_t gLastBindAttemptMs = 0;
 
 ArtnetUniverseConfig gUniverses[LW_MAX_ARTNET_UNIVERSES];
 uint32_t gUniverseFramesRx[LW_MAX_ARTNET_UNIVERSES] = {0};
@@ -27,6 +30,13 @@ uint8_t gPacketBuffer[LW_ARTNET_MAX_PACKET];
 const uint8_t ARTNET_MAGIC[8] = {'A', 'r', 't', '-', 'N', 'e', 't', 0};
 
 constexpr uint16_t OPCODE_ARTDMX = 0x5000;
+
+bool bindArtnetSocket(uint32_t now) {
+  gListening = gUdp.begin(LW_ARTNET_PORT);
+  gBindAttempted = true;
+  gLastBindAttemptMs = now;
+  return gListening;
+}
 
 void installDefaults() {
   // Default mapping: universes 0..7 each cover 170 pixels back-to-back.
@@ -120,8 +130,7 @@ void setupArtnet(CRGB* leds, uint16_t totalPixels) {
 
   // Bind even if WiFi isn't connected yet — WiFiUDP.begin returns 1 once the
   // socket is created. Once STA associates, packets start arriving.
-  if (gUdp.begin(LW_ARTNET_PORT)) {
-    gListening = true;
+  if (bindArtnetSocket(millis())) {
     if (Serial) {
       Serial.print("Art-Net listening on UDP ");
       Serial.print(LW_ARTNET_PORT);
@@ -135,24 +144,29 @@ void setupArtnet(CRGB* leds, uint16_t totalPixels) {
   }
 }
 
-void artnetRebind() {
+bool artnetRebind() {
   gUdp.stop();
   gListening = false;
-  gListening = gUdp.begin(LW_ARTNET_PORT);
+  bindArtnetSocket(millis());
   if (Serial) {
     Serial.println(gListening ? "Art-Net: rebound UDP 6454 after reconnect"
                               : "Art-Net: UDP 6454 rebind failed; lazy retry armed");
   }
+  return gListening;
+}
+
+bool artnetIsListening() {
+  return gListening;
 }
 
 void handleArtnet() {
   if (!gListening) {
     // Lazy retry — useful when WiFi associates after setup() returns.
-    static uint32_t nextRetry = 0;
     uint32_t now = millis();
-    if (now >= nextRetry) {
-      if (gUdp.begin(LW_ARTNET_PORT)) gListening = true;
-      nextRetry = now + 2000;
+    if (!gBindAttempted ||
+        lightweaver::elapsed(
+            now, gLastBindAttemptMs, lightweaver::kNetworkBindingRetryMs)) {
+      bindArtnetSocket(now);
     }
     if (!gListening) return;
   }

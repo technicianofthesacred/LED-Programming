@@ -1,20 +1,58 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash, webcrypto } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
   assertReleaseProvenance,
   assertLegacyRouteRemoved,
   assertStudioRoot,
+  parseStudioBuildGraph,
   resolveProductionUrls,
+  verifyStudioBuildGraph,
 } from './productionDeploymentCheck.js';
 
-const response = (status, body = '', contentType = 'text/html') => ({
-  status,
-  ok: status >= 200 && status < 300,
-  headers: { get: name => name.toLowerCase() === 'content-type' ? contentType : null },
-  text: async () => body,
-});
+const response = (status, body = '', contentType = 'text/html', location = null) => {
+  const bytes = Buffer.from(body);
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    headers: { get: name => name.toLowerCase() === 'content-type' ? contentType : name.toLowerCase() === 'location' ? location : null },
+    text: async () => body,
+    arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+  };
+};
+
+const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+const graph = files => JSON.stringify({ schemaVersion: 1, files });
+const fileEntry = (path, body) => {
+  const bytes = Buffer.from(body);
+  return { path, bytes: bytes.byteLength, sha256: sha256(bytes) };
+};
+
+function graphFetch(graphBody, files = {}, statuses = {}) {
+  const requests = [];
+  return {
+    requests,
+    fetch: async (input, init) => {
+      const url = new URL(String(input));
+      requests.push({ url: url.href, init });
+      if (url.pathname === '/studio-build-graph.json') {
+        const status = statuses[url.pathname] ?? 200;
+        return new Response(graphBody, {
+          status,
+          headers: status >= 300 && status < 400 ? { location: 'https://evil.test/redirected-graph.json' } : {},
+        });
+      }
+      const body = files[url.pathname.slice(1)];
+      const status = statuses[url.pathname] ?? (body === undefined ? 404 : 200);
+      return new Response(body ?? 'missing', {
+        status,
+        headers: status >= 300 && status < 400 ? { location: 'https://evil.test/redirected-asset.js' } : {},
+      });
+    },
+  };
+}
 
 test('one PROD_ORIGIN derives every production check URL', () => {
   assert.deepEqual(resolveProductionUrls({ PROD_ORIGIN: 'https://preview.example.test/path' }), {
@@ -26,12 +64,177 @@ test('one PROD_ORIGIN derives every production check URL', () => {
     signatureUrl: 'https://preview.example.test/firmware/release-manifest.sig',
     provenanceUrl: 'https://preview.example.test/firmware/release-provenance.json',
     productionJobIndexUrl: 'https://preview.example.test/production/jobs/index.json',
+    studioBuildGraphUrl: 'https://preview.example.test/studio-build-graph.json',
   });
+});
+
+test('Studio build graph accepts a sorted exact root and asset set', () => {
+  const files = [
+    fileEntry('assets/production-123.js', 'production'),
+    fileEntry('assets/studio-123.css', 'style'),
+    fileEntry('assets/studio-123.js', 'studio'),
+    fileEntry('index.html', '<div id="root">'),
+  ];
+  assert.deepEqual(parseStudioBuildGraph(graph(files)), { schemaVersion: 1, files });
+});
+
+test('Studio build graph rejects malformed structure and unsafe paths', () => {
+  const validIndex = fileEntry('index.html', 'root');
+  const validJs = fileEntry('assets/studio.js', 'js');
+  const malformed = [
+    ['', /not valid JSON/],
+    ['[]', /object/],
+    [JSON.stringify({ schemaVersion: 2, files: [validJs, validIndex] }), /schemaVersion/],
+    [graph([validJs]), /index\.html/],
+    [graph([validIndex]), /JavaScript/],
+    [graph([validIndex, validJs]), /sorted/],
+    [graph([validJs, validJs, validIndex]), /duplicate/],
+    [graph([{ ...validJs, path: '../studio.js' }, validIndex]), /normalized root-relative/],
+    [graph([{ ...validJs, path: '/assets/studio.js' }, validIndex]), /normalized root-relative/],
+    [graph([{ ...validJs, path: 'https://evil.test/studio.js' }, validIndex]), /normalized root-relative/],
+    [graph([{ ...validJs, path: 'assets\\studio.js' }, validIndex]), /normalized root-relative/],
+    [graph([{ ...validJs, path: 'assets/../studio.js' }, validIndex]), /normalized root-relative/],
+    [graph([{ ...validJs, path: 'studio-build-graph.json' }, validIndex]), /must not list itself/],
+    [graph([{ ...validJs, bytes: -1 }, validIndex]), /byte size/],
+    [graph([{ ...validJs, bytes: 1.5 }, validIndex]), /byte size/],
+    [graph([{ ...validJs, sha256: 'A'.repeat(64) }, validIndex]), /lowercase SHA-256/],
+    [graph([{ ...validJs, sha256: 'a'.repeat(63) }, validIndex]), /lowercase SHA-256/],
+  ];
+  for (const [body, expected] of malformed) {
+    assert.throws(() => parseStudioBuildGraph(body), expected, body);
+  }
+});
+
+test('live graph verification fetches every listed file from the graph origin with no-store', async () => {
+  const bodies = {
+    'assets/studio.css': 'style',
+    'assets/studio.js': 'studio',
+    'index.html': '<div id="root">',
+  };
+  const entries = Object.entries(bodies).map(([path, body]) => fileEntry(path, body));
+  const harness = graphFetch(graph(entries), bodies);
+  const expectedGraph = parseStudioBuildGraph(graph(entries));
+  const rootBytes = await assertStudioRoot(response(200, bodies['index.html']), 'https://example.test/');
+  const result = await verifyStudioBuildGraph(harness.fetch, webcrypto, 'https://example.test/studio-build-graph.json', expectedGraph, rootBytes);
+  assert.deepEqual(result.graph.files, entries);
+  assert.deepEqual(harness.requests.map(request => new URL(request.url).pathname), [
+    '/studio-build-graph.json', '/assets/studio.css', '/assets/studio.js',
+  ]);
+  assert.ok(harness.requests.every(request => request.init.cache === 'no-store' && request.init.redirect === 'manual'));
+});
+
+test('live graph must match this checkout instead of authenticating a self-consistent old deployment', async () => {
+  const currentBodies = {
+    'assets/production-new.js': 'current-production',
+    'assets/studio-new.js': 'current-studio',
+    'index.html': '<script src="/assets/studio-new.js">',
+  };
+  const oldBodies = {
+    'assets/production-old.js': 'old-production',
+    'assets/studio-old.js': 'old-studio',
+    'index.html': '<script src="/assets/studio-old.js">',
+  };
+  const expectedGraph = parseStudioBuildGraph(graph(Object.entries(currentBodies).map(([path, body]) => fileEntry(path, body))));
+  const oldGraph = graph(Object.entries(oldBodies).map(([path, body]) => fileEntry(path, body)));
+  const harness = graphFetch(oldGraph, oldBodies);
+  await assert.rejects(
+    verifyStudioBuildGraph(harness.fetch, webcrypto, 'https://example.test/studio-build-graph.json', expectedGraph, Buffer.from(currentBodies['index.html'])),
+    /graph mismatch: assets\/production-new\.js.*expected .*actual\s+missing/s,
+  );
+  assert.deepEqual(harness.requests.map(request => new URL(request.url).pathname), ['/studio-build-graph.json']);
+});
+
+test('live graph verification rejects stale user root even when separate index.html is current', async () => {
+  const expected = {
+    'assets/studio.js': 'studio',
+    'index.html': '<script src="/assets/studio.js">',
+  };
+  const entries = Object.entries(expected).map(([path, body]) => fileEntry(path, body));
+  const harness = graphFetch(graph(entries), expected);
+  await assert.rejects(
+    verifyStudioBuildGraph(
+      harness.fetch,
+      webcrypto,
+      'https://example.test/studio-build-graph.json',
+      parseStudioBuildGraph(graph(entries)),
+      Buffer.from('<script src="/assets/old.js">'),
+    ),
+    /index\.html.*expected .*sha256.*actual .*sha256/s,
+  );
+  assert.ok(!harness.requests.some(request => new URL(request.url).pathname === '/index.html'));
+});
+
+test('live graph verification detects a stale lazy Production chunk not named by root HTML', async () => {
+  const expected = {
+    'assets/production.js': 'new-production-screen',
+    'assets/studio.js': 'root-loader',
+    'index.html': '<script src="/assets/studio.js">',
+  };
+  const entries = Object.entries(expected).map(([path, body]) => fileEntry(path, body));
+  const harness = graphFetch(graph(entries), { ...expected, 'assets/production.js': 'old-production-screen' });
+  await assert.rejects(
+    verifyStudioBuildGraph(harness.fetch, webcrypto, 'https://example.test/studio-build-graph.json', parseStudioBuildGraph(graph(entries)), Buffer.from(expected['index.html'])),
+    /assets\/production\.js.*expected .*actual /s,
+  );
+});
+
+test('live graph verification cannot skip a missing graph or asset', async () => {
+  const entries = [fileEntry('assets/studio.js', 'studio'), fileEntry('index.html', 'root')];
+  const expectedGraph = parseStudioBuildGraph(graph(entries));
+  const missingGraph = graphFetch('', {}, { '/studio-build-graph.json': 404 });
+  await assert.rejects(
+    verifyStudioBuildGraph(missingGraph.fetch, webcrypto, 'https://example.test/studio-build-graph.json', expectedGraph, Buffer.from('root')),
+    /graph answered HTTP 404/,
+  );
+  const missingAsset = graphFetch(graph(entries), { 'index.html': 'root' });
+  await assert.rejects(
+    verifyStudioBuildGraph(missingAsset.fetch, webcrypto, 'https://example.test/studio-build-graph.json', expectedGraph, Buffer.from('root')),
+    /assets\/studio\.js answered HTTP 404/,
+  );
+});
+
+test('live graph verification reports the first lexicographic mismatch deterministically', async () => {
+  const expected = {
+    'assets/a.js': 'new-a',
+    'assets/z.js': 'new-z',
+    'index.html': 'root',
+  };
+  const entries = Object.entries(expected).map(([path, body]) => fileEntry(path, body));
+  const harness = graphFetch(graph(entries), {
+    ...expected,
+    'assets/a.js': 'old-a',
+    'assets/z.js': 'old-z-that-also-has-a-different-size',
+  });
+  await assert.rejects(
+    verifyStudioBuildGraph(harness.fetch, webcrypto, 'https://example.test/studio-build-graph.json', parseStudioBuildGraph(graph(entries)), Buffer.from('root')),
+    error => error.message.includes('assets/a.js') && !error.message.includes('assets/z.js'),
+  );
+});
+
+test('live graph and asset redirects are refused even if the destination could match', async () => {
+  const bodies = { 'assets/studio.js': 'studio', 'index.html': 'root' };
+  const entries = Object.entries(bodies).map(([path, body]) => fileEntry(path, body));
+  const expectedGraph = parseStudioBuildGraph(graph(entries));
+
+  const graphRedirect = graphFetch(graph(entries), bodies, { '/studio-build-graph.json': 302 });
+  await assert.rejects(
+    verifyStudioBuildGraph(graphRedirect.fetch, webcrypto, 'https://example.test/studio-build-graph.json', expectedGraph, Buffer.from('root')),
+    /graph answered HTTP 302/,
+  );
+  assert.equal(graphRedirect.requests[0].init.redirect, 'manual');
+
+  const assetRedirect = graphFetch(graph(entries), bodies, { '/assets/studio.js': 302 });
+  await assert.rejects(
+    verifyStudioBuildGraph(assetRedirect.fetch, webcrypto, 'https://example.test/studio-build-graph.json', expectedGraph, Buffer.from('root')),
+    /assets\/studio\.js answered HTTP 302/,
+  );
+  assert.ok(assetRedirect.requests.every(request => request.init.redirect === 'manual'));
 });
 
 test('mutable firmware metadata cannot be cached while immutable releases can be cached forever', async () => {
   const headers = await readFile(resolve(import.meta.dirname, '../../public/_headers'), 'utf8');
   for (const path of [
+    '/studio-build-graph.json',
     '/firmware/release-manifest.json',
     '/firmware/release-manifest.sig',
     '/firmware/release-provenance.json',
@@ -43,9 +246,23 @@ test('mutable firmware metadata cannot be cached while immutable releases can be
 });
 
 test('Studio root must contain the root application shell', async () => {
-  await assert.doesNotReject(assertStudioRoot(response(200, '<div id="root"></div>'), 'https://example.test/'));
+  assert.deepEqual(
+    await assertStudioRoot(response(200, '<div id="root"></div>'), 'https://example.test/'),
+    new Uint8Array(Buffer.from('<div id="root"></div>')),
+  );
   await assert.rejects(assertStudioRoot(response(200, '<h1>Other site</h1>'), 'https://example.test/'), /does not contain/);
   await assert.rejects(assertStudioRoot(response(500), 'https://example.test/'), /HTTP 500/);
+});
+
+test('Studio root refuses cross-origin and unexpected same-origin redirects', async () => {
+  await assert.rejects(
+    assertStudioRoot(response(302, '', 'text/html', 'https://evil.test/'), 'https://example.test/'),
+    /HTTP 302/,
+  );
+  await assert.rejects(
+    assertStudioRoot(response(307, '', 'text/html', 'https://example.test/index.html'), 'https://example.test/'),
+    /HTTP 307/,
+  );
 });
 
 test('removed design route requires the branded 404 response', async () => {

@@ -6,6 +6,7 @@
 // script closes that gap by hashing what production actually serves.
 //
 // Run manually or after a production publish:
+//   npm run build && npm run stage:pages
 //   npm run check:prod          (from lightweaver/)
 //
 // Network-optional by design: when the site is unreachable (offline dev,
@@ -26,11 +27,14 @@ import { verifyProductionCachePolicies, verifyProductionReleaseSet } from '../sr
 import {
   assertLegacyRouteRemoved,
   assertStudioRoot,
+  parseStudioBuildGraph,
   resolveProductionUrls,
+  verifyStudioBuildGraph,
 } from '../src/lib/productionDeploymentCheck.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const localBinPath = resolve(here, '../public/firmware/lightweaver-controller-esp32s3-factory.bin');
+const expectedStudioGraphPath = resolve(here, '../.pages/lightweaver/studio-build-graph.json');
 const {
   studioUrl,
   legacyDesignUrl,
@@ -40,8 +44,13 @@ const {
   provenanceUrl,
   productionJobIndexUrl,
   productionSetupUrl,
+  studioBuildGraphUrl,
 } = resolveProductionUrls(process.env);
 const productionOrigin = new URL(studioUrl).origin;
+const productionFetch = (input, init = {}) => fetch(new URL(String(input), productionOrigin), {
+  ...init,
+  signal: AbortSignal.timeout(20_000),
+});
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
@@ -50,6 +59,17 @@ function sha256(bytes) {
 function fail(message) {
   console.error(`check-prod-freshness FAILED\n${message}`);
   process.exit(1);
+}
+
+let expectedStudioGraph;
+try {
+  expectedStudioGraph = parseStudioBuildGraph(readFileSync(expectedStudioGraphPath, 'utf8'));
+} catch (err) {
+  fail(
+    `The expected Studio build graph for this checkout is missing or invalid at\n  ${expectedStudioGraphPath}\n` +
+      'Run npm run build && npm run stage:pages from lightweaver before npm run check:prod.\n' +
+      `  ${err?.message ?? err}`,
+  );
 }
 
 const local = new Uint8Array(readFileSync(localBinPath));
@@ -66,7 +86,7 @@ let studioResponse;
 try {
   studioResponse = await fetch(studioUrl, {
     cache: 'no-store',
-    redirect: 'follow',
+    redirect: 'manual',
     signal: AbortSignal.timeout(20_000),
   });
 } catch (err) {
@@ -77,10 +97,22 @@ try {
   process.exit(0);
 }
 
+let studioRootBytes;
 try {
-  await assertStudioRoot(studioResponse, studioUrl);
+  studioRootBytes = await assertStudioRoot(studioResponse, studioUrl);
 } catch (err) {
   fail(err.message);
+}
+
+let studioBuildFileCount = 0;
+try {
+  const verifiedStudio = await verifyStudioBuildGraph(productionFetch, webcrypto, studioBuildGraphUrl, expectedStudioGraph, studioRootBytes);
+  studioBuildFileCount = verifiedStudio.graph.files.length;
+} catch (err) {
+  fail(
+    `Production root is reachable, but its Studio build graph is unavailable or does not match the deployed bytes.\n` +
+      `  graph: ${studioBuildGraphUrl}\n  ${err?.message ?? err}`,
+  );
 }
 
 let legacyResponse;
@@ -101,10 +133,6 @@ try {
 
 let release;
 let productionJobCount = 0;
-const productionFetch = (input, init = {}) => fetch(new URL(String(input), productionOrigin), {
-  ...init,
-  signal: AbortSignal.timeout(20_000),
-});
 try {
   const verified = await verifyProductionReleaseSet(productionFetch, webcrypto);
   release = verified.release;
@@ -132,5 +160,6 @@ if (remoteHash !== localHash) {
 
 console.log(
   `check-prod-freshness OK — production serves the signed committed factory binary\n  sha256 ${localHash}  (${local.length} bytes)\n  ${new URL(release.manifest.image.url, productionOrigin)}\n  legacy alias: ${legacyAliasUrl}`,
+  `\n  Studio build graph: ${studioBuildFileCount} verified files\n  ${studioBuildGraphUrl}`,
   `\n  Production Setup: ${productionSetupUrl}\n  verified production jobs: ${productionJobCount}\n  job index: ${productionJobIndexUrl}`,
 );

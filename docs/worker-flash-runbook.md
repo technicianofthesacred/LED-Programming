@@ -1,6 +1,6 @@
 # Lightweaver workshop card setup
 
-This is the no-code procedure for preparing one sellable Lightweaver card and artwork. Start and finish each artwork in **Production setup** at [led.mandalacodes.com](https://led.mandalacodes.com/#screen=production). Do not use `/design`, a local IP address, the Lightweaver Bridge, a terminal, or a firmware file from a message or download folder.
+This is the no-code procedure for preparing one sellable Lightweaver card and artwork. Start and finish each artwork in **Production setup** at [led.mandalacodes.com](https://led.mandalacodes.com/#screen=production). Do not use `/design`, type a local IP address, open a terminal, or choose a firmware file from a message or download folder. On HTTPS, Studio may automatically open one card-local page to bridge commands to the card; that guided page is part of Production Setup, not a separate tool for the worker to install or configure.
 
 ## Before each card
 
@@ -20,10 +20,11 @@ Quick data-cable check: after connecting the cable, the computer's USB chooser m
 2. Choose the artwork from the verified list. If the printed QR already opened the job, confirm its artwork and batch. Otherwise enter the printed **Job code**. If the workshop list is unavailable, choose both signed files supplied together: the `.lwjob.json` job and matching `.sig.json` signature. Studio rejects an unverified or mismatched file.
 3. Wait for **Job and official firmware are verified**. Do not connect USB until **Connect one USB card** is enabled. This preloads the exact signed firmware before any local-card network handoff.
 4. Click **Connect one USB card**. In Chrome's chooser, select the single ESP32-S3 card. If more than one appears, cancel, unplug the extras, and retry.
-5. Click **Release USB and inspect firmware**. Follow the one primary action Studio shows. The local card page may open while Studio reads the card; return to the Production setup tab when instructed.
+5. Click **Release USB and inspect firmware**. Follow the one primary action Studio shows. The guided card page may open while Studio reads the card; leave it open and return to the same Production Setup tab when instructed.
 6. If Studio proves the exact firmware is already present, continue. If it shows **Install verified firmware**, reconnect the same USB card and click that button. Never browse for a firmware file. Wait until Studio says USB is released and the card has restarted.
-7. Click **Reconnect same card**. If Studio identifies a different card, stop and reconnect the expected card shown on screen. Do not adopt or substitute another card during this run.
-8. Click **Load verified artwork** once, then **Verify card read-back**. A successful upload message alone is not a pass; Studio must independently read the same card, firmware build, job digest, and artwork revision back from the card.
+7. When asked, join `Lightweaver-XXXX`, enter the workshop/gallery Wi-Fi, and return to the same Studio tab. Do not type or look up a card address. Studio must follow the guided card page to the LAN and receive two fresh status checks from the same card before it advances.
+8. Confirm Studio shows **Blank — load a project**, not green/Connected/Ready. If Studio identifies a different card, stop and reconnect the expected card shown on screen. Do not adopt or substitute another card during this run.
+9. Click **Load verified artwork** once, then **Verify card read-back**. A successful upload message alone is not a pass; Studio must independently read the same card, firmware build, job digest, artwork revision, GPIO 18, 44 pixels, GRB, Aurora, and 1500 mA limit back from the card.
 
 ## Check the real LEDs
 
@@ -54,7 +55,8 @@ Never pass a card because Studio says the test was delivered. Delivery only mean
 2. Enter your worker initials or workshop ID and click **Save pass record**.
 3. Under **Pass records**, export **CSV** at the end of each batch and **JSON** as the audit backup. Unexported records exist only in this browser and can be lost if its data is cleared or the computer changes.
 4. Confirm the downloaded files are present in the workshop's batch folder.
-5. Click **Next artwork**. This keeps completed records but clears the prior job, card, USB, commissioning, and light-test state. Disconnect the finished card before connecting the next one.
+5. Complete the power-cycle and network-recovery checks in [new-card-checklist.md](new-card-checklist.md).
+6. Click **Next artwork**. This keeps completed records but clears the prior job, card, USB, commissioning, and light-test state. Disconnect the finished card before connecting the next one.
 
 ## If Studio stops safely
 

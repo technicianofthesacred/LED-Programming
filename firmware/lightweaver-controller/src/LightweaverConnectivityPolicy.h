@@ -8,6 +8,7 @@ constexpr std::uint32_t kInitialJoinTimeoutMs = 15000;
 constexpr std::uint32_t kReconnectCadenceMs = 10000;
 constexpr std::uint32_t kRecoveryApThresholdMs = 60000;
 constexpr std::uint32_t kHandoffGraceMs = 120000;
+constexpr std::uint32_t kNetworkBindingRetryMs = 2000;
 
 enum class ConnectivityPhase {
   SetupAp,
@@ -43,8 +44,13 @@ struct ConnectivityState {
   bool apActive = true;
   bool stationAssociated = false;
   bool reconnectDue = false;
+  bool networkBindingsPending = false;
+  bool networkBindingsRetryDue = false;
+  bool wledListenerReady = false;
+  bool artnetListenerReady = false;
   std::uint32_t phaseStartedMs = 0;
   std::uint32_t lastAttemptMs = 0;
+  std::uint32_t lastBindingAttemptMs = 0;
   std::uint32_t generation = 0;
 };
 
@@ -54,11 +60,49 @@ constexpr bool elapsed(std::uint32_t nowMs,
   return static_cast<std::uint32_t>(nowMs - startedMs) >= durationMs;
 }
 
+constexpr bool connectivityPhaseIsPending(ConnectivityPhase phase) {
+  return phase == ConnectivityPhase::Joining ||
+         phase == ConnectivityPhase::HandoffReady ||
+         phase == ConnectivityPhase::Reconnecting ||
+         phase == ConnectivityPhase::RecoveryAp;
+}
+
+constexpr bool connectivityTransitionPending(const ConnectivityState& state) {
+  return connectivityPhaseIsPending(state.phase) ||
+         state.networkBindingsPending;
+}
+
+// Action receipts keep policy timestamps truthful: due decisions never claim
+// hardware work happened until the production adapter actually issues it.
+inline ConnectivityState recordStationAttempt(
+    const ConnectivityState& current,
+    std::uint32_t nowMs) {
+  ConnectivityState next = current;
+  next.reconnectDue = false;
+  next.lastAttemptMs = nowMs;
+  return next;
+}
+
+inline ConnectivityState recordNetworkBindingAttempt(
+    const ConnectivityState& current,
+    std::uint32_t nowMs,
+    bool wledReady,
+    bool artnetReady) {
+  ConnectivityState next = current;
+  next.networkBindingsRetryDue = false;
+  next.wledListenerReady = wledReady;
+  next.artnetListenerReady = artnetReady;
+  next.networkBindingsPending = !(wledReady && artnetReady);
+  next.lastBindingAttemptMs = nowMs;
+  return next;
+}
+
 inline ConnectivityState advanceConnectivity(
     const ConnectivityState& current,
     const ConnectivityInput& input) {
   ConnectivityState next = current;
   next.reconnectDue = false;
+  next.networkBindingsRetryDue = false;
 
   switch (input.event) {
     case ConnectivityEvent::CredentialsAccepted:
@@ -66,8 +110,10 @@ inline ConnectivityState advanceConnectivity(
       next.apActive = true;
       next.stationAssociated = false;
       next.reconnectDue = true;
+      next.networkBindingsPending = false;
+      next.wledListenerReady = false;
+      next.artnetListenerReady = false;
       next.phaseStartedMs = input.nowMs;
-      next.lastAttemptMs = input.nowMs;
       next.generation = input.generation;
       return next;
 
@@ -79,10 +125,16 @@ inline ConnectivityState advanceConnectivity(
                  current.phase == ConnectivityPhase::RecoveryAp) {
         next.phase = ConnectivityPhase::Station;
         next.apActive = false;
+      } else if (current.phase == ConnectivityPhase::Station) {
+        next.phase = ConnectivityPhase::Station;
       } else {
         return next;
       }
       next.stationAssociated = true;
+      next.networkBindingsPending = true;
+      next.networkBindingsRetryDue = true;
+      next.wledListenerReady = false;
+      next.artnetListenerReady = false;
       next.phaseStartedMs = input.nowMs;
       return next;
 
@@ -93,8 +145,10 @@ inline ConnectivityState advanceConnectivity(
           : ConnectivityPhase::Reconnecting;
       next.stationAssociated = false;
       next.reconnectDue = true;
+      next.networkBindingsPending = false;
+      next.wledListenerReady = false;
+      next.artnetListenerReady = false;
       next.phaseStartedMs = input.nowMs;
-      next.lastAttemptMs = input.nowMs;
       return next;
 
     case ConnectivityEvent::StationOriginAck:
@@ -117,6 +171,9 @@ inline ConnectivityState advanceConnectivity(
     next.phase = ConnectivityPhase::SetupAp;
     next.apActive = true;
     next.stationAssociated = false;
+    next.networkBindingsPending = false;
+    next.wledListenerReady = false;
+    next.artnetListenerReady = false;
     next.phaseStartedMs = input.nowMs;
     return next;
   }
@@ -141,7 +198,13 @@ inline ConnectivityState advanceConnectivity(
        next.phase == ConnectivityPhase::RecoveryAp) &&
       elapsed(input.nowMs, current.lastAttemptMs, kReconnectCadenceMs)) {
     next.reconnectDue = true;
-    next.lastAttemptMs = input.nowMs;
+  }
+
+  if (next.stationAssociated && next.networkBindingsPending &&
+      elapsed(input.nowMs,
+              current.lastBindingAttemptMs,
+              kNetworkBindingRetryMs)) {
+    next.networkBindingsRetryDue = true;
   }
 
   return next;

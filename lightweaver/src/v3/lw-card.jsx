@@ -309,7 +309,7 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
     />
   );
   else if (route.section === 'settings') content = <SettingsScreen embedded mode="card" {...cardProps} />;
-  else if (route.section === 'workshop') content = <ProductionScreen embedded cardHost={cardHost} onConnectCard={onConnectCard} />;
+  else if (route.section === 'workshop') content = <ProductionScreen embedded cardHost={cardHost} cardLink={cardLink} onConnectCard={onConnectCard} />;
   else if (route.section === 'preferences') content = <SettingsScreen embedded mode="preferences" {...cardProps} />;
   else if (route.section === 'support') content = <CardSupport initialTool={route.supportTool} cardProps={cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} />;
   else content = <CardOverview {...cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} />;

@@ -147,6 +147,20 @@ test('wide desktop footer keeps card identity, telemetry, and test controls in s
 });
 
 test('Card overview persists WiFi progress, gates the setup address, and resumes after reload', async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as any).__commissioningOpens = [];
+    (window as any).__commissioningFetches = [];
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes('/api/status')) (window as any).__commissioningFetches.push(url);
+      return originalFetch(input, init);
+    }) as typeof window.fetch;
+    window.open = ((url?: string | URL, target?: string, features?: string) => {
+      (window as any).__commissioningOpens.push({ url: String(url || ''), target, features });
+      return { closed: false, postMessage() {}, focus() {}, location: { href: String(url || '') } } as unknown as Window;
+    }) as typeof window.open;
+  });
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await seedCommissioningFlow(page, 'wifi');
   await page.reload({ waitUntil: 'domcontentloaded' });
@@ -161,12 +175,61 @@ test('Card overview persists WiFi progress, gates the setup address, and resumes
   await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
   await expect(page).toHaveURL(/#screen=card&section=install$/);
   await expect(page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true })).toBeVisible();
-  await expect(page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toHaveCount(0);
   await page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true }).click();
-  await expect(page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
+  const setupButton = page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i });
+  await expect(setupButton).toBeVisible();
+  await setupButton.click();
+  await expect.poll(() => page.evaluate(() => (window as any).__commissioningOpens.at(-1))).toMatchObject({
+    target: 'lightweaver-card-bridge',
+  });
+  expect(await page.evaluate(() => (window as any).__commissioningOpens.at(-1)?.features || '')).not.toContain('noopener');
 
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
+});
+
+test('commissioning reconnect preserves the verified host instead of falling back to the setup AP', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: {} });
+  });
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'wifi');
+  const reconnectHost = await page.evaluate(async () => {
+    const mainSource = await (await fetch('/src/main.jsx')).text();
+    const domUrl = mainSource.match(/["']([^"']*react-dom_client[^"']*)["']/)?.[1];
+    const panelSource = await (await fetch('/src/components/card/CardCommissioningPanel.jsx')).text();
+    const reactUrl = panelSource.match(/["']([^"']*\/deps\/react\.js[^"']*)["']/)?.[1];
+    if (!domUrl || !reactUrl) throw new Error('could not resolve React module URLs');
+    const [{ CardCommissioningPanel }, { ProjectProvider }, reactModule, domModule] = await Promise.all([
+      import('/src/components/card/CardCommissioningPanel.jsx'),
+      import('/src/state/ProjectContext.jsx'),
+      import(reactUrl),
+      import(domUrl),
+    ]);
+    const React = reactModule.default ?? reactModule;
+    const createRoot = domModule.createRoot ?? domModule.default?.createRoot;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    let received = '';
+    const root = createRoot(host);
+    root.render(React.createElement(ProjectProvider, null,
+      React.createElement(CardCommissioningPanel, {
+        result: null,
+        link: { state: 'disconnected', host: '192.168.18.90', transport: 'bridge' },
+        onReconnect: value => { received = value; },
+      }),
+    ));
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const button = [...host.querySelectorAll('button')].find(node => node.textContent?.trim() === 'Reconnect installed card');
+    if (!button) throw new Error('commissioning reconnect action not rendered');
+    button.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    root.unmount();
+    host.remove();
+    return received;
+  });
+  expect(reconnectHost).toBe('192.168.18.90');
 });
 
 test('reality-driven detection replaces the dead 192.168.4.1 link with the restore path once the card rejoins the LAN', async ({ page }) => {
@@ -180,7 +243,7 @@ test('reality-driven detection replaces the dead 192.168.4.1 link with the resto
   // While the card is still on its setup AP (unreachable on the LAN — the
   // beforeEach aborts every card host) the dead-AP fallback link is the only
   // setup affordance and the restore path is not yet offered.
-  const setupLink = page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i });
+  const setupLink = page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i });
   await expect(setupLink).toBeVisible();
   await expect(page.getByText(/Waiting for the card to rejoin your network/i)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toHaveCount(0);
@@ -192,11 +255,11 @@ test('reality-driven detection replaces the dead 192.168.4.1 link with the resto
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({
-      ok: true,
-      cardId: 'lw-aabbccddeeff',
-      firmwareVersion: '1.2.3',
-      buildId: 'a'.repeat(40),
-      wifi: { transport: 'station', ip: '192.168.18.70' },
+      ...readyStatus('lw-aabbccddeeff', { firmwareVersion: '1.2.3' }),
+      wifi: {
+        transport: 'station', transition: 'station', transitionPending: false,
+        stationIp: '192.168.18.70', ip: '192.168.18.70', handoffGeneration: 7,
+      },
     }),
   }));
 
@@ -221,16 +284,16 @@ test('a wrong card answering on the LAN never auto-advances setup past the ident
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({
-      ok: true,
-      cardId: 'lw-ffffffffffff',
-      firmwareVersion: '9.9.9',
-      buildId: 'f'.repeat(40),
-      wifi: { transport: 'station', ip: '192.168.18.71' },
+      ...readyStatus('lw-ffffffffffff', { firmwareVersion: '9.9.9', buildId: 'f'.repeat(40) }),
+      wifi: {
+        transport: 'station', transition: 'station', transitionPending: false,
+        stationIp: '192.168.18.71', ip: '192.168.18.71', handoffGeneration: 7,
+      },
     }),
   }));
 
   await expect(page.getByText(/Waiting for the card to rejoin your network/i)).toBeVisible();
-  await expect(page.getByRole('link', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
   // Give the poll several cycles; the mismatched card must never unlock restore.
   await page.waitForTimeout(3_000);
   await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toHaveCount(0);
@@ -242,7 +305,13 @@ test('retained pre-install card identity cannot bypass the explicit WiFi handoff
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
     acknowledgedAt: '2026-01-01T00:00:00.000Z',
     card: { id: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
-    readiness: readyStatus('lw-aabbccddeeff', { firmwareVersion: '1.2.3' }),
+    readiness: readyStatus('lw-aabbccddeeff', {
+      firmwareVersion: '1.2.3',
+      wifi: {
+        transport: 'station', transition: 'station', transitionPending: false,
+        stationIp: '192.168.18.90', ip: '192.168.18.90', handoffGeneration: 7,
+      },
+    }),
   }]);
   await seedCommissioningFlow(page, 'wifi');
 
@@ -255,7 +324,13 @@ test('retained pre-install card identity cannot bypass the explicit WiFi handoff
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
     acknowledgedAt: new Date(Date.now() + 5_000).toISOString(),
     card: { id: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
-    readiness: readyStatus('lw-aabbccddeeff', { firmwareVersion: '1.2.3' }),
+    readiness: readyStatus('lw-aabbccddeeff', {
+      firmwareVersion: '1.2.3',
+      wifi: {
+        transport: 'station', transition: 'station', transitionPending: false,
+        stationIp: '192.168.18.90', ip: '192.168.18.90', handoffGeneration: 7,
+      },
+    }),
   }]);
   await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeVisible();
 });
@@ -891,4 +966,487 @@ test('a worker typing the bare domain reaches Batch production from the rail and
   await page.getByRole('button', { name: 'Find job' }).click();
   await expect(page.getByText('Bench fixture · 44 LEDs')).toBeVisible();
   await expect(page.getByText(/Verified production job/i)).toBeVisible();
+});
+
+test('HTTPS Studio keeps a blank replacement card config-only across an ambiguous WiFi handoff', async ({ page }) => {
+  // Serve the real Vite app at its production HTTPS origin. This keeps the
+  // browser security boundary realistic while all card traffic remains the
+  // postMessage-only local bridge exercised below.
+  await page.route('https://led.mandalacodes.com/**', async route => {
+    const requested = new URL(route.request().url());
+    const upstream = await page.request.fetch(`http://localhost:9997${requested.pathname}${requested.search}`);
+    await route.fulfill({ response: upstream });
+  });
+  await page.goto('https://led.mandalacodes.com/#screen=card&section=overview', {
+    waitUntil: 'domcontentloaded',
+  });
+
+  const result = await page.evaluate(async () => {
+    const bridge = await import('/src/lib/cardBridge.js');
+    const handoff = await import('/src/lib/cardWifiHandoff.js');
+    const cardLink = await import('/src/lib/cardLink.js');
+    const commissioning = await import('/src/lib/cardCommissioningFlow.js');
+
+    const priorCard = {
+      version: 1,
+      id: 'lw-aaaaaaaaaaaa',
+      firmwareVersion: '1.0.0',
+      buildId: 'a'.repeat(40),
+    };
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify(priorCard));
+    localStorage.removeItem('lw_chip_card_host');
+
+    const expectedCard = {
+      id: 'lw-bbbbbbbbbbbb',
+      firmwareVersion: '2.0.0',
+      buildId: 'b'.repeat(40),
+    };
+    const stationHost = '192.168.18.91';
+    const bootId = 'boot-replacement-b';
+    const generation = 12;
+    const flowId = 'flow-browser-wifi-123456789';
+    const replacementFlowId = 'flow-browser-wifi-987654321';
+    const messageTypes: string[] = [];
+    let configured = false;
+    let activeHost = '192.168.4.1';
+    const projectRevision = 23;
+    const projectRecord = {
+      id: 'browser-blank-project-record',
+      updatedAt: 100,
+      project: {
+        version: 3,
+        id: 'browser-blank-project',
+        name: 'Browser blank project',
+        layout: { strips: [{ id: 'strip-1', pixelCount: 44 }], wiring: null, patchBoard: null },
+        devices: { standaloneController: {} },
+      },
+    };
+    const startedAt = Date.now();
+    let commissioningFlow = commissioning.completeCardInstall(commissioning.beginCardCommissioning({
+      source: 'web-serial', operation: 'install-current-release', strategy: 'clean-recovery',
+      projectRecord, projectRevision, flowId, now: startedAt,
+    }), {
+      operation: 'install-current-release', cardId: expectedCard.id,
+      firmwareVersion: expectedCard.firmwareVersion, buildId: expectedCard.buildId,
+    }, { now: startedAt + 1 });
+    commissioningFlow = commissioning.confirmCardSetupNetworkJoined(commissioningFlow, { now: startedAt + 2 });
+    await commissioning.writeCardCommissioning(commissioningFlow, { locks: null });
+    const projectFingerprint = commissioningFlow.project.fingerprint;
+    let status = {
+      app: 'Lightweaver',
+      provisioningContractVersion: 1,
+      cardId: expectedCard.id,
+      firmwareVersion: expectedCard.firmwareVersion,
+      buildId: expectedCard.buildId,
+      bootId,
+      runtimePhase: 'ready',
+      knownGoodProject: true,
+      commandReady: true,
+      outputReady: true,
+      wifi: {
+        transport: 'station',
+        transition: 'handoff-ready',
+        transitionPending: true,
+        apActive: true,
+        stationIp: stationHost,
+        ip: stationHost,
+        handoffGeneration: generation,
+      },
+    };
+
+    const emit = (data: Record<string, unknown>, host = activeHost) => {
+      const event = new Event('message');
+      Object.defineProperties(event, {
+        data: { value: data },
+        origin: { value: `http://${host}` },
+        source: { value: fakeCardTab },
+      });
+      window.dispatchEvent(event);
+    };
+    const emitReady = () => emit({
+      app: 'LightweaverCardBridge', type: 'ready', version: 2, host: activeHost,
+    });
+
+    const fakeCardTab = {
+      closed: false,
+      focus() {},
+      postMessage(message: Record<string, unknown>) {
+        const type = String(message.type || '');
+        messageTypes.push(type);
+        if (type === 'wifi-handoff-ack') {
+          // The card applies the ack, but the reply is lost. A same-tab reload
+          // creates a new bridge lifecycle before the request times out.
+          status = {
+            ...status,
+            runtimePhase: 'factory',
+            knownGoodProject: false,
+            commandReady: false,
+            outputReady: false,
+            wifi: {
+              transport: 'station',
+              transition: 'station',
+              transitionPending: false,
+              apActive: false,
+              stationIp: stationHost,
+              ip: stationHost,
+              handoffGeneration: generation,
+            },
+          };
+          setTimeout(emitReady, 25);
+          return;
+        }
+        if (type === 'config') {
+          configured = true;
+          status = {
+            ...status,
+            runtimePhase: 'ready', knownGoodProject: true,
+            commandReady: true, outputReady: true,
+          };
+        }
+        const response = type === 'firmware-info'
+          ? {
+            app: 'Lightweaver',
+            cardId: expectedCard.id,
+            firmwareVersion: expectedCard.firmwareVersion,
+            buildId: expectedCard.buildId,
+            ...(configured ? { projectRevision, projectFingerprint } : {}),
+          }
+          : type === 'status'
+            ? status
+            : { ok: true, saved: type === 'config' };
+        setTimeout(() => emit({
+          app: 'LightweaverCardBridge', version: 2, id: message.id,
+          ok: true, response,
+        }), 0);
+      },
+      location: {
+        set href(value: string) {
+          activeHost = new URL(value).hostname;
+        },
+      },
+    } as unknown as Window;
+    window.open = ((url?: string | URL) => {
+      if (url) activeHost = new URL(String(url)).hostname;
+      if (activeHost === stationHost) setTimeout(emitReady, 0);
+      return fakeCardTab;
+    }) as typeof window.open;
+
+    const opened = bridge.openLocalCardPage('192.168.4.1');
+    if (!opened.ok) throw new Error(`could not open setup card: ${opened.reason}`);
+    const apStatus = await bridge.sendCardBridgeRequest('status', {}, { host: '192.168.4.1' });
+    const correlation = handoff.acceptWifiHandoff({
+      status: apStatus,
+      expectedCard,
+      expectedBootId: bootId,
+      lastGeneration: generation - 1,
+    });
+    if (!correlation) throw new Error('setup AP did not produce a correlation');
+
+    const retargeted = bridge.retargetCardBridge(stationHost, correlation, { flowId });
+    if (!retargeted.ok) throw new Error(`could not retarget card: ${retargeted.reason}`);
+    const hostBeforeFinal = localStorage.getItem('lw_chip_card_host');
+    emitReady();
+
+    const deadline = Date.now() + 7000;
+    while (Date.now() < deadline && !cardLink.getCardLinkState().handoffStationVerified) {
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    const linkAfterFinal = cardLink.getCardLinkState();
+    const bridgeAfterFinal = bridge.getCardBridgeState();
+    (window as any).__blankProductionPath = { messageTypes, flowId, replacementFlowId, correlation };
+
+    return {
+      protocol: location.protocol,
+      hostBeforeFinal,
+      persistedHost: localStorage.getItem('lw_chip_card_host'),
+      priorIdentity: JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null'),
+      linkAfterFinal,
+      bridgeAfterFinal,
+      ackCount: messageTypes.filter(type => type === 'wifi-handoff-ack').length,
+      statusCount: messageTypes.filter(type => type === 'status').length,
+    };
+  });
+
+  expect(result.protocol).toBe('https:');
+  expect(result.hostBeforeFinal).toBe('192.168.4.1');
+  expect(result.persistedHost).toBe('192.168.18.91');
+  expect(result.priorIdentity.id).toBe('lw-aaaaaaaaaaaa');
+  expect(result.ackCount).toBe(1);
+  expect(result.statusCount).toBeLessThanOrEqual(8);
+  expect(result.linkAfterFinal).toMatchObject({
+    state: 'connected-bridge',
+    handoffFlowId: 'flow-browser-wifi-123456789',
+    handoffStationVerified: true,
+    handoffAckSent: true,
+    cardBlank: true,
+  });
+  expect(result.bridgeAfterFinal).toMatchObject({
+    stationIdentityVerified: true,
+    runtimeCommandReady: false,
+    initialConfigAuthority: true,
+    handoffFlowId: 'flow-browser-wifi-123456789',
+  });
+  await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
+  await expect.poll(() => page.evaluate(async () => {
+    const bridge = await import('/src/lib/cardBridge.js');
+    const link = await import('/src/lib/cardLink.js');
+    return {
+      bridge: bridge.getCardBridgeState(),
+      link: link.getCardLinkState(),
+    };
+  })).toMatchObject({
+    bridge: { initialConfigAuthority: true, handoffFlowId: 'flow-browser-wifi-123456789' },
+    link: { handoffStationVerified: true, cardBlank: true },
+  });
+  await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeEnabled();
+  const beforeWizardPush = await page.evaluate(() => (window as any).__blankProductionPath.messageTypes.length);
+  await page.getByRole('button', { name: 'Restore saved project', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Check lights', exact: true })).toBeVisible();
+  const productionPath = await page.evaluate(async (start) => {
+    const bridge = await import('/src/lib/cardBridge.js');
+    const cardLink = await import('/src/lib/cardLink.js');
+    const fixture = (window as any).__blankProductionPath;
+    const types = fixture.messageTypes.slice(start);
+    const recoveryCleared = sessionStorage.getItem('lw_wifi_handoff_recovery_v1') == null;
+    const replacementCorrelation = {
+      ...fixture.correlation,
+      handoffGeneration: fixture.correlation.handoffGeneration + 1,
+    };
+    const replacement = bridge.retargetCardBridge(fixture.correlation.host, replacementCorrelation, {
+      flowId: fixture.replacementFlowId,
+    });
+    const replacementState = cardLink.getCardLinkState();
+    const stateBeforeStaleEnvelope = replacementState;
+    cardLink.getSharedCardLink().dispatch({
+      type: 'wifi-handoff-status', host: fixture.correlation.host,
+      correlation: fixture.correlation, flowId: fixture.flowId,
+      bridgeLifecycle: bridge.getCardBridgeState().lifecycle, readiness: {},
+    });
+    return {
+      types,
+      recoveryCleared,
+      replacement,
+      replacementState,
+      staleEnvelopeIgnored: cardLink.getCardLinkState() === stateBeforeStaleEnvelope,
+    };
+  }, beforeWizardPush);
+  expect(productionPath.types.filter(type => type === 'config')).toHaveLength(1);
+  expect(productionPath.types).not.toContain('wiring-candidate');
+  const configIndex = productionPath.types.indexOf('config');
+  expect(configIndex).toBeGreaterThanOrEqual(0);
+  expect(productionPath.types.slice(0, configIndex)).not.toContain('firmware-info');
+  expect(productionPath.types.slice(configIndex + 1)).toContain('firmware-info');
+  expect(productionPath.recoveryCleared).toBe(true);
+  expect(productionPath.replacement).toMatchObject({ ok: true, state: 'retargeted' });
+  expect(productionPath.replacementState).toMatchObject({
+    handoffFlowId: 'flow-browser-wifi-987654321',
+    handoffEnvelopeCount: 0,
+    handoffAckAttempted: false,
+    handoffStationVerified: false,
+  });
+  expect(productionPath.staleEnvelopeIgnored).toBe(true);
+});
+
+test('HTTPS Studio reload proves an ambiguous initial config without replaying either mutation', async ({ page }) => {
+  await page.addInitScript(() => {
+    const stationHost = '192.168.18.92';
+    const expectedCard = {
+      id: 'lw-cccccccccccc',
+      firmwareVersion: '2.1.0',
+      buildId: 'c'.repeat(40),
+    };
+    const appendType = (type: string) => {
+      const prior = JSON.parse(sessionStorage.getItem('__reload_bridge_types') || '[]');
+      prior.push(type);
+      sessionStorage.setItem('__reload_bridge_types', JSON.stringify(prior));
+    };
+    const emit = (source: Window, data: Record<string, unknown>) => {
+      const event = new Event('message');
+      Object.defineProperties(event, {
+        data: { value: data },
+        origin: { value: `http://${stationHost}` },
+        source: { value: source },
+      });
+      window.dispatchEvent(event);
+    };
+    const tab = {
+      closed: false,
+      focus() {},
+      postMessage(message: Record<string, unknown>) {
+        const type = String(message.type || '');
+        appendType(type);
+        if (type === 'config') {
+          sessionStorage.setItem('__reload_configured', '1');
+          if (sessionStorage.getItem('__reload_drop_config_response') === '1') {
+            sessionStorage.setItem('__reload_drop_config_response', '0');
+            return;
+          }
+        }
+        const configured = sessionStorage.getItem('__reload_configured') === '1';
+        const reportedCardId = sessionStorage.getItem('__reload_report_prior_card') === '1'
+          ? 'lw-aaaaaaaaaaaa'
+          : expectedCard.id;
+        const response = type === 'firmware-info'
+          ? {
+            app: 'Lightweaver', cardId: reportedCardId,
+            firmwareVersion: expectedCard.firmwareVersion, buildId: expectedCard.buildId,
+            ...(configured ? {
+              projectRevision: Number(sessionStorage.getItem('__reload_revision')),
+              projectFingerprint: sessionStorage.getItem('__reload_fingerprint'),
+            } : {}),
+          }
+          : type === 'status'
+            ? {
+              app: 'Lightweaver', provisioningContractVersion: 1,
+              cardId: reportedCardId, firmwareVersion: expectedCard.firmwareVersion,
+              buildId: expectedCard.buildId, bootId: 'boot-reload-blank',
+              runtimePhase: configured ? 'ready' : 'factory',
+              knownGoodProject: configured, commandReady: configured, outputReady: configured,
+              wifi: {
+                transport: 'station', transition: 'station', transitionPending: false,
+                apActive: false, stationIp: stationHost, ip: stationHost,
+                handoffGeneration: 21,
+              },
+            }
+            : { ok: true, saved: type === 'config' };
+        setTimeout(() => emit(tab as unknown as Window, {
+          app: 'LightweaverCardBridge', version: 2, id: message.id,
+          ok: true, response,
+        }), 0);
+      },
+      location: { set href(_value: string) {} },
+    };
+    window.open = ((_url?: string | URL) => {
+      setTimeout(() => emit(tab as unknown as Window, {
+        app: 'LightweaverCardBridge', type: 'ready', version: 2, host: stationHost,
+      }), 0);
+      return tab as unknown as Window;
+    }) as typeof window.open;
+  });
+  await page.route('https://led.mandalacodes.com/**', async route => {
+    const requested = new URL(route.request().url());
+    const upstream = await page.request.fetch(`http://localhost:9997${requested.pathname}${requested.search}`);
+    await route.fulfill({ response: upstream });
+  });
+  await page.goto('https://led.mandalacodes.com/#screen=card&section=install', {
+    waitUntil: 'domcontentloaded',
+  });
+
+  const seeded = await page.evaluate(async () => {
+    const commissioning = await import('/src/lib/cardCommissioningFlow.js');
+    const handoff = await import('/src/lib/cardWifiHandoff.js');
+    const connection = await import('/src/lib/cardConnection.js');
+    const expectedCard = {
+      id: 'lw-cccccccccccc', firmwareVersion: '2.1.0', buildId: 'c'.repeat(40),
+    };
+    const flowId = 'flow-reload-wifi-123456789';
+    const now = Date.now();
+    const projectRecord = {
+      id: 'reload-blank-project-record', updatedAt: now,
+      project: {
+        version: 3, id: 'reload-blank-project', name: 'Reload blank project',
+        layout: { strips: [{ id: 'strip-1', pixelCount: 36 }], wiring: null, patchBoard: null },
+        devices: { standaloneController: {} },
+      },
+    };
+    let flow = commissioning.completeCardInstall(commissioning.beginCardCommissioning({
+      source: 'web-serial', operation: 'install-current-release', strategy: 'clean-recovery',
+      projectRecord, projectRevision: 31, flowId, now,
+    }), {
+      operation: 'install-current-release', cardId: expectedCard.id,
+      firmwareVersion: expectedCard.firmwareVersion, buildId: expectedCard.buildId,
+    }, { now: now + 1 });
+    flow = commissioning.confirmCardSetupNetworkJoined(flow, { now: now + 2 });
+    flow = commissioning.acknowledgeCommissionedCard(flow, expectedCard, { now: now + 3 }).flow;
+    await commissioning.writeCardCommissioning(flow, { locks: null });
+    const correlation = {
+      host: '192.168.18.92', expectedCardId: expectedCard.id,
+      expectedFirmwareVersion: expectedCard.firmwareVersion,
+      expectedBuildId: expectedCard.buildId, expectedBootId: 'boot-reload-blank',
+      handoffGeneration: 21,
+    };
+    connection.writeStoredCardHost(correlation.host);
+    handoff.writeWifiHandoffRecovery({ correlation, flowId, ackAttempted: true });
+    sessionStorage.setItem('__reload_revision', String(flow.project.revision));
+    sessionStorage.setItem('__reload_fingerprint', flow.project.fingerprint);
+    sessionStorage.setItem('__reload_bridge_types', '[]');
+    sessionStorage.setItem('__reload_drop_config_response', '1');
+    return { flowId, correlation };
+  });
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect.poll(() => page.evaluate(async () => {
+    const bridge = await import('/src/lib/cardBridge.js');
+    const link = await import('/src/lib/cardLink.js');
+    return { bridge: bridge.getCardBridgeState(), link: link.getCardLinkState() };
+  })).toMatchObject({
+    bridge: {
+      initialConfigAuthority: true,
+      handoffFlowId: seeded.flowId,
+      handoffReloadRecovery: false,
+      handoffReloadEnvelopeCount: 2,
+    },
+    link: {
+      handoffFlowId: seeded.flowId,
+      handoffStationVerified: true,
+      handoffAckAttempted: true,
+      cardBlank: true,
+    },
+  });
+  const afterReload = await page.evaluate(() => JSON.parse(sessionStorage.getItem('__reload_bridge_types') || '[]'));
+  expect(afterReload.filter((type: string) => type === 'wifi-handoff-ack')).toHaveLength(0);
+  expect(afterReload.filter((type: string) => type === 'status').length).toBeGreaterThanOrEqual(2);
+
+  await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeEnabled();
+  const beforePush = afterReload.length;
+  await page.getByRole('button', { name: 'Restore saved project', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => {
+    const types = JSON.parse(sessionStorage.getItem('__reload_bridge_types') || '[]');
+    const recovery = JSON.parse(sessionStorage.getItem('lw_wifi_handoff_recovery_v1') || 'null');
+    return {
+      configCount: types.filter((type: string) => type === 'config').length,
+      configAttempted: recovery?.configAttempted,
+    };
+  })).toEqual({ configCount: 1, configAttempted: true });
+
+  // The card applied config but its response was lost. A real Studio reload
+  // may only reacquire the named popup and prove the outcome through status;
+  // it must never post config or the WiFi acknowledgement a second time.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect.poll(() => page.evaluate(async () => {
+    const bridge = await import('/src/lib/cardBridge.js');
+    const link = await import('/src/lib/cardLink.js');
+    return { bridge: bridge.getCardBridgeState(), link: link.getCardLinkState() };
+  })).toMatchObject({
+    bridge: { runtimeCommandReady: true, initialConfigAuthority: false },
+    link: { handoffStationVerified: true, cardBlank: false },
+  });
+  await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Restore saved project', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Check lights', exact: true })).toBeVisible();
+  const pushed = await page.evaluate((start) => ({
+    types: JSON.parse(sessionStorage.getItem('__reload_bridge_types') || '[]').slice(start),
+    recovery: sessionStorage.getItem('lw_wifi_handoff_recovery_v1'),
+  }), beforePush);
+  expect(pushed.types.filter((type: string) => type === 'config')).toHaveLength(1);
+  expect(pushed.types).not.toContain('wifi-handoff-ack');
+  expect(pushed.types).not.toContain('wiring-candidate');
+  expect(pushed.types.indexOf('config')).toBeLessThan(pushed.types.indexOf('firmware-info'));
+  expect(pushed.recovery).toBeNull();
+
+  const identityHandoff = await page.evaluate(async (host) => {
+    const bridge = await import('/src/lib/cardBridge.js');
+    const persisted = JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null');
+    const handoffFlowId = bridge.getCardBridgeState().handoffFlowId;
+    const accepted = await bridge.verifyCardBridgeIdentity(host);
+    sessionStorage.setItem('__reload_report_prior_card', '1');
+    let priorReason = '';
+    try { await bridge.verifyCardBridgeIdentity(host); }
+    catch (error) { priorReason = (error as { reason?: string })?.reason || ''; }
+    return { persisted, handoffFlowId, accepted, priorReason };
+  }, seeded.correlation.host);
+  expect(identityHandoff.persisted.id).toBe('lw-cccccccccccc');
+  expect(identityHandoff.handoffFlowId).toBe('');
+  expect(identityHandoff.accepted.id).toBe('lw-cccccccccccc');
+  expect(identityHandoff.priorReason).toBe('wrong-card');
 });

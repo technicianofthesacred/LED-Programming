@@ -1864,10 +1864,7 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
     case lightweaver::ConnectivityPhase::RecoveryAp: wifiPhase = "recovery-ap"; break;
     case lightweaver::ConnectivityPhase::SetupAp: break;
   }
-  bool wifiTransition = wifiState.phase == lightweaver::ConnectivityPhase::Joining ||
-      wifiState.phase == lightweaver::ConnectivityPhase::HandoffReady ||
-      wifiState.phase == lightweaver::ConnectivityPhase::Reconnecting ||
-      wifiState.phase == lightweaver::ConnectivityPhase::RecoveryAp ||
+  bool wifiTransition = lightweaver::connectivityTransitionPending(wifiState) ||
       config.wifiRuntime.stationLinkPending;
   doc["wifi"]["transport"] = config.activeTransport == WIFI_TRANSPORT_STATION ? "station" : "ap";
   doc["wifi"]["hostname"] = config.activeHostname;
@@ -1882,6 +1879,10 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["wifi"]["lastAttemptMs"] = wifiState.lastAttemptMs;
   doc["wifi"]["attemptCount"] = config.wifiRuntime.attemptCount;
   doc["wifi"]["lastError"] = config.wifiRuntime.lastError;
+  doc["wifi"]["networkBindingsPending"] = wifiState.networkBindingsPending;
+  doc["wifi"]["wledListenerReady"] = wifiState.wledListenerReady;
+  doc["wifi"]["artnetListenerReady"] = wifiState.artnetListenerReady;
+  doc["wifi"]["lastBindingAttemptMs"] = wifiState.lastBindingAttemptMs;
   doc["wifi"]["configured"] = config.wifi.ssid.length() > 0;
   String output;
   serializeJson(doc, output);

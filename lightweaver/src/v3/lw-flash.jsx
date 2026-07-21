@@ -596,7 +596,7 @@ import { openInChrome } from '../lib/openInChrome.js';
           <CardCommissioningPanel
             result={null}
             link={cardLink}
-            onReconnect={() => onConnectCard?.()}
+            onReconnect={(host) => onConnectCard?.(host)}
             onComplete={onCommissioningComplete}
             readProjectEvidence={readCardProjectEvidence}
             readCandidateEvidence={readCardWiringCandidateEvidence}

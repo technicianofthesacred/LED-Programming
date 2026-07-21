@@ -7,6 +7,11 @@ import {
   pushConfigToCard,
 } from '../src/lib/cardPushClient.js';
 import { prepareCardStoragePayload } from '../src/lib/cardStoragePayload.js';
+import {
+  bootstrapCardBridgeFromOpener,
+  sendCardBridgeRequest,
+  verifyCardBridgeIdentity,
+} from '../src/lib/cardBridge.js';
 
 const pkg = makeCardRuntimePackage({
   projectName: 'Customer Piece',
@@ -215,8 +220,18 @@ const bridgeWindow = {
           id: message.id,
           ok: true,
           response: message.type === 'firmware-info'
-            ? { ok: true, cardId: 'lw-installer-test', firmwareVersion: '1.0.0', outputs: bridgeCurrentOutputs }
-            : { ok: true, saved: true },
+            ? {
+              ok: true, cardId: 'lw-installer-test', firmwareVersion: '1.0.0',
+              buildId: 'installer-test-build', outputs: bridgeCurrentOutputs,
+            }
+            : message.type === 'status'
+              ? {
+                app: 'Lightweaver', provisioningContractVersion: 1,
+                cardId: 'lw-installer-test', firmwareVersion: '1.0.0', buildId: 'installer-test-build',
+                bootId: 'installer-test-boot', runtimePhase: 'ready', knownGoodProject: true,
+                commandReady: true, outputReady: true,
+              }
+              : { ok: true, saved: true },
         },
       });
     }, 0);
@@ -248,6 +263,11 @@ globalThis.CustomEvent = class CustomEvent {
     this.detail = init.detail;
   }
 };
+
+bootstrapCardBridgeFromOpener();
+await verifyCardBridgeIdentity('lightweaver.local');
+await sendCardBridgeRequest('status', {}, { host: 'lightweaver.local' });
+bridgeMessages.length = 0;
 
 const bridgePushed = await pushConfigToCard(pkg, {
   host: 'lightweaver.local',

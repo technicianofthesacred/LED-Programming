@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  createCardLink,
   getCardLinkState,
   getSharedCardLink,
   initialCardLinkState,
+  invalidateCardLinkOperationLease,
   isCardLinkConnected,
   reportDirectCardStatus,
   reduceCardLink,
@@ -116,4 +118,41 @@ test('direct status reporting feeds the fresh envelope to live consumers', (t) =
   });
   assert.equal(getCardLinkState().cardBlank, true);
   assert.equal(isCardLinkConnected(getCardLinkState()), false);
+});
+
+test('an exact operation lease loss demotes only the lifecycle that failed', (t) => {
+  const link = createCardLink({ host: '192.168.18.70', directPingIntervalMs: 0 });
+  t.after(() => link.destroy());
+  link.dispatch({
+    type: 'direct-status', connected: true, host: '192.168.18.70',
+    card: { id: CARD_ID }, expectedCard: { id: CARD_ID }, readiness: readyEnvelope(),
+  });
+  const current = link.getState();
+  const lease = {
+    expectedCardId: CARD_ID,
+    host: current.host,
+    transport: 'direct',
+    bridgeLifecycle: null,
+    operationGeneration: current.operationGeneration,
+    validatedBootId: current.validatedBootId,
+  };
+
+  assert.equal(invalidateCardLinkOperationLease(lease, { link, reason: 'production-config-timeout' }), true);
+  assert.equal(link.getState().state, 'revalidating');
+  assert.equal(link.getState().reason, 'production-config-timeout');
+  assert.equal(link.getState().cardBlank, null);
+  assert.equal(link.getState().operationGeneration, lease.operationGeneration + 1);
+
+  link.dispatch({
+    type: 'direct-status', connected: true, host: '192.168.18.70',
+    card: { id: CARD_ID }, expectedCard: { id: CARD_ID }, readiness: readyEnvelope({ bootId: 'boot-2' }),
+  });
+  link.dispatch({
+    type: 'direct-status', connected: true, host: '192.168.18.70',
+    card: { id: CARD_ID }, expectedCard: { id: CARD_ID }, readiness: readyEnvelope({ bootId: 'boot-2' }),
+  });
+  const revalidated = link.getState();
+  assert.equal(revalidated.state, 'connected-direct');
+  assert.equal(invalidateCardLinkOperationLease(lease, { link, reason: 'stale-operation' }), false);
+  assert.equal(link.getState(), revalidated, 'an old operation cannot demote a newer card lifecycle');
 });

@@ -2,8 +2,8 @@
 // Generates the canonical BENCH FIXTURE production-job source.
 //
 // This is the job a workshop worker uses for the rehearsal and for bench
-// acceptance of freshly built cards: one output on GPIO 16 driving the
-// 44-LED bench strip (the same count as the firmware factory default), a
+// acceptance of freshly built cards: one output on GPIO 18 driving the
+// physical 44-LED bench strip, a
 // conservative brightness limit, and the standard control pinout. Real
 // artwork jobs are generated the same way with the artwork's own layout.
 //
@@ -28,14 +28,33 @@ import { fingerprintCommissioningProject } from '../../lightweaver/src/lib/cardC
 import { buildCardRuntimePackageFromProject } from '../../lightweaver/src/lib/cardRuntimeProject.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const manifest = JSON.parse(await readFile(resolve(repoRoot, 'lightweaver/public/firmware/release-manifest.json'), 'utf8'));
+
+function parsePaths(values) {
+  const paths = new Map();
+  for (let index = 0; index < values.length; index += 2) {
+    const flag = values[index];
+    const value = values[index + 1];
+    if (!['--manifest', '--output'].includes(flag) || !value) {
+      throw new Error(`Usage: ${process.argv[1]} [--manifest PATH --output PATH]`);
+    }
+    paths.set(flag.slice(2), resolve(value));
+  }
+  return paths;
+}
+
+const paths = parsePaths(process.argv.slice(2));
+const manifestPath = paths.get('manifest') || resolve(repoRoot, 'lightweaver/public/firmware/release-manifest.json');
+const outPath = paths.get('output') || resolve(repoRoot, 'release/job-sources/bench-fixture-44.json');
+const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 
 const PIXELS = 44;
+const DATA_PIN = 18;
+const MAX_MILLIAMPS = 1500;
 const JOB_ID = 'bench-fixture-44';
 
 const standaloneController = {
-  outputs: [{ id: 'out1', name: 'Bench strip', pin: 16, pixels: PIXELS }],
-  led: { type: 'WS2815', colorOrder: 'GRB', brightnessLimit: 0.35 },
+  outputs: [{ id: 'out1', name: 'Bench strip', pin: DATA_PIN, pixels: PIXELS }],
+  led: { type: 'WS2815', colorOrder: 'GRB', brightnessLimit: 0.35, maxMilliamps: MAX_MILLIAMPS },
   controls: {
     encoder: { a: 4, b: 5, press: 0, alternatePress: 6, rotateDirection: 'clockwise-brighter', brightnessStep: 18 },
     previous: 7,
@@ -62,7 +81,7 @@ const restoreSnapshot = {
       verified: true,
       controllerAnchor: null,
       migrationWarnings: [],
-      outputs: [{ id: 'out1', name: 'Bench strip', pin: 16, runIds: ['run-strip-1'] }],
+      outputs: [{ id: 'out1', name: 'Bench strip', pin: DATA_PIN, runIds: ['run-strip-1'] }],
       runs: [{
         id: 'run-strip-1', type: 'strip', verified: true,
         source: { stripId: 'strip-1', from: 0, to: PIXELS - 1 },
@@ -106,10 +125,9 @@ const source = {
     restoreSnapshot,
   },
   configuration,
-  expectedOutputs: [{ id: 'out1', label: 'Bench strip', pin: 16, pixels: PIXELS, direction: 'forward', colorOrder: 'GRB' }],
+  expectedOutputs: [{ id: 'out1', label: 'Bench strip', pin: DATA_PIN, pixels: PIXELS, direction: 'forward', colorOrder: 'GRB' }],
 };
 
-const outPath = resolve(repoRoot, 'release/job-sources/bench-fixture-44.json');
 await mkdir(dirname(outPath), { recursive: true });
 await writeFile(outPath, `${JSON.stringify(source, null, 2)}\n`);
-console.log(JSON.stringify({ outPath, jobId: JOB_ID, firmware: source.firmware }, null, 2));
+console.log(JSON.stringify({ manifestPath, outPath, jobId: JOB_ID, firmware: source.firmware }, null, 2));

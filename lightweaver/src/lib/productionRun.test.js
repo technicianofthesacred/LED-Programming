@@ -20,7 +20,7 @@ const digest = 'a'.repeat(64);
 const ids = { runId: 'run_1234567890abcdef', flowId: 'flow_1234567890abcdef' };
 const correlation = (run, overrides = {}) => ({
   runId: run.runId, flowId: run.flowId, jobDigest: run.jobDigest,
-  expectedCardId: run.expectedCardId, operationId: run.operationId, ...overrides,
+  expectedCardId: run.expectedCardId, operationId: run.operationId, generation: run.generation, ...overrides,
 });
 
 class MemoryStorage {
@@ -46,6 +46,7 @@ test('models the exact production states and binds run, flow, job, and expected 
   assert.throws(() => transitionProductionRun(run, 'install', { correlation: correlation(run, { flowId: 'flow_other_123456' }), now: 13 }), /correlation/i);
   assert.throws(() => transitionProductionRun(run, 'install', { correlation: correlation(run, { expectedCardId: 'lw-wrong' }), now: 13 }), /expected card/i);
   assert.throws(() => transitionProductionRun(run, 'install', { correlation: correlation(run, { operationId: 'op_stale_1234567890' }), now: 13 }), /operation/i);
+  assert.throws(() => transitionProductionRun(run, 'install', { correlation: correlation(run, { generation: run.generation + 1 }), now: 13 }), /generation/i);
 });
 
 test('requires card identity at inspect before install and preserves it thereafter', () => {

@@ -13,6 +13,16 @@ import {
   requireExpectedCardIdentity,
 } from './cardIdentity.js';
 import { classifyCardReadiness } from './cardReadiness.js';
+import {
+  acceptWifiHandoff,
+  clearWifiHandoffRecovery,
+  inspectFinalStationHandoff,
+  isFinalStationHandoff,
+  markWifiHandoffConfigAttempted,
+  normalizeWifiHandoffCorrelation,
+  readWifiHandoffRecovery,
+  writeWifiHandoffRecovery,
+} from './cardWifiHandoff.js';
 
 // Message types that command the hardware (write state, push config, reboot,
 // repair the LED output, stream live frames). These require a card origin we've
@@ -29,6 +39,7 @@ const PRIVILEGED_BRIDGE_TYPES = new Set([
   'wiring-confirm',
   'wiring-rollback',
   'wiring-discover',
+  'wifi-handoff-ack',
 ]);
 const IDENTITY_FREE_BRIDGE_TYPES = new Set(['ping', 'status', 'firmware-info']);
 
@@ -50,8 +61,8 @@ const RETRYABLE_BRIDGE_TYPES = new Set([
 // feature first shipped in. Cards report their version in the 'ready'
 // handshake (and on every relay reply); firmware older than the versioned
 // bridge reports nothing, which we treat as 0 (legacy).
-export const CARD_BRIDGE_PROTOCOL_VERSION = 1;
-export const CARD_BRIDGE_FEATURE_VERSIONS = { frame: 1 };
+export const CARD_BRIDGE_PROTOCOL_VERSION = 2;
+export const CARD_BRIDGE_FEATURE_VERSIONS = { frame: 1, 'wifi-handoff-ack': 2 };
 
 export const CARD_BRIDGE_CHANGED_EVENT = 'lightweaver-card-bridge-changed';
 export const STUDIO_BRIDGE_APP = 'LightweaverStudioBridge';
@@ -80,6 +91,21 @@ let bridgeIdentityError = '';
 let bridgeLastSeenAt = 0;
 let bridgeSeq = 0;
 let bridgeLifecycle = 0;
+// Exact AP evidence retained across the origin switch. It remains present when
+// the first station navigation fails, allowing the caller to retry the same
+// WindowProxy without accepting a new/stale generation. While this is set,
+// identity cannot regain command authority until a fresh station status
+// satisfies the complete correlation.
+let bridgeHandoffCorrelation = null;
+let bridgeHandoffFlowId = '';
+let bridgeHandoffAckReady = false;
+let bridgeStationIdentityVerified = false;
+let bridgeRuntimeCommandReady = false;
+let bridgeInitialConfigAvailable = false;
+let bridgeInitialConfigAttempted = false;
+let bridgeAuthorityLifecycle = -1;
+let bridgeRestoredHandoff = false;
+let bridgeRestoredFinalEnvelopeCount = 0;
 let listenerAttached = false;
 let listenerWindow = null;
 const pending = new Map();
@@ -87,6 +113,18 @@ const bridgeAcquisitions = new Map();
 
 function browserWindow() {
   return typeof window !== 'undefined' ? window : null;
+}
+
+function normalizeCommissioningFlowId(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{16,96}$/.test(value) ? value : '';
+}
+
+function handoffExpectedIdentity(correlation = bridgeHandoffCorrelation) {
+  return correlation ? {
+    id: correlation.expectedCardId,
+    firmwareVersion: correlation.expectedFirmwareVersion,
+    buildId: correlation.expectedBuildId,
+  } : null;
 }
 
 export function readLocalChipDefault() {
@@ -126,7 +164,11 @@ function bridgeTargetClosed(target = bridgeWindow) {
   }
 }
 
-function clearBridgeTarget({ host = bridgeHost, origin = bridgeOrigin } = {}) {
+function clearBridgeTarget({
+  host = bridgeHost,
+  origin = bridgeOrigin,
+  preserveHandoff = false,
+} = {}) {
   bridgeWindow = null;
   bridgeOrigin = origin || '';
   bridgeHost = normalizeCardHost(host || bridgeHost || readStoredCardHost());
@@ -136,8 +178,193 @@ function clearBridgeTarget({ host = bridgeHost, origin = bridgeOrigin } = {}) {
   bridgeCard = null;
   bridgeDiscoveredCard = null;
   bridgeIdentityError = '';
+  bridgeHandoffAckReady = false;
+  bridgeStationIdentityVerified = false;
+  bridgeRuntimeCommandReady = false;
+  bridgeInitialConfigAvailable = false;
+  if (!preserveHandoff) {
+    bridgeHandoffCorrelation = null;
+    bridgeHandoffFlowId = '';
+    bridgeInitialConfigAttempted = false;
+    bridgeRestoredHandoff = false;
+    bridgeRestoredFinalEnvelopeCount = 0;
+  }
   bridgeLifecycle += 1;
   dispatchBridgeChange();
+}
+
+function rejectPendingBridgeRequests(reason, message) {
+  for (const [id, request] of pending) {
+    pending.delete(id);
+    clearTimeout(request.timer);
+    request.reject(bridgeError(message, reason));
+  }
+}
+
+// Every navigation of the tracked named window crosses a page lifecycle even
+// when WindowProxy, host, and origin stay identical. Revoke the old page before
+// invoking window.open or assigning location so no response can arrive in the
+// browser's navigation gap with stale command authority.
+function revokeBridgeForNavigation({
+  host = bridgeHost,
+  origin = bridgeOrigin,
+  reason = 'bridge-navigated',
+  message = 'The tracked card page started a new navigation.',
+  preserveHandoff = false,
+} = {}) {
+  rejectPendingBridgeRequests(reason, message);
+  bridgeLifecycle += 1;
+  bridgeConnected = false;
+  bridgeReady = false;
+  bridgeVersion = 0;
+  bridgeCard = null;
+  bridgeDiscoveredCard = null;
+  bridgeIdentityError = '';
+  bridgeHandoffAckReady = false;
+  bridgeStationIdentityVerified = false;
+  bridgeRuntimeCommandReady = false;
+  bridgeInitialConfigAvailable = false;
+  if (!preserveHandoff) {
+    bridgeHandoffCorrelation = null;
+    bridgeHandoffFlowId = '';
+    bridgeInitialConfigAttempted = false;
+    bridgeRestoredHandoff = false;
+    bridgeRestoredFinalEnvelopeCount = 0;
+  }
+  if (host) bridgeHost = normalizeCardHost(host);
+  if (origin) bridgeOrigin = origin;
+  dispatchBridgeChange();
+}
+
+function trackNavigatedBridgeWindow(source, { host, origin, persistHost = true } = {}) {
+  if (source) bridgeWindow = source;
+  if (origin) bridgeOrigin = origin;
+  if (host) {
+    bridgeHost = normalizeCardHost(host);
+    if (persistHost && !bridgeHandoffCorrelation) writeStoredCardHost(bridgeHost);
+  }
+  dispatchBridgeChange();
+}
+
+function sameHandoffCorrelation(left, right) {
+  return Boolean(left && right)
+    && left.host === right.host
+    && left.expectedCardId === right.expectedCardId
+    && left.expectedFirmwareVersion === right.expectedFirmwareVersion
+    && left.expectedBuildId === right.expectedBuildId
+    && left.expectedBootId === right.expectedBootId
+    && left.handoffGeneration === right.handoffGeneration;
+}
+
+function applyAuthoritativeBridgeStatus(status, host = bridgeHost) {
+  bridgeRuntimeCommandReady = false;
+  bridgeInitialConfigAvailable = false;
+  bridgeAuthorityLifecycle = -1;
+
+  if (bridgeHandoffCorrelation) {
+    const authority = inspectFinalStationHandoff({
+      status,
+      correlation: bridgeHandoffCorrelation,
+    });
+    if (!authority) {
+      bridgeStationIdentityVerified = false;
+      bridgeCard = null;
+      const stillHandoffReady = acceptWifiHandoff({
+        status,
+        expectedCard: handoffExpectedIdentity(bridgeHandoffCorrelation),
+        expectedBootId: bridgeHandoffCorrelation.expectedBootId,
+        lastGeneration: bridgeHandoffCorrelation.handoffGeneration - 1,
+      });
+      if (!sameHandoffCorrelation(stillHandoffReady, bridgeHandoffCorrelation)) {
+        clearWifiHandoffRecovery(bridgeHandoffFlowId);
+      }
+      return null;
+    }
+    try {
+      const identity = normalizeCardIdentity(status, host);
+      requireExpectedCardIdentity(identity, {
+        expected: handoffExpectedIdentity(bridgeHandoffCorrelation),
+      });
+      bridgeDiscoveredCard = identity;
+      bridgeCard = identity;
+      bridgeStationIdentityVerified = true;
+      bridgeAuthorityLifecycle = bridgeLifecycle;
+      if (bridgeRestoredHandoff) {
+        bridgeRestoredFinalEnvelopeCount = Math.min(2, bridgeRestoredFinalEnvelopeCount + 1);
+      }
+      const stableAfterRestore = !bridgeRestoredHandoff || bridgeRestoredFinalEnvelopeCount >= 2;
+      bridgeRuntimeCommandReady = stableAfterRestore && authority.runtimeReady;
+      bridgeInitialConfigAvailable = Boolean(
+        stableAfterRestore
+        &&
+        authority.blank
+        && bridgeHandoffFlowId
+        && !bridgeInitialConfigAttempted
+      );
+      if (stableAfterRestore) bridgeRestoredHandoff = false;
+      bridgeIdentityError = bridgeRuntimeCommandReady ? '' : 'runtime-not-ready';
+      bridgeHandoffAckReady = false;
+      writeStoredCardHost(bridgeHandoffCorrelation.host);
+      return authority;
+    } catch (error) {
+      bridgeStationIdentityVerified = false;
+      bridgeCard = null;
+      bridgeIdentityError = error?.reason || 'handoff-correlation';
+      clearWifiHandoffRecovery(bridgeHandoffFlowId);
+      return null;
+    }
+  }
+
+  const expected = readPersistedCardIdentity();
+  const readiness = classifyCardReadiness(status || {}, { expectedCard: expected });
+  if (!expected?.id || ['checking', 'identity-mismatch'].includes(readiness.state)) {
+    bridgeStationIdentityVerified = false;
+    bridgeCard = null;
+    bridgeIdentityError = readiness.reason === 'unexpected-card' ? 'wrong-card' : 'identity-missing';
+    return null;
+  }
+  try {
+    const identity = normalizeCardIdentity(status, host);
+    requireExpectedCardIdentity(identity, { expected });
+    bridgeDiscoveredCard = identity;
+    bridgeCard = identity;
+    bridgeStationIdentityVerified = true;
+    bridgeAuthorityLifecycle = bridgeLifecycle;
+    bridgeRuntimeCommandReady = readiness.connected === true;
+    bridgeIdentityError = bridgeRuntimeCommandReady ? '' : 'runtime-not-ready';
+    return Object.freeze({
+      verified: true,
+      commandReady: status.commandReady === true,
+      runtimeReady: readiness.connected === true,
+      blank: readiness.blank === true,
+      readinessState: readiness.state,
+    });
+  } catch (error) {
+    bridgeStationIdentityVerified = false;
+    bridgeCard = null;
+    bridgeIdentityError = error?.reason || 'identity-missing';
+    return null;
+  }
+}
+
+function isAllowedStudioOrigin(origin = '') {
+  return origin === 'https://led.mandalacodes.com'
+    || origin === 'https://lightweaver-edw.pages.dev'
+    || /^https:\/\/[a-z0-9-]+\.lightweaver-edw\.pages\.dev$/.test(origin)
+    || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+}
+
+function currentStudioOrigin(candidate = '') {
+  const win = browserWindow();
+  for (const value of [win?.location?.origin, win?.location?.href, candidate]) {
+    try {
+      const origin = new URL(String(value || '')).origin;
+      if (isAllowedStudioOrigin(origin)) return origin;
+    } catch {
+      /* try the next bounded source */
+    }
+  }
+  return '';
 }
 
 function setBridgeState({
@@ -159,12 +386,16 @@ function setBridgeState({
     bridgeDiscoveredCard = null;
     bridgeIdentityError = '';
     bridgeVersion = 0;
+    bridgeHandoffAckReady = false;
+    bridgeStationIdentityVerified = false;
+    bridgeRuntimeCommandReady = false;
+    bridgeInitialConfigAvailable = false;
   }
   if (source) bridgeWindow = source;
   if (origin) bridgeOrigin = origin;
   if (host) {
     bridgeHost = normalizedHost;
-    writeStoredCardHost(bridgeHost);
+    if (!bridgeHandoffCorrelation || bridgeStationIdentityVerified) writeStoredCardHost(bridgeHost);
   }
   bridgeConnected = Boolean(connected);
   // `ready` only flips to true on a verified handshake; once true it sticks for
@@ -230,6 +461,10 @@ function handleBridgeMessage(event) {
     bridgeCard = null;
     bridgeDiscoveredCard = null;
     bridgeIdentityError = '';
+    bridgeHandoffAckReady = false;
+    bridgeStationIdentityVerified = false;
+    bridgeRuntimeCommandReady = false;
+    bridgeInitialConfigAvailable = false;
     bridgeVersion = Number(data.version) || 0;
     setBridgeState({
       source: event.source,
@@ -277,24 +512,54 @@ function handleBridgeMessage(event) {
       if (!identity.id) throw bridgeError('The card firmware did not report a stable identity.', 'identity-missing');
       bridgeDiscoveredCard = identity;
       try {
-        requireExpectedCardIdentity(identity);
-        bridgeCard = identity;
+        requireExpectedCardIdentity(identity, {
+          expected: bridgeHandoffCorrelation
+            ? handoffExpectedIdentity(bridgeHandoffCorrelation)
+            : readPersistedCardIdentity(),
+        });
+        const sameVerifiedIdentity = bridgeStationIdentityVerified
+          && bridgeAuthorityLifecycle === bridgeLifecycle
+          && bridgeCard?.id === identity.id
+          && bridgeCard?.firmwareVersion === identity.firmwareVersion
+          && bridgeCard?.buildId === identity.buildId;
+        // A read-only identity refresh cannot establish station authority by
+        // itself because it contains no boot/generation proof. It may preserve
+        // authority already proven in this exact lifecycle when every identity
+        // field still matches. New, partial, or different evidence fails closed.
+        bridgeCard = sameVerifiedIdentity || !bridgeHandoffCorrelation ? identity : null;
+        bridgeStationIdentityVerified = bridgeHandoffCorrelation
+          ? sameVerifiedIdentity
+          : true;
+        bridgeRuntimeCommandReady = sameVerifiedIdentity && bridgeRuntimeCommandReady;
+        bridgeInitialConfigAvailable = sameVerifiedIdentity && bridgeInitialConfigAvailable;
         bridgeIdentityError = '';
       } catch (error) {
         // Discovery is read-only and must still succeed. Keep commands locked
         // until an explicit first-pair adoption or re-pair verifies this card.
         bridgeCard = null;
+        bridgeStationIdentityVerified = false;
+        bridgeRuntimeCommandReady = false;
+        bridgeInitialConfigAvailable = false;
         bridgeIdentityError = error?.reason || 'identity-missing';
+        if (bridgeHandoffFlowId) clearWifiHandoffRecovery(bridgeHandoffFlowId);
       }
     } catch (error) {
       bridgeDiscoveredCard = null;
       bridgeCard = null;
+      bridgeStationIdentityVerified = false;
+      bridgeRuntimeCommandReady = false;
+      bridgeInitialConfigAvailable = false;
       bridgeIdentityError = error?.reason || 'identity-missing';
+      if (bridgeHandoffFlowId) clearWifiHandoffRecovery(bridgeHandoffFlowId);
       dispatchBridgeChange();
       request.reject(error);
       return;
     }
   }
+  if (request.type === 'status') {
+    applyAuthoritativeBridgeStatus(responsePayload, request.host || bridgeHost);
+  }
+  if (request.type === 'wifi-handoff-ack') bridgeHandoffAckReady = false;
 
   // A response whose origin matches a local card origin is a verified handshake
   // (the request's targetOrigin was already enforced on postMessage), so mark
@@ -352,10 +617,13 @@ export function bootstrapCardBridgeFromOpener() {
   return true;
 }
 
-export function buildCardBridgeLaunchUrl(rawHost = '') {
+export function buildCardBridgeLaunchUrl(rawHost = '', studioUrl = '') {
   const host = normalizeCardHost(rawHost || readStoredCardHost());
   const url = new URL(`${cardHostToUrl(host)}/`);
-  url.hash = '#studioBridge=1';
+  const fragment = new URLSearchParams({ studioBridge: '1' });
+  const studioOrigin = currentStudioOrigin(studioUrl);
+  if (studioOrigin) fragment.set('studioOrigin', studioOrigin);
+  url.hash = fragment.toString();
   return url.href;
 }
 
@@ -368,12 +636,11 @@ export function openCardBridge(rawHost = '', {
   attachCardBridgeListener();
   const host = normalizeCardHost(rawHost || readStoredCardHost());
   const origin = cardHostToUrl(host);
-  const bridgeUrl = autoOpenStudio
-    ? buildCardBridgeLaunchUrl(host, studioUrl)
-    : `${origin}/#studioBridge=1`;
+  const bridgeUrl = buildCardBridgeLaunchUrl(host, studioUrl);
+  revokeBridgeForNavigation({ host, origin });
   const opened = win.open(bridgeUrl, CARD_BRIDGE_WINDOW_NAME);
   if (opened) {
-    setBridgeState({ source: opened, origin, host, connected: false, ready: false });
+    trackNavigatedBridgeWindow(opened, { host, origin });
   }
   return opened;
 }
@@ -408,11 +675,12 @@ export function openLocalCardPage(rawHost = '', { path = '/', reason = 'open-car
   if (url.origin !== origin) return { ok: false, reason: 'invalid-host' };
   if (!win?.open) return { ok: false, reason: 'popup-blocked' };
   attachCardBridgeListener();
+  revokeBridgeForNavigation({ host, origin });
   const opened = win.open(url.href, CARD_BRIDGE_WINDOW_NAME);
   if (!opened) return { ok: false, reason: 'popup-blocked' };
   // Same bookkeeping as openCardBridge: adopt the (possibly reused) named
   // window and drop any prior handshake so identity must re-verify.
-  setBridgeState({ source: opened, origin, host, connected: false, ready: false });
+  trackNavigatedBridgeWindow(opened, { host, origin });
   try {
     opened.focus?.();
   } catch {
@@ -421,13 +689,190 @@ export function openLocalCardPage(rawHost = '', { path = '/', reason = 'open-car
   return { ok: true, window: opened };
 }
 
-export function getCardBridgeState() {
-  let identityVerified = false;
-  try {
-    identityVerified = Boolean(bridgeCard?.id && requireExpectedCardIdentity(bridgeCard));
-  } catch {
-    identityVerified = false;
+// Move the already-authorized named card tab from the setup AP to the exact
+// station address proven by acceptWifiHandoff. No popup is opened here: the
+// stable WindowProxy is the retry surface while the workstation changes WiFi.
+export function retargetCardBridge(rawHost = '', rawCorrelation = {}, { flowId: rawFlowId = '' } = {}) {
+  const correlation = normalizeWifiHandoffCorrelation(rawCorrelation);
+  const flowId = normalizeCommissioningFlowId(rawFlowId);
+  const host = normalizeCardHost(rawHost);
+  if (!correlation || !flowId || host !== correlation.host) {
+    return { ok: false, state: 'invalid-correlation', reason: 'invalid-correlation', retryable: false };
   }
+  // A replaced top-level Studio window cannot own a WindowProxy acquired by
+  // the prior document. Browsers normally tear the module down too; this guard
+  // also makes that lifecycle explicit for embedded/test hosts.
+  if (listenerWindow && listenerWindow !== browserWindow()) {
+    rejectPendingBridgeRequests('bridge-missing', 'The Studio bridge owner changed.');
+    clearBridgeTarget({ host: bridgeHost, origin: bridgeOrigin });
+  }
+  if (!bridgeWindow) {
+    return { ok: false, state: 'missing-window', reason: 'bridge-missing', retryable: true };
+  }
+  if (bridgeTargetClosed()) {
+    clearBridgeTarget({ host: bridgeHost, origin: bridgeOrigin });
+    return { ok: false, state: 'closed-window', reason: 'bridge-closed', retryable: true };
+  }
+  const studioOrigin = currentStudioOrigin();
+  if (!studioOrigin) {
+    return { ok: false, state: 'invalid-correlation', reason: 'invalid-studio-origin', retryable: false };
+  }
+
+  const previous = bridgeHandoffCorrelation;
+  const repeated = sameHandoffCorrelation(previous, correlation) && bridgeHandoffFlowId === flowId;
+  if (previous && !repeated) {
+    const sameCardBoot = previous.expectedCardId === correlation.expectedCardId
+      && previous.expectedFirmwareVersion === correlation.expectedFirmwareVersion
+      && previous.expectedBuildId === correlation.expectedBuildId
+      && previous.expectedBootId === correlation.expectedBootId;
+    if (bridgeHandoffFlowId === flowId
+      && (!sameCardBoot || correlation.handoffGeneration <= previous.handoffGeneration)) {
+      return { ok: false, state: 'stale-correlation', reason: 'stale-correlation', retryable: false };
+    }
+  }
+
+  const target = bridgeWindow;
+  const origin = cardHostToUrl(host);
+  if (!repeated) {
+    // Settle every AP promise and revoke its lifecycle synchronously before the
+    // cross-origin location assignment. A delayed AP response can no longer
+    // mutate identity or readiness after this point.
+    revokeBridgeForNavigation({
+      host,
+      origin,
+      reason: 'bridge-retargeted',
+      message: 'The setup-AP bridge was replaced by the correlated station target.',
+    });
+    bridgeHandoffCorrelation = correlation;
+    bridgeHandoffFlowId = flowId;
+    bridgeInitialConfigAttempted = false;
+    bridgeRestoredHandoff = false;
+    bridgeRestoredFinalEnvelopeCount = 0;
+    writeWifiHandoffRecovery({ correlation, flowId, ackAttempted: false });
+    dispatchBridgeChange();
+  }
+
+  const url = new URL(`${origin}/`);
+  url.hash = new URLSearchParams({
+    studioBridge: '1',
+    wifiHandoff: String(correlation.handoffGeneration),
+    expectedCardId: correlation.expectedCardId,
+    expectedBootId: correlation.expectedBootId,
+    studioOrigin,
+  }).toString();
+  // Once the station page has answered at the correlated origin, another copy
+  // of the same AP evidence is a true no-op. Reloading here would create a
+  // brief interval where the old page's authority survived a new navigation.
+  if (repeated && bridgeReady && bridgeOrigin === origin) {
+    return {
+      ok: true,
+      state: 'already-retargeted',
+      retryable: false,
+      window: target,
+      host,
+      url: url.href,
+      correlation,
+      repeated: true,
+    };
+  }
+  if (repeated) {
+    revokeBridgeForNavigation({ host, origin, preserveHandoff: true });
+  }
+  try {
+    target.location.href = url.href;
+  } catch (cause) {
+    return {
+      ok: false,
+      state: 'navigation-failed',
+      reason: 'bridge-navigation-failed',
+      retryable: true,
+      window: target,
+      host,
+      url: url.href,
+      correlation,
+      repeated,
+      error: cause,
+    };
+  }
+  return {
+    ok: true,
+    state: 'retargeted',
+    retryable: false,
+    window: target,
+    host,
+    url: url.href,
+    correlation,
+    repeated,
+  };
+}
+
+// Reacquire the existing named card tab after a same-tab Studio reload. The
+// session record restores only the exact correlation and ack-attempt latch; it
+// never restores write authority. Two fresh final-station status envelopes in
+// the new Studio lifecycle are still required by both bridge and link layers.
+export function restoreCardBridgeHandoff(rawFlowId = '') {
+  const flowId = normalizeCommissioningFlowId(rawFlowId);
+  const recovery = readWifiHandoffRecovery({ flowId });
+  if (!flowId || !recovery) return { ok: false, reason: 'handoff-recovery-missing' };
+  const correlation = recovery.correlation;
+  if (normalizeCardHost(readStoredCardHost()) !== correlation.host) {
+    clearWifiHandoffRecovery(flowId);
+    return { ok: false, reason: 'stale-host' };
+  }
+  const win = browserWindow();
+  const studioOrigin = currentStudioOrigin();
+  if (!win?.open || !studioOrigin) return { ok: false, reason: 'bridge-missing' };
+  if (bridgeWindow
+    && bridgeHandoffFlowId === flowId
+    && sameHandoffCorrelation(bridgeHandoffCorrelation, correlation)) {
+    return {
+      ok: true, state: 'already-restored', correlation, flowId,
+      ackAttempted: recovery.ackAttempted,
+      configAttempted: recovery.configAttempted,
+      lifecycle: bridgeLifecycle,
+    };
+  }
+
+  const host = correlation.host;
+  const origin = cardHostToUrl(host);
+  attachCardBridgeListener();
+  revokeBridgeForNavigation({ host, origin });
+  bridgeHandoffCorrelation = correlation;
+  bridgeHandoffFlowId = flowId;
+  bridgeInitialConfigAttempted = recovery.configAttempted;
+  bridgeRestoredHandoff = recovery.ackAttempted;
+  bridgeRestoredFinalEnvelopeCount = 0;
+
+  const url = new URL(`${origin}/`);
+  url.hash = new URLSearchParams({
+    studioBridge: '1',
+    wifiHandoff: String(correlation.handoffGeneration),
+    expectedCardId: correlation.expectedCardId,
+    expectedBootId: correlation.expectedBootId,
+    studioOrigin,
+  }).toString();
+  let opened = null;
+  try {
+    opened = win.open(url.href, CARD_BRIDGE_WINDOW_NAME);
+  } catch {
+    opened = null;
+  }
+  if (!opened) {
+    dispatchBridgeChange();
+    return { ok: false, reason: 'popup-blocked', retryable: true };
+  }
+  trackNavigatedBridgeWindow(opened, { host, origin, persistHost: false });
+  try { opened.focus?.(); } catch { /* best effort */ }
+  return {
+    ok: true, state: 'restored', window: opened, host, url: url.href,
+    correlation, flowId, ackAttempted: recovery.ackAttempted,
+    configAttempted: recovery.configAttempted,
+    lifecycle: bridgeLifecycle,
+  };
+}
+
+export function getCardBridgeState() {
+  const identityVerified = bridgeStationIdentityVerified;
   return {
     connected: bridgeConnected,
     // True once a handshake (ready event or verified response) confirmed the
@@ -439,15 +884,96 @@ export function getCardBridgeState() {
     discoveredCard: bridgeDiscoveredCard,
     identityError: bridgeIdentityError,
     identityVerified,
+    stationIdentityVerified: bridgeStationIdentityVerified,
+    runtimeCommandReady: bridgeRuntimeCommandReady,
+    initialConfigAuthority: bridgeInitialConfigAvailable,
     // Monotonic target generation. A card-page reload can keep the same
     // WindowProxy, host, and card identity, so consumers need this to revoke
     // readiness evidence from the previous page lifecycle.
     lifecycle: bridgeLifecycle,
+    handoffCorrelation: bridgeHandoffCorrelation,
+    handoffFlowId: bridgeHandoffFlowId,
+    handoffAckReady: bridgeHandoffAckReady,
+    handoffReloadRecovery: bridgeRestoredHandoff,
+    handoffReloadEnvelopeCount: bridgeRestoredFinalEnvelopeCount,
     host: bridgeHost || readStoredCardHost(),
     origin: bridgeOrigin || cardHostToUrl(bridgeHost || readStoredCardHost()),
     lastSeenAt: bridgeLastSeenAt,
     open: Boolean(bridgeWindow),
   };
+}
+
+export function hasCardBridgeInitialConfigAuthority({ host = '', flowId: rawFlowId = '' } = {}) {
+  const flowId = normalizeCommissioningFlowId(rawFlowId);
+  const resolvedHost = normalizeCardHost(host || bridgeHost);
+  return Boolean(
+    flowId
+    && bridgeConnected
+    && bridgeReady
+    && bridgeAuthorityLifecycle === bridgeLifecycle
+    && bridgeStationIdentityVerified
+    && bridgeInitialConfigAvailable
+    && !bridgeInitialConfigAttempted
+    && bridgeHandoffCorrelation
+    && bridgeHandoffFlowId === flowId
+    && bridgeHandoffCorrelation.host === resolvedHost
+    && normalizeCardHost(bridgeHost) === resolvedHost
+  );
+}
+
+export function clearCardBridgeHandoff(rawFlowId = '') {
+  const flowId = normalizeCommissioningFlowId(rawFlowId);
+  if (!flowId || flowId !== bridgeHandoffFlowId) return false;
+  bridgeHandoffCorrelation = null;
+  bridgeHandoffFlowId = '';
+  bridgeHandoffAckReady = false;
+  bridgeStationIdentityVerified = false;
+  bridgeRuntimeCommandReady = false;
+  bridgeInitialConfigAvailable = false;
+  bridgeInitialConfigAttempted = false;
+  bridgeRestoredHandoff = false;
+  bridgeRestoredFinalEnvelopeCount = 0;
+  bridgeCard = null;
+  bridgeIdentityError = '';
+  clearWifiHandoffRecovery(flowId);
+  dispatchBridgeChange();
+  return true;
+}
+
+// Convert a successfully restored replacement from handoff-scoped identity to
+// the ordinary persisted pairing before clearing the correlation. Callers must
+// reach this only after independent project readback has succeeded.
+export function adoptCommissionedCardBridgeIdentity(rawFlowId = '') {
+  const flowId = normalizeCommissioningFlowId(rawFlowId);
+  if (!flowId || flowId !== bridgeHandoffFlowId || !bridgeHandoffCorrelation) return null;
+  if (!bridgeConnected
+    || !bridgeReady
+    || bridgeAuthorityLifecycle !== bridgeLifecycle
+    || !bridgeStationIdentityVerified
+    || !bridgeCard?.id) {
+    throw bridgeError(
+      'The commissioned replacement card lost exact bridge authority before pairing completed.',
+      bridgeIdentityError || 'identity-missing',
+    );
+  }
+  requireExpectedCardIdentity(bridgeCard, {
+    expected: handoffExpectedIdentity(bridgeHandoffCorrelation),
+  });
+  if (!adoptExpectedCardIdentity(bridgeCard)) {
+    throw bridgeError('Could not save the commissioned replacement card identity.', 'identity-storage');
+  }
+  const adopted = bridgeCard;
+  bridgeHandoffCorrelation = null;
+  bridgeHandoffFlowId = '';
+  bridgeHandoffAckReady = false;
+  bridgeInitialConfigAvailable = false;
+  bridgeInitialConfigAttempted = false;
+  bridgeRestoredHandoff = false;
+  bridgeRestoredFinalEnvelopeCount = 0;
+  clearWifiHandoffRecovery(flowId);
+  bridgeIdentityError = bridgeRuntimeCommandReady ? '' : 'runtime-not-ready';
+  dispatchBridgeChange();
+  return adopted;
 }
 
 function requireDiscoveredBridgeCard(rawHost = bridgeHost) {
@@ -518,6 +1044,7 @@ export async function verifyCardBridgeIdentity(rawHost = bridgeHost) {
   const expectedHost = normalizeCardHost(rawHost || bridgeHost || readStoredCardHost());
   const expectedWindow = bridgeWindow;
   const expectedLifecycle = bridgeLifecycle;
+  const expectedHandoffCorrelation = bridgeHandoffCorrelation;
   try {
     const response = await sendCardBridgeRequest('firmware-info', {}, { host: expectedHost });
     const identity = normalizeCardIdentity(response, expectedHost);
@@ -525,14 +1052,67 @@ export async function verifyCardBridgeIdentity(rawHost = bridgeHost) {
     if (bridgeWindow !== expectedWindow || normalizeCardHost(bridgeHost) !== expectedHost || bridgeLifecycle !== expectedLifecycle) {
       throw bridgeError('Ignored identity from an older card connection.', 'stale-host');
     }
-    requireExpectedCardIdentity(identity, { expected: readPersistedCardIdentity() });
+    requireExpectedCardIdentity(identity, {
+      expected: expectedHandoffCorrelation
+        ? handoffExpectedIdentity(expectedHandoffCorrelation)
+        : readPersistedCardIdentity(),
+    });
+    if (expectedHandoffCorrelation) {
+      const status = await sendCardBridgeRequest('status', { cache: 'no-store', nonce: Date.now() }, {
+        host: expectedHost,
+        retryOnTimeout: false,
+      });
+      if (bridgeHandoffCorrelation !== expectedHandoffCorrelation) {
+        throw bridgeError('The active WiFi handoff changed during station verification.', 'handoff-correlation');
+      }
+      const finalStationVerified = isFinalStationHandoff({
+        status,
+        correlation: expectedHandoffCorrelation,
+      });
+      if (!finalStationVerified) {
+        const readyCorrelation = acceptWifiHandoff({
+          status,
+          expectedCard: {
+            id: expectedHandoffCorrelation.expectedCardId,
+            firmwareVersion: expectedHandoffCorrelation.expectedFirmwareVersion,
+            buildId: expectedHandoffCorrelation.expectedBuildId,
+          },
+          expectedBootId: expectedHandoffCorrelation.expectedBootId,
+          lastGeneration: expectedHandoffCorrelation.handoffGeneration - 1,
+        });
+        if (!sameHandoffCorrelation(readyCorrelation, expectedHandoffCorrelation)) {
+          throw bridgeError(
+            'The station card page did not match the active WiFi handoff.',
+            'handoff-correlation',
+          );
+        }
+        // This exact status is sufficient only for the one acknowledgement.
+        // General card commands stay locked until transition:'station' arrives.
+        bridgeHandoffAckReady = true;
+        bridgeCard = null;
+        bridgeIdentityError = 'handoff-awaiting-ack';
+        dispatchBridgeChange();
+        return identity;
+      }
+      if (!bridgeStationIdentityVerified || bridgeCard?.id !== identity.id) {
+        throw bridgeError('The card status did not verify mutation authority for this lifecycle.', 'identity-missing');
+      }
+    } else {
+      bridgeCard = identity;
+      bridgeStationIdentityVerified = true;
+    }
     bridgeCard = identity;
-    bridgeIdentityError = '';
+    bridgeHandoffAckReady = false;
+    bridgeIdentityError = bridgeRuntimeCommandReady ? '' : 'runtime-not-ready';
     dispatchBridgeChange();
     return identity;
   } catch (error) {
     if (bridgeWindow === expectedWindow && normalizeCardHost(bridgeHost) === expectedHost && bridgeLifecycle === expectedLifecycle) {
       bridgeCard = null;
+      bridgeHandoffAckReady = false;
+      bridgeStationIdentityVerified = false;
+      bridgeRuntimeCommandReady = false;
+      bridgeInitialConfigAvailable = false;
       bridgeIdentityError = error?.reason || 'identity-missing';
       dispatchBridgeChange();
     }
@@ -575,7 +1155,7 @@ export function acquireCardBridgeFromGesture(rawHost = '', {
     if (bridgeAcquisitions.get(host) === attempt) bridgeAcquisitions.delete(host);
   };
   const resolveWhenVerified = (state = getCardBridgeState()) => {
-    if (state?.identityError) {
+    if (state?.identityError && !state?.identityVerified) {
       cleanup();
       settle.reject(bridgeError('The card page did not verify the paired Lightweaver identity.', state.identityError));
       return true;
@@ -640,7 +1220,7 @@ export function cardBridgeFeatureGap(feature) {
 export function hasCardBridge() {
   bootstrapCardBridgeFromOpener();
   if (bridgeTargetClosed()) {
-    clearBridgeTarget();
+    clearBridgeTarget({ preserveHandoff: Boolean(bridgeHandoffCorrelation) });
     return false;
   }
   return Boolean(bridgeWindow);
@@ -656,6 +1236,14 @@ function bridgeError(message, reason, cause = null) {
 function markBridgeTimeout(startedAt) {
   if (!startedAt || bridgeLastSeenAt <= startedAt) {
     bridgeConnected = false;
+    bridgeReady = false;
+    bridgeCard = null;
+    bridgeHandoffAckReady = false;
+    bridgeStationIdentityVerified = false;
+    bridgeRuntimeCommandReady = false;
+    bridgeInitialConfigAvailable = false;
+    bridgeAuthorityLifecycle = -1;
+    bridgeIdentityError = 'bridge-timeout';
     dispatchBridgeChange();
   }
 }
@@ -691,7 +1279,11 @@ function bridgeRequestAttempt(type, payload, {
     } catch (cause) {
       pending.delete(id);
       clearTimeout(timer);
-      if (bridgeTargetClosed()) clearBridgeTarget({ host: resolvedHost, origin: targetOrigin });
+      if (bridgeTargetClosed()) clearBridgeTarget({
+        host: resolvedHost,
+        origin: targetOrigin,
+        preserveHandoff: Boolean(bridgeHandoffCorrelation),
+      });
       reject(bridgeError('Could not send a message to the card bridge.', 'bridge-post-failed', cause));
     }
   });
@@ -702,11 +1294,14 @@ export function sendCardBridgeRequest(type, payload = {}, {
   timeoutMs = 3000,
   reboot = undefined,
   retryOnTimeout = undefined,
+  commissioningFlowId: rawCommissioningFlowId = '',
 } = {}) {
   attachCardBridgeListener();
   bootstrapCardBridgeFromOpener();
   const resolvedHost = normalizeCardHost(host || bridgeHost || readStoredCardHost());
   const targetOrigin = cardHostToUrl(resolvedHost);
+  const commissioningFlowId = normalizeCommissioningFlowId(rawCommissioningFlowId);
+  let consumeInitialConfigAuthority = false;
 
   if (PRIVILEGED_BRIDGE_TYPES.has(type) && !isLocalCardHost(resolvedHost)) {
     return Promise.reject(bridgeError(
@@ -715,17 +1310,56 @@ export function sendCardBridgeRequest(type, payload = {}, {
     ));
   }
 
-  if (!IDENTITY_FREE_BRIDGE_TYPES.has(type)) {
+  if (type === 'wifi-handoff-ack') {
+    if (
+      !bridgeReady
+      || !bridgeConnected
+      || !bridgeHandoffAckReady
+      || !bridgeHandoffCorrelation
+      || normalizeCardHost(bridgeHost) !== resolvedHost
+      || bridgeVersion < CARD_BRIDGE_FEATURE_VERSIONS['wifi-handoff-ack']
+    ) {
+      return Promise.reject(bridgeError(
+        'The station card page has not verified the active WiFi handoff.',
+        'handoff-correlation',
+      ));
+    }
+  } else if (!IDENTITY_FREE_BRIDGE_TYPES.has(type)) {
     try {
-      if (!bridgeReady || !bridgeCard?.id) {
+      if (!bridgeConnected || !bridgeReady || !bridgeStationIdentityVerified || !bridgeCard?.id) {
         throw bridgeError(
           'The card bridge transport is open, but card identity is not verified.',
           bridgeIdentityError || 'identity-missing',
         );
       }
-      requireExpectedCardIdentity(bridgeCard);
+      requireExpectedCardIdentity(bridgeCard, {
+        expected: bridgeHandoffCorrelation
+          ? handoffExpectedIdentity(bridgeHandoffCorrelation)
+          : readPersistedCardIdentity(),
+      });
       if (normalizeCardHost(bridgeHost) !== resolvedHost) {
         throw bridgeError('The verified card belongs to an older bridge host.', 'stale-host');
+      }
+      if (PRIVILEGED_BRIDGE_TYPES.has(type) && !bridgeRuntimeCommandReady) {
+        const exactInitialConfig = type === 'config'
+          && bridgeInitialConfigAvailable
+          && !bridgeInitialConfigAttempted
+          && commissioningFlowId
+          && commissioningFlowId === bridgeHandoffFlowId
+          && Boolean(bridgeHandoffCorrelation);
+        if (!exactInitialConfig) {
+          throw bridgeError(
+            'The verified card is not runtime-ready for this mutation.',
+            'runtime-not-ready',
+          );
+        }
+        consumeInitialConfigAuthority = true;
+      }
+      if (PRIVILEGED_BRIDGE_TYPES.has(type) && bridgeAuthorityLifecycle !== bridgeLifecycle) {
+        throw bridgeError(
+          'The card bridge authority belongs to an older page lifecycle.',
+          'stale-host',
+        );
       }
     } catch (error) {
       return Promise.reject(error?.reason ? error : bridgeError(error?.message || 'Card identity verification failed.', 'identity-missing', error));
@@ -741,7 +1375,11 @@ export function sendCardBridgeRequest(type, payload = {}, {
   // origin can never be the target here. Status/ping/info reads stay
   // unrestricted so the handshake can complete and so discovery still works.
   if (!bridgeWindow || bridgeTargetClosed()) {
-    clearBridgeTarget({ host: resolvedHost, origin: targetOrigin });
+    clearBridgeTarget({
+      host: resolvedHost,
+      origin: targetOrigin,
+      preserveHandoff: Boolean(bridgeHandoffCorrelation),
+    });
     // Return a rejected promise (rather than throwing synchronously) so callers
     // that attach `.catch()` for friendly error wrapping reach their handler.
     return Promise.reject(bridgeError(
@@ -755,7 +1393,24 @@ export function sendCardBridgeRequest(type, payload = {}, {
     bridgeHost = resolvedHost;
   }
 
-  const shouldRetryTimeout = retryOnTimeout ?? RETRYABLE_BRIDGE_TYPES.has(type);
+  if (consumeInitialConfigAuthority) {
+    if (!markWifiHandoffConfigAttempted({
+      flowId: bridgeHandoffFlowId,
+      correlation: bridgeHandoffCorrelation,
+    })) {
+      return Promise.reject(bridgeError(
+        'Studio could not persist the one-time initial config attempt.',
+        'handoff-recovery',
+      ));
+    }
+    bridgeInitialConfigAttempted = true;
+    bridgeInitialConfigAvailable = false;
+    dispatchBridgeChange();
+  }
+
+  const shouldRetryTimeout = consumeInitialConfigAuthority
+    ? false
+    : (retryOnTimeout ?? RETRYABLE_BRIDGE_TYPES.has(type));
   const maxAttempts = shouldRetryTimeout ? 2 : 1;
   return (async () => {
     let lastError = null;

@@ -7,13 +7,13 @@
   "firmware": {
     "target": "esp32-s3-n16r8",
     "version": "1.0.0",
-    "buildId": "e2bb002b770bd51552fdf78b754a790bb46c2827",
+    "buildId": "cbd2fd4054ec63fe85d6f797a1e73cc32d77d0c7",
     "minimumVersion": "1.0.0"
   },
   "project": {
     "id": "bench-fixture",
     "revision": 1,
-    "fingerprint": "f01fb56f1cfdd572",
+    "fingerprint": "d9388bda15c29a82",
     "restoreSnapshot": {
       "version": 4,
       "id": "bench-fixture",
@@ -37,7 +37,7 @@
             {
               "id": "out1",
               "name": "Bench strip",
-              "pin": 16,
+              "pin": 18,
               "runIds": [
                 "run-strip-1"
               ]
@@ -66,14 +66,15 @@
             {
               "id": "out1",
               "name": "Bench strip",
-              "pin": 16,
+              "pin": 18,
               "pixels": 44
             }
           ],
           "led": {
             "type": "WS2815",
             "colorOrder": "GRB",
-            "brightnessLimit": 0.35
+            "brightnessLimit": 0.35,
+            "maxMilliamps": 1500
           },
           "controls": {
             "encoder": {
@@ -127,7 +128,7 @@
         "name": "Bench fixture"
       },
       "projectRevision": 1,
-      "projectFingerprint": "f01fb56f1cfdd572",
+      "projectFingerprint": "d9388bda15c29a82",
       "productionJobId": "bench-fixture-44",
       "productionJobDigest": "0000000000000000000000000000000000000000000000000000000000000000",
       "led": {
@@ -136,7 +137,7 @@
           {
             "id": "out1",
             "name": "Bench strip",
-            "pin": 16,
+            "pin": 18,
             "pixels": 44,
             "direction": "forward",
             "segments": [
@@ -225,7 +226,7 @@
     {
       "id": "out1",
       "label": "Bench strip",
-      "pin": 16,
+      "pin": 18,
       "pixels": 44,
       "direction": "forward",
       "colorOrder": "GRB"

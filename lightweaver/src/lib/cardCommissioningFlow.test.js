@@ -310,7 +310,7 @@ test('light-check hardware mutations require one fenced cross-tab lease', async 
   assert.equal(verifyCardLightCheckMutation(lightCheck, first.lease.id, 'wrong-fence-token-1', { storage }), false);
 });
 
-test('a background station-transport detection auto-advances with the same verification as the manual acknowledge', () => {
+test('a final station transition auto-advances with the same verification as the manual acknowledge', () => {
   const ready = completeCardInstall(beginCardCommissioning({
     source: 'web-serial', operation: installed.operation, strategy: 'clean-recovery',
     projectRecord, projectRevision: 7, flowId: 'flow-detect-1234567890', now: 10,
@@ -318,10 +318,11 @@ test('a background station-transport detection auto-advances with the same verif
   const joined = confirmCardSetupNetworkJoined(ready, { now: 25 });
 
   const auto = acknowledgeCommissionedCardFromStatus(joined, {
-    cardId: installed.cardId,
-    firmwareVersion: installed.firmwareVersion,
-    buildId: installed.buildId,
-    wifi: { transport: 'station' },
+    ...readyStatus(),
+    wifi: {
+      transport: 'station', transition: 'station', transitionPending: false,
+      stationIp: '192.168.18.70', ip: '192.168.18.70', handoffGeneration: 7,
+    },
   }, { now: 30 });
   const manual = acknowledgeCommissionedCard(joined, {
     id: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId,
@@ -331,6 +332,45 @@ test('a background station-transport detection auto-advances with the same verif
   assert.equal(auto.flow.networkState, 'connected');
   assert.equal(auto.flow.cardAcknowledgedAt, 30);
   assert.deepEqual(auto.flow, manual.flow);
+});
+
+test('handoff-ready transport and incomplete station truth never acknowledge commissioning', () => {
+  const ready = completeCardInstall(beginCardCommissioning({
+    source: 'web-serial', operation: installed.operation, strategy: 'clean-recovery',
+    projectRecord, projectRevision: 7, flowId: 'flow-final-station-1234', now: 10,
+  }), installed, { now: 20 });
+  const base = {
+    ...readyStatus(),
+    wifi: {
+      transport: 'station', transition: 'station', transitionPending: false,
+      stationIp: '192.168.18.70', ip: '192.168.18.70', handoffGeneration: 7,
+    },
+  };
+
+  for (const status of [
+    { ...base, wifi: { ...base.wifi, transition: 'handoff-ready', transitionPending: true } },
+    { ...base, wifi: { ...base.wifi, transitionPending: true } },
+    { ...base, wifi: { ...base.wifi, transport: 'ap' } },
+  ]) {
+    assert.deepEqual(
+      acknowledgeCommissionedCardFromStatus(ready, status),
+      { ok: false, reason: 'not-on-home-network' },
+    );
+  }
+
+  const blankStation = acknowledgeCommissionedCardFromStatus(ready, {
+    ...base,
+    runtimePhase: 'factory', knownGoodProject: false,
+    commandReady: false, outputReady: true,
+  });
+  assert.equal(blankStation.ok, true,
+    'exact complete blank station truth acknowledges station/config authority');
+  assert.equal(preflightCardCommissioningMutation(blankStation.flow, {
+    ...base,
+    runtimePhase: 'factory', knownGoodProject: false,
+    commandReady: false, outputReady: true,
+  }, { allowInitialConfig: true }).ok, true,
+    'blank station commissioning can preflight only the initial project config');
 });
 
 test('a card still on its setup AP (no station transport) is never mistaken for on-home-network', () => {
@@ -355,7 +395,13 @@ test('detection auto-advance rejects a wrong card, firmware version, or build li
     source: 'web-serial', operation: installed.operation, strategy: 'clean-recovery',
     projectRecord, projectRevision: 7, flowId: 'flow-detect-wrong-1234', now: 10,
   }), installed, { now: 20 });
-  const base = { firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, wifi: { transport: 'station' } };
+  const base = {
+    ...readyStatus(),
+    wifi: {
+      transport: 'station', transition: 'station', transitionPending: false,
+      stationIp: '192.168.18.70', ip: '192.168.18.70', handoffGeneration: 7,
+    },
+  };
 
   assert.deepEqual(acknowledgeCommissionedCardFromStatus(ready, { ...base, cardId: 'lw-ffffffffffff' }), { ok: false, reason: 'wrong-card' });
   assert.deepEqual(acknowledgeCommissionedCardFromStatus(ready, { ...base, cardId: installed.cardId, firmwareVersion: '1.2.2' }), { ok: false, reason: 'wrong-firmware-version' });

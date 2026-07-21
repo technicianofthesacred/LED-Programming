@@ -32,6 +32,16 @@ function readyStatus(cardId: string, overrides = {}) {
   };
 }
 
+function finalStationStatus(cardId: string, overrides = {}) {
+  return readyStatus(cardId, {
+    wifi: {
+      transport: 'station', transition: 'station', transitionPending: false,
+      stationIp: '192.168.18.90', ip: '192.168.18.90', handoffGeneration: 7,
+    },
+    ...overrides,
+  });
+}
+
 async function installOpenSpy(page) {
   await page.addInitScript(() => {
     (window as any).__openedUrls = [];
@@ -44,8 +54,10 @@ async function installOpenSpy(page) {
       }
       return originalFetch(input, init);
     }) as typeof window.fetch;
-    window.open = ((url?: string | URL) => {
+    (window as any).__openedWindows = [];
+    window.open = ((url?: string | URL, target?: string, features?: string) => {
       (window as any).__openedUrls.push(String(url || ''));
+      (window as any).__openedWindows.push({ url: String(url || ''), target, features });
       return { closed: false, postMessage() {}, close() {}, focus() {} } as Window;
     }) as typeof window.open;
   });
@@ -137,7 +149,7 @@ test('announces asynchronous connection states without repeating card metadata',
 
 test('normalizes a bare local card name before validation and storage', async ({ page }) => {
   await page.evaluate(() => localStorage.setItem('lw_chip_card_host', '192.168.4.1'));
-  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await page.getByTestId('card-link-status').click();
   await page.getByText('Connection details', { exact: true }).click();
   const host = page.getByLabel('Card hostname');
 
@@ -367,13 +379,13 @@ test('Bridge return does not call a successful POST independent restoration proo
   await dispatchCardLinkEvent(page, {
     type: 'card-verified', via: 'direct', host: 'lightweaver.local',
     card: { id: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
-    readiness: readyStatus('lw-441bf681feb0', { firmwareVersion: '1.2.3' }),
+    readiness: finalStationStatus('lw-441bf681feb0', { firmwareVersion: '1.2.3' }),
   });
   await expect(page.getByRole('button', { name: 'Restore saved project' })).toBeVisible();
   await page.route('**/api/status', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify(readyStatus('lw-441bf681feb0', { firmwareVersion: '1.2.3' })),
+    body: JSON.stringify(finalStationStatus('lw-441bf681feb0', { firmwareVersion: '1.2.3' })),
   }));
   await page.getByRole('button', { name: 'Restore saved project' }).click();
   await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
@@ -397,13 +409,16 @@ test('Bridge return does not call a successful POST independent restoration proo
   });
 
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await page.evaluate(() => localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+    version: 1, id: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40),
+  })));
+  await page.getByTestId('card-link-status').click();
   await expect.poll(() => page.evaluate(() => (window as any).__commissioningPushes.length)).toBe(0);
   await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
   await dispatchCardLinkEvent(page, {
     type: 'card-verified', via: 'direct', host: 'lightweaver.local',
     card: { id: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
-    readiness: readyStatus('lw-441bf681feb0', { firmwareVersion: '1.2.3' }),
+    readiness: finalStationStatus('lw-441bf681feb0', { firmwareVersion: '1.2.3' }),
   });
   await page.evaluate(() => {
     (window as any).__LW_READ_COMMISSIONING_EVIDENCE_FOR_TEST__ = async () => {
@@ -452,12 +467,12 @@ test('a staged GPIO restoration stops at the Check lights handoff without legacy
   await dispatchCardLinkEvent(page, {
     type: 'card-verified', via: 'direct', host: 'lightweaver.local',
     card: { id: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
-    readiness: readyStatus('lw-441bf681feb0', { firmwareVersion: '1.2.3' }),
+    readiness: finalStationStatus('lw-441bf681feb0', { firmwareVersion: '1.2.3' }),
   });
   await page.route('**/api/status', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify(readyStatus('lw-441bf681feb0', { firmwareVersion: '1.2.3' })),
+    body: JSON.stringify(finalStationStatus('lw-441bf681feb0', { firmwareVersion: '1.2.3' })),
   }));
   await page.getByRole('button', { name: 'Restore saved project' }).click();
   await expect(page.getByRole('heading', { name: 'Check lights' })).toBeVisible();
@@ -545,4 +560,8 @@ test('working setup card restores AP steps and continues through 192.168.4.1', a
   await expect.poll(() => page.evaluate(() => (window as any).__openedUrls.length)).toBe(0);
   await page.getByRole('button', { name: 'Continue' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__openedUrls[0] || '')).toContain('192.168.4.1');
+  await expect.poll(() => page.evaluate(() => (window as any).__openedWindows[0])).toMatchObject({
+    target: 'lightweaver-card-bridge',
+  });
+  expect(await page.evaluate(() => (window as any).__openedWindows[0]?.features || '')).not.toContain('noopener');
 });

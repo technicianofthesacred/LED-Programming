@@ -118,7 +118,7 @@ export function createProductionRun({ runId = randomId('run'), flowId = randomId
 }
 
 function requireCorrelation(run, correlation) {
-  for (const field of ['runId', 'flowId', 'jobDigest', 'operationId']) {
+  for (const field of ['runId', 'flowId', 'jobDigest', 'operationId', 'generation']) {
     if (correlation?.[field] !== run[field]) throw new Error(`Production run correlation mismatch: ${field}`);
   }
   if (correlation?.expectedCardId !== run.expectedCardId) {
