@@ -4,6 +4,120 @@ export const FIRMWARE_MANIFEST_PATH = '/firmware/release-manifest.json';
 export const FIRMWARE_SIGNATURE_PATH = '/firmware/release-manifest.sig';
 export const FIRMWARE_PROVENANCE_PATH = '/firmware/release-provenance.json';
 export const PRODUCTION_JOB_INDEX_PATH = '/production/jobs/index.json';
+export const STUDIO_BUILD_GRAPH_PATH = '/studio-build-graph.json';
+
+const LOWERCASE_SHA256 = /^[0-9a-f]{64}$/;
+const STUDIO_FILE_PATH = /^(?:index\.html|assets\/[A-Za-z0-9._/-]+\.(?:js|css))$/;
+
+function isNormalizedStudioPath(path) {
+  if (typeof path !== 'string' || path.length === 0 || path.startsWith('/') || path.includes('\\')) return false;
+  if (path.includes('?') || path.includes('#') || path.includes('%') || path.includes('://')) return false;
+  const segments = path.split('/');
+  return segments.every(segment => segment !== '' && segment !== '.' && segment !== '..');
+}
+
+function describeGraphEntry(entry, index) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    throw new Error(`Studio build graph file ${index} must be an object`);
+  }
+  const keys = Object.keys(entry).sort();
+  if (keys.join(',') !== 'bytes,path,sha256') {
+    throw new Error(`Studio build graph file ${index} must contain exactly path, bytes, and sha256`);
+  }
+  if (!isNormalizedStudioPath(entry.path)) {
+    throw new Error(`Studio build graph file ${index} must use a normalized root-relative path`);
+  }
+  if (entry.path === STUDIO_BUILD_GRAPH_PATH.slice(1)) {
+    throw new Error('Studio build graph must not list itself');
+  }
+  if (!STUDIO_FILE_PATH.test(entry.path)) {
+    throw new Error(`Studio build graph file ${entry.path} is not index.html or a Vite JavaScript/CSS asset`);
+  }
+  if (!Number.isSafeInteger(entry.bytes) || entry.bytes < 0) {
+    throw new Error(`Studio build graph file ${entry.path} has an invalid byte size`);
+  }
+  if (typeof entry.sha256 !== 'string' || !LOWERCASE_SHA256.test(entry.sha256)) {
+    throw new Error(`Studio build graph file ${entry.path} must have a lowercase SHA-256`);
+  }
+  return { path: entry.path, bytes: entry.bytes, sha256: entry.sha256 };
+}
+
+export function parseStudioBuildGraph(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('Studio build graph is not valid JSON');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Studio build graph must be an object');
+  }
+  const keys = Object.keys(parsed).sort();
+  if (keys.join(',') !== 'files,schemaVersion') {
+    throw new Error('Studio build graph must contain exactly schemaVersion and files');
+  }
+  if (parsed.schemaVersion !== 1) {
+    throw new Error('Studio build graph schemaVersion must be 1');
+  }
+  if (!Array.isArray(parsed.files)) {
+    throw new Error('Studio build graph files must be an array');
+  }
+
+  const files = parsed.files.map(describeGraphEntry);
+  const paths = files.map(file => file.path);
+  if (new Set(paths).size !== paths.length) {
+    throw new Error('Studio build graph contains a duplicate path');
+  }
+  const sortedPaths = [...paths].sort();
+  if (paths.some((path, index) => path !== sortedPaths[index])) {
+    throw new Error('Studio build graph files must be sorted lexicographically');
+  }
+  if (!paths.includes('index.html')) {
+    throw new Error('Studio build graph must include index.html');
+  }
+  if (!paths.some(path => path.startsWith('assets/') && path.endsWith('.js'))) {
+    throw new Error('Studio build graph must include at least one JavaScript asset');
+  }
+  return { schemaVersion: 1, files };
+}
+
+function bytesToHex(bytes) {
+  return Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+}
+
+async function sha256Hex(cryptoImpl, bytes) {
+  if (!cryptoImpl?.subtle?.digest) throw new Error('Web Crypto SHA-256 is unavailable');
+  return bytesToHex(new Uint8Array(await cryptoImpl.subtle.digest('SHA-256', bytes)));
+}
+
+export async function verifyStudioBuildGraph(fetchImpl, cryptoImpl, graphUrl) {
+  const parsedGraphUrl = new URL(graphUrl);
+  const graphResponse = await fetchImpl(parsedGraphUrl.href, { cache: 'no-store' });
+  if (!graphResponse.ok) {
+    throw new Error(`Production Studio build graph answered HTTP ${graphResponse.status} at\n  ${parsedGraphUrl.href}`);
+  }
+  const graph = parseStudioBuildGraph(await graphResponse.text());
+  for (const expected of graph.files) {
+    const assetUrl = new URL(expected.path, `${parsedGraphUrl.origin}/`);
+    if (assetUrl.origin !== parsedGraphUrl.origin) {
+      throw new Error(`Studio build graph file escaped its production origin: ${expected.path}`);
+    }
+    const assetResponse = await fetchImpl(assetUrl.href, { cache: 'no-store' });
+    if (!assetResponse.ok) {
+      throw new Error(`Production Studio asset ${expected.path} answered HTTP ${assetResponse.status} at\n  ${assetUrl.href}`);
+    }
+    const actualBytes = new Uint8Array(await assetResponse.arrayBuffer());
+    const actualHash = await sha256Hex(cryptoImpl, actualBytes);
+    if (actualBytes.byteLength !== expected.bytes || actualHash !== expected.sha256) {
+      throw new Error(
+        `Production Studio asset mismatch: ${expected.path}\n` +
+        `  expected ${expected.bytes} bytes, sha256 ${expected.sha256}\n` +
+        `  actual   ${actualBytes.byteLength} bytes, sha256 ${actualHash}`,
+      );
+    }
+  }
+  return { graph, graphUrl: parsedGraphUrl.href };
+}
 
 export function resolveProductionUrls(env = {}) {
   const parsed = new URL(env.PROD_ORIGIN || DEFAULT_PRODUCTION_ORIGIN);
@@ -20,6 +134,7 @@ export function resolveProductionUrls(env = {}) {
     signatureUrl: `${origin}${FIRMWARE_SIGNATURE_PATH}`,
     provenanceUrl: `${origin}${FIRMWARE_PROVENANCE_PATH}`,
     productionJobIndexUrl: `${origin}${PRODUCTION_JOB_INDEX_PATH}`,
+    studioBuildGraphUrl: `${origin}${STUDIO_BUILD_GRAPH_PATH}`,
   };
 }
 

@@ -27,6 +27,7 @@ import {
   assertLegacyRouteRemoved,
   assertStudioRoot,
   resolveProductionUrls,
+  verifyStudioBuildGraph,
 } from '../src/lib/productionDeploymentCheck.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -40,8 +41,13 @@ const {
   provenanceUrl,
   productionJobIndexUrl,
   productionSetupUrl,
+  studioBuildGraphUrl,
 } = resolveProductionUrls(process.env);
 const productionOrigin = new URL(studioUrl).origin;
+const productionFetch = (input, init = {}) => fetch(new URL(String(input), productionOrigin), {
+  ...init,
+  signal: AbortSignal.timeout(20_000),
+});
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
@@ -83,6 +89,17 @@ try {
   fail(err.message);
 }
 
+let studioBuildFileCount = 0;
+try {
+  const verifiedStudio = await verifyStudioBuildGraph(productionFetch, webcrypto, studioBuildGraphUrl);
+  studioBuildFileCount = verifiedStudio.graph.files.length;
+} catch (err) {
+  fail(
+    `Production root is reachable, but its Studio build graph is unavailable or does not match the deployed bytes.\n` +
+      `  graph: ${studioBuildGraphUrl}\n  ${err?.message ?? err}`,
+  );
+}
+
 let legacyResponse;
 try {
   legacyResponse = await fetch(legacyDesignUrl, {
@@ -101,10 +118,6 @@ try {
 
 let release;
 let productionJobCount = 0;
-const productionFetch = (input, init = {}) => fetch(new URL(String(input), productionOrigin), {
-  ...init,
-  signal: AbortSignal.timeout(20_000),
-});
 try {
   const verified = await verifyProductionReleaseSet(productionFetch, webcrypto);
   release = verified.release;
@@ -132,5 +145,6 @@ if (remoteHash !== localHash) {
 
 console.log(
   `check-prod-freshness OK — production serves the signed committed factory binary\n  sha256 ${localHash}  (${local.length} bytes)\n  ${new URL(release.manifest.image.url, productionOrigin)}\n  legacy alias: ${legacyAliasUrl}`,
+  `\n  Studio build graph: ${studioBuildFileCount} verified files\n  ${studioBuildGraphUrl}`,
   `\n  Production Setup: ${productionSetupUrl}\n  verified production jobs: ${productionJobCount}\n  job index: ${productionJobIndexUrl}`,
 );
