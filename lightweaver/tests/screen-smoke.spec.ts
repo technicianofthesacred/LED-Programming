@@ -546,10 +546,13 @@ test('wrong-card recovery only adopts after the explicit secondary action', asyn
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await page.evaluate(async () => {
     const { connectCardLink } = await import('/src/lib/cardLink.js');
-    connectCardLink('lightweaver.local');
+    (window as any).__connectCardLinkForWrongCardTest = connectCardLink;
+  });
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await page.evaluate(() => {
+    (window as any).__connectCardLinkForWrongCardTest('lightweaver.local');
   });
   await expect(page.getByRole('button', { name: 'Use this card instead' })).toBeVisible();
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null')?.id)).toBe('lw-expected-card');
