@@ -125,6 +125,20 @@ for (const proof of [
 assert.ok(processTeardown.indexOf('apTeardownDeadlineMs') < processTeardown.indexOf('retireSetupAp'),
   'AP teardown must happen only after the response-settle deadline and proof revalidation');
 
+for (const macro of [
+  'LW_WEB_WIFI_MAX_BODY_BYTES',
+  'LW_WEB_WIFI_ACK_MAX_BODY_BYTES',
+]) {
+  assert.match(web, new RegExp(`#ifndef\\s+${macro}\\s*\\n\\s*#error[^\\n]*\\n\\s*#endif`),
+    `${macro} must fail firmware compilation when the parser guard flag is missing`);
+  assert.doesNotMatch(web, new RegExp(`#define\\s+${macro}\\b`),
+    `${macro} must not have a numeric source fallback`);
+  const configuredFlags = [
+    ...platformio.matchAll(new RegExp(`^\\s*-D${macro}=([0-9]+)\\s*$`, 'gm')),
+  ];
+  assert.equal(configuredFlags.length, 1,
+    `${macro} must have exactly one numeric source of truth in platformio.ini`);
+}
 assert.match(web, /constexpr size_t LW_MAX_WIFI_REQUEST_BODY_BYTES\s*=\s*LW_WEB_WIFI_MAX_BODY_BYTES/);
 assert.match(web, /constexpr size_t LW_MAX_WIFI_ACK_REQUEST_BODY_BYTES\s*=\s*LW_WEB_WIFI_ACK_MAX_BODY_BYTES/);
 assert.match(web, /static_assert\s*\(LW_MAX_WIFI_REQUEST_BODY_BYTES\s*>=\s*320/,
@@ -147,8 +161,8 @@ for (const route of ['/api/wifi', '/api/wifi/handoff-ack']) {
 }
 assert.match(parserGuard, /LW_WEB_WIFI_MAX_BODY_BYTES[\s\S]*LW_WEB_WIFI_ACK_MAX_BODY_BYTES/,
   'framework allocation guard must use explicit WiFi body limits');
-assert.match(platformio, /-DLW_WEB_WIFI_MAX_BODY_BYTES=(?:384|512)/);
-assert.match(platformio, /-DLW_WEB_WIFI_ACK_MAX_BODY_BYTES=128/);
+assert.match(platformio, /^\s*-DLW_WEB_WIFI_MAX_BODY_BYTES=512\s*$/m);
+assert.match(platformio, /^\s*-DLW_WEB_WIFI_ACK_MAX_BODY_BYTES=128\s*$/m);
 const maximumEscapedWifiBody = JSON.stringify({
   ssid: '"'.repeat(32),
   password: '\\'.repeat(63),

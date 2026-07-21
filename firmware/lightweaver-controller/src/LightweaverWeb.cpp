@@ -17,10 +17,10 @@ ErrorCode* errorCodePtr = nullptr;
 uint16_t* totalPixelsPtr = nullptr;
 uint8_t* currentLookIndexPtr = nullptr;
 #ifndef LW_WEB_WIFI_MAX_BODY_BYTES
-#define LW_WEB_WIFI_MAX_BODY_BYTES 512
+#error "LW_WEB_WIFI_MAX_BODY_BYTES must be configured with the WebServer parser guard"
 #endif
 #ifndef LW_WEB_WIFI_ACK_MAX_BODY_BYTES
-#define LW_WEB_WIFI_ACK_MAX_BODY_BYTES 128
+#error "LW_WEB_WIFI_ACK_MAX_BODY_BYTES must be configured with the WebServer parser guard"
 #endif
 
 constexpr size_t LW_MAX_CONTROL_BODY_BYTES = 4096;
