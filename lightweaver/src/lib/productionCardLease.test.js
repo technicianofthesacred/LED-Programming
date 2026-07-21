@@ -35,6 +35,25 @@ test('runtime authority requires an exact command-ready current lifecycle', () =
   assert.equal(productionCardAuthority(link({ validatedBootId: '' }), expectedCardId, { mutation: 'runtime' }).ok, false);
 });
 
+test('identity authority permits exact read-only firmware evidence without granting mutation', () => {
+  const oldFactory = link({
+    cardBlank: true,
+    readiness: {
+      app: 'Lightweaver', cardId: expectedCardId, firmwareVersion: '0.9.0',
+      buildId: '0'.repeat(40), bootId: 'boot-1', commandReady: false,
+      runtimePhase: 'factory', knownGoodProject: false, outputReady: false,
+    },
+  });
+  const authority = productionCardAuthority(oldFactory, expectedCardId, { mutation: 'identity' });
+  assert.equal(authority.ok, true);
+  const lease = captureProductionCardLease(oldFactory, expectedCardId, { mutation: 'identity' });
+  assert.doesNotThrow(() => assertProductionCardLease(lease, oldFactory, { mutation: 'identity' }));
+  assert.equal(productionCardAuthority(oldFactory, expectedCardId, { mutation: 'config' }).ok, false);
+  assert.equal(productionCardAuthority(oldFactory, expectedCardId, { mutation: 'runtime' }).ok, false);
+  assert.equal(productionCardAuthority({ ...oldFactory, state: 'revalidating' }, expectedCardId, { mutation: 'identity' }).ok, false);
+  assert.equal(productionCardAuthority({ ...oldFactory, readiness: { ...oldFactory.readiness, cardId: 'lw-other' } }, expectedCardId, { mutation: 'identity' }).ok, false);
+});
+
 test('an exact blank card grants config-only authority', () => {
   const blank = link({
     cardBlank: true,

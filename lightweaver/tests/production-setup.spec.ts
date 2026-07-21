@@ -126,8 +126,12 @@ async function installDriver(page, {
       disconnect: async () => {
         const count = Number(localStorage.getItem('lw_test_disconnect_count') || 0) + 1;
         localStorage.setItem('lw_test_disconnect_count', String(count));
-        if (disconnectDelayMs) await new Promise(resolve => setTimeout(resolve, disconnectDelayMs));
-        if (count === disconnectFailureAt) throw new Error('USB port did not release');
+        try {
+          if (disconnectDelayMs) await new Promise(resolve => setTimeout(resolve, disconnectDelayMs));
+          if (count === disconnectFailureAt) throw new Error('USB port did not release');
+        } finally {
+          localStorage.setItem('lw_test_disconnect_settled_count', String(count));
+        }
       },
       noteLanHandoff: () => localStorage.setItem('lw_test_lan_handoff_count', String(Number(localStorage.getItem('lw_test_lan_handoff_count') || 0) + 1)),
       inspectCard: async () => {
@@ -418,6 +422,190 @@ test('HTTPS production transport performs exact blank config then runtime frame 
   });
 });
 
+test('a delayed hotspot status cannot retarget or resurrect recovery after the production run is replaced', async ({ page }) => {
+  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
+  await page.route('https://led.mandalacodes.com/**', async route => {
+    const requested = new URL(route.request().url());
+    const upstream = await page.request.fetch(`http://localhost:${testPort}${requested.pathname}${requested.search}`);
+    await route.fulfill({ response: upstream });
+  });
+  const job = await serveJob(page);
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
+    window.__LW_PRODUCTION_DRIVER_FOR_TEST__ = {
+      connectCard: async () => ({}), disconnect: async () => true,
+      inspectCard: async () => ({ cardId: 'lw-aabbccddeeff', chipName: 'ESP32-S3', flashSize: '16MB' }),
+    };
+  });
+  await page.goto('https://led.mandalacodes.com/#screen=production');
+  await page.evaluate(firmware => {
+    const stationHost = '192.168.18.77';
+    let activeHost = '192.168.4.1';
+    const stats = { statusStarted: 0, retargets: 0 };
+    window.__LW_DELAYED_HANDOFF_STATS__ = stats;
+    const fakeCardTab = {
+      closed: false, focus() {},
+      postMessage(message) {
+        if (message.type !== 'status') return;
+        stats.statusStarted += 1;
+        const response = {
+          app: 'Lightweaver', provisioningContractVersion: 1,
+          cardId: 'lw-aabbccddeeff', firmwareVersion: firmware.firmwareVersion, buildId: firmware.buildId,
+          bootId: 'boot-delayed-handoff', runtimePhase: 'ready', knownGoodProject: true, commandReady: true, outputReady: true,
+          wifi: { transport: 'station', transition: 'handoff-ready', transitionPending: true, apActive: true, stationIp: stationHost, ip: stationHost, handoffGeneration: 3 },
+        };
+        setTimeout(() => {
+          const event = new Event('message');
+          Object.defineProperties(event, {
+            data: { value: { app: 'LightweaverCardBridge', version: 2, id: message.id, ok: true, response } },
+            origin: { value: `http://${activeHost}` }, source: { value: fakeCardTab },
+          });
+          window.dispatchEvent(event);
+        }, 250);
+      },
+      location: { set href(value) { activeHost = new URL(value).hostname; stats.retargets += 1; } },
+    };
+    window.open = url => { if (url) activeHost = new URL(String(url)).hostname; return fakeCardTab; };
+  }, signedRelease);
+
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click({ noWaitAfter: true });
+  await expect.poll(() => page.evaluate(() => window.__LW_DELAYED_HANDOFF_STATS__.statusStarted)).toBeGreaterThanOrEqual(1);
+  const replacementRunId = await page.evaluate(async digest => {
+    const module = await import('/src/lib/productionRun.js');
+    const replacement = await module.updateProductionRunAtomically(() => {
+      const created = module.createProductionRun({ jobDigest: digest });
+      const correlation = {
+        runId: created.runId, flowId: created.flowId, jobDigest: created.jobDigest,
+        operationId: created.operationId, expectedCardId: created.expectedCardId, generation: created.generation,
+      };
+      return module.transitionProductionRun(created, 'connect-card', { correlation });
+    });
+    window.dispatchEvent(new StorageEvent('storage', { key: module.PRODUCTION_RUN_COMMIT_A_KEY }));
+    return replacement.runId;
+  }, job.digest);
+
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(() => window.__LW_DELAYED_HANDOFF_STATS__.retargets)).toBe(0);
+  await expect(page.getByRole('region', { name: 'Safe recovery' })).toHaveCount(0);
+  expect(await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun())).toMatchObject({ runId: replacementRunId, state: 'connect-card' });
+});
+
+test('install-required production reconnects through the factory AP and exact station handoff after flashing', async ({ page }) => {
+  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
+  await page.route('https://led.mandalacodes.com/**', async route => {
+    const requested = new URL(route.request().url());
+    const upstream = await page.request.fetch(`http://localhost:${testPort}${requested.pathname}${requested.search}`);
+    await route.fulfill({ response: upstream });
+  });
+  const job = await serveJob(page);
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
+    const oldReadiness = {
+      app: 'Lightweaver', cardId: 'lw-aabbccddeeff', firmwareVersion: '0.9.0', buildId: '0'.repeat(40),
+      bootId: 'boot-before-flash', runtimePhase: 'factory', knownGoodProject: false, commandReady: false, outputReady: false,
+    };
+    const driver = {
+      connectCard: async () => ({}), disconnect: async () => true,
+      inspectCard: async () => ({ cardId: 'lw-aabbccddeeff', chipName: 'ESP32-S3', flashSize: '16MB' }),
+      connectLan: async () => {},
+      getCardLink: () => ({
+        state: 'connected-bridge', transport: 'bridge', host: '192.168.18.70',
+        card: { id: 'lw-aabbccddeeff' }, expectedCard: { id: 'lw-aabbccddeeff' },
+        cardBlank: true, validatedBootId: 'boot-before-flash', operationGeneration: 4,
+        bridgeLifecycle: 9, readiness: oldReadiness,
+      }),
+      readEvidence: async () => ({
+        app: 'Lightweaver', cardId: 'lw-aabbccddeeff', firmwareVersion: '0.9.0', buildId: '0'.repeat(40),
+        projectRevision: 0, projectFingerprint: '', productionJobId: '', productionJobDigest: '',
+      }),
+      install: async ({ onProgress }) => {
+        localStorage.setItem('lw_test_factory_flashed', '1');
+        delete driver.connectLan; delete driver.getCardLink; delete driver.readEvidence;
+        onProgress(1);
+      },
+    };
+    window.__LW_PRODUCTION_DRIVER_FOR_TEST__ = driver;
+  });
+  await page.goto('https://led.mandalacodes.com/#screen=production');
+  await page.evaluate(async firmware => {
+    const expectedCardId = 'lw-aabbccddeeff';
+    const stationHost = '192.168.18.77';
+    const oldBuild = '0'.repeat(40);
+    let activeHost = 'lightweaver.local';
+    let acked = false;
+    const stats = { openHosts: [], status: 0, ack: 0, firmwareInfo: 0 };
+    window.__LW_FLASH_HANDOFF_STATS__ = stats;
+    const installed = () => localStorage.getItem('lw_test_factory_flashed') === '1';
+    const statusEnvelope = () => {
+      if (!installed()) return {
+        app: 'Lightweaver', provisioningContractVersion: 1, cardId: expectedCardId,
+        firmwareVersion: '0.9.0', buildId: oldBuild, bootId: 'boot-before-flash',
+        runtimePhase: 'factory', knownGoodProject: false, commandReady: false, outputReady: false,
+        wifi: { transport: 'station', transition: 'station', transitionPending: false, apActive: false, stationIp: stationHost, ip: stationHost, handoffGeneration: 1 },
+      };
+      return {
+        app: 'Lightweaver', provisioningContractVersion: 1, cardId: expectedCardId,
+        firmwareVersion: firmware.firmwareVersion, buildId: firmware.buildId, bootId: 'boot-after-flash',
+        runtimePhase: acked ? 'factory' : 'ready', knownGoodProject: !acked,
+        commandReady: !acked, outputReady: !acked,
+        wifi: acked
+          ? { transport: 'station', transition: 'station', transitionPending: false, apActive: false, stationIp: stationHost, ip: stationHost, handoffGeneration: 2 }
+          : { transport: 'station', transition: 'handoff-ready', transitionPending: true, apActive: true, stationIp: stationHost, ip: stationHost, handoffGeneration: 2 },
+      };
+    };
+    const firmwareInfo = () => ({
+      app: 'Lightweaver', cardId: expectedCardId,
+      firmwareVersion: installed() ? firmware.firmwareVersion : '0.9.0',
+      buildId: installed() ? firmware.buildId : oldBuild,
+      outputs: [],
+    });
+    const emit = (data, host = activeHost) => {
+      const event = new Event('message');
+      Object.defineProperties(event, { data: { value: data }, origin: { value: `http://${host}` }, source: { value: fakeCardTab } });
+      window.dispatchEvent(event);
+    };
+    const emitReady = () => emit({ app: 'LightweaverCardBridge', type: 'ready', version: 2, host: activeHost });
+    const fakeCardTab = {
+      closed: false, focus() {},
+      postMessage(message) {
+        let response = { ok: true };
+        if (message.type === 'status') { stats.status += 1; response = statusEnvelope(); }
+        else if (message.type === 'firmware-info') { stats.firmwareInfo += 1; response = firmwareInfo(); }
+        else if (message.type === 'wifi-handoff-ack') { stats.ack += 1; acked = true; response = { ok: true, handoffGeneration: 2 }; }
+        queueMicrotask(() => emit({ app: 'LightweaverCardBridge', version: 2, id: message.id, ok: true, response }));
+      },
+      location: { set href(value) { activeHost = new URL(value).hostname; if (activeHost === stationHost) setTimeout(emitReady, 0); } },
+    };
+    window.open = url => {
+      if (url) activeHost = new URL(String(url)).hostname;
+      stats.openHosts.push(activeHost);
+      return fakeCardTab;
+    };
+  }, signedRelease);
+
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await expect(page.getByRole('button', { name: 'Reconnect same USB card' })).toBeVisible();
+  await page.getByRole('button', { name: 'Reconnect same USB card' }).click();
+  await page.getByRole('button', { name: 'Install verified firmware' }).click();
+  await page.getByRole('button', { name: 'Reconnect same card' }).click();
+  await expect(page.getByRole('button', { name: 'Load verified artwork' })).toBeVisible({ timeout: 12_000 });
+
+  const result = await page.evaluate(async () => ({
+    stats: window.__LW_FLASH_HANDOFF_STATS__,
+    flashed: localStorage.getItem('lw_test_factory_flashed'),
+    run: (await import('/src/lib/productionRun.js')).readProductionRun(),
+  }));
+  expect(result.flashed).toBe('1');
+  expect(result.stats.openHosts).toContain('192.168.4.1');
+  expect(result.stats.ack).toBe(1);
+  expect(result.stats.firmwareInfo).toBeGreaterThanOrEqual(2);
+  expect(result.run).toMatchObject({ state: 'restore', expectedCardId: 'lw-aabbccddeeff', cardChanged: true });
+});
+
 test('HTTPS ProductionScreen commissions a blank card through bridge, human light checks, final reads, and pass', async ({ page }) => {
   const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   await page.route('https://led.mandalacodes.com/**', async route => {
@@ -655,6 +843,7 @@ test('a stale USB recovery action cannot mutate a replacement production run', a
     return replacement.runId;
   }, job.digest);
 
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_test_disconnect_settled_count'))).toBe('2');
   await expect(recovery).toHaveCount(0);
   const storedRun = await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun());
   expect(replacementRunId).not.toBe(staleRunId);

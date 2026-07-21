@@ -146,6 +146,19 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     return current;
   }
 
+  function assertActiveRunLease(lease) {
+    if (!mountedRef.current) {
+      const error = new Error('The production screen closed. This stale operation was cancelled.');
+      error.code = 'stale-production-run';
+      throw error;
+    }
+    return assertRunLease(lease);
+  }
+
+  function runLeaseIsCurrent(lease) {
+    return mountedRef.current && sameCorrelation(lease, correlation(runRef.current));
+  }
+
   function invalidateOperation(lease, reason) {
     if (lease) invalidateCardLinkOperationLease(lease, { reason });
   }
@@ -380,6 +393,68 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     } finally { setBusy(false); }
   }
 
+  async function connectCardPageThroughWifi(runLease, initialHost, { authority = 'identity' } = {}) {
+    await onConnectCard?.(initialHost);
+    assertActiveRunLease(runLease);
+    if (window.location.protocol !== 'https:') return;
+
+    setStatus('Finish WiFi setup in the card page. Studio is waiting for this exact card to join the gallery network.');
+    const setupDeadline = Date.now() + 180000;
+    let handoff = null;
+    let finalStationSeen = false;
+    while (Date.now() < setupDeadline && !handoff && !finalStationSeen) {
+      assertActiveRunLease(runLease);
+      try {
+        const apStatus = await sendCardBridgeRequest('status', { cache: 'no-store', nonce: Date.now() }, {
+          host: initialHost, timeoutMs: 1500, retryOnTimeout: false,
+        });
+        assertActiveRunLease(runLease);
+        finalStationSeen = apStatus?.wifi?.transport === 'station'
+          && apStatus?.wifi?.transition === 'station'
+          && apStatus?.wifi?.transitionPending === false;
+        if (!finalStationSeen) {
+          const generation = Number(apStatus?.wifi?.handoffGeneration);
+          handoff = acceptWifiHandoff({
+            status: apStatus,
+            expectedCard: {
+              id: runLease.expectedCardId,
+              firmwareVersion: release.value.manifest.firmwareVersion,
+              buildId: release.value.manifest.buildId,
+            },
+            expectedBootId: apStatus?.bootId,
+            lastGeneration: Number.isSafeInteger(generation) && generation > 0 ? generation - 1 : 0,
+          });
+        }
+      } catch (reason) {
+        if (reason?.code === 'stale-production-run') throw reason;
+        // The card may be switching radios; keep the bounded setup wait
+        // attached to this immutable production run and exact host.
+      }
+      if (!handoff && !finalStationSeen) {
+        await new Promise(resolve => setTimeout(resolve, 750));
+        assertActiveRunLease(runLease);
+      }
+    }
+    assertActiveRunLease(runLease);
+    if (!handoff && !finalStationSeen) throw new Error('The exact card did not complete WiFi setup before the bounded setup wait ended.');
+
+    if (handoff) {
+      assertActiveRunLease(runLease);
+      const retargeted = retargetCardBridge(handoff.host, handoff, { flowId: runLease.flowId });
+      if (!retargeted.ok) throw new Error('The verified card page could not move from its setup hotspot to the gallery network.');
+      setStatus('Card joined WiFi. Rejoin the gallery network; Studio will continue automatically when the exact card returns.');
+    }
+
+    const returnDeadline = Date.now() + 180000;
+    while (Date.now() < returnDeadline) {
+      assertActiveRunLease(runLease);
+      if (productionCardAuthority(currentCardLink(), runLease.expectedCardId, { mutation: authority }).ok) return;
+      await new Promise(resolve => setTimeout(resolve, 100));
+      assertActiveRunLease(runLease);
+    }
+    throw new Error('The exact card did not return on the gallery network before setup timed out.');
+  }
+
   async function readInstalledFirmwareEvidence() {
     const runLease = captureRunLease();
     let lease = null;
@@ -387,60 +462,15 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       const driver = testDriver();
       // Opening/reconnecting the local card page is the required HTTPS → local
       // handoff. The verified job and firmware remain resident in this screen.
-      if (driver?.connectLan) await driver.connectLan();
-      else {
-        await onConnectCard?.(cardHost);
-        if (window.location.protocol === 'https:') {
-          setStatus('Finish WiFi setup in the card page. Studio is waiting for this exact card to join the gallery network.');
-          const setupDeadline = Date.now() + 180000;
-          let correlation = null;
-          while (Date.now() < setupDeadline && !correlation) {
-            assertRunLease(runLease);
-            try {
-              const apStatus = await sendCardBridgeRequest('status', { cache: 'no-store', nonce: Date.now() }, {
-                host: cardHost, timeoutMs: 1500, retryOnTimeout: false,
-              });
-              const generation = Number(apStatus?.wifi?.handoffGeneration);
-              correlation = acceptWifiHandoff({
-                status: apStatus,
-                expectedCard: {
-                  id: runLease.expectedCardId,
-                  firmwareVersion: release.value.manifest.firmwareVersion,
-                  buildId: release.value.manifest.buildId,
-                },
-                expectedBootId: apStatus?.bootId,
-                lastGeneration: Number.isSafeInteger(generation) && generation > 0 ? generation - 1 : 0,
-              });
-              if (!correlation && apStatus?.wifi?.transport === 'station'
-                && apStatus?.wifi?.transition === 'station'
-                && apStatus?.wifi?.transitionPending === false) break;
-            } catch {
-              // The card may be switching radios; keep the bounded setup wait
-              // attached to this immutable production run and exact host.
-            }
-            if (!correlation) await new Promise(resolve => setTimeout(resolve, 750));
-          }
-          if (correlation) {
-            const retargeted = retargetCardBridge(correlation.host, correlation, { flowId: runLease.flowId });
-            if (!retargeted.ok) throw new Error('The verified card page could not move from its setup hotspot to the gallery network.');
-            setStatus('Card joined WiFi. Rejoin the gallery network; Studio will continue automatically when the exact card returns.');
-            const returnDeadline = Date.now() + 180000;
-            while (Date.now() < returnDeadline) {
-              assertRunLease(runLease);
-              if (productionCardAuthority(currentCardLink(), runLease.expectedCardId, { mutation: 'config' }).ok) break;
-              await new Promise(resolve => setTimeout(resolve, 100));
-            }
-            if (!productionCardAuthority(currentCardLink(), runLease.expectedCardId, { mutation: 'config' }).ok) {
-              throw new Error('The exact card did not return on the gallery network before setup timed out.');
-            }
-          }
-        }
-      }
-      assertRunLease(runLease);
+      if (driver?.connectLan) {
+        await driver.connectLan();
+        assertActiveRunLease(runLease);
+      } else await connectCardPageThroughWifi(runLease, cardHost);
+      assertActiveRunLease(runLease);
       driver?.noteLanHandoff?.();
-      lease = captureCardLease('config', runLease);
+      lease = captureCardLease('identity', runLease);
       const evidence = driver?.readEvidence ? await driver.readEvidence('preflight') : await readCardProjectEvidence({ host: lease.host, transport: lease.transport });
-      assertCardLease(lease, 'config');
+      assertCardLease(lease, 'identity');
       assertRunLease(runLease);
       if (!evidence?.cardId) throw new Error('The card page did not return card identity.');
       if (evidence.cardId !== runLease.expectedCardId) {
@@ -458,6 +488,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
         setStatus(`Card ${evidence.cardId} reports firmware ${evidence.firmwareVersion} (${evidence.buildId.slice(0, 8)}), which does not match the verified release. Reconnect the same USB card to update it.`);
       }
     } catch (reason) {
+      if (reason?.code === 'stale-production-run' || !runLeaseIsCurrent(runLease)) return;
       if (lease && reason?.code !== 'stale-production-run') invalidateOperation(lease, 'production-preflight-failed');
       setFirmwareDecision('unproven');
       if (/wrong online card/i.test(String(reason?.message || ''))) showRecovery('wrong-card-reconnect');
@@ -519,8 +550,8 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     let lease = null;
     try {
       const driver = testDriver();
-      if (!driver) await onConnectCard?.(cardHost);
-      assertRunLease(runLease);
+      if (!driver?.readEvidence) await connectCardPageThroughWifi(runLease, '192.168.4.1', { authority: 'config' });
+      assertActiveRunLease(runLease);
       lease = captureCardLease('config', runLease);
       const evidence = driver?.readEvidence ? await driver.readEvidence('reconnect') : await readCardProjectEvidence({ host: lease.host, transport: lease.transport });
       assertCardLease(lease, 'config');
@@ -536,10 +567,11 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       await advance('restore', { usbReleased: true }, runLease);
       setStatus('The same card is online with the exact firmware. Ready to load the artwork once.');
     } catch (reason) {
+      if (reason?.code === 'stale-production-run' || !runLeaseIsCurrent(runLease)) return;
       if (lease && reason?.code !== 'stale-production-run') invalidateOperation(lease, 'production-reconnect-readback-failed');
       showRecovery(reason, { phase: 'reconnect', usbReleased: 'yes' });
     }
-    finally { setBusy(false); }
+    finally { if (mountedRef.current) setBusy(false); }
   }
 
   async function restoreArtwork() {
@@ -837,7 +869,11 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
         });
         runRef.current = updated;
         setRun(updated); setRecovery(null); setStatus('USB released. Reconnect and inspect the same card before continuing.');
-      } catch { setRecovery(classifyProductionFailure('usb-ownership-uncertain')); }
+      } catch (reason) {
+        if (reason?.code !== 'stale-production-run' && runLeaseIsCurrent(recoveryRunLease)) {
+          setRecovery(classifyProductionFailure('usb-ownership-uncertain'));
+        }
+      }
       finally { setBusy(false); }
     }
   }

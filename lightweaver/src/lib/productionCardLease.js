@@ -45,6 +45,11 @@ export function productionCardAuthority(link = {}, expectedCardId = '', { mutati
   const exactReadiness = readiness.app === 'Lightweaver'
     && String(readiness.cardId || readiness.id || '').trim().toLowerCase() === expected
     && String(readiness.bootId || '') === String(link.validatedBootId || '');
+  if (mutation === 'identity') {
+    return exactReadiness
+      ? { ok: true, readOnly: true, blank: link.cardBlank === true }
+      : fail('The exact card identity status is not ready for read-only evidence.');
+  }
   if (mutation === 'config' && link.cardBlank === true) {
     if (link.state === 'connected-bridge' && !/^[A-Za-z0-9_-]{16,96}$/.test(link.handoffFlowId || '')) {
       return fail('The blank card is missing its verified WiFi handoff flow.');
