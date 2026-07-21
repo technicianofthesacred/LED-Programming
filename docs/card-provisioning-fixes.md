@@ -1,5 +1,12 @@
 # Card provisioning hardening — implemented fixes and production checklist
 
+> Historical implementation record. It includes direct diagnostic steps from
+> the 2026-07-20 bench session and is not the current worker procedure or
+> shipment evidence. Use [`card-provisioning-audit.md`](card-provisioning-audit.md),
+> [`new-card-checklist.md`](new-card-checklist.md), and
+> [`deployment-checklist.md`](deployment-checklist.md). The released Studio
+> whole-system GPIO 18/full-strip acceptance remains pending.
+
 This document records what the current branch implements. It is not a future implementation plan. The detailed failure analysis and real-card evidence are in `docs/card-provisioning-audit.md`.
 
 ## Implemented fixes

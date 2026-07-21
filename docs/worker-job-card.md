@@ -51,8 +51,8 @@ you call — do not improvise with cables or power.
 
 Operational notes (not printed):
 
-- The rehearsal job `bench-fixture-44` targets the standard 44-LED bench strip
-  on GPIO 16 (WS2815, GRB, conservative brightness). Add an artwork by copying
+- The rehearsal job `bench-fixture-44` targets the physical 44-LED bench strip
+  on GPIO 18 (WS2815, GRB, 1500 mA, 0.35 brightness limit). Add an artwork by copying
   `release/job-generators/bench-fixture-44.mjs` to a new generator with the
   artwork's layout, then run `node scripts/rebuild-production-jobs.mjs` and
   commit. Jobs pin the exact signed firmware buildId, so the protected

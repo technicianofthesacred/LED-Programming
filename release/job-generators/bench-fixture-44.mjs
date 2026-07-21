@@ -2,8 +2,8 @@
 // Generates the canonical BENCH FIXTURE production-job source.
 //
 // This is the job a workshop worker uses for the rehearsal and for bench
-// acceptance of freshly built cards: one output on GPIO 16 driving the
-// 44-LED bench strip (the same count as the firmware factory default), a
+// acceptance of freshly built cards: one output on GPIO 18 driving the
+// physical 44-LED bench strip, a
 // conservative brightness limit, and the standard control pinout. Real
 // artwork jobs are generated the same way with the artwork's own layout.
 //
@@ -31,11 +31,13 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const manifest = JSON.parse(await readFile(resolve(repoRoot, 'lightweaver/public/firmware/release-manifest.json'), 'utf8'));
 
 const PIXELS = 44;
+const DATA_PIN = 18;
+const MAX_MILLIAMPS = 1500;
 const JOB_ID = 'bench-fixture-44';
 
 const standaloneController = {
-  outputs: [{ id: 'out1', name: 'Bench strip', pin: 16, pixels: PIXELS }],
-  led: { type: 'WS2815', colorOrder: 'GRB', brightnessLimit: 0.35 },
+  outputs: [{ id: 'out1', name: 'Bench strip', pin: DATA_PIN, pixels: PIXELS }],
+  led: { type: 'WS2815', colorOrder: 'GRB', brightnessLimit: 0.35, maxMilliamps: MAX_MILLIAMPS },
   controls: {
     encoder: { a: 4, b: 5, press: 0, alternatePress: 6, rotateDirection: 'clockwise-brighter', brightnessStep: 18 },
     previous: 7,
@@ -62,7 +64,7 @@ const restoreSnapshot = {
       verified: true,
       controllerAnchor: null,
       migrationWarnings: [],
-      outputs: [{ id: 'out1', name: 'Bench strip', pin: 16, runIds: ['run-strip-1'] }],
+      outputs: [{ id: 'out1', name: 'Bench strip', pin: DATA_PIN, runIds: ['run-strip-1'] }],
       runs: [{
         id: 'run-strip-1', type: 'strip', verified: true,
         source: { stripId: 'strip-1', from: 0, to: PIXELS - 1 },
@@ -106,7 +108,7 @@ const source = {
     restoreSnapshot,
   },
   configuration,
-  expectedOutputs: [{ id: 'out1', label: 'Bench strip', pin: 16, pixels: PIXELS, direction: 'forward', colorOrder: 'GRB' }],
+  expectedOutputs: [{ id: 'out1', label: 'Bench strip', pin: DATA_PIN, pixels: PIXELS, direction: 'forward', colorOrder: 'GRB' }],
 };
 
 const outPath = resolve(repoRoot, 'release/job-sources/bench-fixture-44.json');

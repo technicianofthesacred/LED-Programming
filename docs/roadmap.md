@@ -4,7 +4,7 @@
 
 Living source of truth for project work. Update as items move between sections.
 
-Last updated: 2026-07-18
+Last updated: 2026-07-21
 
 > **Current scope: ESP32-only.** The runtime is the Lightweaver card alone — it
 > serves its own branded page (the visitor UI) and the WLED API; the public
@@ -18,6 +18,33 @@ Last updated: 2026-07-18
 This is the master order of work. The detailed plans under
 `docs/superpowers/plans/` are engineering references, not a stack that must be
 run end to end.
+
+### Current shipping focus: deterministic card production
+
+The immediate goal is not another feature: it is repeatably turning erased
+ESP32-S3 cards into verified GPIO 18 / 44-pixel customer cards through the live
+Production Setup route. Current work is ordered as follows:
+
+1. Finish fail-closed exact-card recognition, AP+STA handoff, automatic
+   card-page bridge retargeting, two-fresh-status validation, operation leases,
+   and recovery without interrupting local playback.
+2. Keep a reachable factory card visibly **Blank — load a project** and allow
+   only the one exact project configuration until it becomes known-good.
+3. Publish the canonical `bench-fixture-44` job from its generator as GPIO 18,
+   44 pixels, GRB, Aurora, 1500 mA, and brightness limit 0.35.
+4. Pass source verification, protected signing/job rebuild, signed
+   `launch:check`, Cloudflare publish, and live whole-build graph freshness in
+   that order.
+5. Erase and commission one real card through the live site with no terminal or
+   typed IP; require full-strip observation, power-cycle recovery, outage
+   demotion, recovery AP by 60 seconds, automatic LAN return, and exported
+   records. Then repeat [`new-card-checklist.md`](new-card-checklist.md) for
+   every card.
+
+**Current limiter:** firmware and Studio source hardening are still being
+integrated. The protected signed release/live deploy and uninterrupted real-card
+whole-system pass have not happened. The user has reported the live route still
+failing/dark. Lightweaver is not ready to ship until all three gates pass.
 
 ### Phase 1: Finish the product already on `main` — required now
 
@@ -182,10 +209,10 @@ installation cannot be completed safely without them.
 - The remaining 2026-07-17 closeout plans are already represented in current
   `main`; preserve their tested behavior.
 
-**Current next action:** integrate the other LED UX work into `main`, then run
-Phase 1A and 1B as one narrow release-coherence pass before the Phase 1C test,
-bench, signing, and deployment gate. No reusable hardware module is currently
-required to ship the working product.
+**Current next action:** finish the deterministic provisioning integration and
+source gates, then run the protected signer, live deploy/build-graph check, and
+erased-card checklist. No reusable hardware module is required to ship this
+working product.
 
 Keep `codex/unified-hardware-workspace` as an incubator and engineering
 reference. Do not merge the branch wholesale; extract only a triggered module
@@ -263,10 +290,10 @@ These cannot be done by agents. See `docs/hardware-setup.md` for step-by-step.
 ## Open — deployment
 
 - [x] Publish the public Lightweaver browser UI at `led.mandalacodes.com` through Mandala Codes/Cloudflare Pages
-- [x] Keep actual card control local to the ESP32 page unless a local bridge is intentionally added
+- [x] Keep actual card control local; HTTPS Studio automatically uses the guided card-page bridge without requiring a separate installed product or typed IP.
 - [ ] Run the protected `firmware-release` signer for the latest merged firmware source; the currently committed public factory artifact is stale and the strict deploy gate must remain red until CI publishes the new signed release.
 - [ ] Deploy the root Studio only after `npm run launch:check` passes on that signed release commit, then require `PROD_CHECK_REQUIRED=1 npm run check:prod` and verify the live `#screen=production` route.
-- [x] Publish at least one immutable production job — `bench-fixture-44` (44-LED bench strip, GPIO 16) is published through the same-origin index and regenerated automatically against every newly signed firmware release by `scripts/rebuild-production-jobs.mjs` in the protected workflow. Detached-signature export for the offline file lane remains available via `--signing-key`.
+- [x] Publish an immutable production job — `bench-fixture-44` is generated for the physical 44-LED GPIO 18 fixture (GRB, Aurora, 1500 mA, 0.35 limit), indexed by digest, and rebuilt against every protected signed firmware release. Source/index/artifact consistency is a source-gate test.
 - [ ] Pi setup: hostname, autostart `visitor-ui/server` (systemd unit example in `visitor-ui/README.md`)
 - [ ] AP mode SSID convention: `Lightweaver-XXXX` (MAC-suffix, set by firmware automatically; see ESP32 card smoke test in `docs/deployment-checklist.md`)
 - [ ] Captive portal end-to-end test from a phone on the AP

@@ -16,9 +16,16 @@ on:
       - 'firmware/lightweaver-controller/platformio.ini'
       - 'firmware/lightweaver-controller/scripts/**'
       - 'scripts/build-firmware-manifest.mjs'
+      - 'scripts/build-production-job.mjs'
+      - 'scripts/rebuild-production-jobs.mjs'
       - 'scripts/sign-release-artifacts.mjs'
       - 'lightweaver/src/lib/firmwareRelease.js'
+      - 'lightweaver/src/lib/productionJobPackage.js'
       - 'packages/installer-core/**'
+      - 'release/firmware-manifest.schema.json'
+      - 'release/production-job.schema.json'
+      - 'release/job-generators/**'
+      - 'release/job-sources/**'
       - 'release/keys/lightweaver-release-public.pem'
       - '.github/workflows/build-firmware.yml'
 
@@ -68,6 +75,7 @@ jobs:
           # The factory binary is intentionally stale on a firmware-source
           # commit; the protected build below replaces it. Every other normal
           # core contract still runs here and must pass before secrets unlock.
+          npm run test:production-jobs
           npm run test:core:source
           node scripts/ensure-rollup-native.mjs
           npm run build
@@ -136,7 +144,9 @@ jobs:
           node scripts/sign-release-artifacts.mjs
 
       - name: Rebuild production jobs against the freshly signed release
-        run: node scripts/rebuild-production-jobs.mjs
+        run: |
+          node scripts/rebuild-production-jobs.mjs
+          npm run test:production-jobs --prefix lightweaver
 
       - name: Verify signed release set
         run: |
