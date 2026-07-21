@@ -357,7 +357,9 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
       const testing = driver?.activateCandidate ? await driver.activateCandidate(staged.activationId) : await activateAndWaitForCardWiring(staged.activationId, { host: lease.host, transport: lease.transport });
       assertCandidateOperation();
       if (testing?.activationId !== staged.activationId || testing?.state !== 'testing') throw new Error('The exact candidate did not enter its 90-second test.');
-      await reacquireAfterCardReboot(lease);
+      const rebootLease = await reacquireAfterCardReboot(lease);
+      assertCandidateOperation();
+      assertLease(rebootLease);
       const locked = { ...candidate, activationId: staged.activationId, phase: 'testing' };
       dispatch({ type: 'candidate', candidate: locked }); setCountdown(90); clearInterval(timerRef.current);
       timerRef.current = setInterval(() => setCountdown(value => {
@@ -378,17 +380,19 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
       if (stagedCandidate) {
         try {
           await rollbackExactCandidate(stagedCandidate, knownGood);
+          if (!mountedRef.current || candidateOperationRef.current !== operation) return;
           dispatch({ type: 'candidate-clear' });
           requireBoundaryRestart('Temporary change was removed', 'The card independently proved the last confirmed wiring. Restart this boundary before making another observation.');
           setError(`${reason?.message || reason} The exact staged candidate was rolled back and the last confirmed wiring was read back.`);
         } catch (rollbackReason) {
+          if (!mountedRef.current || candidateOperationRef.current !== operation) return;
           dispatch({ type: 'candidate', candidate: stagedCandidate });
           setRoute({ action: 'candidate-recovery', title: 'Temporary candidate is still locked', guidance: 'Studio could not prove rollback. Keep this boundary locked and use Restore last confirmed wiring again.' });
           setError(`${reason?.message || reason} Cleanup was not confirmed: ${rollbackReason?.message || rollbackReason}. Do not continue or disconnect this card.`);
         }
-      } else { if (operationLease) invalidateLease(operationLease, 'production-wiring-candidate-failed'); setError(`${reason?.message || reason} The last confirmed wiring remains protected.`); }
+      } else if (mountedRef.current && candidateOperationRef.current === operation) { if (operationLease) invalidateLease(operationLease, 'production-wiring-candidate-failed'); setError(`${reason?.message || reason} The last confirmed wiring remains protected.`); }
     }
-    finally { setBusy(false); }
+    finally { if (mountedRef.current) setBusy(false); }
   }
 
   async function rollback() {

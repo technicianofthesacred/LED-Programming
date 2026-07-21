@@ -88,9 +88,9 @@ async function installDriver(page, {
   candidateEvidenceMismatch = false, physicalIdentityMismatch = false, physicalFirmwareMismatch = false,
   activationFailure = false, activationLifecycleChange = false, rollbackFailure = false, rollbackRebootReads = 0, physicalDeliveryFailure = false, physicalDeliveryFailureOnce = false, physicalDeliveryDelayMs = 0, linkLossDuringPhysical = false,
   connectErrorOnce = '',
-  disconnectFailureAt = 0, secondUsbWrong = false, installThrows = false, reconnectFirmwareMismatch = false,
+  disconnectFailureAt = 0, disconnectDelayMs = 0, secondUsbWrong = false, installThrows = false, reconnectFirmwareMismatch = false,
 } = {}) {
-  await page.addInitScript(({ firmwareVersion, firmwareBuildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, connectErrorOnce, disconnectFailureAt, secondUsbWrong, installThrows, reconnectFirmwareMismatch }) => {
+  await page.addInitScript(({ firmwareVersion, firmwareBuildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, connectErrorOnce, disconnectFailureAt, disconnectDelayMs, secondUsbWrong, installThrows, reconnectFirmwareMismatch }) => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
     const evidence = {
       cardId: 'lw-aabbccddeeff', firmwareVersion,
@@ -126,6 +126,7 @@ async function installDriver(page, {
       disconnect: async () => {
         const count = Number(localStorage.getItem('lw_test_disconnect_count') || 0) + 1;
         localStorage.setItem('lw_test_disconnect_count', String(count));
+        if (disconnectDelayMs) await new Promise(resolve => setTimeout(resolve, disconnectDelayMs));
         if (count === disconnectFailureAt) throw new Error('USB port did not release');
       },
       noteLanHandoff: () => localStorage.setItem('lw_test_lan_handoff_count', String(Number(localStorage.getItem('lw_test_lan_handoff_count') || 0) + 1)),
@@ -270,7 +271,7 @@ async function installDriver(page, {
         return evidence;
       },
     };
-  }, { firmwareVersion: signedRelease.firmwareVersion, firmwareBuildId: signedRelease.buildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, connectErrorOnce, disconnectFailureAt, secondUsbWrong, installThrows, reconnectFirmwareMismatch });
+  }, { firmwareVersion: signedRelease.firmwareVersion, firmwareBuildId: signedRelease.buildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, connectErrorOnce, disconnectFailureAt, disconnectDelayMs, secondUsbWrong, installThrows, reconnectFirmwareMismatch });
 }
 
 test('production fixture tracks the exact currently signed firmware release', async () => {
@@ -431,26 +432,16 @@ test('HTTPS ProductionScreen commissions a blank card through bridge, human ligh
       connectCard: async () => ({}),
       disconnect: async () => true,
       inspectCard: async () => ({ cardId: 'lw-aabbccddeeff', chipName: 'ESP32-S3', flashSize: '16MB' }),
-      connectLan: async () => {
-        try { return await window.__LW_START_REAL_PRODUCTION_BRIDGE__(); }
-        catch (reason) {
-          if (window.__LW_REAL_PRODUCTION_BRIDGE_STATS__) window.__LW_REAL_PRODUCTION_BRIDGE_STATS__.connectError = reason?.message || String(reason);
-          throw reason;
-        }
-      },
     };
   });
   await page.goto('https://led.mandalacodes.com/#screen=production');
 
   await page.evaluate(async ({ firmware, project, jobId, digest }) => {
     localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-prior-card-a' }));
-    const bridge = await import('/src/lib/cardBridge.js');
-    const handoff = await import('/src/lib/cardWifiHandoff.js');
     const linkModule = await import('/src/lib/cardLink.js');
     const expectedCardId = 'lw-aabbccddeeff';
     const stationHost = '192.168.18.77';
     const bootId = 'boot-production-ui-1';
-    const flowId = 'flow-production-ui-123456';
     const handoffGeneration = 8;
     let activeHost = '192.168.4.1';
     let configured = null;
@@ -537,44 +528,14 @@ test('HTTPS ProductionScreen commissions a blank card through bridge, human ligh
           emit({ app: 'LightweaverCardBridge', version: 2, id: message.id, ok: true, response });
         });
       },
-      location: { set href(value) { activeHost = new URL(value).hostname; } },
+      location: { set href(value) {
+        activeHost = new URL(value).hostname;
+        if (activeHost === stationHost) setTimeout(emitReady, 0);
+      } },
     };
     window.open = url => {
       if (url) activeHost = new URL(String(url)).hostname;
       return fakeCardTab;
-    };
-    window.__LW_START_REAL_PRODUCTION_BRIDGE__ = async () => {
-      stats.stage = 'starting';
-      const opened = bridge.openLocalCardPage('192.168.4.1');
-      stats.stage = 'opened';
-      if (!opened.ok) throw new Error(opened.reason);
-      const apStatus = await bridge.sendCardBridgeRequest('status', {}, { host: '192.168.4.1' });
-      stats.stage = 'status-ready';
-      let correlation;
-      try {
-        correlation = handoff.acceptWifiHandoff({
-          status: apStatus,
-          expectedCard: { id: expectedCardId, firmwareVersion: firmware.version, buildId: firmware.buildId },
-          expectedBootId: bootId,
-          lastGeneration: handoffGeneration - 1,
-        });
-      } catch (reason) {
-        stats.handoffError = reason?.message || String(reason);
-        throw reason;
-      }
-      stats.apEnvelope = apStatus;
-      stats.correlationAccepted = Boolean(correlation);
-      if (!correlation) throw new Error('AP handoff correlation was not accepted');
-      const retargeted = bridge.retargetCardBridge(stationHost, correlation, { flowId });
-      if (!retargeted.ok) throw new Error(retargeted.reason);
-      setTimeout(emitReady, 0);
-      const blankDeadline = Date.now() + 8000;
-      while (Date.now() < blankDeadline && linkModule.getCardLinkState().cardBlank !== true) await new Promise(resolve => setTimeout(resolve, 20));
-      if (linkModule.getCardLinkState().cardBlank !== true) {
-        stats.finalLink = linkModule.getCardLinkState();
-        stats.finalBridge = bridge.getCardBridgeState();
-        throw new Error(`blank card did not rejoin: ${JSON.stringify(linkModule.getCardLinkState())}`);
-      }
     };
   }, { firmware: job.firmware, project: job.project, jobId: job.jobId, digest: job.digest });
 
@@ -603,6 +564,7 @@ test('HTTPS ProductionScreen commissions a blank card through bridge, human ligh
     records: (await import('/src/lib/productionRecords.js')).readProductionRecords(),
   }));
   expect(result.stats.stationStatusBeforeAck).toBe(3);
+  expect(result.stats.apStatus).toBeGreaterThanOrEqual(1);
   expect(result.stats.handoffEnvelopeCountAtAck).toBe(2);
   expect(result.stats.ack).toBe(1);
   expect(result.stats.config).toBe(1);
@@ -659,6 +621,44 @@ test('failed USB cleanup stays unknown, persists conservative ownership, and ret
   await recovery.getByRole('button', { name: 'Release USB safely' }).click();
   await expect(page.getByRole('button', { name: 'Connect one USB card' })).toBeVisible();
   expect(await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun().usbReleased)).toBe(true);
+});
+
+test('a stale USB recovery action cannot mutate a replacement production run', async ({ page }) => {
+  const job = await serveJob(page);
+  await installDriver(page, { invalidInspection: true, disconnectFailureAt: 1, disconnectDelayMs: 200 });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+
+  const recovery = page.getByRole('region', { name: 'Safe recovery' });
+  const release = recovery.getByRole('button', { name: 'Release USB safely' });
+  await expect(release).toBeVisible();
+  const staleRunId = await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun().runId);
+  await release.click({ noWaitAfter: true });
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_test_disconnect_count'))).toBe('2');
+
+  const replacementRunId = await page.evaluate(async digest => {
+    const module = await import('/src/lib/productionRun.js');
+    const replacement = await module.updateProductionRunAtomically(() => {
+      const created = module.createProductionRun({ jobDigest: digest });
+      const correlation = {
+        runId: created.runId,
+        flowId: created.flowId,
+        jobDigest: created.jobDigest,
+        operationId: created.operationId,
+        expectedCardId: created.expectedCardId,
+        generation: created.generation,
+      };
+      return module.transitionProductionRun(created, 'connect-card', { correlation });
+    });
+    window.dispatchEvent(new StorageEvent('storage', { key: module.PRODUCTION_RUN_COMMIT_A_KEY }));
+    return replacement.runId;
+  }, job.digest);
+
+  await expect(recovery).toHaveCount(0);
+  const storedRun = await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun());
+  expect(replacementRunId).not.toBe(staleRunId);
+  expect(storedRun).toMatchObject({ runId: replacementRunId, state: 'connect-card', usbReleased: true });
 });
 
 test('install failure never claims USB release when cleanup fails', async ({ page }) => {

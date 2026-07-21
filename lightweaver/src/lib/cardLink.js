@@ -1029,15 +1029,9 @@ export async function resumeCardWifiHandoff({
     || typeof sendRequest !== 'function' || typeof wait !== 'function') {
     throw new Error('A correlated card link and bridge request transport are required.');
   }
-  const entryState = link.getState();
-  const refreshConfiguredBlank = isCardLinkConnected(entryState)
-    && sameWifiHandoffCorrelation(entryState.handoffCorrelation, correlation)
-    && entryState.handoffFlowId === flowId
-    && entryState.cardBlank === true;
-  if (isCardLinkConnected(entryState)
-    && sameWifiHandoffCorrelation(entryState.handoffCorrelation, correlation)
-    && entryState.handoffFlowId === flowId
-    && !refreshConfiguredBlank) return entryState;
+  if (isCardLinkConnected(link.getState())
+    && sameWifiHandoffCorrelation(link.getState().handoffCorrelation, correlation)
+    && link.getState().handoffFlowId === flowId) return link.getState();
   const host = correlation.host;
   const assertCurrent = () => {
     if (!isCurrent()) {
@@ -1072,11 +1066,7 @@ export async function resumeCardWifiHandoff({
   }
 
   const beforeAck = link.getState();
-  // A verified factory card remains under the same commissioning correlation
-  // after its one allowed config write. Do not mistake that stale blank
-  // envelope for final runtime authority: read one fresh status below so the
-  // exact lifecycle can prove the newly configured command-ready state.
-  if (beforeAck.handoffStationVerified && !refreshConfiguredBlank) return beforeAck;
+  if (beforeAck.handoffStationVerified) return beforeAck;
   if (!beforeAck.handoffAckAttempted) {
     if (!beforeAck.handoffAckReady) return beforeAck;
     // Latch before the privileged write. A timeout is ambiguous: the card may
@@ -1151,6 +1141,68 @@ async function advanceSharedWifiHandoff(correlation, lifecycle, flowId) {
   });
   sharedHandoffAdvances.set(key, run);
   return run;
+}
+
+// Deterministic post-config boundary for Production. The first fresh status is
+// consumed by cardBridge before this call; this awaits cardLink's own follow-up
+// status instead of depending on an event-handler race or background keepalive.
+// Every authority component is rechecked before and after the awaited read.
+export async function revalidateSharedCommissionedCard({
+  expectedCardId = '', host = '', flowId = '', bridgeLifecycle = null,
+} = {}) {
+  const link = getSharedCardLink();
+  const before = link.getState();
+  const correlation = normalizeWifiHandoffCorrelation(before.handoffCorrelation);
+  const normalizedFlowId = normalizeHandoffFlowId(flowId);
+  const normalizedHost = normalizeCardHost(host);
+  const expectedId = String(expectedCardId || '').trim().toLowerCase();
+  const bridge = getCardBridgeState();
+  const exactBoundary = correlation
+    && expectedId
+    && correlation.expectedCardId === expectedId
+    && correlation.host === normalizedHost
+    && before.host === normalizedHost
+    && before.handoffFlowId === normalizedFlowId
+    && before.handoffBridgeLifecycle === bridgeLifecycle
+    && before.bridgeLifecycle === bridgeLifecycle
+    && bridge.lifecycle === bridgeLifecycle
+    && bridge.handoffFlowId === normalizedFlowId
+    && sameWifiHandoffCorrelation(bridge.handoffCorrelation, correlation);
+  if (!exactBoundary || !currentBridgeStillOwnsHandoff(correlation, bridgeLifecycle, normalizedFlowId)) {
+    throw new Error('The exact commissioned card page changed before runtime revalidation.');
+  }
+
+  const readiness = await sendCardBridgeRequest('status', { cache: 'no-store', nonce: Date.now() }, {
+    host: normalizedHost,
+    timeoutMs: CARD_LINK_PING_TIMEOUT_MS,
+    retryOnTimeout: false,
+  });
+  if (!currentBridgeStillOwnsHandoff(correlation, bridgeLifecycle, normalizedFlowId)) {
+    throw new Error('The exact commissioned card page changed during runtime revalidation.');
+  }
+  link.dispatch({
+    type: 'wifi-handoff-status', host: normalizedHost, correlation,
+    flowId: normalizedFlowId, bridgeLifecycle, readiness,
+  });
+  const final = link.getState();
+  const finalReadiness = final.readiness || {};
+  const finalCardId = String(final.card?.id || final.card?.cardId || '').trim().toLowerCase();
+  const exactRuntime = final.state === 'connected-bridge'
+    && final.transport === 'bridge'
+    && finalCardId === expectedId
+    && final.host === normalizedHost
+    && final.bridgeLifecycle === bridgeLifecycle
+    && final.handoffFlowId === normalizedFlowId
+    && sameWifiHandoffCorrelation(final.handoffCorrelation, correlation)
+    && final.cardBlank === false
+    && finalReadiness.app === 'Lightweaver'
+    && String(finalReadiness.cardId || finalReadiness.id || '').trim().toLowerCase() === expectedId
+    && finalReadiness.commandReady === true
+    && finalReadiness.outputReady === true
+    && finalReadiness.knownGoodProject === true
+    && finalReadiness.runtimePhase === 'ready';
+  if (!exactRuntime) throw new Error('The commissioned card did not establish fresh runtime command authority.');
+  return final;
 }
 
 export function cancelCardWifiHandoff(rawFlowId = '') {
@@ -1274,9 +1326,7 @@ export function getSharedCardLink() {
       }
       const latestHandoff = sharedLink.getState();
       if (detail.connected && detail.verified && (
-        detail.handoffAckReady
-        || latestHandoff.handoffReloadRecovery
-        || (latestHandoff.cardBlank === true && detail.runtimeCommandReady === true)
+        detail.handoffAckReady || latestHandoff.handoffReloadRecovery
       )) {
         void advanceSharedWifiHandoff(
           detail.handoffCorrelation,
