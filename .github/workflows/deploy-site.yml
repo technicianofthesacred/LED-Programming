@@ -123,11 +123,15 @@ jobs:
         env:
           PROD_CHECK_REQUIRED: '1'
         run: |
-          for attempt in 1 2 3 4 5; do
+          # Cloudflare Pages can expose the new no-store graph before every
+          # content-addressed asset has reached every edge. A real production
+          # rollout took just over 60 seconds, so keep the proof strict but
+          # allow a bounded two-minute convergence window.
+          for attempt in $(seq 1 12); do
             if npm run check:prod; then
               exit 0
             fi
-            if [ "$attempt" = 5 ]; then
+            if [ "$attempt" = 12 ]; then
               echo "::error::Production did not converge to the verified release."
               exit 1
             fi

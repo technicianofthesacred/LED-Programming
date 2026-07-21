@@ -173,3 +173,11 @@ test('deploy workflow explicitly records a credential-skipped publish as not run
   assert.match(workflow, /is not a deployment and must not be used as shipment evidence/);
   assert.match(workflow, /PROD_CHECK_REQUIRED: '1'/);
 });
+
+test('deploy allows the Cloudflare asset graph to converge before declaring failure', async () => {
+  const workflow = await readFile(resolve(repoRoot, '.github/workflows/deploy-site.yml'), 'utf8');
+  const attempts = workflow.match(/for attempt in \$\(seq 1 (\d+)\); do/);
+  assert.ok(attempts, 'live verification must use an explicit bounded retry count');
+  assert.ok(Number(attempts[1]) >= 12, 'live verification must allow at least two minutes of edge convergence');
+  assert.match(workflow, /sleep 10/);
+});
