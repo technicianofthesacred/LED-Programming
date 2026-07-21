@@ -5,6 +5,8 @@ import { ProductionPhysicalTest } from '../components/production/ProductionPhysi
 import { ProductionRecovery } from '../components/production/ProductionRecovery.jsx';
 import { clearCardCommissioning } from '../lib/cardCommissioningFlow.js';
 import { readCardProjectEvidence, pushConfigToCard } from '../lib/cardPushClient.js';
+import { adoptExpectedCardIdentity } from '../lib/cardIdentity.js';
+import { adoptCommissionedCardBridgeIdentity, getCardBridgeState } from '../lib/cardBridge.js';
 import { getCardWiringStatus } from '../lib/cardWiringSafety.js';
 import { connectESP, disconnectESP, flashFirmware, inspectConnectedESP } from '../lib/flash.js';
 import { flashFirmwareAndRelease } from '../lib/flashWorkflow.js';
@@ -14,6 +16,11 @@ import { detectPlatformCapabilities } from '../lib/platformCapabilities.js';
 import { appendProductionRecord, readProductionRecords } from '../lib/productionRecords.js';
 import { classifyProductionFailure, inferProductionFailure } from '../lib/productionRecovery.js';
 import { assertProductionFinalWiringStatus } from '../lib/productionPhysicalTest.js';
+import {
+  assertProductionCardLease,
+  captureProductionCardLease,
+  productionCardAuthority,
+} from '../lib/productionCardLease.js';
 import {
   PRODUCTION_RUN_COMMIT_A_KEY, PRODUCTION_RUN_COMMIT_B_KEY,
   PRODUCTION_RUN_SLOT_A_KEY, PRODUCTION_RUN_SLOT_B_KEY,
@@ -67,7 +74,7 @@ function exactEvidence(evidence, job, cardId, release) {
     && evidence?.productionJobDigest === job.digest;
 }
 
-export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) {
+export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded = false }) {
   const cap = useMemo(capabilities, []);
   const [job, setJob] = useState(null);
   const [run, setRun] = useState(() => readProductionRun());
@@ -91,8 +98,56 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
   const restoreStartedRef = useRef(false);
   const savingPassRef = useRef(false);
   const previousStateRef = useRef(run?.state);
+  const cardLinkRef = useRef(cardLink);
   const ProductionHeading = embedded ? 'h2' : 'h1';
   const ProductionLandmark = embedded ? 'section' : 'main';
+
+  cardLinkRef.current = cardLink;
+
+  function currentCardLink() {
+    return testDriver()?.getCardLink?.() || cardLinkRef.current || {};
+  }
+
+  function captureCardLease(mutation = 'runtime') {
+    return captureProductionCardLease(currentCardLink(), run?.expectedCardId, { mutation });
+  }
+
+  function assertCardLease(lease, mutation = 'runtime') {
+    return assertProductionCardLease(lease, currentCardLink(), { mutation });
+  }
+
+  async function waitForRuntimeAuthority(expectedCardId, timeoutMs = 7000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const authority = productionCardAuthority(currentCardLink(), expectedCardId, { mutation: 'runtime' });
+      if (authority.ok) return captureProductionCardLease(currentCardLink(), expectedCardId, { mutation: 'runtime' });
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    throw new Error('The configured card did not establish two fresh command-ready status checks.');
+  }
+
+  async function adoptVerifiedBridgeIdentity(flowId, lease, mutation, timeoutMs = 7000) {
+    const deadline = Date.now() + timeoutMs;
+    let lastError = null;
+    while (Date.now() < deadline) {
+      assertCardLease(lease, mutation);
+      const bridge = getCardBridgeState();
+      if (bridge.lifecycle !== lease.bridgeLifecycle || bridge.handoffFlowId !== flowId) {
+        throw new Error('The card page lifecycle changed before verified production pairing completed.');
+      }
+      try {
+        const adopted = adoptCommissionedCardBridgeIdentity(flowId);
+        if (adopted?.id === lease.expectedCardId) return adopted;
+      } catch (reason) { lastError = reason; }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    throw lastError || new Error('The configured bridge did not become ready for exact production pairing.');
+  }
+
+  const displayedCardLink = testDriver()?.getCardLink?.() || cardLink || {};
+  const configAuthority = productionCardAuthority(displayedCardLink, run?.expectedCardId, { mutation: 'config' });
+  const runtimeAuthority = productionCardAuthority(displayedCardLink, run?.expectedCardId, { mutation: 'runtime' });
+  const readbackAuthority = productionCardAuthority(displayedCardLink, run?.expectedCardId, { mutation: 'readback' });
 
   const advance = useCallback(async (next, options = {}) => {
     const updated = await updateProductionRunAtomically(current => transitionProductionRun(current, next, { correlation: correlation(current), ...options }));
@@ -121,6 +176,19 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
     if (release.state !== 'ready' || !job) return;
     requestAnimationFrame(() => actionRef.current?.querySelector('.btn.primary:not([disabled])')?.focus());
   }, [job, release.state]);
+  useEffect(() => {
+    if (!run?.expectedCardId || !['restore', 'verify-card', 'check-lights', 'record'].includes(run.state)) return;
+    const observed = testDriver()?.getCardLink?.() || cardLink || {};
+    const mutation = run.state === 'restore' ? 'config' : 'runtime';
+    const authority = run.state === 'verify-card'
+      ? (productionCardAuthority(observed, run.expectedCardId, { mutation: 'runtime' }).ok
+        ? { ok: true }
+        : productionCardAuthority(observed, run.expectedCardId, { mutation: 'readback' }))
+      : productionCardAuthority(observed, run.expectedCardId, { mutation });
+    if (!authority.ok) {
+      setStatus('Card link lost — reconnect the exact USB-inspected card. No command or pass is authorized.');
+    }
+  }, [cardLink, run?.expectedCardId, run?.state]);
 
   async function preloadFirmware(selected = job) {
     if (!selected || release.state === 'loading') return;
@@ -216,6 +284,10 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
       }
       loaderRef.current = connection.loader;
       transportRef.current = connection.transport;
+      // Selecting a physical USB card is the production-line pairing gesture.
+      // Replace any prior gallery card only with this hardware-proven identity;
+      // LAN status still has to independently prove the same id before use.
+      adoptExpectedCardIdentity({ id: inspected.cardId });
       setUsbConnected(true);
       setHardware(inspected);
       setRecovery(null);
@@ -256,7 +328,9 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
       if (driver?.connectLan) await driver.connectLan();
       else await onConnectCard?.(cardHost);
       driver?.noteLanHandoff?.();
-      const evidence = driver?.readEvidence ? await driver.readEvidence('preflight') : await readCardProjectEvidence({ host: cardHost });
+      const lease = captureCardLease('config');
+      const evidence = driver?.readEvidence ? await driver.readEvidence('preflight') : await readCardProjectEvidence({ host: lease.host, transport: lease.transport });
+      assertCardLease(lease, 'config');
       if (!evidence?.cardId) throw new Error('The card page did not return card identity.');
       if (evidence.cardId !== run.expectedCardId) {
         throw new Error(`Wrong online card. USB identified ${run.expectedCardId}, but the card page reports ${evidence.cardId}. Nothing was changed.`);
@@ -326,7 +400,9 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
     try {
       const driver = testDriver();
       if (!driver) await onConnectCard?.(cardHost);
-      const evidence = driver?.readEvidence ? await driver.readEvidence('reconnect') : await readCardProjectEvidence({ host: cardHost });
+      const lease = captureCardLease('config');
+      const evidence = driver?.readEvidence ? await driver.readEvidence('reconnect') : await readCardProjectEvidence({ host: lease.host, transport: lease.transport });
+      assertCardLease(lease, 'config');
       if (evidence.cardId !== run.expectedCardId) throw new Error(`Wrong card. Reconnect ${run.expectedCardId}; the online card is ${evidence.cardId}.`);
       if (evidence.firmwareVersion !== release.value.manifest.firmwareVersion || evidence.buildId !== release.value.manifest.buildId) {
         showRecovery('firmware-mismatch', { cardChanged: run?.cardChanged ? 'yes' : 'no', firmwareEvidence: {
@@ -347,7 +423,9 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
     let mutationIntentPersisted = false;
     try {
       const driver = testDriver();
-      const binding = driver?.readEvidence ? await driver.readEvidence('before-restore') : await readCardProjectEvidence({ host: cardHost });
+      const lease = captureCardLease('config');
+      const binding = driver?.readEvidence ? await driver.readEvidence('before-restore') : await readCardProjectEvidence({ host: lease.host, transport: lease.transport });
+      assertCardLease(lease, 'config');
       if (binding.cardId !== run.expectedCardId
         || binding.firmwareVersion !== release.value.manifest.firmwareVersion
         || binding.buildId !== release.value.manifest.buildId) {
@@ -359,11 +437,23 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
       await advance('verify-card', { usbReleased: true });
       mutationIntentPersisted = true;
       if (driver?.restore) await driver.restore(job.configuration);
-      else await pushConfigToCard(job.configuration, { host: cardHost, reboot: 'if-needed', allowProjectChange: true, allowLayoutChange: true });
-      setStatus('Artwork was sent once. Now Studio will read the card back independently.');
+      else await pushConfigToCard(job.configuration, {
+        host: lease.host,
+        reboot: 'if-needed',
+        allowProjectChange: true,
+        allowLayoutChange: true,
+        commissioningFlowId: lease.commissioningFlowId,
+      });
+      // Applying first wiring may restart the card or replace the bridge page.
+      // The old lease is expected to die. The next step uses a new, exact
+      // handoff/readback lease and will not replay this mutation.
+      setStatus('Artwork was sent once. Now Studio will rebind the exact card lifecycle and read it back independently.');
     } catch (reason) {
       if (!mutationIntentPersisted) restoreStartedRef.current = false;
-      if (mutationIntentPersisted) showRecovery('restore-failure', { cardChanged: 'unknown', usbReleased: 'yes' });
+      if (mutationIntentPersisted) {
+        showRecovery('restore-failure', { cardChanged: 'unknown', usbReleased: 'yes' });
+        if (/card link/i.test(String(reason?.message || ''))) setError(reason.message);
+      }
       else showRecovery(/exact USB-inspected card/i.test(String(reason?.message || '')) ? 'wrong-card-reconnect' : 'restore-failure', { cardChanged: 'no', usbReleased: 'yes' });
     }
     finally { setBusy(false); }
@@ -372,7 +462,11 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
   async function verifyCard() {
     setBusy(true); setError('');
     try {
-      const evidence = testDriver()?.readEvidence ? await testDriver().readEvidence('verify') : await readCardProjectEvidence({ host: cardHost });
+      const mutation = productionCardAuthority(currentCardLink(), run.expectedCardId, { mutation: 'runtime' }).ok
+        ? 'runtime' : 'readback';
+      const lease = captureCardLease(mutation);
+      const evidence = testDriver()?.readEvidence ? await testDriver().readEvidence('verify') : await readCardProjectEvidence({ host: lease.host, transport: lease.transport });
+      assertCardLease(lease, mutation);
       if (!exactEvidence(evidence, job, run.expectedCardId, release.value)) {
         if (evidence.cardId !== run.expectedCardId) throw new Error(`Wrong card. Expected ${run.expectedCardId}, but read back ${evidence.cardId}. No retry was unlocked.`);
         if (evidence.firmwareVersion !== release.value.manifest.firmwareVersion || evidence.buildId !== release.value.manifest.buildId) throw new Error('Card firmware changed after restore. No retry was unlocked.');
@@ -380,6 +474,10 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
         restoreStartedRef.current = false;
         throw new Error('Card read-back does not match this job and firmware. No second restore ran; review the evidence, then explicitly retry if appropriate.');
       }
+      if (lease.transport === 'bridge' && lease.commissioningFlowId) {
+        await adoptVerifiedBridgeIdentity(lease.commissioningFlowId, lease, mutation);
+      }
+      await waitForRuntimeAuthority(run.expectedCardId);
       await advance('check-lights');
       setStatus('Card identity and artwork match exactly. Check every physical output before recording a pass.');
     } catch (reason) {
@@ -392,6 +490,8 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
 
   async function continueAfterLights(results = observations) {
     if (!Array.isArray(results) || !results.length || !results.every(result => result?.result === 'correct')) return;
+    try { assertCardLease(captureCardLease('runtime'), 'runtime'); }
+    catch (reason) { setError(`${reason.message} Physical results were not advanced to a pass.`); return; }
     setObservations(results);
     setRecordRecoveryNeeded(false);
     await advance('record');
@@ -402,10 +502,13 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
     if (!workerId.trim() || busy || savingPassRef.current) return;
     savingPassRef.current = true; setBusy(true); setError('');
     try {
-      const evidence = testDriver()?.readEvidence ? await testDriver().readEvidence('record') : await readCardProjectEvidence({ host: cardHost });
+      const lease = captureCardLease('runtime');
+      const evidence = testDriver()?.readEvidence ? await testDriver().readEvidence('record') : await readCardProjectEvidence({ host: lease.host, transport: lease.transport });
+      assertCardLease(lease, 'runtime');
       if (!exactEvidence(evidence, job, run.expectedCardId, release.value)) throw new Error('The final card identity changed.');
       const driver = testDriver();
-      const wiringStatus = driver?.readWiringStatus ? await driver.readWiringStatus() : await getCardWiringStatus({ host: cardHost });
+      const wiringStatus = driver?.readWiringStatus ? await driver.readWiringStatus() : await getCardWiringStatus({ host: lease.host });
+      assertCardLease(lease, 'runtime');
       assertProductionFinalWiringStatus({
         status: wiringStatus, job, cardId: run.expectedCardId,
         firmwareVersion: release.value.manifest.firmwareVersion, buildId: release.value.manifest.buildId,
@@ -414,6 +517,7 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
       setRecordRecoveryNeeded(false);
       const existing = readProductionRecords().some(record => record.runId === run.runId);
       if (!existing) {
+        assertCardLease(lease, 'runtime');
         appendProductionRecord({
           runId: run.runId, jobId: job.jobId, jobDigest: job.digest, artwork: job.artwork, batch: job.batch,
           cardId: evidence.cardId, firmwareVersion: evidence.firmwareVersion, firmwareBuildId: evidence.buildId,
@@ -554,7 +658,7 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
   if (!cap.canProductionWebSerial) {
     const mobile = cap.isMobile;
     const retainedCode = new URLSearchParams(window.location.hash.slice(1)).get('job');
-    const handoff = <ProductionLandmark className="prod-handoff" ref={primaryRef} tabIndex={-1}><span className="prod-kicker">Production setup</span><ProductionHeading>{mobile ? 'Continue on a workshop computer' : 'Open this page in Chrome or Edge'}</ProductionHeading><p>{mobile ? 'Production USB setup needs a desktop or laptop. On that computer, open led.mandalacodes.com in Chrome or Edge and choose Production setup.' : 'Use the secure top-level led.mandalacodes.com page in desktop Chrome or Edge. This workflow does not use or install Lightweaver Bridge.'}</p><code>led.mandalacodes.com/#screen=production{retainedCode ? `&job=${retainedCode}` : ''}</code>{retainedCode && <p>Job code <strong>{retainedCode}</strong> is retained in this address.</p>}</ProductionLandmark>;
+    const handoff = <ProductionLandmark className="prod-handoff" ref={primaryRef} tabIndex={-1}><span className="prod-kicker">Production setup</span><ProductionHeading>{mobile ? 'Continue on a workshop computer' : 'Open this page in Chrome or Edge'}</ProductionHeading><p>{mobile ? 'Production USB setup needs a desktop or laptop. On that computer, open led.mandalacodes.com in Chrome or Edge and choose Production setup.' : 'Use the secure top-level led.mandalacodes.com page in desktop Chrome or Edge. Studio uses direct local HTTP when allowed and the existing card-page bridge from HTTPS.'}</p><code>led.mandalacodes.com/#screen=production{retainedCode ? `&job=${retainedCode}` : ''}</code>{retainedCode && <p>Job code <strong>{retainedCode}</strong> is retained in this address.</p>}</ProductionLandmark>;
     return embedded ? <div className="prod-screen prod-embedded">{handoff}</div> : <div className="screen prod-screen">{handoff}</div>;
   }
 
@@ -567,7 +671,7 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
         <ProductionLandmark className="prod-shell">
           <header className="prod-hero">
             <div><span className="prod-kicker">Workshop · browser USB</span><ProductionHeading ref={primaryRef} tabIndex={-1}>Production setup</ProductionHeading><p>One card, one verified artwork, one physical pass. No firmware files or GPIO tables.</p></div>
-            <div className="prod-safety"><span aria-hidden="true">●</span> Chrome/Edge · secure USB · no Bridge</div>
+            <div className="prod-safety"><span aria-hidden="true">●</span> Chrome/Edge · secure USB · verified local card link</div>
           </header>
           <ol className="prod-steps" aria-label="Production progress">{STEPS.map(([id, label], index) => <li key={id} className={index < currentStage ? 'done' : index === currentStage ? 'current' : ''} aria-current={index === currentStage ? 'step' : undefined}><span>{index < currentStage ? '✓' : index + 1}</span>{label}</li>)}</ol>
           <div className="prod-layout">
@@ -586,10 +690,10 @@ export function ProductionScreen({ cardHost, onConnectCard, embedded = false }) 
                 {run?.state === 'inspect' && hardware && firmwareDecision === 'install-required' && usbConnected && <button className="btn primary" type="button" disabled={busy} onClick={installOrContinue}>Install verified firmware</button>}
                 {run?.state === 'install' && <div className="prod-progress" role="progressbar" aria-label="Installing verified firmware" aria-valuenow={Math.round(progress * 100)}><span style={{ width: `${Math.round(progress * 100)}%` }} /></div>}
                 {run?.state === 'reconnect' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready'} onClick={reconnectAfterInstall}>{busy ? 'Checking same card…' : 'Reconnect same card'}</button>}
-                {run?.state === 'restore' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready' || restoreStartedRef.current} onClick={restoreArtwork}>{busy ? 'Loading artwork once…' : 'Load verified artwork'}</button>}
-                {run?.state === 'verify-card' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready'} onClick={verifyCard}>{busy ? 'Reading card…' : 'Verify card read-back'}</button>}
-                {run?.state === 'check-lights' && <ProductionPhysicalTest job={job} runId={run.runId} cardHost={cardHost} expectedCardId={run.expectedCardId} platform={diagnosticPlatform(cap)} onResultsChange={setObservations} onComplete={continueAfterLights} onRecovery={handlePhysicalRecovery} />}
-                {run?.state === 'record' && <><form className="prod-record-form" onSubmit={event => { event.preventDefault(); void savePass(); }}><label htmlFor="prod-worker">Worker initials or ID</label><input id="prod-worker" value={workerId} maxLength={80} onChange={event => setWorkerId(event.target.value)} /><button className="btn primary" disabled={!workerId.trim() || busy}>{busy ? 'Saving pass…' : 'Save pass record'}</button></form>{recordRecoveryNeeded && <button className="btn" type="button" disabled={busy} onClick={() => void handlePhysicalRecovery('rerun-lights')}>Re-run physical checks</button>}</>}
+                {run?.state === 'restore' && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready' || restoreStartedRef.current || !configAuthority.ok} onClick={restoreArtwork}>{busy ? 'Loading artwork once…' : 'Load verified artwork'}</button>}
+                {run?.state === 'verify-card' && !recovery && <button className="btn primary" type="button" disabled={busy || release.state !== 'ready' || (!runtimeAuthority.ok && !readbackAuthority.ok)} onClick={verifyCard}>{busy ? 'Reading card…' : 'Verify card read-back'}</button>}
+                {run?.state === 'check-lights' && <ProductionPhysicalTest job={job} runId={run.runId} cardLink={cardLink} expectedCardId={run.expectedCardId} platform={diagnosticPlatform(cap)} onResultsChange={setObservations} onComplete={continueAfterLights} onRecovery={handlePhysicalRecovery} />}
+                {run?.state === 'record' && <><form className="prod-record-form" onSubmit={event => { event.preventDefault(); void savePass(); }}><label htmlFor="prod-worker">Worker initials or ID</label><input id="prod-worker" value={workerId} maxLength={80} onChange={event => setWorkerId(event.target.value)} /><button className="btn primary" disabled={!workerId.trim() || busy || !runtimeAuthority.ok}>{busy ? 'Saving pass…' : 'Save pass record'}</button></form>{recordRecoveryNeeded && <button className="btn" type="button" disabled={busy} onClick={() => void handlePhysicalRecovery('rerun-lights')}>Re-run physical checks</button>}</>}
                 {run?.state === 'complete' && <div className="prod-complete"><strong>Artwork passed</strong><p>The card, exact job, and physical outputs were recorded.</p><button className="btn primary" onClick={nextArtwork}>Next artwork</button></div>}</>}
                 {canChangeJob && !recovery && <button className="btn prod-change-job" type="button" disabled={busy} onClick={changeJob}>Change job</button>}
                 {error && <p className="prod-error" role="alert">{error}</p>}
