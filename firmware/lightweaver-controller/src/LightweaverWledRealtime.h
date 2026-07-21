@@ -21,4 +21,5 @@ void handleWledRealtime();
 // go stale when the STA interface drops and re-associates; call this from the
 // connectivity maintenance path so realtime streaming recovers. Art-Net has a
 // matching explicit rebind plus its own lazy retry fallback.
-void wledRealtimeRebind();
+bool wledRealtimeRebind();
+bool wledRealtimeIsListening();

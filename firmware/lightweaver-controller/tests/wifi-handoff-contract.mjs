@@ -12,6 +12,8 @@ const main = read('src/main.cpp');
 const web = read('src/LightweaverWeb.cpp');
 const artnet = read('src/LightweaverArtnet.cpp');
 const artnetHeader = read('src/LightweaverArtnet.h');
+const wled = read('src/LightweaverWledRealtime.cpp');
+const wledHeader = read('src/LightweaverWledRealtime.h');
 const parserGuard = read('scripts/guard-webserver-control-body.py');
 const platformio = read('platformio.ini');
 
@@ -83,6 +85,20 @@ assert.match(setupWeb, /startApMode\s*\([\s\S]*beginStationJoin\s*\(/,
 const beginJoin = functionBody(web, /void\s+beginStationJoin\s*\([^;]*\)\s*\{/);
 assert.match(beginJoin, /apTeardownScheduled\s*=\s*false[\s\S]*attemptCount\s*=\s*0[\s\S]*CredentialsAccepted/,
   'new credentials must replace pending teardown and retry metadata before starting a new generation');
+for (const signature of [
+  /void\s+startStationAttempt\s*\(/,
+  /void\s+startStationReconnect\s*\(/,
+]) {
+  const body = functionBody(web, signature);
+  assert.match(body, /WiFi\.setAutoReconnect\(false\)/,
+    'all policy-owned station attempts must disable SDK auto-reconnect');
+  assert.doesNotMatch(body, /WiFi\.setAutoReconnect\(true\)/,
+    'the SDK must never own retries alongside the connectivity policy');
+  assert.match(body, /recordStationAttempt/,
+    'attempt timestamps must be recorded only when production issues a real attempt');
+}
+assert.doesNotMatch(web, /WiFi\.setAutoReconnect\(true\)/,
+  'no firmware lifecycle may silently return retry ownership to the SDK');
 
 const ack = functionBody(web, /void\s+handleWifiHandoffAck\s*\(/);
 assert.match(ack, /handoffGeneration/,
@@ -184,17 +200,43 @@ assert.match(connectivity, /WL_CONNECTED[\s\S]*HandoffReady|StationAssociated/,
 assert.match(connectivity, /station association timed out[\s\S]*startApMode|SetupAp[\s\S]*startApMode/,
   'failed initial association must leave or restore a reachable setup AP');
 const associated = functionBody(web, /void\s+recordStationAssociation\s*\(/);
+assert.match(associated, /WiFi\.setAutoReconnect\(false\)/,
+  'association and recovery must leave SDK auto-reconnect disabled');
 assert.match(associated, /announceMdns[\s\S]*wledRealtimeRebind/,
   'association must refresh mDNS and existing realtime binding');
 assert.match(associated, /wledRealtimeRebind[\s\S]*artnetRebind/,
   'every association and reassociation must refresh both UDP listeners');
 assert.ok(associated.indexOf('artnetRebind()') < associated.indexOf('syncWifiReadiness(config)'),
   'command readiness may return only after all runtime UDP bindings are refreshed');
-assert.match(artnetHeader, /void\s+artnetRebind\s*\(\s*\)/,
-  'Art-Net must expose an explicit reconnect binding API');
-const artnetRebind = functionBody(artnet, /void\s+artnetRebind\s*\(\s*\)/);
-assert.match(artnetRebind, /gUdp\.stop\s*\(\s*\)[\s\S]*gListening\s*=\s*false[\s\S]*LW_ARTNET_PORT/,
+assert.match(artnetHeader, /bool\s+artnetRebind\s*\(\s*\)/,
+  'Art-Net rebind must report actual bind success');
+assert.match(wledHeader, /bool\s+wledRealtimeRebind\s*\(\s*\)/,
+  'WLED realtime rebind must report actual bind success');
+const artnetRebind = functionBody(artnet, /bool\s+artnetRebind\s*\(\s*\)/);
+assert.match(artnetRebind, /gUdp\.stop\s*\(\s*\)[\s\S]*gListening\s*=\s*false[\s\S]*bindArtnetSocket/,
   'Art-Net rebind must discard stale socket truth and reopen UDP 6454');
+const artnetBind = functionBody(artnet, /bool\s+bindArtnetSocket\s*\(/);
+assert.match(artnetBind, /gUdp\.begin\(LW_ARTNET_PORT\)/,
+  'the shared Art-Net bind path must open UDP 6454');
+assert.match(artnetRebind, /return\s+gListening/,
+  'Art-Net rebind return value must expose socket truth');
+const wledRebind = functionBody(wled, /bool\s+wledRealtimeRebind\s*\(\s*\)/);
+assert.match(wledRebind, /return\s+g_started/,
+  'WLED realtime rebind return value must expose socket truth');
+assert.doesNotMatch(artnet, /now\s*>=\s*nextRetry/,
+  'Art-Net lazy retry must be rollover-safe');
+assert.match(artnet, /elapsed\s*\(/,
+  'Art-Net lazy retry must use rollover-safe elapsed arithmetic');
+assert.match(wled, /elapsed\s*\(/,
+  'WLED realtime must have a rollover-safe lazy retry fallback');
+const readiness = functionBody(web, /void\s+syncWifiReadiness\s*\(/);
+assert.match(readiness, /connectivityTransitionPending/,
+  'production readiness must consume the native-tested binding-pending policy');
+assert.match(connectivity, /networkBindingsRetryDue[\s\S]*refreshNetworkBindings/,
+  'station-up listener failures must retry without blocking connectivity maintenance');
+const refreshBindings = functionBody(web, /void\s+refreshNetworkBindings\s*\(/);
+assert.doesNotMatch(refreshBindings, /ensureRecoveryAp|softAP/,
+  'listener-only failure must not reopen the recovery AP');
 const recoveryAp = functionBody(web, /void\s+ensureRecoveryAp\s*\([^;]*\)\s*\{/);
 assert.match(recoveryAp, /apActive\s*=\s*apRadioStarted/,
   'recovery AP status must reflect whether the AP radio actually started');
@@ -232,7 +274,8 @@ const status = functionBody(storage, /String\s+runtimeStatusJson\s*\(/);
 for (const field of [
   'transition', 'phase', 'transitionPending', 'apActive', 'stationIp',
   'handoffGeneration', 'phaseStartedMs', 'lastAttemptMs',
-  'attemptCount', 'lastError',
+  'attemptCount', 'lastError', 'networkBindingsPending',
+  'wledListenerReady', 'artnetListenerReady', 'lastBindingAttemptMs',
 ]) {
   assert.match(status, new RegExp(`doc\\["wifi"\\]\\["${field}"\\]\\s*=`),
     `status must expose safe WiFi field ${field}`);

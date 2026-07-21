@@ -9,10 +9,14 @@ using lightweaver::ConnectivityInput;
 using lightweaver::ConnectivityPhase;
 using lightweaver::ConnectivityState;
 using lightweaver::advanceConnectivity;
+using lightweaver::connectivityTransitionPending;
 using lightweaver::kHandoffGraceMs;
 using lightweaver::kInitialJoinTimeoutMs;
+using lightweaver::kNetworkBindingRetryMs;
 using lightweaver::kReconnectCadenceMs;
 using lightweaver::kRecoveryApThresholdMs;
+using lightweaver::recordNetworkBindingAttempt;
+using lightweaver::recordStationAttempt;
 
 static_assert(kInitialJoinTimeoutMs == 15000,
               "initial join timeout must remain 15 seconds");
@@ -22,6 +26,8 @@ static_assert(kRecoveryApThresholdMs == 60000,
               "recovery AP threshold must remain 60 seconds");
 static_assert(kHandoffGraceMs == 120000,
               "handoff grace must remain 120 seconds");
+static_assert(kNetworkBindingRetryMs == 2000,
+              "listener retry cadence must remain 2 seconds");
 
 ConnectivityInput input(ConnectivityEvent event,
                         std::uint32_t nowMs,
@@ -50,17 +56,25 @@ int main() {
   assert(!state.stationAssociated);
   assert(state.reconnectDue);
   assert(state.phaseStartedMs == 100);
-  assert(state.lastAttemptMs == 100);
+  assert(state.lastAttemptMs == 0);
   assert(state.generation == 7);
+  state = recordStationAttempt(state, 100);
+  assert(state.lastAttemptMs == 100);
+  assert(!state.reconnectDue);
 
   state = advanceConnectivity(
       state, input(ConnectivityEvent::StationAssociated, 500, 7));
   assert(state.phase == ConnectivityPhase::HandoffReady);
   assert(state.apActive);
   assert(state.stationAssociated);
-  assert(!state.reconnectDue);
+  assert(state.networkBindingsPending);
+  assert(state.networkBindingsRetryDue);
+  assert(connectivityTransitionPending(state));
   assert(state.phaseStartedMs == 500);
   assert(state.generation == 7);
+  state = recordNetworkBindingAttempt(state, 500, true, true);
+  assert(!state.networkBindingsPending);
+  assert(!state.networkBindingsRetryDue);
 
   ConnectivityState mismatch = advanceConnectivity(
       state, input(ConnectivityEvent::StationOriginAck, 700, 6));
@@ -156,6 +170,8 @@ int main() {
   assert(!state.stationAssociated);
   assert(state.reconnectDue);
   assert(state.phaseStartedMs == 5000);
+  assert(state.lastAttemptMs == 100);
+  state = recordStationAttempt(state, 5000);
   assert(state.lastAttemptMs == 5000);
 
   state = advanceConnectivity(
@@ -167,6 +183,8 @@ int main() {
       state, input(ConnectivityEvent::Tick, 5000 + kReconnectCadenceMs));
   assert(state.phase == ConnectivityPhase::Reconnecting);
   assert(state.reconnectDue);
+  assert(state.lastAttemptMs == 5000);
+  state = recordStationAttempt(state, 5000 + kReconnectCadenceMs);
   assert(state.lastAttemptMs == 5000 + kReconnectCadenceMs);
   state = advanceConnectivity(
       state, input(ConnectivityEvent::Tick,
@@ -192,6 +210,9 @@ int main() {
       state, input(ConnectivityEvent::Tick,
                    recoveryAttempt + kReconnectCadenceMs));
   assert(state.reconnectDue);
+  assert(state.lastAttemptMs == recoveryAttempt);
+  state = recordStationAttempt(
+      state, recoveryAttempt + kReconnectCadenceMs);
   assert(state.lastAttemptMs == recoveryAttempt + kReconnectCadenceMs);
 
   state = advanceConnectivity(
@@ -208,6 +229,7 @@ int main() {
   wrapped = advanceConnectivity(
       wrapped,
       input(ConnectivityEvent::CredentialsAccepted, nearWrap, 13));
+  wrapped = recordStationAttempt(wrapped, nearWrap);
   wrapped = advanceConnectivity(
       wrapped,
       input(ConnectivityEvent::Tick, nearWrap + kInitialJoinTimeoutMs - 1));
@@ -217,6 +239,71 @@ int main() {
       input(ConnectivityEvent::Tick, nearWrap + kInitialJoinTimeoutMs));
   assert(wrapped.phase == ConnectivityPhase::SetupAp);
   assert(wrapped.apActive);
+
+  ConnectivityState wrappedReconnect{};
+  wrappedReconnect.phase = ConnectivityPhase::Station;
+  wrappedReconnect.apActive = false;
+  wrappedReconnect.stationAssociated = true;
+  wrappedReconnect = advanceConnectivity(
+      wrappedReconnect,
+      input(ConnectivityEvent::StationLost, nearWrap));
+  wrappedReconnect = recordStationAttempt(wrappedReconnect, nearWrap);
+  wrappedReconnect = advanceConnectivity(
+      wrappedReconnect,
+      input(ConnectivityEvent::Tick, nearWrap + kReconnectCadenceMs - 1));
+  assert(!wrappedReconnect.reconnectDue);
+  wrappedReconnect = advanceConnectivity(
+      wrappedReconnect,
+      input(ConnectivityEvent::Tick, nearWrap + kReconnectCadenceMs));
+  assert(wrappedReconnect.reconnectDue);
+  wrappedReconnect = recordStationAttempt(
+      wrappedReconnect, nearWrap + kReconnectCadenceMs);
+  wrappedReconnect = advanceConnectivity(
+      wrappedReconnect,
+      input(ConnectivityEvent::Tick, nearWrap + kRecoveryApThresholdMs - 1));
+  assert(wrappedReconnect.phase == ConnectivityPhase::Reconnecting);
+  wrappedReconnect = advanceConnectivity(
+      wrappedReconnect,
+      input(ConnectivityEvent::Tick, nearWrap + kRecoveryApThresholdMs));
+  assert(wrappedReconnect.phase == ConnectivityPhase::RecoveryAp);
+  assert(wrappedReconnect.apActive);
+
+  ConnectivityState wrappedHandoff{};
+  wrappedHandoff = advanceConnectivity(
+      wrappedHandoff,
+      input(ConnectivityEvent::CredentialsAccepted, nearWrap, 14));
+  wrappedHandoff = recordStationAttempt(wrappedHandoff, nearWrap);
+  wrappedHandoff = advanceConnectivity(
+      wrappedHandoff,
+      input(ConnectivityEvent::StationAssociated, nearWrap + 100, 14));
+  wrappedHandoff = recordNetworkBindingAttempt(
+      wrappedHandoff, nearWrap + 100, true, true);
+  wrappedHandoff = advanceConnectivity(
+      wrappedHandoff,
+      input(ConnectivityEvent::Tick,
+            nearWrap + 100 + kHandoffGraceMs - 1));
+  assert(wrappedHandoff.phase == ConnectivityPhase::HandoffReady);
+  wrappedHandoff = advanceConnectivity(
+      wrappedHandoff,
+      input(ConnectivityEvent::Tick, nearWrap + 100 + kHandoffGraceMs));
+  assert(wrappedHandoff.phase == ConnectivityPhase::Station);
+
+  ConnectivityState wrappedBindings = wrappedHandoff;
+  wrappedBindings = advanceConnectivity(
+      wrappedBindings,
+      input(ConnectivityEvent::StationAssociated, nearWrap + 200, 14));
+  wrappedBindings = recordNetworkBindingAttempt(
+      wrappedBindings, nearWrap + 200, true, false);
+  wrappedBindings = advanceConnectivity(
+      wrappedBindings,
+      input(ConnectivityEvent::Tick,
+            nearWrap + 200 + kNetworkBindingRetryMs - 1));
+  assert(!wrappedBindings.networkBindingsRetryDue);
+  wrappedBindings = advanceConnectivity(
+      wrappedBindings,
+      input(ConnectivityEvent::Tick,
+            nearWrap + 200 + kNetworkBindingRetryMs));
+  assert(wrappedBindings.networkBindingsRetryDue);
 
   return 0;
 }

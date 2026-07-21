@@ -1997,6 +1997,7 @@ void announceMdns(const String& hostname) {
 void startApMode(RuntimeConfig& config) {
   WiFi.mode(config.wifi.ssid.length() ? WIFI_AP_STA : WIFI_AP);
   WiFi.setSleep(false);
+  WiFi.setAutoReconnect(false);
   String ssid = apSsid();
   if (!apRadioStarted) apRadioStarted = WiFi.softAP(ssid.c_str());
   config.wifiRuntime.connectivity.apActive = apRadioStarted;
@@ -2024,6 +2025,7 @@ void ensureRecoveryAp(RuntimeConfig& config) {
   // keep the saved credentials/project intact while making setup reachable.
   WiFi.mode(WIFI_AP_STA);
   WiFi.setSleep(false);
+  WiFi.setAutoReconnect(false);
   if (!apRadioStarted) {
     String ssid = apSsid();
     apRadioStarted = WiFi.softAP(ssid.c_str());
@@ -2038,38 +2040,36 @@ void ensureRecoveryAp(RuntimeConfig& config) {
   }
 }
 
-bool wifiPhaseIsPending(lightweaver::ConnectivityPhase phase) {
-  return phase == lightweaver::ConnectivityPhase::Joining ||
-         phase == lightweaver::ConnectivityPhase::HandoffReady ||
-         phase == lightweaver::ConnectivityPhase::Reconnecting ||
-         phase == lightweaver::ConnectivityPhase::RecoveryAp;
-}
-
 void syncWifiReadiness(const RuntimeConfig& config) {
   runtimeSetWifiTransitionPending(
-      wifiPhaseIsPending(config.wifiRuntime.connectivity.phase) ||
+      lightweaver::connectivityTransitionPending(
+          config.wifiRuntime.connectivity) ||
       config.wifiRuntime.stationLinkPending);
 }
 
-void startStationAttempt(RuntimeConfig& config) {
+void startStationAttempt(RuntimeConfig& config, uint32_t now) {
   String hostname = sanitizeHostname(config.wifi.hostname);
   WiFi.mode(config.wifiRuntime.connectivity.apActive ? WIFI_AP_STA : WIFI_STA);
   WiFi.setSleep(false);
-  WiFi.setAutoReconnect(true);
+  WiFi.setAutoReconnect(false);
   WiFi.setHostname(hostname.c_str());
   WiFi.begin(config.wifi.ssid.c_str(), config.wifi.password.c_str());
+  config.wifiRuntime.connectivity = lightweaver::recordStationAttempt(
+      config.wifiRuntime.connectivity, now);
   config.wifiRuntime.attemptCount++;
   if (Serial) Serial.println("WiFi station association started");
 }
 
-void startStationReconnect(RuntimeConfig& config) {
+void startStationReconnect(RuntimeConfig& config, uint32_t now) {
   WiFi.mode(config.wifiRuntime.connectivity.apActive ? WIFI_AP_STA : WIFI_STA);
   WiFi.setSleep(false);
-  WiFi.setAutoReconnect(true);
+  WiFi.setAutoReconnect(false);
   WiFi.setHostname(sanitizeHostname(config.wifi.hostname).c_str());
   if (!WiFi.reconnect()) {
     WiFi.begin(config.wifi.ssid.c_str(), config.wifi.password.c_str());
   }
+  config.wifiRuntime.connectivity = lightweaver::recordStationAttempt(
+      config.wifiRuntime.connectivity, now);
   config.wifiRuntime.attemptCount++;
   if (Serial) Serial.println("WiFi station reassociation requested");
 }
@@ -2081,10 +2081,12 @@ void beginStationJoin(RuntimeConfig& config, uint32_t generation) {
   apTeardownDeadlineMs = 0;
   apTeardownStationIp = "";
   config.wifiRuntime.attemptCount = 0;
+  WiFi.setAutoReconnect(false);
   WiFi.disconnect(false, false);
+  uint32_t now = millis();
   config.wifiRuntime.connectivity = lightweaver::advanceConnectivity(
       config.wifiRuntime.connectivity,
-      {lightweaver::ConnectivityEvent::CredentialsAccepted, millis(), generation});
+      {lightweaver::ConnectivityEvent::CredentialsAccepted, now, generation});
   config.wifiRuntime.stationIp = "";
   config.wifiRuntime.lastError = "";
   config.wifiRuntime.stationLinkPending = false;
@@ -2092,7 +2094,7 @@ void beginStationJoin(RuntimeConfig& config, uint32_t generation) {
   config.activeIp = WiFi.softAPIP().toString();
   config.activeHostname = "";
   syncWifiReadiness(config);
-  startStationAttempt(config);
+  startStationAttempt(config, now);
 }
 
 void scheduleApTeardown(uint32_t generation) {
@@ -2110,10 +2112,21 @@ void retireSetupAp(RuntimeConfig& config) {
   WiFi.softAPdisconnect(true);
   apRadioStarted = false;
   WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(false);
   config.wifiRuntime.connectivity.apActive = false;
   config.wifiRuntime.stationLinkPending = false;
   config.activeTransport = WIFI_TRANSPORT_STATION;
   config.activeIp = config.wifiRuntime.stationIp;
+}
+
+void refreshNetworkBindings(RuntimeConfig& config, uint32_t now) {
+  lightweaver::ConnectivityState& state = config.wifiRuntime.connectivity;
+  bool wledReady = wledRealtimeIsListening();
+  bool artnetReady = artnetIsListening();
+  if (!wledReady) wledReady = wledRealtimeRebind();
+  if (!artnetReady) artnetReady = artnetRebind();
+  state = lightweaver::recordNetworkBindingAttempt(
+      state, now, wledReady, artnetReady);
 }
 
 void processScheduledApTeardown(
@@ -2151,14 +2164,19 @@ void recordStationAssociation(RuntimeConfig& config, uint32_t now) {
   config.wifiRuntime.stationIp = WiFi.localIP().toString();
   config.wifiRuntime.lastError = "";
   config.wifiRuntime.stationLinkPending = false;
+  WiFi.setAutoReconnect(false);
   config.activeTransport = WIFI_TRANSPORT_STATION;
   config.activeIp = config.wifiRuntime.stationIp;
   config.activeHostname = sanitizeHostname(config.wifi.hostname);
   announceMdns(config.activeHostname);
-  wledRealtimeRebind();
-  artnetRebind();
-  // A recovery AP is retired only after station IP and runtime listeners have
-  // been refreshed. Initial handoff AP retirement still requires ACK/grace.
+  bool wledReady = wledRealtimeRebind();
+  bool artnetReady = artnetRebind();
+  config.wifiRuntime.connectivity =
+      lightweaver::recordNetworkBindingAttempt(
+          config.wifiRuntime.connectivity, now, wledReady, artnetReady);
+  // The recovery AP may retire once station DHCP is usable. Listener bind
+  // failures remain fail-closed in networkBindingsPending and retry in place;
+  // they do not reopen an otherwise unnecessary recovery AP.
   if (recoveryApWasActive) retireSetupAp(config);
   syncWifiReadiness(config);
   if (Serial) {
@@ -2195,13 +2213,16 @@ void maintainConnectivity() {
       cfg.activeIp = "";
       cfg.activeHostname = "";
       syncWifiReadiness(cfg);
-      startStationReconnect(cfg);
+      startStationReconnect(cfg, now);
       return;
     }
     if (currentStationIp != cfg.wifiRuntime.stationIp) {
       recordStationAssociation(cfg, now);
       return;
     }
+    state = lightweaver::advanceConnectivity(
+        state, {lightweaver::ConnectivityEvent::Tick, now, 0});
+    if (state.networkBindingsRetryDue) refreshNetworkBindings(cfg, now);
     syncWifiReadiness(cfg);
     return;
   }
@@ -2224,13 +2245,17 @@ void maintainConnectivity() {
     cfg.activeIp = WiFi.softAPIP().toString();
     cfg.activeHostname = "";
     syncWifiReadiness(cfg);
-    startStationAttempt(cfg);
+    startStationAttempt(cfg, now);
     return;
   }
 
   lightweaver::ConnectivityPhase previousPhase = state.phase;
   state = lightweaver::advanceConnectivity(
       state, {lightweaver::ConnectivityEvent::Tick, now, 0});
+
+  if (state.networkBindingsRetryDue && stationReady) {
+    refreshNetworkBindings(cfg, now);
+  }
 
   if (previousPhase == lightweaver::ConnectivityPhase::Joining &&
       state.phase == lightweaver::ConnectivityPhase::SetupAp) {
@@ -2250,7 +2275,7 @@ void maintainConnectivity() {
   if (state.reconnectDue &&
       (state.phase == lightweaver::ConnectivityPhase::Reconnecting ||
        state.phase == lightweaver::ConnectivityPhase::RecoveryAp)) {
-    startStationReconnect(cfg);
+    startStationReconnect(cfg, now);
   }
 
   syncWifiReadiness(cfg);

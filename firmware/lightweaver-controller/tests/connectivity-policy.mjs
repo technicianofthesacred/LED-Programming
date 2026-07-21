@@ -5,13 +5,18 @@ import { join } from 'node:path';
 
 const dir = mkdtempSync(join(tmpdir(), 'lw-connectivity-'));
 try {
-  const binary = join(dir, 'connectivity-policy');
-  execFileSync(process.env.CXX || 'c++', [
-    '-std=c++17',
+  for (const source of [
     'connectivity-policy.cpp',
-    '-o', binary,
-  ], { cwd: new URL('.', import.meta.url), stdio: 'inherit' });
-  execFileSync(binary, { stdio: 'inherit' });
+    'connectivity-orchestration.cpp',
+  ]) {
+    const binary = join(dir, source.replace(/\.cpp$/, ''));
+    execFileSync(process.env.CXX || 'c++', [
+      '-std=c++17',
+      source,
+      '-o', binary,
+    ], { cwd: new URL('.', import.meta.url), stdio: 'inherit' });
+    execFileSync(binary, { stdio: 'inherit' });
+  }
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
