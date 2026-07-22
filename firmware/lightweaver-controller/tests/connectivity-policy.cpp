@@ -10,7 +10,6 @@ using lightweaver::ConnectivityPhase;
 using lightweaver::ConnectivityState;
 using lightweaver::advanceConnectivity;
 using lightweaver::connectivityTransitionPending;
-using lightweaver::kHandoffGraceMs;
 using lightweaver::kInitialJoinTimeoutMs;
 using lightweaver::kNetworkBindingRetryMs;
 using lightweaver::kReconnectCadenceMs;
@@ -24,8 +23,6 @@ static_assert(kReconnectCadenceMs == 10000,
               "reconnect cadence must remain 10 seconds");
 static_assert(kRecoveryApThresholdMs == 60000,
               "recovery AP threshold must remain 60 seconds");
-static_assert(kHandoffGraceMs == 120000,
-              "handoff grace must remain 120 seconds");
 static_assert(kNetworkBindingRetryMs == 2000,
               "listener retry cadence must remain 2 seconds");
 
@@ -113,38 +110,45 @@ int main() {
   assert(interruptedHandoff.stationAssociated);
   interruptedHandoff = advanceConnectivity(
       interruptedHandoff,
-      input(ConnectivityEvent::Tick, 1500 + kHandoffGraceMs));
+      input(ConnectivityEvent::Tick, 1500 + 120000));
   assert(interruptedHandoff.phase == ConnectivityPhase::HandoffReady);
   assert(interruptedHandoff.apActive);
 
   ConnectivityState acknowledgedRejoin = advanceConnectivity(
       interruptedHandoff,
       input(ConnectivityEvent::StationOriginAck,
-            1500 + kHandoffGraceMs + 1,
+            1500 + 120001,
             8));
   assert(acknowledgedRejoin.phase == ConnectivityPhase::Station);
   assert(!acknowledgedRejoin.apActive);
 
   interruptedHandoff = advanceConnectivity(
       interruptedHandoff,
-      input(ConnectivityEvent::Tick, 2500 + kHandoffGraceMs));
-  assert(interruptedHandoff.phase == ConnectivityPhase::Station);
-  assert(!interruptedHandoff.apActive);
+      input(ConnectivityEvent::Tick, 2500 + 120000));
+  assert(interruptedHandoff.phase == ConnectivityPhase::HandoffReady);
+  assert(interruptedHandoff.apActive);
 
-  ConnectivityState grace{};
-  grace = advanceConnectivity(
-      grace, input(ConnectivityEvent::CredentialsAccepted, 1000, 9));
-  grace = advanceConnectivity(
-      grace, input(ConnectivityEvent::StationAssociated, 1100, 9));
-  grace = advanceConnectivity(
-      grace, input(ConnectivityEvent::Tick, 1100 + kHandoffGraceMs - 1));
-  assert(grace.phase == ConnectivityPhase::HandoffReady);
-  assert(grace.apActive);
-  grace = advanceConnectivity(
-      grace, input(ConnectivityEvent::Tick, 1100 + kHandoffGraceMs));
-  assert(grace.phase == ConnectivityPhase::Station);
-  assert(!grace.apActive);
-  assert(grace.stationAssociated);
+  ConnectivityState unacknowledged{};
+  unacknowledged = advanceConnectivity(
+      unacknowledged, input(ConnectivityEvent::CredentialsAccepted, 1000, 9));
+  unacknowledged = advanceConnectivity(
+      unacknowledged, input(ConnectivityEvent::StationAssociated, 1100, 9));
+  unacknowledged = advanceConnectivity(
+      unacknowledged, input(ConnectivityEvent::Tick, 1100 + 120000));
+  assert(unacknowledged.phase == ConnectivityPhase::HandoffReady);
+  assert(unacknowledged.apActive);
+  assert(unacknowledged.stationAssociated);
+
+  ConnectivityState acknowledged = advanceConnectivity(
+      unacknowledged,
+      input(ConnectivityEvent::StationOriginAck, 1100 + 120001,
+            8));
+  assert(acknowledged.phase == ConnectivityPhase::HandoffReady);
+  acknowledged = advanceConnectivity(
+      unacknowledged,
+      input(ConnectivityEvent::StationOriginAck, 1100 + 120001, 9));
+  assert(acknowledged.phase == ConnectivityPhase::Station);
+  assert(!acknowledged.apActive);
 
   ConnectivityState timedOut{};
   timedOut = advanceConnectivity(
@@ -162,6 +166,18 @@ int main() {
   assert(!timedOut.stationAssociated);
   assert(!timedOut.reconnectDue);
   assert(timedOut.generation == 11);
+  assert(timedOut.lastAttemptMs == 2000 + kInitialJoinTimeoutMs);
+  timedOut = advanceConnectivity(
+      timedOut, input(ConnectivityEvent::Tick,
+                      2000 + kInitialJoinTimeoutMs + kReconnectCadenceMs - 1));
+  assert(timedOut.phase == ConnectivityPhase::SetupAp);
+  assert(!timedOut.reconnectDue);
+  timedOut = advanceConnectivity(
+      timedOut, input(ConnectivityEvent::Tick,
+                      2000 + kInitialJoinTimeoutMs + kReconnectCadenceMs));
+  assert(timedOut.phase == ConnectivityPhase::Joining);
+  assert(timedOut.apActive);
+  assert(timedOut.reconnectDue);
 
   state = advanceConnectivity(
       state, input(ConnectivityEvent::StationLost, 5000));
@@ -280,12 +296,12 @@ int main() {
       wrappedHandoff, nearWrap + 100, true, true);
   wrappedHandoff = advanceConnectivity(
       wrappedHandoff,
-      input(ConnectivityEvent::Tick,
-            nearWrap + 100 + kHandoffGraceMs - 1));
+      input(ConnectivityEvent::Tick, nearWrap + 100 + 120000));
   assert(wrappedHandoff.phase == ConnectivityPhase::HandoffReady);
   wrappedHandoff = advanceConnectivity(
       wrappedHandoff,
-      input(ConnectivityEvent::Tick, nearWrap + 100 + kHandoffGraceMs));
+      input(ConnectivityEvent::StationOriginAck,
+            nearWrap + 100 + 120001, 14));
   assert(wrappedHandoff.phase == ConnectivityPhase::Station);
 
   ConnectivityState wrappedBindings = wrappedHandoff;

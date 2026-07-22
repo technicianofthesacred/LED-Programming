@@ -7,7 +7,6 @@ namespace lightweaver {
 constexpr std::uint32_t kInitialJoinTimeoutMs = 15000;
 constexpr std::uint32_t kReconnectCadenceMs = 10000;
 constexpr std::uint32_t kRecoveryApThresholdMs = 60000;
-constexpr std::uint32_t kHandoffGraceMs = 120000;
 constexpr std::uint32_t kNetworkBindingRetryMs = 2000;
 
 enum class ConnectivityPhase {
@@ -175,14 +174,15 @@ inline ConnectivityState advanceConnectivity(
     next.wledListenerReady = false;
     next.artnetListenerReady = false;
     next.phaseStartedMs = input.nowMs;
+    next.lastAttemptMs = input.nowMs;
     return next;
   }
 
-  if (current.phase == ConnectivityPhase::HandoffReady &&
-      current.stationAssociated &&
-      elapsed(input.nowMs, current.phaseStartedMs, kHandoffGraceMs)) {
-    next.phase = ConnectivityPhase::Station;
-    next.apActive = false;
+  if (current.phase == ConnectivityPhase::SetupAp &&
+      current.generation != 0 &&
+      elapsed(input.nowMs, current.lastAttemptMs, kReconnectCadenceMs)) {
+    next.phase = ConnectivityPhase::Joining;
+    next.reconnectDue = true;
     next.phaseStartedMs = input.nowMs;
     return next;
   }

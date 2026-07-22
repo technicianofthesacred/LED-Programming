@@ -95,6 +95,10 @@ assert.match(advancedRoot,
 assert.doesNotMatch(advancedRoot,
   /Saved\. Joining your home WiFi now[^'\"]*Then open/,
   'the setup page must not tell the user to leave the AP before station evidence is verified');
+assert.doesNotMatch(web, /keeps retrying about once a minute/,
+  'the recovery page must not describe the old inert/minute retry behavior');
+assert.match(web, /keeps retrying every 10 seconds/,
+  'the recovery page must describe the bounded retry cadence truthfully');
 
 assert.doesNotMatch(web, /bool\s+tryStationJoin\s*\(/,
   'boot association must not use the old blocking STA-only join');

@@ -142,10 +142,13 @@ inline ConnectivityActionPlan planConnectivityActions(
   }
 
   if (plan.stationAttempt == ConnectivityStationAttempt::None &&
-      plan.nextState.reconnectDue &&
-      (plan.nextState.phase == ConnectivityPhase::Reconnecting ||
-       plan.nextState.phase == ConnectivityPhase::RecoveryAp)) {
-    plan.stationAttempt = ConnectivityStationAttempt::Reconnect;
+      plan.nextState.reconnectDue) {
+    if (plan.nextState.phase == ConnectivityPhase::Joining) {
+      plan.stationAttempt = ConnectivityStationAttempt::Begin;
+    } else if (plan.nextState.phase == ConnectivityPhase::Reconnecting ||
+               plan.nextState.phase == ConnectivityPhase::RecoveryAp) {
+      plan.stationAttempt = ConnectivityStationAttempt::Reconnect;
+    }
   }
 
   return plan;
