@@ -523,7 +523,7 @@ test('a delayed hotspot status cannot retarget or resurrect recovery after the p
   expect(await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun())).toMatchObject({ runId: replacementRunId, state: 'connect-card' });
 });
 
-test('an erased card automatically retries its authorized station popup after the gallery network returns', async ({ page }) => {
+test('an erased card retries once after WiFi returns and lets a slow ESP station page finish', async ({ page }) => {
   const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   await page.route('https://led.mandalacodes.com/**', async route => {
     const requested = new URL(route.request().url());
@@ -553,7 +553,11 @@ test('an erased card automatically retries its authorized station popup after th
     let activeHost = 'lightweaver.local';
     let acked = false;
     let galleryNetworkAvailable = false;
-    const stats = { openHosts: [], stationNavigations: 0, status: 0, ack: 0, firmwareInfo: 0 };
+    let stationLoadGeneration = 0;
+    const stats = {
+      openHosts: [], stationNavigations: 0, interruptedStationLoads: 0,
+      completedStationLoads: 0, status: 0, ack: 0, firmwareInfo: 0,
+    };
     window.__LW_FLASH_HANDOFF_STATS__ = stats;
     const installed = () => localStorage.getItem('lw_test_factory_flashed') === '1';
     const statusEnvelope = () => {
@@ -598,6 +602,8 @@ test('an erased card automatically retries its authorized station popup after th
         activeHost = new URL(value).hostname;
         if (activeHost !== stationHost) return;
         stats.stationNavigations += 1;
+        stationLoadGeneration += 1;
+        const loadGeneration = stationLoadGeneration;
         if (stats.stationNavigations === 1) {
           // The first navigation happens while the workstation is still on the
           // card AP, so the gallery-subnet address cannot load. Switching Wi-Fi
@@ -605,7 +611,14 @@ test('an erased card automatically retries its authorized station popup after th
           setTimeout(() => { galleryNetworkAvailable = true; }, 200);
           return;
         }
-        if (galleryNetworkAvailable) setTimeout(emitReady, 0);
+        if (galleryNetworkAvailable) setTimeout(() => {
+          if (loadGeneration !== stationLoadGeneration) {
+            stats.interruptedStationLoads += 1;
+            return;
+          }
+          stats.completedStationLoads += 1;
+          emitReady();
+        }, 5_500);
       } },
     };
     window.open = url => {
@@ -627,7 +640,7 @@ test('an erased card automatically retries its authorized station popup after th
   await expect(page.getByRole('button', { name: 'Install verified firmware', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Install verified firmware', exact: true }).click();
   await page.getByRole('button', { name: 'Reconnect same card' }).click();
-  await expect(page.getByRole('button', { name: 'Load verified artwork' })).toBeVisible({ timeout: 12_000 });
+  await expect(page.getByRole('button', { name: 'Load verified artwork' })).toBeVisible({ timeout: 18_000 });
 
   const result = await page.evaluate(async () => ({
     stats: window.__LW_FLASH_HANDOFF_STATS__,
@@ -635,8 +648,10 @@ test('an erased card automatically retries its authorized station popup after th
     run: (await import('/src/lib/productionRun.js')).readProductionRun(),
   }));
   expect(result.flashed).toBe('1');
-  expect(result.stats.openHosts).toContain('192.168.4.1');
-  expect(result.stats.stationNavigations).toBeGreaterThanOrEqual(2);
+  expect(result.stats.openHosts).toEqual(['192.168.4.1']);
+  expect(result.stats.stationNavigations).toBe(2);
+  expect(result.stats.interruptedStationLoads).toBe(0);
+  expect(result.stats.completedStationLoads).toBe(1);
   expect(result.stats.ack).toBe(1);
   expect(result.stats.firmwareInfo).toBeGreaterThanOrEqual(2);
   expect(result.run).toMatchObject({ state: 'restore', expectedCardId: 'lw-aabbccddeeff', cardChanged: true });

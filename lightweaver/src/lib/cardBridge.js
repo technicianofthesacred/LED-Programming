@@ -42,8 +42,13 @@ const PRIVILEGED_BRIDGE_TYPES = new Set([
   'wifi-handoff-ack',
 ]);
 const IDENTITY_FREE_BRIDGE_TYPES = new Set(['ping', 'status', 'firmware-info']);
-const WIFI_HANDOFF_NAVIGATION_RETRY_INTERVAL_MS = 4000;
-const WIFI_HANDOFF_NAVIGATION_MAX_ATTEMPTS = 45;
+// Retry once soon after the operator has had an opportunity to switch networks,
+// then give each subsequent ESP page load materially more time to complete.
+// The last automatic navigation starts after 130 seconds and gets the remainder
+// of Production's three-minute station-return window without another reload.
+const WIFI_HANDOFF_NAVIGATION_RETRY_DELAYS_MS = Object.freeze([
+  4000, 12000, 24000, 30000, 30000, 30000,
+]);
 
 // Reads and idempotent transaction operations may safely cross one transient
 // bridge timeout. Candidate staging is intentionally absent: retrying it could
@@ -280,8 +285,19 @@ function scheduleBridgeHandoffNavigationRetry({ target, url, correlation, flowId
   const owner = browserWindow();
   const work = {
     target, url, correlation, flowId, owner,
-    attempts: 1,
+    nextDelayIndex: 0,
     timer: null,
+  };
+  const scheduleNext = () => {
+    if (bridgeHandoffNavigationRetry !== work) return;
+    const delay = WIFI_HANDOFF_NAVIGATION_RETRY_DELAYS_MS[work.nextDelayIndex];
+    if (!Number.isFinite(delay)) {
+      clearBridgeHandoffNavigationRetry();
+      return;
+    }
+    work.nextDelayIndex += 1;
+    work.timer = setTimeout(retry, delay);
+    work.timer?.unref?.();
   };
   const retry = () => {
     if (bridgeHandoffNavigationRetry !== work) return;
@@ -294,25 +310,20 @@ function scheduleBridgeHandoffNavigationRetry({ target, url, correlation, flowId
       || bridgeWindow !== target
       || bridgeTargetClosed(target)
       || bridgeHandoffFlowId !== flowId
-      || !sameHandoffCorrelation(bridgeHandoffCorrelation, correlation)
-      || work.attempts >= WIFI_HANDOFF_NAVIGATION_MAX_ATTEMPTS) {
+      || !sameHandoffCorrelation(bridgeHandoffCorrelation, correlation)) {
       clearBridgeHandoffNavigationRetry();
       return;
     }
-    work.attempts += 1;
     revokeBridgeForNavigation({
       host: correlation.host,
       origin: currentOrigin,
       preserveHandoff: true,
     });
     try { target.location.href = url; } catch { /* retry stays bounded */ }
-    if (bridgeHandoffNavigationRetry !== work) return;
-    work.timer = setTimeout(retry, WIFI_HANDOFF_NAVIGATION_RETRY_INTERVAL_MS);
-    work.timer?.unref?.();
+    scheduleNext();
   };
   bridgeHandoffNavigationRetry = work;
-  work.timer = setTimeout(retry, WIFI_HANDOFF_NAVIGATION_RETRY_INTERVAL_MS);
-  work.timer?.unref?.();
+  scheduleNext();
 }
 
 function applyAuthoritativeBridgeStatus(status, host = bridgeHost) {
