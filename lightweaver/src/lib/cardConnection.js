@@ -8,6 +8,7 @@ export const CARD_HOST_FALLBACKS = ['lightweaver.local', '192.168.4.1'];
 export const CARD_CONNECTION_MISS_LIMIT = 3;
 export const CARD_HOST_HISTORY_LIMIT = 8;
 export const CARD_SPECIFIC_DISCOVERY_HEAD_START_MS = 180;
+export const PRODUCTION_READ_ONLY_PREFLIGHT_FALLBACK_MS = 5_000;
 
 function stripProtocolAndPath(rawHost = '') {
   const value = String(rawHost || '').trim().toLowerCase();
@@ -58,6 +59,18 @@ export function normalizeCardHost(rawHost = '') {
 
 export function cardHostToUrl(rawHost = '') {
   return `http://${normalizeCardHost(rawHost)}`;
+}
+
+// Production's pre-install firmware inspection is read-only. If a previous
+// setup saved the AP address, try that exact local origin briefly, then reuse
+// the same card-page bridge at the stable mDNS name. The later identity read
+// still has to match the USB-inspected card before Production can continue.
+// Post-install setup/handoff deliberately does not use this list: its AP host
+// and handoff correlation are authoritative and must never be guessed.
+export function productionReadOnlyPreflightHosts(rawHost = '') {
+  const requested = normalizeCardHost(rawHost || DEFAULT_CARD_HOST);
+  const initial = isLocalCardHost(requested) ? requested : DEFAULT_CARD_HOST;
+  return [...new Set([initial, DEFAULT_CARD_HOST])];
 }
 
 // A card lives on the local network: an RFC1918 / loopback IPv4 address, or a

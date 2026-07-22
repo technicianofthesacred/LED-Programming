@@ -32,15 +32,24 @@ reported a blank, non-command-ready project. Studio's source flow now also
 accepts an already verified exact station card for firmware inspection instead
 of forcing it back through a nonexistent setup AP.
 
-The protected signer published firmware build `df20968`, Cloudflare published
-the matching Studio, and the strict live verifier proved the signed image plus
-all 51 build-graph files. Live Studio then flashed that release to the exact
-USB card and advanced with USB released instead of leaving the S3 in its ROM
-downloader. After the full erase, the old station route disappeared and the
-card-page handoff correctly targeted `192.168.4.1`; joining the setup Wi-Fi and
-all later physical gates remain incomplete. No factory beacon, guided boundary,
-Aurora, or recovery light result was visually verified. Deployment correctness
-and API readback are not shipment evidence.
+The protected signer published firmware build `e4b4858`, Cloudflare published
+the matching Studio, and the signed production launch gate passed. In the
+2026-07-22 bench run, live Production Setup identified the exact USB card
+`lw-b0fe81f61b44` at `/dev/cu.usbmodem142201`. Before erase, its old signed
+build `3a5771a` was reachable at `lightweaver.local` / `192.168.18.70` and
+truthfully reported factory/blank state: `commandReady: false` and
+`outputReady: true`.
+
+Production first reopened its stale persisted setup address, `192.168.4.1`, and
+timed out even though the exact card remained available through mDNS. That is a
+real preflight-resume defect: a remembered setup address is not authority to
+ignore fresher exact-card reachability. Safe recovery reidentified the same USB
+card, fully erased it, and successfully flashed signed build `e4b4858` through
+the live Studio. The old `.70` station route then stopped answering, as expected
+after erase, and Studio truthfully remained **Not connected** while waiting at
+the setup-hotspot stage. The workstation was not switched to the setup Wi-Fi,
+so no hotspot-to-LAN handoff, project load, guided light check, or recovery test
+was credited. No card from this run is ship-ready yet.
 
 ## Full-flow audit
 
@@ -84,9 +93,12 @@ lost reset response, unreachable card page, stale runs, and retained USB
 ownership.
 
 **Live result.** The correction is signed and deployed. The production browser
-inspected `lw-b0fe81f61b44`, flashed the exact release, released USB, and reached
-**Reconnect same card** without the former downloader dead end. Application/AP
-readiness and visible output still require the following gates.
+inspected `lw-b0fe81f61b44` at `/dev/cu.usbmodem142201`, safely recovered from
+the stale persisted `192.168.4.1` attempt by reidentifying that same card, and
+erased/flashed signed build `e4b4858`. The prior station address
+`192.168.18.70` became unreachable after erase. Studio did not claim success: it
+remained **Not connected** at the setup-hotspot gate. Application/AP readiness
+and visible output still require the following gates.
 
 ### 2. Prove the factory card is blank and visibly alive
 

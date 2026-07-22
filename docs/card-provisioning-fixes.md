@@ -108,18 +108,24 @@ direct diagnostic control has previously produced light on the GPIO 18 strip.
 Those are useful diagnostics only. They are not a completed live Studio
 Production Setup run and do not prove the complete 44-pixel customer flow.
 
+On 2026-07-22, live Production Setup reidentified exact card
+`lw-b0fe81f61b44` on `/dev/cu.usbmodem142201` and successfully erased/flashed
+signed build `e4b4858`. Before erase, old build `3a5771a` was reachable at
+`lightweaver.local` / `192.168.18.70`, blank, `commandReady: false`, and
+`outputReady: true`. After erase, `.70` correctly disappeared and Studio
+remained **Not connected** at the setup-hotspot stage. This proves the live
+signed flash boundary only; Wi-Fi handoff, project read-back, real light, and
+recovery remain unverified.
+
 ## Remaining shipment blockers
 
-1. Merge the current source hardening and pass `npm run launch:source`.
-2. Let the protected workflow compile/sign firmware and regenerate the GPIO 18
-   production job; pass `npm run launch:check` on that release commit.
-3. Publish Studio with Cloudflare credentials and pass
-   `PROD_CHECK_REQUIRED=1 npm run check:prod`, including the live build graph.
-4. Through the live Production Setup route, erase and commission a real card in
-   one uninterrupted guided same-tab flow—no terminal, direct diagnostic
-   control, local server, or typed card address.
-5. Observe the complete 44-pixel GPIO 18 Aurora strip, then pass power-cycle and
+1. Continue the already flashed exact card through the live guided setup Wi-Fi
+   and gallery-LAN handoff—no terminal, direct diagnostic control, local server,
+   or typed card address.
+2. Confirm Studio classifies the card as **Blank — load a project**, then load
+   and independently read back GPIO 18 / 44 / GRB / Aurora / 1500 mA / 0.35.
+3. Observe the complete 44-pixel GPIO 18 Aurora strip, then pass power-cycle and
    network-outage recovery and export the JSON/CSV production record.
 
-Until all five are recorded, the production flow remains pending and the card
+Until all three are recorded, the production flow remains pending and the card
 is not ready to ship.

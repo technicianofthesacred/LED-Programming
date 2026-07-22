@@ -4,7 +4,11 @@ import { ProductionPassRecord } from '../components/production/ProductionPassRec
 import { ProductionPhysicalTest } from '../components/production/ProductionPhysicalTest.jsx';
 import { ProductionRecovery } from '../components/production/ProductionRecovery.jsx';
 import { clearCardCommissioning } from '../lib/cardCommissioningFlow.js';
-import { normalizeCardHost } from '../lib/cardConnection.js';
+import {
+  PRODUCTION_READ_ONLY_PREFLIGHT_FALLBACK_MS,
+  normalizeCardHost,
+  productionReadOnlyPreflightHosts,
+} from '../lib/cardConnection.js';
 import { readCardProjectEvidence, readCardStatusEnvelope, pushConfigToCard } from '../lib/cardPushClient.js';
 import { adoptExpectedCardIdentity } from '../lib/cardIdentity.js';
 import { adoptCommissionedCardBridgeIdentity, getCardBridgeState, retargetCardBridge, sendCardBridgeRequest } from '../lib/cardBridge.js';
@@ -23,6 +27,7 @@ import {
   assertProductionCardLease,
   captureProductionCardLease,
   productionCardAuthority,
+  productionReadOnlyPreflightAuthority,
 } from '../lib/productionCardLease.js';
 import {
   PRODUCTION_RUN_COMMIT_A_KEY, PRODUCTION_RUN_COMMIT_B_KEY,
@@ -527,7 +532,11 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     } finally { if (runLeaseIsCurrent(activeRunLease)) setBusy(false); }
   }
 
-  async function connectCardPageThroughWifi(runLease, initialHost, { authority = 'identity', setupTimeoutMs = 180000 } = {}) {
+  async function connectCardPageThroughWifi(runLease, initialHost, {
+    authority = 'identity',
+    readOnlyPreflightHosts = null,
+    setupTimeoutMs = 180000,
+  } = {}) {
     if (window.location.protocol === 'https:') {
       // A previously commissioned exact card can already be verified on the
       // station LAN while its firmware is old or project is blank. Inspect it
@@ -537,14 +546,24 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       if (finalStationWifiAuthority(observed)
         && productionCardAuthority(observed, runLease.expectedCardId, authorityOptions(authority)).ok) return;
     }
-    await onConnectCard?.(initialHost);
+    const hosts = Array.isArray(readOnlyPreflightHosts) && readOnlyPreflightHosts.length
+      ? readOnlyPreflightHosts
+      : [initialHost];
+    let hostIndex = 0;
+    let activeHost = hosts[hostIndex];
+    await onConnectCard?.(activeHost);
     assertActiveRunLease(runLease);
     if (window.location.protocol !== 'https:') return;
 
     setStatus('Finish WiFi setup in the card page. Studio is waiting for this exact card to join the gallery network.');
     const setupDeadline = Date.now() + setupTimeoutMs;
+    const fallbackAt = Date.now() + PRODUCTION_READ_ONLY_PREFLIGHT_FALLBACK_MS;
     let handoff = null;
     let finalStationSeen = false;
+    const readOnlyIdentityIsReady = () => Boolean(readOnlyPreflightHosts)
+      && productionReadOnlyPreflightAuthority(
+        currentCardLink(), runLease.expectedCardId, activeHost,
+      ).ok;
     const stationAuthorityIsReady = () => {
       const observed = currentCardLink();
       return finalStationWifiAuthority(observed)
@@ -556,15 +575,23 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       // this call's bridge request receives a reply (the timing observed on the
       // production S3). Consume that fresh station evidence on every poll; do
       // not make a healthy returned card wait for an AP-specific response.
+      if (readOnlyIdentityIsReady()) return;
       if (stationAuthorityIsReady()) {
         finalStationSeen = true;
         break;
       }
+      if (hostIndex + 1 < hosts.length && Date.now() >= fallbackAt) {
+        activeHost = hosts[++hostIndex];
+        await onConnectCard?.(activeHost);
+        assertActiveRunLease(runLease);
+        setStatus(`The saved card address did not answer. Trying the same USB-inspected card at ${activeHost}.`);
+      }
       try {
         const apStatus = await sendCardBridgeRequest('status', { cache: 'no-store', nonce: Date.now() }, {
-          host: initialHost, timeoutMs: 1500, retryOnTimeout: false,
+          host: activeHost, timeoutMs: 1500, retryOnTimeout: false,
         });
         assertActiveRunLease(runLease);
+        if (readOnlyIdentityIsReady()) return;
         finalStationSeen = apStatus?.wifi?.transport === 'station'
           && apStatus?.wifi?.transition === 'station'
           && apStatus?.wifi?.transitionPending === false
@@ -597,6 +624,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       }
     }
     assertActiveRunLease(runLease);
+    if (readOnlyIdentityIsReady()) return;
     if (!handoff && !finalStationSeen && stationAuthorityIsReady()) finalStationSeen = true;
     if (!handoff && !finalStationSeen) throw new Error('The exact card did not complete WiFi setup before the bounded setup wait ended.');
 
@@ -628,6 +656,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
         await driver.connectLan();
         assertActiveRunLease(runLease);
       } else await connectCardPageThroughWifi(runLease, cardHost, {
+        readOnlyPreflightHosts: productionReadOnlyPreflightHosts(cardHost),
         setupTimeoutMs: driver?.preflightTimeoutMs ?? PREFLIGHT_CARD_PAGE_TIMEOUT_MS,
       });
       assertActiveRunLease(runLease);

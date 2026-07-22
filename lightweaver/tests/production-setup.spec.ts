@@ -1624,6 +1624,97 @@ test('an exact card already verified on station LAN reaches firmware evidence wi
   ]);
 });
 
+test('read-only firmware preflight reuses one named card tab to escape a stale saved AP host', async ({ page }) => {
+  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
+  await page.route('https://led.mandalacodes.com/**', async route => {
+    const requested = new URL(route.request().url());
+    const upstream = await page.request.fetch(`http://localhost:${testPort}${requested.pathname}${requested.search}`);
+    await route.fulfill({ response: upstream });
+  });
+  await serveJob(page);
+  await page.addInitScript(({ expectedCardId }) => {
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
+    localStorage.setItem('lw_chip_card_host', '192.168.4.1');
+    const staleBuildId = '3a5771a'.padEnd(40, '0');
+    let activeHost = '192.168.4.1';
+    const stats = { popupObjects: 1, openHosts: [], windowNames: [], messages: [] };
+    localStorage.setItem('lw_test_preflight_bridge_stats', JSON.stringify(stats));
+    const saveStats = () => localStorage.setItem('lw_test_preflight_bridge_stats', JSON.stringify(stats));
+    const firmwareInfo = () => ({
+      app: 'Lightweaver', provisioningContractVersion: 1,
+      cardId: expectedCardId, firmwareVersion: '0.9.0', buildId: staleBuildId,
+      projectRevision: 0, projectFingerprint: '', productionJobId: '', productionJobDigest: '',
+    });
+    const status = () => ({
+      ...firmwareInfo(), bootId: 'boot-stale-production-card', runtimePhase: 'factory',
+      knownGoodProject: false, commandReady: false, outputReady: true,
+      wifi: {
+        transport: 'station', transition: 'handoff-ready', transitionPending: true,
+        apActive: true, stationIp: '192.168.18.70', ip: '192.168.18.70', handoffGeneration: 2,
+      },
+    });
+    const emit = (data, host = activeHost) => {
+      const event = new Event('message');
+      Object.defineProperties(event, {
+        data: { value: data }, origin: { value: `http://${host}` }, source: { value: fakeCardTab },
+      });
+      window.dispatchEvent(event);
+    };
+    const emitReady = () => emit({ app: 'LightweaverCardBridge', type: 'ready', version: 2, host: activeHost });
+    const fakeCardTab = {
+      closed: false,
+      focus() {},
+      postMessage(message) {
+        const responseHost = activeHost;
+        stats.messages.push(String(message.type || ''));
+        saveStats();
+        if (responseHost !== 'lightweaver.local') return;
+        const response = message.type === 'status' ? status() : firmwareInfo();
+        setTimeout(() => emit({
+          app: 'LightweaverCardBridge', version: 2, id: message.id, ok: true, response,
+        }, responseHost), 0);
+      },
+      location: {
+        set href(value) {
+          activeHost = new URL(String(value)).hostname;
+          if (activeHost === 'lightweaver.local') setTimeout(emitReady, 0);
+        },
+      },
+    };
+    window.open = (url, name) => {
+      activeHost = new URL(String(url)).hostname;
+      stats.openHosts.push(activeHost);
+      stats.windowNames.push(String(name || ''));
+      saveStats();
+      if (activeHost === 'lightweaver.local') setTimeout(emitReady, 0);
+      return fakeCardTab;
+    };
+    window.__LW_PRODUCTION_DRIVER_FOR_TEST__ = {
+      preflightTimeoutMs: 12_000,
+      connectCard: async () => ({ testConnectionId: 1 }),
+      inspectCard: async () => ({ cardId: expectedCardId, chipName: 'ESP32-S3', flashSize: '16MB' }),
+      restartIntoApp: async () => {},
+      disconnect: async () => {},
+    };
+  }, { expectedCardId: 'lw-aabbccddeeff' });
+
+  await page.goto('https://led.mandalacodes.com/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click({ noWaitAfter: true });
+
+  await expect.poll(async () => page.evaluate(() => JSON.parse(
+    localStorage.getItem('lw_test_preflight_bridge_stats') || '{}',
+  ).openHosts), { timeout: 9_000 }).toEqual(['192.168.4.1', 'lightweaver.local']);
+  await expect(page.getByRole('button', { name: 'Reconnect same USB card', exact: true })).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByRole('region', { name: 'Safe recovery' })).toHaveCount(0);
+  const stats = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_test_preflight_bridge_stats') || '{}'));
+  expect(stats.popupObjects).toBe(1);
+  expect(stats.windowNames).toEqual(['lightweaver-card-bridge', 'lightweaver-card-bridge']);
+  expect(await page.evaluate(() => localStorage.getItem('lw_chip_card_host'))).toBe('lightweaver.local');
+  expect(await page.evaluate(() => localStorage.getItem('lw_test_install_count'))).toBeNull();
+});
+
 test('an AP-host bridge with handoff-ready station metadata is not final station authority', async ({ page }) => {
   const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   await page.route('https://led.mandalacodes.com/**', async route => {

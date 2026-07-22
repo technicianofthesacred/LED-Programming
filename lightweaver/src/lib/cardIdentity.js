@@ -71,7 +71,8 @@ export function normalizeCardProjectEvidence(payload = {}) {
   }
   const hasRevision = source.projectRevision !== undefined && source.projectRevision !== null && source.projectRevision !== '';
   const fingerprint = cleanText(source.projectFingerprint, 65);
-  if (hasRevision || fingerprint) {
+  const canonicalBlankProject = source.projectRevision === 0 && fingerprint === '';
+  if ((hasRevision || fingerprint) && !canonicalBlankProject) {
     if (!Number.isSafeInteger(source.projectRevision) || source.projectRevision < 0 || source.projectRevision > 0xffffffff) {
       throw cardIdentityError('project-identity-invalid', 'The Lightweaver card returned an invalid project revision.');
     }

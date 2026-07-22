@@ -6,6 +6,7 @@ import {
   adoptExpectedCardIdentity,
   forgetExpectedCardIdentity,
   normalizeCardIdentity,
+  normalizeCardProjectEvidence,
   persistCardIdentity,
   readPersistedCardIdentity,
 } from './cardIdentity.js';
@@ -68,6 +69,28 @@ test('normalizes status payloads and rejects missing or wrong identities', () =>
   assert.deepEqual(compareCardIdentity({ id: status.id }, status), { ok: true, reason: '' });
   assert.deepEqual(compareCardIdentity({ id: status.id }, {}), { ok: false, reason: 'missing-identity' });
   assert.deepEqual(compareCardIdentity({ id: status.id }, { id: 'lw-other' }), { ok: false, reason: 'wrong-card' });
+});
+
+test('accepts only the canonical blank project identity pair from factory firmware', () => {
+  const blank = {
+    app: 'Lightweaver', cardId: 'lw-aabbccddeeff',
+    firmwareVersion: '0.9.0', buildId: 'a'.repeat(40),
+    projectRevision: 0, projectFingerprint: '', productionJobId: '', productionJobDigest: '',
+  };
+  assert.deepEqual(normalizeCardProjectEvidence(blank), {
+    app: 'Lightweaver', cardId: 'lw-aabbccddeeff',
+    firmwareVersion: '0.9.0', buildId: 'a'.repeat(40),
+    projectRevision: 0,
+  });
+  assert.throws(() => normalizeCardProjectEvidence({
+    ...blank, projectRevision: 1,
+  }), /invalid project fingerprint/i);
+  assert.throws(() => normalizeCardProjectEvidence({
+    ...blank, projectRevision: '0',
+  }), /invalid project revision/i);
+  assert.throws(() => normalizeCardProjectEvidence({
+    ...blank, projectRevision: undefined, projectFingerprint: 'b'.repeat(16),
+  }), /invalid project revision/i);
 });
 
 test('persists only stable nonsecret identity and connection hints under a versioned key', () => {

@@ -22,12 +22,25 @@ shipment-ready.
   `commandReady: false`, so Studio must call it blank rather than connected.
 - No factory beacon, boundary frame, full-strip Aurora, continued playback, or
   other physical-light result was visually verified during diagnostic recovery.
-- The protected signer published build `df20968`, the strict live verifier
-  proved all 51 deployed files, and live Studio flashed that signed image to the
-  exact USB card with confirmed USB release. After the erase, the old station
-  route disappeared and the card-page tab targeted `192.168.4.1`; the setup-AP
-  join and every later physical gate remain open.
-- The same card subsequently proved a successful gallery join at
+- The protected signer published build `e4b4858`, the signed production launch
+  gate passed, and live Studio flashed that signed image to the exact USB card
+  at `/dev/cu.usbmodem142201`.
+- Before erase, the card's old signed build `3a5771a` was reachable through
+  `lightweaver.local` / `192.168.18.70`. It truthfully reported blank factory
+  state with `commandReady: false` and `outputReady: true`; reachability was not
+  shown as Connected.
+- Production initially reopened the stale persisted `192.168.4.1` setup address
+  and timed out even though the card remained stably available through mDNS.
+  Safe recovery reidentified the same USB card before allowing erase/flash. The
+  correction now retries the same named card tab at `lightweaver.local` after
+  five seconds, accepts only the USB-proven identity for this read-only check,
+  and treats the firmware's canonical revision-0/empty-fingerprint response as
+  blank rather than malformed. Post-install handoff authority remains strict.
+- After erase/flash, the old `.70` route stopped answering and Studio honestly
+  remained **Not connected** at the setup-hotspot stage. The workstation was not
+  switched to the card AP, so setup-AP join and every later physical gate remain
+  open.
+- In the earlier pre-erase run, the same card proved a successful gallery join at
   `192.168.18.70`: exact card/build, final `station` transition, AP inactive,
   and truthful factory/blank state. Studio was stuck because its one LAN-tab
   navigation happened while the workstation was still on the setup AP and was
@@ -91,6 +104,9 @@ HTTP command, board LED, or eight-pixel beacon can substitute for this run.
 - [x] Fully erase and flash the blank ESP32-S3 through the live Studio.
 - [x] Confirm USB MAC `44:1B:F6:81:FE:B0` is retained as canonical card ID
       `lw-b0fe81f61b44`, then confirm USB release/reset actually completes.
+- [x] Confirm live Studio does not claim Connected after erase: the old
+      `192.168.18.70` route disappeared and the screen remained **Not connected**
+      while waiting for the setup hotspot.
 - [ ] Observe exactly the bounded eight-pixel/two-pulse amber factory beacon.
 - [ ] Confirm Studio says **Blank — load a project**, never green.
 - [ ] Complete the guided hotspot-to-LAN handoff in the same Studio flow; the

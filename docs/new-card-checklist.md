@@ -11,6 +11,12 @@ For the current labeled bench card, Studio must show `lw-b0fe81f61b44`.
 `lw-441bf681feb0` is the former byte-order bug and is a stop. For later cards,
 copy the ID Studio shows onto that card's production record before continuing.
 
+Do not trust a remembered `192.168.4.1` tab by itself. If Studio times out there
+while the selected card is still reachable at `lightweaver.local`, stop and use
+only Studio's same-card USB recovery. Reidentify the canonical card before any
+erase or flash; never treat the stale setup address as proof that the card is
+blank, absent, or ready.
+
 ## Build the card
 
 - [ ] Studio says the selected USB device is the same ESP32-S3 card ID written

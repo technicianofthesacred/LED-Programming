@@ -1,4 +1,4 @@
-import { normalizeCardHost } from './cardConnection.js';
+import { isLocalCardHost, normalizeCardHost } from './cardConnection.js';
 
 function cardId(value = {}) {
   return String(value?.id || value?.cardId || '').trim().toLowerCase();
@@ -96,6 +96,14 @@ export function productionCardAuthority(link = {}, expectedCardId = '', {
     return fail('The exact card is present but not ready for runtime commands.');
   }
   return { ok: true, blank: false };
+}
+
+export function productionReadOnlyPreflightAuthority(link = {}, expectedCardId = '', expectedHost = '') {
+  const host = normalizeCardHost(expectedHost);
+  if (!isLocalCardHost(host) || normalizeCardHost(link.host) !== host) {
+    return fail('The exact USB-inspected card has not answered from this preflight origin.');
+  }
+  return productionCardAuthority(link, expectedCardId, { mutation: 'identity' });
 }
 
 export function captureProductionCardLease(link, expectedCardId, options = {}) {
