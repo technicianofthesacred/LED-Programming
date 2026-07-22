@@ -1859,6 +1859,7 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   switch (wifiState.phase) {
     case lightweaver::ConnectivityPhase::Joining: wifiPhase = "joining"; break;
     case lightweaver::ConnectivityPhase::HandoffReady: wifiPhase = "handoff-ready"; break;
+    case lightweaver::ConnectivityPhase::HandoffAbandoned: wifiPhase = "handoff-abandoned"; break;
     case lightweaver::ConnectivityPhase::Station: wifiPhase = "station"; break;
     case lightweaver::ConnectivityPhase::Reconnecting: wifiPhase = "reconnecting"; break;
     case lightweaver::ConnectivityPhase::RecoveryAp: wifiPhase = "recovery-ap"; break;

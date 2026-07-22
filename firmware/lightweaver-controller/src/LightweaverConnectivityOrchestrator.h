@@ -82,7 +82,8 @@ inline ConnectivityActionPlan planConnectivityActions(
   plan.nextState = current;
   ConnectivityPhase previousPhase = current.phase;
 
-  if (current.phase == ConnectivityPhase::Station) {
+  if (current.phase == ConnectivityPhase::Station ||
+      current.phase == ConnectivityPhase::HandoffAbandoned) {
     if (!observed.stationReady) {
       plan.nextState = advanceConnectivity(
           current, {ConnectivityEvent::StationLost, observed.nowMs, 0});
@@ -125,7 +126,8 @@ inline ConnectivityActionPlan planConnectivityActions(
   }
 
   if (previousPhase == ConnectivityPhase::HandoffReady &&
-      plan.nextState.phase == ConnectivityPhase::Station &&
+      (plan.nextState.phase == ConnectivityPhase::Station ||
+       plan.nextState.phase == ConnectivityPhase::HandoffAbandoned) &&
       observed.stationReady) {
     plan.retireSetupAp = true;
   }

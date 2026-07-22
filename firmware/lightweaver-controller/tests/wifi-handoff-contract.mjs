@@ -100,6 +100,45 @@ assert.doesNotMatch(web, /keeps retrying about once a minute/,
 assert.match(web, /keeps retrying every 10 seconds/,
   'the recovery page must describe the bounded retry cadence truthfully');
 
+const wifiPollCppStart = advancedRoot.indexOf('"let wifiJoinPollToken=0;');
+const wifiPollCppEnd = advancedRoot.indexOf('"$(\'join\').onclick', wifiPollCppStart);
+assert.notEqual(wifiPollCppStart, -1,
+  'the setup page must own a replaceable WiFi polling generation');
+assert.ok(wifiPollCppEnd > wifiPollCppStart,
+  'the replaceable WiFi polling helper must be emitted before submit handling');
+const wifiPollSource = decodeCppStrings(
+  advancedRoot.slice(wifiPollCppStart, wifiPollCppEnd),
+);
+const joinUi = {
+  join: { disabled: true },
+  msg: { textContent: '', className: 'note' },
+};
+const retryStatuses = [
+  { bootId: 'boot-new', wifi: { transition: 'setup-ap', transitionPending: false, apActive: true, stationIp: '', handoffGeneration: 2, lastError: 'station association timed out' } },
+  { bootId: 'boot-new', wifi: { transition: 'joining', transitionPending: true, apActive: true, stationIp: '', handoffGeneration: 2, lastError: 'station association timed out' } },
+  { bootId: 'boot-new', wifi: { transition: 'handoff-ready', transitionPending: true, apActive: true, stationIp: '192.168.18.70', handoffGeneration: 2, lastError: '' } },
+  { bootId: 'boot-new', wifi: { transition: 'handoff-ready', transitionPending: true, apActive: true, stationIp: '192.168.18.70', handoffGeneration: 2, lastError: '' } },
+];
+let retryStatusReads = 0;
+const wifiPollContext = {
+  $: id => joinUi[id],
+  get: async () => { retryStatusReads += 1; return retryStatuses.shift(); },
+  setTimeout: callback => queueMicrotask(callback),
+};
+vm.runInNewContext(
+  `${wifiPollSource};globalThis.startWifiJoinPoll=startWifiJoinPoll`,
+  wifiPollContext,
+);
+const stalePoll = wifiPollContext.startWifiJoinPoll(1, 'boot-old');
+const currentPoll = wifiPollContext.startWifiJoinPoll(2, 'boot-new');
+assert.deepEqual(await Promise.all([stalePoll, currentPoll]), ['cancelled', 'verified'],
+  'a replacement submit must cancel the old poll while the current poll survives one timeout and the automatic retry');
+assert.equal(retryStatusReads, 4,
+  'only the current poll may consume the timeout, retry, and two stable handoff reads');
+assert.match(joinUi.msg.textContent, /Verified:[\s\S]*192\.168\.18\.70/);
+assert.equal(joinUi.msg.className, 'note ok',
+  'the successful retry must replace the transient timeout styling');
+
 assert.doesNotMatch(web, /bool\s+tryStationJoin\s*\(/,
   'boot association must not use the old blocking STA-only join');
 assert.doesNotMatch(web, /while\s*\(WiFi\.status\(\)[\s\S]{0,300}delay\s*\(/,
@@ -138,8 +177,12 @@ assert.match(bridgeScript, /fetch\('\/api\/status'[\s\S]*cache:'no-store'/,
   'the station page must fetch fresh same-origin status before acknowledgement');
 assert.match(bridgeScript, /location\.hostname[\s\S]*stationIp/,
   'the page hostname must exactly match the status station IP');
-assert.match(bridgeScript, /transition==='handoff-ready'[\s\S]*transitionPending===true[\s\S]*apActive===true/,
+assert.match(bridgeScript, /transition==='handoff-ready'[\s\S]*apActive===true/,
   'the relay must require complete handoff-ready AP keepalive evidence');
+assert.match(bridgeScript, /transition==='handoff-abandoned'[\s\S]*apActive===false/,
+  'the relay must accept the exact station correlation after bounded AP retirement');
+assert.match(bridgeScript, /handoffState[\s\S]*transitionPending===true/,
+  'both live and abandoned handoffs must remain pending until station-origin acknowledgement');
 assert.match(bridgeScript, /s\.cardId[\s\S]*expectedCardId[\s\S]*s\.bootId[\s\S]*expectedBootId[\s\S]*handoffGeneration/,
   'the relay must correlate exact card, boot, and generation');
 assert.match(bridgeScript, /post\('\/api\/wifi\/handoff-ack',[\s\S]*bootId[\s\S]*handoffGeneration/,
@@ -232,7 +275,53 @@ await ackContext.relayHandoffAck(ackEvent);
 assert.equal(statusFetches, 1, 'concurrent and post-success duplicates share one fresh status read');
 assert.equal(acknowledgementPosts, 1, 'concurrent and post-success duplicates relay one endpoint POST');
 
+let abandonedStatusFetches = 0;
+let abandonedAcknowledgementPosts = 0;
+const abandonedStationOpener = { postMessage() {} };
+const abandonedAckContext = {
+  window: { opener: abandonedStationOpener, addEventListener() {} },
+  location: {
+    hash: '#studioBridge=1&wifiHandoff=9&expectedCardId=lw-b0fe81f61b44&expectedBootId=boot-current&studioOrigin=https%3A%2F%2Fled.mandalacodes.com',
+    href: 'http://192.168.18.70/', host: '192.168.18.70', hostname: '192.168.18.70',
+  },
+  URLSearchParams,
+  fetch: async () => {
+    abandonedStatusFetches += 1;
+    return {
+      ok: true,
+      json: async () => ({
+        app: 'Lightweaver', provisioningContractVersion: 1,
+        cardId: 'lw-b0fe81f61b44', firmwareVersion: '1.0.0', buildId: 'build-exact',
+        bootId: 'boot-current', knownGoodProject: false, commandReady: false, outputReady: true,
+        wifi: {
+          transition: 'handoff-abandoned', transitionPending: true, apActive: false,
+          stationIp: '192.168.18.70', handoffGeneration: 9,
+        },
+      }),
+    };
+  },
+  post: async (path, body) => {
+    abandonedAcknowledgementPosts += 1;
+    assert.equal(path, '/api/wifi/handoff-ack');
+    assert.equal(JSON.stringify(body), '{"bootId":"boot-current","handoffGeneration":9}');
+    return { ok: true, accepted: true };
+  },
+};
+vm.runInNewContext(`${emittedReadyPrefix};globalThis.relayHandoffAck=lwRelayWifiHandoffAck`, abandonedAckContext);
+await abandonedAckContext.relayHandoffAck({
+  source: abandonedStationOpener,
+  origin: 'https://led.mandalacodes.com',
+});
+assert.equal(abandonedStatusFetches, 1,
+  'a late station return must verify fresh abandoned-handoff status');
+assert.equal(abandonedAcknowledgementPosts, 1,
+  'a correlated station page must finalize an abandoned handoff after AP retirement');
+
 const ack = functionBody(web, /void\s+handleWifiHandoffAck\s*\(/);
+assert.match(storage, /HandoffAbandoned[\s\S]*handoff-abandoned/,
+  'status must distinguish an abandoned handoff from acknowledged station success');
+assert.match(ack, /HandoffReady[\s\S]*HandoffAbandoned/,
+  'the exact stored station correlation must remain acknowledgeable after AP retirement');
 assert.match(ack, /handoffGeneration/,
   'handoff acknowledgement must require a generation');
 assert.match(ack, /generation\s*==\s*0|generation\s*!=/,

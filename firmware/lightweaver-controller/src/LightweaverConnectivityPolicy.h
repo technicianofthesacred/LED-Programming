@@ -8,11 +8,13 @@ constexpr std::uint32_t kInitialJoinTimeoutMs = 15000;
 constexpr std::uint32_t kReconnectCadenceMs = 10000;
 constexpr std::uint32_t kRecoveryApThresholdMs = 60000;
 constexpr std::uint32_t kNetworkBindingRetryMs = 2000;
+constexpr std::uint32_t kHandoffMaxMs = 300000;
 
 enum class ConnectivityPhase {
   SetupAp,
   Joining,
   HandoffReady,
+  HandoffAbandoned,
   Station,
   Reconnecting,
   RecoveryAp,
@@ -62,6 +64,7 @@ constexpr bool elapsed(std::uint32_t nowMs,
 constexpr bool connectivityPhaseIsPending(ConnectivityPhase phase) {
   return phase == ConnectivityPhase::Joining ||
          phase == ConnectivityPhase::HandoffReady ||
+         phase == ConnectivityPhase::HandoffAbandoned ||
          phase == ConnectivityPhase::Reconnecting ||
          phase == ConnectivityPhase::RecoveryAp;
 }
@@ -126,6 +129,9 @@ inline ConnectivityState advanceConnectivity(
         next.apActive = false;
       } else if (current.phase == ConnectivityPhase::Station) {
         next.phase = ConnectivityPhase::Station;
+      } else if (current.phase == ConnectivityPhase::HandoffAbandoned) {
+        next.phase = ConnectivityPhase::HandoffAbandoned;
+        next.apActive = false;
       } else {
         return next;
       }
@@ -151,7 +157,8 @@ inline ConnectivityState advanceConnectivity(
       return next;
 
     case ConnectivityEvent::StationOriginAck:
-      if (current.phase != ConnectivityPhase::HandoffReady ||
+      if ((current.phase != ConnectivityPhase::HandoffReady &&
+           current.phase != ConnectivityPhase::HandoffAbandoned) ||
           current.generation == 0 ||
           input.generation != current.generation) {
         return next;
@@ -183,6 +190,14 @@ inline ConnectivityState advanceConnectivity(
       elapsed(input.nowMs, current.lastAttemptMs, kReconnectCadenceMs)) {
     next.phase = ConnectivityPhase::Joining;
     next.reconnectDue = true;
+    next.phaseStartedMs = input.nowMs;
+    return next;
+  }
+
+  if (current.phase == ConnectivityPhase::HandoffReady &&
+      elapsed(input.nowMs, current.phaseStartedMs, kHandoffMaxMs)) {
+    next.phase = ConnectivityPhase::HandoffAbandoned;
+    next.apActive = false;
     next.phaseStartedMs = input.nowMs;
     return next;
   }

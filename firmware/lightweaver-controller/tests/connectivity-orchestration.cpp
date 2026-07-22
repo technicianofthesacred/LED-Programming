@@ -201,17 +201,38 @@ int main() {
   preAck.generation = 44;
   preAck.phaseStartedMs = 1000;
   hardware.actions.clear();
-  preAck = run(hardware, preAck, observation(200000, true, false, true));
+  preAck = run(hardware, preAck, observation(300999, true, false, true));
   assert(preAck.phase == ConnectivityPhase::HandoffReady);
   assert(preAck.apActive);
   assert((hardware.actions == std::vector<std::string>{"readiness-pending"}));
   hardware.actions.clear();
-  preAck = run(hardware, preAck, observation(200250, false, false, true));
-  assert(preAck.phase == ConnectivityPhase::Joining);
-  assert(preAck.apActive);
-  assert(hardware.stationAttempts.back() == 200250);
+  preAck = run(hardware, preAck, observation(301000, true, false, true));
+  assert(preAck.phase == ConnectivityPhase::HandoffAbandoned);
+  assert(!preAck.apActive);
+  assert((hardware.actions == std::vector<std::string>{
+      "retire-setup-ap", "readiness-pending"}));
+
+  ConnectivityState preAckLoss{};
+  preAckLoss.phase = ConnectivityPhase::HandoffReady;
+  preAckLoss.apActive = true;
+  preAckLoss.stationAssociated = true;
+  preAckLoss.generation = 45;
+  preAckLoss.phaseStartedMs = 302000;
+  hardware.actions.clear();
+  preAckLoss = run(hardware, preAckLoss,
+                   observation(302250, false, false, true));
+  assert(preAckLoss.phase == ConnectivityPhase::Joining);
+  assert(preAckLoss.apActive);
+  assert(hardware.stationAttempts.back() == 302250);
   assert((hardware.actions == std::vector<std::string>{
       "preack-station-lost", "readiness-pending", "station-begin"}));
+
+  hardware.actions.clear();
+  preAck = run(hardware, preAck, observation(301250, false, false, false));
+  assert(preAck.phase == ConnectivityPhase::Reconnecting);
+  assert(!preAck.apActive);
+  assert((hardware.actions == std::vector<std::string>{
+      "station-lost", "readiness-pending", "station-reconnect"}));
 
   ConnectivityState joining{};
   joining.phase = ConnectivityPhase::Joining;

@@ -11,6 +11,7 @@ using lightweaver::ConnectivityState;
 using lightweaver::advanceConnectivity;
 using lightweaver::connectivityTransitionPending;
 using lightweaver::kInitialJoinTimeoutMs;
+using lightweaver::kHandoffMaxMs;
 using lightweaver::kNetworkBindingRetryMs;
 using lightweaver::kReconnectCadenceMs;
 using lightweaver::kRecoveryApThresholdMs;
@@ -23,6 +24,8 @@ static_assert(kReconnectCadenceMs == 10000,
               "reconnect cadence must remain 10 seconds");
 static_assert(kRecoveryApThresholdMs == 60000,
               "recovery AP threshold must remain 60 seconds");
+static_assert(kHandoffMaxMs == 300000,
+              "abandoned handoff AP maximum must remain five minutes");
 static_assert(kNetworkBindingRetryMs == 2000,
               "listener retry cadence must remain 2 seconds");
 
@@ -134,16 +137,24 @@ int main() {
   unacknowledged = advanceConnectivity(
       unacknowledged, input(ConnectivityEvent::StationAssociated, 1100, 9));
   unacknowledged = advanceConnectivity(
-      unacknowledged, input(ConnectivityEvent::Tick, 1100 + 120000));
+      unacknowledged, input(ConnectivityEvent::Tick,
+                            1100 + kHandoffMaxMs - 1));
   assert(unacknowledged.phase == ConnectivityPhase::HandoffReady);
   assert(unacknowledged.apActive);
   assert(unacknowledged.stationAssociated);
+  unacknowledged = advanceConnectivity(
+      unacknowledged, input(ConnectivityEvent::Tick,
+                            1100 + kHandoffMaxMs));
+  assert(unacknowledged.phase == ConnectivityPhase::HandoffAbandoned);
+  assert(!unacknowledged.apActive);
+  assert(unacknowledged.stationAssociated);
+  assert(connectivityTransitionPending(unacknowledged));
 
   ConnectivityState acknowledged = advanceConnectivity(
       unacknowledged,
       input(ConnectivityEvent::StationOriginAck, 1100 + 120001,
             8));
-  assert(acknowledged.phase == ConnectivityPhase::HandoffReady);
+  assert(acknowledged.phase == ConnectivityPhase::HandoffAbandoned);
   acknowledged = advanceConnectivity(
       unacknowledged,
       input(ConnectivityEvent::StationOriginAck, 1100 + 120001, 9));
@@ -296,12 +307,18 @@ int main() {
       wrappedHandoff, nearWrap + 100, true, true);
   wrappedHandoff = advanceConnectivity(
       wrappedHandoff,
-      input(ConnectivityEvent::Tick, nearWrap + 100 + 120000));
+      input(ConnectivityEvent::Tick,
+            nearWrap + 100 + kHandoffMaxMs - 1));
   assert(wrappedHandoff.phase == ConnectivityPhase::HandoffReady);
   wrappedHandoff = advanceConnectivity(
       wrappedHandoff,
+      input(ConnectivityEvent::Tick,
+            nearWrap + 100 + kHandoffMaxMs));
+  assert(wrappedHandoff.phase == ConnectivityPhase::HandoffAbandoned);
+  wrappedHandoff = advanceConnectivity(
+      wrappedHandoff,
       input(ConnectivityEvent::StationOriginAck,
-            nearWrap + 100 + 120001, 14));
+            nearWrap + 100 + kHandoffMaxMs + 1, 14));
   assert(wrappedHandoff.phase == ConnectivityPhase::Station);
 
   ConnectivityState wrappedBindings = wrappedHandoff;
