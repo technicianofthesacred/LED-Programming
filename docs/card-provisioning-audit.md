@@ -133,7 +133,10 @@ delayed and revalidated after that acknowledgement.
 for joined. The AP can disappear before Studio learns where the card went. A
 setup tab can remain stranded on the dead AP page. An old acknowledgement can
 close a new AP lifecycle. Another Lightweaver on the LAN can be adopted. The
-listener can fail to bind even though Wi-Fi reports associated.
+listener can fail to bind even though Wi-Fi reports associated. Replacing Wi-Fi
+on a previously commissioned card currently persists the proposed credentials
+before association succeeds, so a wrong password does not automatically roll
+back to the prior network.
 
 **Verification replacing assumption.** `202 joining` is progress, not success.
 `handoff-ready` requires the station address plus runtime listener readiness.
@@ -161,9 +164,33 @@ actual different card or signed-firmware mismatch can be named truthfully before
 the exact-card configuration authority is required. Observation never grants a
 project write.
 
-**Remaining gap.** The live HTTPS path—including popup permission, an actual
-blank-card network switch, retarget, and return to the same Studio tab—must pass
-on the real card. Direct LAN polling does not substitute for this test.
+**Observed handoff defect and correction.** The real card accepted the gallery
+credentials and reached `192.168.18.70` with final station status, but Studio
+remained stuck. Two assumptions caused the dead end. First, Studio navigated the
+named card tab to the station address while the workstation was still on the
+setup AP; when that first navigation failed, returning to gallery Wi-Fi did not
+reload the browser's network-error document. Second, the production path could
+interpret an AP-host status with `transport: station` as final even while the
+firmware still reported `handoff-ready`, `transitionPending: true`, and an active
+AP. Studio now requires final station-origin evidence and automatically retries
+the same already-authorized, exactly correlated card tab during the bounded
+return window. The retry neither opens another popup nor weakens card, boot,
+build, generation, or flow identity.
+
+The card setup page also keeps the worker on the setup AP after credentials are
+accepted. It polls the exact accepted boot and handoff generation, announces the
+verified station address only at `handoff-ready`, and surfaces association
+failure/timeout instead of leaving **Saved. Joining…** on screen indefinitely.
+
+**Remaining physical gate.** The corrected live HTTPS path—including popup
+permission, an actual blank-card network switch, automatic retry, retarget, and
+return to the same Studio tab—must pass on the released real card. Direct LAN
+polling does not substitute for this test.
+
+**Non-factory follow-up.** Transactional rollback to prior Wi-Fi credentials is
+still needed for changing networks on an already commissioned card. It does not
+block the blank-card production path, which has no prior network to preserve,
+but it must remain explicit rather than claiming the old network was retained.
 
 ### 4. Recognize the exact card and classify blank versus usable
 
@@ -305,10 +332,14 @@ credentials is explicitly **not deployed** and cannot authorize shipment.
 ## Current release limiter
 
 The USB identity and ESP32-S3 restart corrections are deployed and verified on
-the real USB card through signed flash and confirmed release. The live run is
-paused at the required setup-network handoff: the erased card is no longer on
-its old station address, and Studio has not credited Wi-Fi, project, command, or
-light success. The current limiter is completing one uninterrupted live
-acceptance from setup AP through visible output and recovery. Do not mark a card
-ready to ship until it completes [`new-card-checklist.md`](new-card-checklist.md),
-including the human physical-light checks.
+the real USB card through signed flash and confirmed release. The card also
+proved that it accepted the gallery credentials: it returned at
+`192.168.18.70` as `lw-b0fe81f61b44` on the signed build, with final station
+transport, its AP off, and truthful factory/blank status. Studio nevertheless
+stalled because its one station-tab navigation failed before the workstation
+left the setup AP and was never retried. That software defect is now covered by
+the topology regression described above. The current limiter is publishing the
+correction and completing one uninterrupted live acceptance from setup AP
+through visible output and recovery. Do not mark a card ready to ship until it
+completes [`new-card-checklist.md`](new-card-checklist.md), including the human
+physical-light checks.

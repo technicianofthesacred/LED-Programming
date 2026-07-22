@@ -1,7 +1,7 @@
 # Lightweaver card provisioning — remaining work
 
-Updated on 2026-07-21 after reproducing and correcting the post-inspection reset
-failure on the real ESP32-S3. The provisioning flow is still not
+Updated on 2026-07-22 after reproducing the setup-AP-to-gallery-LAN browser
+handoff failure on the real ESP32-S3. The provisioning flow is still not
 shipment-ready.
 
 ## Current truth
@@ -27,6 +27,13 @@ shipment-ready.
   exact USB card with confirmed USB release. After the erase, the old station
   route disappeared and the card-page tab targeted `192.168.4.1`; the setup-AP
   join and every later physical gate remain open.
+- The same card subsequently proved a successful gallery join at
+  `192.168.18.70`: exact card/build, final `station` transition, AP inactive,
+  and truthful factory/blank state. Studio was stuck because its one LAN-tab
+  navigation happened while the workstation was still on the setup AP and was
+  never retried after returning to gallery Wi-Fi. Production could also accept
+  AP-host `handoff-ready` metadata as final station evidence. Focused topology
+  regressions now cover both failures; publishing and live re-run remain open.
 
 ## 1. Post-flash dead end — deployed, USB transition verified
 
@@ -101,3 +108,12 @@ HTTP command, board LED, or eight-pixel beacon can substitute for this run.
 
 Only after every box above passes is this card, or the repeatable production
 flow, ready to ship.
+
+## 5. Follow-up outside the blank-card production path
+
+- [ ] Make Wi-Fi changes on an already commissioned card transactional: retain
+      the last working credentials until the proposed network is verified, and
+      roll back after a failed change. Today the recovery AP and re-entry flow
+      remain available, but a wrong proposed password replaces the stored prior
+      network before association succeeds. Blank factory cards have no prior
+      network, so this does not replace or block the live erased-card gate above.

@@ -22,9 +22,12 @@ copy the ID Studio shows onto that card's production record before continuing.
 - [ ] Studio shows **Blank — load a project** for this exact card. It does not
       show green, Connected, Ready, or Success.
 - [ ] Join `Lightweaver-XXXX` when Studio asks and enter the gallery/home Wi-Fi.
-      Return to the same Studio tab. Do not type or look up an IP address.
+      Stay on the card page until it says the card actually joined and shows a
+      verified gallery-network address. Then return to the gallery Wi-Fi and
+      the same Studio tab. Do not type or look up an IP address.
 - [ ] The guided card page follows the same card from setup Wi-Fi to the LAN,
-      and Studio advances automatically only after two fresh status checks.
+      retries automatically if its first LAN load happened too early, and Studio
+      advances automatically only after two fresh status checks.
 - [ ] Studio still shows the card ID written above. A different ID is a stop.
 - [ ] Load the verified project once. Read-back shows all six facts:
       `GPIO 18` · `44 pixels` · `GRB` · `Aurora` · `1500 mA` · `0.35 limit`.

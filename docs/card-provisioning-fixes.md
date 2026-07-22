@@ -45,9 +45,16 @@ full failure audit is [`card-provisioning-audit.md`](card-provisioning-audit.md)
   `reconnecting`, and `recovery-ap` phases.
 - AP+STA remains available until the station address and local command listeners
   are ready and Studio acknowledges the exact card, boot, and generation.
+- The setup page treats the Wi-Fi POST as accepted credentials only. It polls
+  the accepted boot/generation until the station address is verified, then tells
+  the worker to return to gallery Wi-Fi; join failure and timeout are explicit.
 - HTTPS Studio uses the guided named card-page bridge. That page follows the
   verified station address and returns the worker to the same Studio flow; the
   worker never types or discovers a card address.
+- If the first station navigation occurs before the workstation leaves the
+  setup AP and lands on a browser network-error page, Studio automatically
+  renavigates that same authorized tab during the bounded return window. It does
+  not open repeated popups or relax exact-card correlation.
 - Two fresh station statuses are required before auto-advance. Wrong-card,
   wrong-boot, stale-generation, AP-interface, or partial evidence fails closed.
 - Firmware retries the station network every 10 seconds, opens the recovery AP
