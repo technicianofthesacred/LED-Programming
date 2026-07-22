@@ -118,10 +118,13 @@ readiness.
 
 **Required flow.** The worker joins the guided setup hotspot and enters the
 gallery/home credentials. Firmware runs AP+STA through explicit phases:
-`setup-ap`, `joining`, `handoff-ready`, `station`, `reconnecting`, and
-`recovery-ap`. It does not reboot merely to save credentials. The setup AP stays
-available until the station API is actually ready and Studio acknowledges the
-exact handoff.
+`setup-ap`, `joining`, `handoff-ready`, `handoff-abandoned`, `station`,
+`reconnecting`, and `recovery-ap`. It does not reboot merely to save
+credentials. The setup AP stays available while the station API becomes ready
+and Studio completes the exact handoff. To avoid leaving an unauthenticated
+commissioning surface open indefinitely, an abandoned handoff retires the AP
+after five minutes without granting success; the exact stored station
+correlation remains acknowledgeable from the station page afterward.
 
 The handoff proof contains the exact card ID, boot ID, handoff generation, and
 private station IPv4 address. The card-page bridge retargets its one named
@@ -180,7 +183,10 @@ build, generation, or flow identity.
 The card setup page also keeps the worker on the setup AP after credentials are
 accepted. It polls the exact accepted boot and handoff generation, announces the
 verified station address only at `handoff-ready`, and surfaces association
-failure/timeout instead of leaving **Saved. Joining…** on screen indefinitely.
+failure without stopping the correlated watcher. Firmware retries every ten
+seconds, the watcher covers complete later attempts, and a corrected resubmit
+cancels the old watcher instead of leaving **Saved. Joining…** on screen
+indefinitely.
 
 **Remaining physical gate.** The corrected live HTTPS path—including popup
 permission, an actual blank-card network switch, automatic retry, retarget, and

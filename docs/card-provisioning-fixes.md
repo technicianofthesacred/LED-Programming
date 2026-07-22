@@ -43,8 +43,10 @@ full failure audit is [`card-provisioning-audit.md`](card-provisioning-audit.md)
 
 - Firmware owns explicit `setup-ap`, `joining`, `handoff-ready`, `station`,
   `reconnecting`, and `recovery-ap` phases.
-- AP+STA remains available until the station address and local command listeners
-  are ready and Studio acknowledges the exact card, boot, and generation.
+- AP+STA remains available while the station address and local command listeners
+  become ready and Studio acknowledges the exact card, boot, and generation. An
+  abandoned handoff retires the open AP after five minutes without granting
+  success; exact station-origin correlation can still finish it afterward.
 - The setup page treats the Wi-Fi POST as accepted credentials only. It polls
   the accepted boot/generation until the station address is verified, then tells
   the worker to return to gallery Wi-Fi; join failure and timeout are explicit.
