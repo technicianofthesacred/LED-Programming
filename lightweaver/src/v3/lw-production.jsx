@@ -4,6 +4,7 @@ import { ProductionPassRecord } from '../components/production/ProductionPassRec
 import { ProductionPhysicalTest } from '../components/production/ProductionPhysicalTest.jsx';
 import { ProductionRecovery } from '../components/production/ProductionRecovery.jsx';
 import { clearCardCommissioning } from '../lib/cardCommissioningFlow.js';
+import { normalizeCardHost } from '../lib/cardConnection.js';
 import { readCardProjectEvidence, readCardStatusEnvelope, pushConfigToCard } from '../lib/cardPushClient.js';
 import { adoptExpectedCardIdentity } from '../lib/cardIdentity.js';
 import { adoptCommissionedCardBridgeIdentity, getCardBridgeState, retargetCardBridge, sendCardBridgeRequest } from '../lib/cardBridge.js';
@@ -84,6 +85,20 @@ function exactEvidence(evidence, job, cardId, release) {
     && evidence?.projectFingerprint === job.project.fingerprint
     && evidence?.productionJobId === job.jobId
     && evidence?.productionJobDigest === job.digest;
+}
+
+function finalStationWifiAuthority(link = {}) {
+  const wifi = link?.readiness?.wifi;
+  const reportedStationHost = wifi?.stationIp || wifi?.ip || '';
+  const exactStationOrigin = Boolean(reportedStationHost)
+    && normalizeCardHost(reportedStationHost) !== '192.168.4.1'
+    && normalizeCardHost(link?.host) === normalizeCardHost(reportedStationHost);
+  return exactStationOrigin
+    && wifi?.transport === 'station'
+    && wifi?.transition === 'station'
+    && wifi?.transitionPending === false
+    && wifi?.apActive === false
+    && Boolean(wifi.stationIp || wifi.ip);
 }
 
 export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded = false }) {
@@ -519,9 +534,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       // in place; reopening the bridge would discard that proof and incorrectly
       // force an AP handoff tied to firmware we have not inspected yet.
       const observed = currentCardLink();
-      const wifi = observed?.readiness?.wifi;
-      if (wifi?.transport === 'station'
-        && Boolean(wifi.stationIp || wifi.ip)
+      if (finalStationWifiAuthority(observed)
         && productionCardAuthority(observed, runLease.expectedCardId, authorityOptions(authority)).ok) return;
     }
     await onConnectCard?.(initialHost);
@@ -534,9 +547,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     let finalStationSeen = false;
     const stationAuthorityIsReady = () => {
       const observed = currentCardLink();
-      const wifi = observed?.readiness?.wifi;
-      return wifi?.transport === 'station'
-        && Boolean(wifi.stationIp || wifi.ip)
+      return finalStationWifiAuthority(observed)
         && productionCardAuthority(observed, runLease.expectedCardId, authorityOptions(authority)).ok;
     };
     while (Date.now() < setupDeadline && !handoff && !finalStationSeen) {
@@ -556,7 +567,8 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
         assertActiveRunLease(runLease);
         finalStationSeen = apStatus?.wifi?.transport === 'station'
           && apStatus?.wifi?.transition === 'station'
-          && apStatus?.wifi?.transitionPending === false;
+          && apStatus?.wifi?.transitionPending === false
+          && apStatus?.wifi?.apActive === false;
         if (!finalStationSeen) {
           const generation = Number(apStatus?.wifi?.handoffGeneration);
           handoff = acceptWifiHandoff({

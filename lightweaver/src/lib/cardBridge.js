@@ -42,6 +42,8 @@ const PRIVILEGED_BRIDGE_TYPES = new Set([
   'wifi-handoff-ack',
 ]);
 const IDENTITY_FREE_BRIDGE_TYPES = new Set(['ping', 'status', 'firmware-info']);
+const WIFI_HANDOFF_NAVIGATION_RETRY_INTERVAL_MS = 4000;
+const WIFI_HANDOFF_NAVIGATION_MAX_ATTEMPTS = 45;
 
 // Reads and idempotent transaction operations may safely cross one transient
 // bridge timeout. Candidate staging is intentionally absent: retrying it could
@@ -106,6 +108,7 @@ let bridgeInitialConfigAttempted = false;
 let bridgeAuthorityLifecycle = -1;
 let bridgeRestoredHandoff = false;
 let bridgeRestoredFinalEnvelopeCount = 0;
+let bridgeHandoffNavigationRetry = null;
 let listenerAttached = false;
 let listenerWindow = null;
 const pending = new Map();
@@ -113,6 +116,13 @@ const bridgeAcquisitions = new Map();
 
 function browserWindow() {
   return typeof window !== 'undefined' ? window : null;
+}
+
+function clearBridgeHandoffNavigationRetry() {
+  if (bridgeHandoffNavigationRetry?.timer != null) {
+    clearTimeout(bridgeHandoffNavigationRetry.timer);
+  }
+  bridgeHandoffNavigationRetry = null;
 }
 
 function normalizeCommissioningFlowId(value) {
@@ -183,6 +193,7 @@ function clearBridgeTarget({
   bridgeRuntimeCommandReady = false;
   bridgeInitialConfigAvailable = false;
   if (!preserveHandoff) {
+    clearBridgeHandoffNavigationRetry();
     bridgeHandoffCorrelation = null;
     bridgeHandoffFlowId = '';
     bridgeInitialConfigAttempted = false;
@@ -225,6 +236,7 @@ function revokeBridgeForNavigation({
   bridgeRuntimeCommandReady = false;
   bridgeInitialConfigAvailable = false;
   if (!preserveHandoff) {
+    clearBridgeHandoffNavigationRetry();
     bridgeHandoffCorrelation = null;
     bridgeHandoffFlowId = '';
     bridgeInitialConfigAttempted = false;
@@ -254,6 +266,53 @@ function sameHandoffCorrelation(left, right) {
     && left.expectedBuildId === right.expectedBuildId
     && left.expectedBootId === right.expectedBootId
     && left.handoffGeneration === right.handoffGeneration;
+}
+
+// A station address is unreachable while the workshop computer is still on the
+// card AP. Browsers keep the failed network-error document after WiFi changes;
+// they do not reliably retry that cross-subnet navigation themselves. Retain
+// the one already-authorized WindowProxy and retry only the exact persisted
+// card/boot/generation target. This never opens another popup and never sends an
+// acknowledgement or configuration command. The station page's verified ready
+// handshake cancels the bounded retry before the handoff orchestrator runs.
+function scheduleBridgeHandoffNavigationRetry({ target, url, correlation, flowId }) {
+  clearBridgeHandoffNavigationRetry();
+  const owner = browserWindow();
+  const work = {
+    target, url, correlation, flowId, owner,
+    attempts: 1,
+    timer: null,
+  };
+  const retry = () => {
+    if (bridgeHandoffNavigationRetry !== work) return;
+    const currentOrigin = cardHostToUrl(correlation.host);
+    if (bridgeReady && bridgeConnected && bridgeOrigin === currentOrigin) {
+      clearBridgeHandoffNavigationRetry();
+      return;
+    }
+    if (browserWindow() !== owner
+      || bridgeWindow !== target
+      || bridgeTargetClosed(target)
+      || bridgeHandoffFlowId !== flowId
+      || !sameHandoffCorrelation(bridgeHandoffCorrelation, correlation)
+      || work.attempts >= WIFI_HANDOFF_NAVIGATION_MAX_ATTEMPTS) {
+      clearBridgeHandoffNavigationRetry();
+      return;
+    }
+    work.attempts += 1;
+    revokeBridgeForNavigation({
+      host: correlation.host,
+      origin: currentOrigin,
+      preserveHandoff: true,
+    });
+    try { target.location.href = url; } catch { /* retry stays bounded */ }
+    if (bridgeHandoffNavigationRetry !== work) return;
+    work.timer = setTimeout(retry, WIFI_HANDOFF_NAVIGATION_RETRY_INTERVAL_MS);
+    work.timer?.unref?.();
+  };
+  bridgeHandoffNavigationRetry = work;
+  work.timer = setTimeout(retry, WIFI_HANDOFF_NAVIGATION_RETRY_INTERVAL_MS);
+  work.timer?.unref?.();
 }
 
 function applyAuthoritativeBridgeStatus(status, host = bridgeHost) {
@@ -453,6 +512,7 @@ function handleBridgeMessage(event) {
     if (!isLocalCardHost(claimedHost) || event.origin !== derivedOrigin) return;
     if (bridgeWindow && event.source && event.source !== bridgeWindow) return;
     if (bridgeOrigin && event.origin !== bridgeOrigin) return;
+    clearBridgeHandoffNavigationRetry();
     // A card-page reload may retain the exact same WindowProxy and host. Revoke
     // the prior lifecycle synchronously before exposing transport readiness;
     // fresh firmware identity is the only path back to command authority.
@@ -794,6 +854,12 @@ export function retargetCardBridge(rawHost = '', rawCorrelation = {}, { flowId: 
       error: cause,
     };
   }
+  scheduleBridgeHandoffNavigationRetry({
+    target,
+    url: url.href,
+    correlation,
+    flowId,
+  });
   return {
     ok: true,
     state: 'retargeted',
@@ -862,6 +928,12 @@ export function restoreCardBridgeHandoff(rawFlowId = '') {
     return { ok: false, reason: 'popup-blocked', retryable: true };
   }
   trackNavigatedBridgeWindow(opened, { host, origin, persistHost: false });
+  scheduleBridgeHandoffNavigationRetry({
+    target: opened,
+    url: url.href,
+    correlation,
+    flowId,
+  });
   try { opened.focus?.(); } catch { /* best effort */ }
   return {
     ok: true, state: 'restored', window: opened, host, url: url.href,
@@ -924,6 +996,7 @@ export function hasCardBridgeInitialConfigAuthority({ host = '', flowId: rawFlow
 export function clearCardBridgeHandoff(rawFlowId = '') {
   const flowId = normalizeCommissioningFlowId(rawFlowId);
   if (!flowId || flowId !== bridgeHandoffFlowId) return false;
+  clearBridgeHandoffNavigationRetry();
   bridgeHandoffCorrelation = null;
   bridgeHandoffFlowId = '';
   bridgeHandoffAckReady = false;
@@ -963,6 +1036,7 @@ export function adoptCommissionedCardBridgeIdentity(rawFlowId = '') {
     throw bridgeError('Could not save the commissioned replacement card identity.', 'identity-storage');
   }
   const adopted = bridgeCard;
+  clearBridgeHandoffNavigationRetry();
   bridgeHandoffCorrelation = null;
   bridgeHandoffFlowId = '';
   bridgeHandoffAckReady = false;

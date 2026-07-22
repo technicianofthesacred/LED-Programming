@@ -88,9 +88,9 @@ async function installDriver(page, {
   candidateEvidenceMismatch = false, physicalIdentityMismatch = false, physicalFirmwareMismatch = false,
   activationFailure = false, activationLifecycleChange = false, rollbackFailure = false, rollbackRebootReads = 0, physicalDeliveryFailure = false, physicalDeliveryFailureOnce = false, physicalDeliveryDelayMs = 0, linkLossDuringPhysical = false,
   connectErrorOnce = '',
-  disconnectFailureAt = 0, disconnectDelayMs = 0, restartThrows = false, stationPreflight = false, stationAfterConnect = false, secondUsbWrong = false, installThrows = false, reconnectFirmwareMismatch = false, reconnectThrows = false,
+  disconnectFailureAt = 0, disconnectDelayMs = 0, restartThrows = false, stationPreflight = false, handoffPreflight = false, stationAfterConnect = false, secondUsbWrong = false, installThrows = false, reconnectFirmwareMismatch = false, reconnectThrows = false,
 } = {}) {
-  await page.addInitScript(({ firmwareVersion, firmwareBuildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, connectErrorOnce, disconnectFailureAt, disconnectDelayMs, restartThrows, stationPreflight, stationAfterConnect, secondUsbWrong, installThrows, reconnectFirmwareMismatch, reconnectThrows }) => {
+  await page.addInitScript(({ firmwareVersion, firmwareBuildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, connectErrorOnce, disconnectFailureAt, disconnectDelayMs, restartThrows, stationPreflight, handoffPreflight, stationAfterConnect, secondUsbWrong, installThrows, reconnectFirmwareMismatch, reconnectThrows }) => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
     const evidence = {
       cardId: 'lw-aabbccddeeff', firmwareVersion,
@@ -99,7 +99,7 @@ async function installDriver(page, {
     };
     const readyCardLink = () => ({
       state: localStorage.getItem('lw_test_card_link_state') || 'connected-bridge',
-      transport: 'bridge', host: '192.168.18.70',
+      transport: 'bridge', host: handoffPreflight ? '192.168.4.1' : '192.168.18.70',
       card: { id: evidence.cardId }, expectedCard: { id: evidence.cardId },
       cardBlank: localStorage.getItem('lw_test_card_blank') === '1',
       validatedBootId: localStorage.getItem('lw_test_boot_id') || 'boot-production-1',
@@ -112,8 +112,11 @@ async function installDriver(page, {
         outputReady: localStorage.getItem('lw_test_card_blank') !== '1',
         runtimePhase: localStorage.getItem('lw_test_card_blank') === '1' ? 'factory' : 'ready',
         knownGoodProject: localStorage.getItem('lw_test_card_blank') !== '1',
-        ...((stationPreflight || (stationAfterConnect && localStorage.getItem('lw_test_station_after_connect') === '1'))
-          ? { wifi: { transport: 'station', stationIp: '192.168.18.70', ip: '192.168.18.70' } } : {}),
+        ...(handoffPreflight ? { wifi: {
+          transport: 'station', transition: 'handoff-ready', transitionPending: true,
+          apActive: true, stationIp: '192.168.18.70', ip: '192.168.18.70', handoffGeneration: 2,
+        } } : (stationPreflight || (stationAfterConnect && localStorage.getItem('lw_test_station_after_connect') === '1'))
+          ? { wifi: { transport: 'station', transition: 'station', transitionPending: false, apActive: false, stationIp: '192.168.18.70', ip: '192.168.18.70' } } : {}),
       },
     });
     const recordPreflightPhase = phase => {
@@ -122,7 +125,7 @@ async function installDriver(page, {
       localStorage.setItem('lw_test_preflight_phases', JSON.stringify(phases));
     };
     window.__LW_PRODUCTION_DRIVER_FOR_TEST__ = {
-      ...(stationAfterConnect ? { preflightTimeoutMs: 250 } : {}),
+      ...((stationAfterConnect || handoffPreflight) ? { preflightTimeoutMs: 250 } : {}),
       getCardLink: readyCardLink,
       connectCard: async () => {
         const attempts = Number(localStorage.getItem('lw_test_connect_attempts') || 0) + 1;
@@ -130,7 +133,7 @@ async function installDriver(page, {
         if (attempts === 1 && connectErrorOnce) throw new Error(connectErrorOnce);
         return { testConnectionId: attempts };
       },
-      ...((stationPreflight || stationAfterConnect) ? {} : { connectLan: async () => { recordPreflightPhase('lan'); } }),
+      ...((stationPreflight || handoffPreflight || stationAfterConnect) ? {} : { connectLan: async () => { recordPreflightPhase('lan'); } }),
       restartIntoApp: async () => {
         recordPreflightPhase('restart');
         if (restartThrows) throw new Error('Card did not leave download mode');
@@ -294,13 +297,13 @@ async function installDriver(page, {
         return evidence;
       },
     };
-    if (stationPreflight || stationAfterConnect) window.open = () => {
+    if (stationPreflight || handoffPreflight || stationAfterConnect) window.open = () => {
       if (stationAfterConnect) window.setTimeout(() => {
         localStorage.setItem('lw_test_station_after_connect', '1');
       }, 50);
       return { closed: false, focus() {}, postMessage() {} };
     };
-  }, { firmwareVersion: signedRelease.firmwareVersion, firmwareBuildId: signedRelease.buildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, connectErrorOnce, disconnectFailureAt, disconnectDelayMs, restartThrows, stationPreflight, stationAfterConnect, secondUsbWrong, installThrows, reconnectFirmwareMismatch, reconnectThrows });
+  }, { firmwareVersion: signedRelease.firmwareVersion, firmwareBuildId: signedRelease.buildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, connectErrorOnce, disconnectFailureAt, disconnectDelayMs, restartThrows, stationPreflight, handoffPreflight, stationAfterConnect, secondUsbWrong, installThrows, reconnectFirmwareMismatch, reconnectThrows });
 }
 
 test('production fixture tracks the exact currently signed firmware release', async () => {
@@ -520,7 +523,7 @@ test('a delayed hotspot status cannot retarget or resurrect recovery after the p
   expect(await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun())).toMatchObject({ runId: replacementRunId, state: 'connect-card' });
 });
 
-test('an erased no-response card explicitly reconnects by USB, flashes, then returns through factory AP and exact station handoff', async ({ page }) => {
+test('an erased card automatically retries its authorized station popup after the gallery network returns', async ({ page }) => {
   const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   await page.route('https://led.mandalacodes.com/**', async route => {
     const requested = new URL(route.request().url());
@@ -549,7 +552,8 @@ test('an erased no-response card explicitly reconnects by USB, flashes, then ret
     const oldBuild = '0'.repeat(40);
     let activeHost = 'lightweaver.local';
     let acked = false;
-    const stats = { openHosts: [], status: 0, ack: 0, firmwareInfo: 0 };
+    let galleryNetworkAvailable = false;
+    const stats = { openHosts: [], stationNavigations: 0, status: 0, ack: 0, firmwareInfo: 0 };
     window.__LW_FLASH_HANDOFF_STATS__ = stats;
     const installed = () => localStorage.getItem('lw_test_factory_flashed') === '1';
     const statusEnvelope = () => {
@@ -590,7 +594,19 @@ test('an erased no-response card explicitly reconnects by USB, flashes, then ret
         else if (message.type === 'wifi-handoff-ack') { stats.ack += 1; acked = true; response = { ok: true, handoffGeneration: 2 }; }
         queueMicrotask(() => emit({ app: 'LightweaverCardBridge', version: 2, id: message.id, ok: true, response }));
       },
-      location: { set href(value) { activeHost = new URL(value).hostname; if (activeHost === stationHost) setTimeout(emitReady, 0); } },
+      location: { set href(value) {
+        activeHost = new URL(value).hostname;
+        if (activeHost !== stationHost) return;
+        stats.stationNavigations += 1;
+        if (stats.stationNavigations === 1) {
+          // The first navigation happens while the workstation is still on the
+          // card AP, so the gallery-subnet address cannot load. Switching Wi-Fi
+          // does not reload Chrome's network-error document by itself.
+          setTimeout(() => { galleryNetworkAvailable = true; }, 200);
+          return;
+        }
+        if (galleryNetworkAvailable) setTimeout(emitReady, 0);
+      } },
     };
     window.open = url => {
       if (url) activeHost = new URL(String(url)).hostname;
@@ -620,6 +636,7 @@ test('an erased no-response card explicitly reconnects by USB, flashes, then ret
   }));
   expect(result.flashed).toBe('1');
   expect(result.stats.openHosts).toContain('192.168.4.1');
+  expect(result.stats.stationNavigations).toBeGreaterThanOrEqual(2);
   expect(result.stats.ack).toBe(1);
   expect(result.stats.firmwareInfo).toBeGreaterThanOrEqual(2);
   expect(result.run).toMatchObject({ state: 'restore', expectedCardId: 'lw-aabbccddeeff', cardChanged: true });
@@ -1590,6 +1607,25 @@ test('an exact card already verified on station LAN reaches firmware evidence wi
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('lw_test_preflight_phases') || '[]'))).toEqual([
     'restart', 'disconnect',
   ]);
+});
+
+test('an AP-host bridge with handoff-ready station metadata is not final station authority', async ({ page }) => {
+  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
+  await page.route('https://led.mandalacodes.com/**', async route => {
+    const requested = new URL(route.request().url());
+    const upstream = await page.request.fetch(`http://localhost:${testPort}${requested.pathname}${requested.search}`);
+    await route.fulfill({ response: upstream });
+  });
+  await serveJob(page); await installDriver(page, { handoffPreflight: true });
+  await page.goto('https://led.mandalacodes.com/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+
+  const recovery = page.getByRole('region', { name: 'Safe recovery' });
+  await expect(recovery).toContainText('could not read the local card page', { timeout: 5_000 });
+  await expect(page.getByRole('button', { name: 'Reconnect same USB card', exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem('lw_test_preflight_count'))).toBeNull();
 });
 
 test('fresh exact station evidence arriving after the card page opens completes preflight', async ({ page }) => {
