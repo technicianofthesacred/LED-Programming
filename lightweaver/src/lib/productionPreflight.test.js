@@ -31,14 +31,18 @@ test('read-only Production preflight falls back from a stale setup address to th
   );
 });
 
-test('read-only Production preflight never repeats the stable card name or accepts a public origin', () => {
+test('read-only Production preflight falls back symmetrically without accepting a public origin', () => {
   assert.deepEqual(
     cardConnection.productionReadOnlyPreflightHosts?.('lightweaver.local'),
-    ['lightweaver.local'],
+    ['lightweaver.local', '192.168.4.1'],
+  );
+  assert.deepEqual(
+    cardConnection.productionReadOnlyPreflightHosts?.('192.168.18.70'),
+    ['192.168.18.70', '192.168.4.1'],
   );
   assert.deepEqual(
     cardConnection.productionReadOnlyPreflightHosts?.('https://example.com/card'),
-    ['lightweaver.local'],
+    ['lightweaver.local', '192.168.4.1'],
   );
   assert.equal(cardConnection.PRODUCTION_READ_ONLY_PREFLIGHT_FALLBACK_MS, 5_000);
 });

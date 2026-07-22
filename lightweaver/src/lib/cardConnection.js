@@ -70,7 +70,8 @@ export function cardHostToUrl(rawHost = '') {
 export function productionReadOnlyPreflightHosts(rawHost = '') {
   const requested = normalizeCardHost(rawHost || DEFAULT_CARD_HOST);
   const initial = isLocalCardHost(requested) ? requested : DEFAULT_CARD_HOST;
-  return [...new Set([initial, DEFAULT_CARD_HOST])];
+  const fallback = initial === '192.168.4.1' ? DEFAULT_CARD_HOST : '192.168.4.1';
+  return [...new Set([initial, fallback])];
 }
 
 // A card lives on the local network: an RFC1918 / loopback IPv4 address, or a
