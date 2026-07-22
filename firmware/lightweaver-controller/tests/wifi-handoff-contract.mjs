@@ -79,6 +79,23 @@ assert.doesNotMatch(wifiPost, /runtimeMarkRestartPending|ESP\.restart|delay\s*\(
 assert.doesNotMatch(web, /Saved\. Rebooting[^'\"]*/,
   'the setup page must not claim an accepted nonblocking handoff will reboot');
 
+const advancedRoot = functionBody(web, /void\s+handleAdvancedRoot\s*\(\)\s*\{/);
+assert.match(advancedRoot, /const\s+pollWifiJoin\s*=\s*async/,
+  'the setup page must poll card status after credentials are accepted');
+assert.match(advancedRoot, /w\.handoffGeneration\s*!==\s*expectedGeneration/,
+  'the setup page must correlate join status to the accepted generation');
+assert.match(advancedRoot, /s\.bootId\s*!==\s*expectedBootId/,
+  'the setup page must correlate join status to the accepted boot');
+assert.match(advancedRoot,
+  /transition\s*===\s*'handoff-ready'[\s\S]*stationIp/,
+  'the setup page must wait for handoff-ready station evidence before telling the user to switch networks');
+assert.match(advancedRoot,
+  /transition\s*===\s*'setup-ap'[\s\S]*lastError/,
+  'the setup page must surface an association timeout or failure instead of waiting forever');
+assert.doesNotMatch(advancedRoot,
+  /Saved\. Joining your home WiFi now[^'\"]*Then open/,
+  'the setup page must not tell the user to leave the AP before station evidence is verified');
+
 assert.doesNotMatch(web, /bool\s+tryStationJoin\s*\(/,
   'boot association must not use the old blocking STA-only join');
 assert.doesNotMatch(web, /while\s*\(WiFi\.status\(\)[\s\S]{0,300}delay\s*\(/,

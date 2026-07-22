@@ -820,7 +820,7 @@ void handleAdvancedRoot() {
               "<input type='password' id='pw' autocomplete='off'>"
               "<label class='field'>Hostname</label>"
               "<input type='text' id='hn' value='lightweaver'>"
-              "<div class='row'><button class='primary' id='join'>Save and reboot</button></div>"
+              "<div class='row'><button class='primary' id='join'>Save and join WiFi</button></div>"
               "<p class='note' id='msg'></p>"
               "</div>");
   } else {
@@ -967,11 +967,18 @@ void handleAdvancedRoot() {
               "const startScan=()=>{scanPolls=0;if(scanTimer){clearTimeout(scanTimer);scanTimer=null}setScanPlaceholder('Scanning…');pollScan()};"
               "$('rescan').onclick=startScan;"
               "startScan();"
+              "const pollWifiJoin=async(expectedGeneration,expectedBootId)=>{const btn=$('join'),m=$('msg');let polls=0,readyReads=0;while(polls++<40){"
+              "await new Promise(resolve=>setTimeout(resolve,750));let s;try{s=await get('/api/status')}catch(_){continue}const w=s&&s.wifi||{};"
+              "if(s.bootId!==expectedBootId||w.handoffGeneration!==expectedGeneration){m.textContent='The card restarted or began another WiFi setup. Reopen this setup page and try again.';m.className='note err';btn.disabled=false;return}"
+              "if(w.transition==='handoff-ready'&&w.transitionPending===true&&w.apActive===true&&w.stationIp){readyReads++;if(readyReads<2)continue;m.textContent='Verified: this card joined gallery WiFi at '+w.stationIp+'. Return this device to gallery WiFi now; Studio will continue automatically.';m.className='note ok';return}"
+              "readyReads=0;if(w.transition==='setup-ap'&&w.lastError){m.textContent='Could not join gallery WiFi: '+w.lastError+'. Check the network name and password, then try again.';m.className='note err';btn.disabled=false;return}"
+              "m.textContent='Credentials saved. Waiting for this card to verify its gallery WiFi connection…';m.className='note'}"
+              "m.textContent='The card did not verify gallery WiFi in time. Stay on Lightweaver-XXXX, check the network name and password, then try again.';m.className='note err';btn.disabled=false};"
               "$('join').onclick=async()=>{const btn=$('join'),m=$('msg');const manual=$('ssid-manual').value.trim();const ssid=manual||$('ssid').value;"
               "if(!ssid){m.textContent='Choose a network or type its name first.';m.className='note err';return}"
               "btn.disabled=true;m.textContent='Saving…';m.className='note';"
               "try{const r=await post('/api/wifi',{ssid:ssid,password:$('pw').value,hostname:$('hn').value});"
-              "if(r.ok){m.textContent='Saved. Joining your home WiFi now — this setup network stays available during handoff. Then open '+($('hn').value||'lightweaver')+'.local';m.className='note ok'}"
+              "if(r.ok){m.textContent='Credentials saved. Waiting for this card to verify its gallery WiFi connection…';m.className='note';await pollWifiJoin(r.handoffGeneration,r.bootId)}"
               "else{m.textContent=r.error||'Save failed';m.className='note err';btn.disabled=false}}catch(e){m.textContent=e.message;m.className='note err';btn.disabled=false}};");
   } else {
     page += F("let patterns=[],currentId='',blackoutOn=false;"
