@@ -1,8 +1,9 @@
 # Lightweaver card provisioning — remaining work
 
-Updated on 2026-07-22 after reproducing the setup-AP-to-gallery-LAN browser
-handoff failure on the real ESP32-S3. The provisioning flow is still not
-shipment-ready.
+Updated on 2026-07-25 when this software branch was closed after the real-card
+run stopped at the setup-AP network switch. The provisioning flow is still not
+shipment-ready. See the exact branch and hardware record in
+[`card-provisioning-closeout-2026-07-25.md`](card-provisioning-closeout-2026-07-25.md).
 
 ## Current truth
 
@@ -40,6 +41,16 @@ shipment-ready.
   remained **Not connected** at the setup-hotspot stage. The workstation was not
   switched to the card AP, so setup-AP join and every later physical gate remain
   open.
+- The final deployed Studio release is commit `a3d5530`, containing official
+  firmware build `85bcda15c03e466f7c6528165641ae734cfffc4e`; live deployment run
+  `29884602213` passed. The disconnected bench card was last flashed with the
+  earlier signed build `e4b4858`, so the next session must reidentify and update
+  it rather than assuming firmware is current.
+- The final live preflight reverified `lw-b0fe81f61b44` over USB and released
+  USB, but the workstation was not moved from gallery Wi-Fi to
+  `Lightweaver-1B44`. Neither the setup address nor mDNS produced current exact
+  runtime evidence. Studio stopped safely with `LW-CARD-202`, offered same-card
+  recovery, performed no project mutation, and remained **Not connected**.
 - In the earlier pre-erase run, the same card proved a successful gallery join at
   `192.168.18.70`: exact card/build, final `station` transition, AP inactive,
   and truthful factory/blank state. Studio was stuck because its one LAN-tab
@@ -121,6 +132,10 @@ HTTP command, board LED, or eight-pixel beacon can substitute for this run.
 - [ ] Turn Wi-Fi off: playback must continue, Studio must demote, and the
       recovery AP must appear within 60 seconds. Restore Wi-Fi and confirm
       automatic same-card recovery without reloading the project.
+
+This run was closed on 2026-07-25 with the card disconnected. Resume as a new
+Production Setup run from USB identification; do not reuse the cached local-card
+tab as evidence.
 
 Only after every box above passes is this card, or the repeatable production
 flow, ready to ship.

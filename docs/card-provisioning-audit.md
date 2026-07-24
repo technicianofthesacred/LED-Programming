@@ -349,15 +349,24 @@ credentials is explicitly **not deployed** and cannot authorize shipment.
 
 ## Current release limiter
 
-The USB identity and ESP32-S3 restart corrections are deployed and verified on
-the real USB card through signed flash and confirmed release. The card also
-proved that it accepted the gallery credentials: it returned at
-`192.168.18.70` as `lw-b0fe81f61b44` on the signed build, with final station
-transport, its AP off, and truthful factory/blank status. Studio nevertheless
-stalled because its one station-tab navigation failed before the workstation
-left the setup AP and was never retried. That software defect is now covered by
-the topology regression described above. The current limiter is publishing the
-correction and completing one uninterrupted live acceptance from setup AP
-through visible output and recovery. Do not mark a card ready to ship until it
-completes [`new-card-checklist.md`](new-card-checklist.md), including the human
-physical-light checks.
+The USB identity, ESP32-S3 restart, Wi-Fi handoff, and symmetric stale-address
+preflight corrections are deployed in commit `a3d5530`; live deployment run
+`29884602213` passed with official firmware build `85bcda15c03e466f7c6528165641ae734cfffc4e`.
+The card previously proved that it accepted gallery credentials and returned at
+`192.168.18.70` as `lw-b0fe81f61b44`, with final station transport, its AP off,
+and truthful factory/blank status. The topology defect that stranded Studio on
+its first failed station navigation is covered by automated regressions.
+
+The branch closed on 2026-07-25 without completing the next physical run. In
+the last live preflight, Studio reverified the exact USB card and released USB,
+but the workstation was not switched to `Lightweaver-1B44`. No current exact
+card page answered, so Studio stopped safely with `LW-CARD-202`, made no project
+mutation, and remained **Not connected**. The card was later disconnected. The
+current limiter is one uninterrupted live acceptance from a fresh USB
+identification through setup AP, gallery return, project read-back, visible
+full-strip output, restart/recovery checks, and exported pass record. Do not
+mark a card ready to ship until it completes
+[`new-card-checklist.md`](new-card-checklist.md), including the human
+physical-light checks. See
+[`card-provisioning-closeout-2026-07-25.md`](card-provisioning-closeout-2026-07-25.md)
+for the exact stopping state.

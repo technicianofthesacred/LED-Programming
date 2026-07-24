@@ -4,7 +4,10 @@ Living list of outstanding work on the LED installation controller. Project is b
 
 ## Active release path
 
-The focused pause/resume handoff for the current card-provisioning release is
+The card-provisioning software branch closed on 2026-07-25; its exact shipped
+state and unverified hardware gates are recorded in
+[docs/card-provisioning-closeout-2026-07-25.md](docs/card-provisioning-closeout-2026-07-25.md).
+Resume the physical acceptance from
 [docs/card-provisioning-remaining.md](docs/card-provisioning-remaining.md).
 
 The immediate goal is to prove and ship the product already on `main`, not to
