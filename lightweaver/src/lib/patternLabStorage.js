@@ -19,7 +19,10 @@ function storageFrom(options) {
 
 function normalizeEnvelope(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Pattern Lab draft envelope must be an object');
-  if (Number(value.version) !== PATTERN_LAB_RECIPE_VERSION) throw new RangeError(`Unsupported Pattern Lab draft version: ${String(value.version)}`);
+  const version = Number(value.version);
+  if (version !== 1 && version !== PATTERN_LAB_RECIPE_VERSION) {
+    throw new RangeError(`Unsupported Pattern Lab draft version: ${String(value.version)}`);
+  }
   if (!Array.isArray(value.drafts)) throw new TypeError('Pattern Lab draft envelope must contain drafts');
   return value.drafts.map(normalizePatternLabRecipe);
 }

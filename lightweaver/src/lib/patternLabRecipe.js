@@ -1,4 +1,4 @@
-export const PATTERN_LAB_RECIPE_VERSION = 1;
+export const PATTERN_LAB_RECIPE_VERSION = 2;
 export const PATTERN_LAB_MAX_LAYERS = 3;
 
 export function assertPatternLabLayerCount(layers) {
@@ -10,8 +10,16 @@ export function assertPatternLabLayerCount(layers) {
 }
 
 const DEFAULT_PALETTE = ['#1a0c05', '#8f3f18', '#f0a04a', '#ffe1a3'];
-const DEFAULT_MACROS = { color: 0.5, movement: 0.5, shape: 0.5, texture: 0.5, energy: 0.5 };
-const DEFAULT_EVOLUTION = { enabled: true, character: 'slow-bloom', durationSeconds: 600, change: 0.35 };
+const DEFAULT_MACROS = { color: 0.5, movement: 0.5, shape: 0.5, texture: 0.5 };
+const DEFAULT_PLAYBACK = { brightness: 0.575, speed: 1.125 };
+const DEFAULT_DYNAMICS = { dynamicRange: 0.55, rareEventStrength: 0.4 };
+const DEFAULT_EVOLUTION = {
+  enabled: true,
+  character: 'slow-bloom',
+  durationSeconds: 600,
+  change: 0.35,
+  dynamics: DEFAULT_DYNAMICS,
+};
 let fallbackId = 0;
 
 function clone(value, ancestors = new WeakSet()) {
@@ -101,7 +109,7 @@ function cryptoSafeId() {
 export function normalizePatternLabRecipe(input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new TypeError('Pattern Lab recipe must be an object');
   const major = majorVersion(input.version);
-  if (major !== PATTERN_LAB_RECIPE_VERSION) {
+  if (major !== 1 && major !== PATTERN_LAB_RECIPE_VERSION) {
     throw new RangeError(`Unsupported Pattern Lab recipe version: ${String(input.version)}`);
   }
 
@@ -119,6 +127,18 @@ export function normalizePatternLabRecipe(input = {}) {
   const macroSource = objectOr(source.macros);
   const macros = { ...DEFAULT_MACROS, ...macroSource };
   for (const key of Object.keys(DEFAULT_MACROS)) macros[key] = bounded(macroSource[key], 0, 1, DEFAULT_MACROS[key]);
+  delete macros.energy;
+
+  const playbackSource = objectOr(source.playback);
+  const playback = { ...DEFAULT_PLAYBACK, ...playbackSource };
+  const oldMovement = bounded(macroSource.movement, 0, 1, DEFAULT_MACROS.movement);
+  const oldEnergy = bounded(macroSource.energy, 0, 1, 0.5);
+  playback.brightness = major === 1
+    ? 0.15 + oldEnergy * 0.85
+    : bounded(playbackSource.brightness, 0, 1, DEFAULT_PLAYBACK.brightness);
+  playback.speed = major === 1
+    ? 0.25 + oldMovement * 1.75
+    : bounded(playbackSource.speed, 0.25, 2, DEFAULT_PLAYBACK.speed);
 
   const evolutionSource = objectOr(source.evolution);
   const evolution = { ...DEFAULT_EVOLUTION, ...evolutionSource };
@@ -126,6 +146,15 @@ export function normalizePatternLabRecipe(input = {}) {
   evolution.character = String(evolutionSource.character || DEFAULT_EVOLUTION.character);
   evolution.durationSeconds = bounded(evolutionSource.durationSeconds, 300, 900, DEFAULT_EVOLUTION.durationSeconds);
   evolution.change = bounded(evolutionSource.change, 0, 1, DEFAULT_EVOLUTION.change);
+  const dynamicsSource = objectOr(evolutionSource.dynamics);
+  const dynamics = { ...DEFAULT_DYNAMICS, ...dynamicsSource };
+  dynamics.dynamicRange = major === 1
+    ? 0.1 + oldEnergy * 0.9
+    : bounded(dynamicsSource.dynamicRange, 0.1, 1, DEFAULT_DYNAMICS.dynamicRange);
+  dynamics.rareEventStrength = major === 1
+    ? oldEnergy * 0.8
+    : bounded(dynamicsSource.rareEventStrength, 0, 0.8, DEFAULT_DYNAMICS.rareEventStrength);
+  evolution.dynamics = dynamics;
   const layers = arrayOr(source.layers);
   assertPatternLabLayerCount(layers);
 
@@ -137,6 +166,7 @@ export function normalizePatternLabRecipe(input = {}) {
     base,
     palette,
     macros,
+    playback,
     evolution,
     seed: (Number.isFinite(Number(source.seed)) ? Math.trunc(Number(source.seed)) : 1) >>> 0,
     layers,
@@ -154,6 +184,7 @@ export function createPatternLabRecipe(overrides = {}) {
     base: { kind: 'lightweaver-pattern', patternId: 'aurora', params: {} },
     palette: DEFAULT_PALETTE,
     macros: DEFAULT_MACROS,
+    playback: DEFAULT_PLAYBACK,
     evolution: DEFAULT_EVOLUTION,
     seed: 1,
     layers: [],

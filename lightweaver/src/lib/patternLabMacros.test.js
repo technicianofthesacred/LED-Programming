@@ -13,9 +13,9 @@ const CASES = [
     { paletteTravel: 0.5, warmth: 0, saturation: 0.775 },
     { paletteTravel: 1, warmth: 1, saturation: 1 }],
   ['movement',
-    { speedMultiplier: 0.25, driftToPulse: 0, modulationDepth: 0.05 },
-    { speedMultiplier: 1.125, driftToPulse: 0.5, modulationDepth: 0.4 },
-    { speedMultiplier: 2, driftToPulse: 1, modulationDepth: 0.75 }],
+    { driftToPulse: 0, modulationDepth: 0.05 },
+    { driftToPulse: 0.5, modulationDepth: 0.4 },
+    { driftToPulse: 1, modulationDepth: 0.75 }],
   ['shape',
     { spatialScale: 0.5, radialBias: -1, symmetryStrength: 0.15 },
     { spatialScale: 1.5, radialBias: 0, symmetryStrength: 0.575 },
@@ -24,10 +24,6 @@ const CASES = [
     { detailScale: 0.5, crispness: 0, density: 0.15 },
     { detailScale: 2.25, crispness: 0.5, density: 0.575 },
     { detailScale: 4, crispness: 1, density: 1 }],
-  ['energy',
-    { brightness: 0.15, dynamicRange: 0.1, rareEventStrength: 0 },
-    { brightness: 0.575, dynamicRange: 0.55, rareEventStrength: 0.4 },
-    { brightness: 1, dynamicRange: 1, rareEventStrength: 0.8 }],
 ];
 
 for (const [macro, atZero, atMidpoint, atOne] of CASES) {
@@ -42,7 +38,7 @@ for (const [macro, atZero, atMidpoint, atOne] of CASES) {
 test('resolution returns fresh values and never mutates the source recipe or macro object', () => {
   const source = {
     id: 'immutable',
-    macros: { color: 0.2, movement: 0.3, shape: 0.4, texture: 0.6, energy: 0.7 },
+    macros: { color: 0.2, movement: 0.3, shape: 0.4, texture: 0.6 },
   };
   const before = structuredClone(source);
   const first = resolvePatternLabMacros(source);
@@ -66,7 +62,7 @@ test('primary-field projection recovers endpoint and midpoint resolver outputs',
 });
 
 test('resolver output projects back within documented twelve-decimal precision', () => {
-  const macros = { color: 0.13, movement: 0.27, shape: 0.49, texture: 0.68, energy: 0.91 };
+  const macros = { color: 0.13, movement: 0.27, shape: 0.49, texture: 0.68 };
   const before = structuredClone(macros);
   const technical = resolvePatternLabMacros(macros);
   const projected = projectPatternLabMacrosFromTechnicalValues(technical);
@@ -80,12 +76,12 @@ test('resolver output projects back within documented twelve-decimal precision',
 test('projection uses only the documented primary field for contradictory technical groups', () => {
   const technical = {
     color: { paletteTravel: 0.25, warmth: 1, saturation: 0.55 },
-    energy: { brightness: 0.575, dynamicRange: 1, rareEventStrength: 0 },
+    movement: { driftToPulse: 0.75, modulationDepth: 0.05 },
   };
   const before = structuredClone(technical);
   const projected = projectPatternLabMacrosFromTechnicalValues(technical);
   assert.equal(projected.color, 0.25);
-  assert.equal(projected.energy, 0.5);
+  assert.equal(projected.movement, 0.75);
   assert.deepEqual(technical, before);
 });
 
@@ -103,9 +99,22 @@ test('legacy technical-to-macro name remains a projection-compatible alias', () 
 
 test('missing macros use midpoint defaults and out-of-range inputs clamp', () => {
   assert.deepEqual(projectPatternLabMacrosFromTechnicalValues(resolvePatternLabMacros({})), {
-    color: 0.5, movement: 0.5, shape: 0.5, texture: 0.5, energy: 0.5,
+    color: 0.5, movement: 0.5, shape: 0.5, texture: 0.5,
   });
   const resolved = resolvePatternLabMacros({ color: -1, movement: 2 });
   assert.equal(resolved.color.paletteTravel, 0);
-  assert.equal(resolved.movement.speedMultiplier, 2);
+  assert.deepEqual(resolved.movement, { driftToPulse: 1, modulationDepth: .75 });
+});
+
+test('movement owns motion character only and Energy has no technical group', () => {
+  const resolved = resolvePatternLabMacros({
+    color: .4,
+    movement: .6,
+    shape: .5,
+    texture: .5,
+    energy: 1,
+  });
+  assert.deepEqual(Object.keys(resolved), ['color', 'movement', 'shape', 'texture']);
+  assert.equal(Object.hasOwn(resolved.movement, 'speedMultiplier'), false);
+  assert.equal(Object.hasOwn(resolved, 'energy'), false);
 });

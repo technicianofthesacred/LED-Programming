@@ -6,8 +6,8 @@ const DEFINITIONS = Object.freeze({
     fields: Object.freeze({ paletteTravel: [0, 1], warmth: [-1, 1], saturation: [0.55, 1] }),
   }),
   movement: Object.freeze({
-    primary: 'speedMultiplier',
-    fields: Object.freeze({ speedMultiplier: [0.25, 2], driftToPulse: [0, 1], modulationDepth: [0.05, 0.75] }),
+    primary: 'driftToPulse',
+    fields: Object.freeze({ driftToPulse: [0, 1], modulationDepth: [0.05, 0.75] }),
   }),
   shape: Object.freeze({
     primary: 'spatialScale',
@@ -16,10 +16,6 @@ const DEFINITIONS = Object.freeze({
   texture: Object.freeze({
     primary: 'detailScale',
     fields: Object.freeze({ detailScale: [0.5, 4], crispness: [0, 1], density: [0.15, 1] }),
-  }),
-  energy: Object.freeze({
-    primary: 'brightness',
-    fields: Object.freeze({ brightness: [0.15, 1], dynamicRange: [0.1, 1], rareEventStrength: [0, 0.8] }),
   }),
 });
 

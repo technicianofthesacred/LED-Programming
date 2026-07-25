@@ -16,7 +16,32 @@ test('writes normalized drafts only to private primary and backup keys', () => {
   assert.deepEqual(storage.writes, [PATTERN_LAB_DRAFTS_KEY, PATTERN_LAB_DRAFTS_BACKUP_KEY]);
   assert.equal(PATTERN_LAB_DRAFTS_KEY, 'lw_pattern_lab_drafts_v1');
   assert.equal(PATTERN_LAB_DRAFTS_BACKUP_KEY, 'lw_pattern_lab_drafts_v1_backup');
+  assert.equal(JSON.parse(storage.getItem(PATTERN_LAB_DRAFTS_KEY)).version, 2);
+  assert.equal(JSON.parse(storage.getItem(PATTERN_LAB_DRAFTS_BACKUP_KEY)).drafts[0].version, 2);
   assert.deepEqual(readPatternLabDrafts({ storage }).map(x => x.id), ['private']);
+});
+
+test('reads a v1 envelope and migrates its drafts without rewriting stored data', () => {
+  const storage = memoryStorage();
+  const legacyEnvelope = {
+    version: 1,
+    drafts: [{
+      version: 1,
+      id: 'legacy',
+      macros: { color: .2, movement: .5, shape: .6, texture: .7, energy: .5 },
+    }],
+  };
+  const raw = JSON.stringify(legacyEnvelope);
+  storage.setItem(PATTERN_LAB_DRAFTS_KEY, raw);
+  storage.writes.length = 0;
+
+  const [restored] = readPatternLabDrafts({ storage });
+  assert.equal(restored.version, 2);
+  assert.deepEqual(restored.playback, { brightness: .575, speed: 1.125 });
+  assert.deepEqual(restored.evolution.dynamics, { dynamicRange: .55, rareEventStrength: .4 });
+  assert.equal(Object.hasOwn(restored.macros, 'energy'), false);
+  assert.deepEqual(storage.writes, []);
+  assert.equal(storage.getItem(PATTERN_LAB_DRAFTS_KEY), raw);
 });
 
 test('recovers from backup after corrupt or unsupported primary data', () => {
@@ -24,7 +49,7 @@ test('recovers from backup after corrupt or unsupported primary data', () => {
   writePatternLabDrafts([createPatternLabRecipe({ id: 'safe' })], { storage });
   storage.setItem(PATTERN_LAB_DRAFTS_KEY, '{broken');
   assert.deepEqual(readPatternLabDrafts({ storage }).map(x => x.id), ['safe']);
-  storage.setItem(PATTERN_LAB_DRAFTS_KEY, JSON.stringify({ version: 1, drafts: [{ version: 2, id: 'future' }] }));
+  storage.setItem(PATTERN_LAB_DRAFTS_KEY, JSON.stringify({ version: 3, drafts: [{ version: 3, id: 'future' }] }));
   assert.deepEqual(readPatternLabDrafts({ storage }).map(x => x.id), ['safe']);
 });
 
@@ -32,7 +57,7 @@ test('rejects invalid writes before mutating either stored copy', () => {
   const storage = memoryStorage();
   writePatternLabDrafts([createPatternLabRecipe({ id: 'original' })], { storage });
   const primary = storage.getItem(PATTERN_LAB_DRAFTS_KEY), backup = storage.getItem(PATTERN_LAB_DRAFTS_BACKUP_KEY);
-  assert.throws(() => writePatternLabDrafts([{ version: 2, id: 'future' }], { storage }), /unsupported pattern lab recipe version/i);
+  assert.throws(() => writePatternLabDrafts([{ version: 3, id: 'future' }], { storage }), /unsupported pattern lab recipe version/i);
   assert.equal(storage.getItem(PATTERN_LAB_DRAFTS_KEY), primary);
   assert.equal(storage.getItem(PATTERN_LAB_DRAFTS_BACKUP_KEY), backup);
 });
@@ -57,7 +82,7 @@ test('deletes one draft and tolerates unavailable or invalid storage', () => {
   assert.equal(deletePatternLabDraft('missing', { storage }), false);
   assert.deepEqual(readPatternLabDrafts({ storage: null }), []);
   assert.equal(writePatternLabDrafts([], { storage: null }), false);
-  storage.setItem(PATTERN_LAB_DRAFTS_KEY, JSON.stringify({ version: 2, drafts: [] }));
+  storage.setItem(PATTERN_LAB_DRAFTS_KEY, JSON.stringify({ version: 3, drafts: [] }));
   storage.setItem(PATTERN_LAB_DRAFTS_BACKUP_KEY, 'bad');
   assert.deepEqual(readPatternLabDrafts({ storage }), []);
 });

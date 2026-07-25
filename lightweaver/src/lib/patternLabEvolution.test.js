@@ -19,8 +19,13 @@ const REQUIRED_CHARACTERS = [
 function recipe(character, overrides = {}) {
   return {
     seed: 424242,
-    evolution: { enabled: true, character, durationSeconds: 600, change: 0.65 },
-    limits: { brightnessCeiling: 0.78 },
+    evolution: {
+      enabled: true,
+      character,
+      durationSeconds: 600,
+      change: 0.65,
+      dynamics: { dynamicRange: .55, rareEventStrength: .4 },
+    },
     ...overrides,
   };
 }
@@ -44,7 +49,13 @@ for (const character of REQUIRED_CHARACTERS) {
   test(`${character} produces varied destination samples across its full duration`, () => {
     for (const durationSeconds of [300, 600, 900]) {
       const source = recipe(character, {
-        evolution: { enabled: true, character, durationSeconds, change: 0.65 },
+        evolution: {
+          enabled: true,
+          character,
+          durationSeconds,
+          change: 0.65,
+          dynamics: { dynamicRange: .55, rareEventStrength: .4 },
+        },
       });
       const times = Array.from({ length: 37 }, (_, index) => (
         (index * 73.137 + index * index * 0.619 + 0.137) % (durationSeconds - 0.5)
@@ -59,16 +70,19 @@ for (const character of REQUIRED_CHARACTERS) {
     }
   });
 
-  test(`${character} stays inside its preset ranges and brightness ceiling`, () => {
+  test(`${character} stays inside its preset ranges with relative brightness at or below one`, () => {
     const source = recipe(character);
     const ranges = PATTERN_LAB_EVOLUTION_PRESETS[character];
     for (let second = 0; second <= source.evolution.durationSeconds; second += 7) {
-      const { destinations } = sampleEvolution(source, second);
+      const { destinations, effectiveBrightnessRange } = sampleEvolution(source, second);
       for (const [key, [minimum, maximum]] of Object.entries(ranges)) {
+        if (key === 'brightness') continue;
         assert.ok(destinations[key] >= minimum - 1e-12, `${key} below ${minimum}`);
         assert.ok(destinations[key] <= maximum + 1e-12, `${key} above ${maximum}`);
       }
-      assert.ok(destinations.brightness <= source.limits.brightnessCeiling);
+      assert.ok(destinations.brightness >= effectiveBrightnessRange[0] - 1e-12);
+      assert.ok(destinations.brightness <= effectiveBrightnessRange[1] + 1e-12);
+      assert.ok(destinations.brightness <= 1);
     }
   });
 }
@@ -82,7 +96,13 @@ test('different seeds produce different spatial and texture clocks', () => {
 test('false-like enabled values return one explicit stable disabled result', () => {
   for (const enabled of [false, 0, null, '']) {
     const source = recipe('tidal', {
-      evolution: { enabled, character: 'tidal', durationSeconds: 600, change: 0.65 },
+      evolution: {
+        enabled,
+        character: 'tidal',
+        durationSeconds: 600,
+        change: 0.65,
+        dynamics: { dynamicRange: .55, rareEventStrength: .4 },
+      },
     });
     const initial = sampleEvolution(source, 0);
     assert.equal(initial.enabled, false);
@@ -119,15 +139,61 @@ test('seed parsing preserves zero and normalizes finite uint32 edges', () => {
   assert.notDeepEqual([zero.spatial, zero.texture], [one.spatial, one.texture]);
 });
 
-test('effective brightness range exposes ceiling conflicts without claiming the preset minimum', () => {
-  const source = recipe('rare-surprises', { limits: { brightnessCeiling: 0.2 } });
-  for (let second = 0; second <= 600; second += 5) {
-    const sample = sampleEvolution(source, second);
-    assert.deepEqual(sample.effectiveBrightnessRange, [0.2, 0.2]);
-    assert.equal(sample.destinations.brightness, 0.2);
-  }
-  const intersected = sampleEvolution(recipe('rare-surprises', { limits: { brightnessCeiling: 0.5 } }), 80);
-  assert.deepEqual(intersected.effectiveBrightnessRange, [0.3, 0.5]);
+test('dynamic range controls relative brightness depth instead of reading a master ceiling', () => {
+  const shallow = recipe('rare-surprises', {
+    limits: { brightnessCeiling: .01 },
+    evolution: {
+      enabled: true,
+      character: 'rare-surprises',
+      durationSeconds: 600,
+      change: .65,
+      dynamics: { dynamicRange: .1, rareEventStrength: .4 },
+    },
+  });
+  const deep = recipe('rare-surprises', {
+    limits: { brightnessCeiling: .01 },
+    evolution: {
+      enabled: true,
+      character: 'rare-surprises',
+      durationSeconds: 600,
+      change: .65,
+      dynamics: { dynamicRange: 1, rareEventStrength: .4 },
+    },
+  });
+  const shallowSample = sampleEvolution(shallow, 80);
+  const deepSample = sampleEvolution(deep, 80);
+  assert.deepEqual(shallowSample.effectiveBrightnessRange, [.93, .978]);
+  assert.deepEqual(deepSample.effectiveBrightnessRange, [.3, .78]);
+  assert.ok(shallowSample.destinations.brightness > deepSample.destinations.brightness);
+  assert.equal(Object.hasOwn(shallowSample, 'brightnessCeiling'), false);
+});
+
+test('rare event strength is bounded and scales deterministic rare emphasis', () => {
+  const withoutRare = recipe('rare-surprises', {
+    evolution: {
+      enabled: true,
+      character: 'rare-surprises',
+      durationSeconds: 600,
+      change: 1,
+      dynamics: { dynamicRange: .55, rareEventStrength: 0 },
+    },
+  });
+  const withRare = recipe('rare-surprises', {
+    evolution: {
+      enabled: true,
+      character: 'rare-surprises',
+      durationSeconds: 600,
+      change: 1,
+      dynamics: { dynamicRange: .55, rareEventStrength: .8 },
+    },
+  });
+  const samples = Array.from({ length: 600 }, (_, second) => [
+    sampleEvolution(withoutRare, second).rare,
+    sampleEvolution(withRare, second).rare,
+  ]);
+  assert.ok(samples.every(([none]) => none === 0));
+  assert.ok(samples.some(([, full]) => full > 0));
+  assert.ok(samples.every(([, full]) => full >= 0 && full <= 1));
 });
 
 test('sampling uses neither Math.random nor wall-clock time', () => {

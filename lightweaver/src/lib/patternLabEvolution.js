@@ -26,6 +26,8 @@ const TAU = Math.PI * 2;
 const DEFAULT_DURATION_SECONDS = 600;
 const DEFAULT_CHANGE = 0.35;
 const DEFAULT_SEED = 1;
+const DEFAULT_DYNAMIC_RANGE = 0.55;
+const DEFAULT_RARE_EVENT_STRENGTH = 0.4;
 
 function clamp(value, minimum = 0, maximum = 1) {
   const number = Number(value);
@@ -86,7 +88,8 @@ function smoothCycle(phase, character) {
   }
 }
 
-function sampleRareEvents(seed, elapsedSeconds, change) {
+function sampleRareEvents(seed, elapsedSeconds, change, strength) {
+  if (strength <= 0) return 0;
   const interval = 43;
   const bucket = Math.floor(elapsedSeconds / interval);
   const chance = hash01(seed, bucket);
@@ -95,7 +98,9 @@ function sampleRareEvents(seed, elapsedSeconds, change) {
   const phase = fract(elapsedSeconds / interval);
   const attack = smooth(Math.min(1, phase / 0.12));
   const release = 1 - smooth(Math.max(0, (phase - 0.12) / 0.88));
-  return clamp(attack * release * (0.45 + hash01(seed + 101, bucket) * 0.55));
+  return clamp(
+    attack * release * (0.45 + hash01(seed + 101, bucket) * 0.55) * (strength / 0.8),
+  );
 }
 
 function rangeValue(range, signal, change) {
@@ -104,18 +109,8 @@ function rangeValue(range, signal, change) {
   return midpoint + (destination - midpoint) * change;
 }
 
-function brightnessCeiling(recipe) {
-  const value = recipe?.limits?.brightnessCeiling
-    ?? recipe?.card?.brightnessCeiling
-    ?? recipe?.card?.maxBrightness
-    ?? recipe?.brightnessCeiling
-    ?? 1;
-  return clamp(value);
-}
-
-function brightnessRangeAtCeiling(presetRange, ceiling) {
-  const maximum = Math.min(presetRange[1], ceiling);
-  return [Math.min(presetRange[0], maximum), maximum];
+function relativeBrightnessRange(presetRange, dynamicRange) {
+  return presetRange.map(value => Math.round((1 - (1 - value) * dynamicRange) * 1e12) / 1e12);
 }
 
 export function sampleEvolution(recipe, elapsedSeconds) {
@@ -129,9 +124,21 @@ export function sampleEvolution(recipe, elapsedSeconds) {
   const duration = bounded(recipe?.evolution?.durationSeconds, 300, 900, DEFAULT_DURATION_SECONDS);
   const elapsed = Math.max(0, Number.isFinite(Number(elapsedSeconds)) ? Number(elapsedSeconds) : 0);
   const change = bounded(recipe?.evolution?.change, 0, 1, DEFAULT_CHANGE);
+  const dynamicRange = bounded(
+    recipe?.evolution?.dynamics?.dynamicRange,
+    0.1,
+    1,
+    DEFAULT_DYNAMIC_RANGE,
+  );
+  const rareEventStrength = bounded(
+    recipe?.evolution?.dynamics?.rareEventStrength,
+    0,
+    0.8,
+    DEFAULT_RARE_EVENT_STRENGTH,
+  );
   const seed = uint32Seed(recipe?.seed);
-  const ceiling = brightnessCeiling(recipe);
-  const effectiveBrightnessRange = brightnessRangeAtCeiling(preset.brightness, ceiling);
+  const effectiveBrightnessRange = relativeBrightnessRange(preset.brightness, dynamicRange);
+  const dynamics = { dynamicRange, rareEventStrength };
 
   if (!enabled) {
     return {
@@ -144,7 +151,7 @@ export function sampleEvolution(recipe, elapsedSeconds) {
       spatial: 0,
       texture: 0,
       rare: 0,
-      brightnessCeiling: ceiling,
+      dynamics,
       effectiveBrightnessRange,
       destinations: null,
     };
@@ -153,7 +160,7 @@ export function sampleEvolution(recipe, elapsedSeconds) {
   const arc = smoothCycle(elapsed / duration, character);
   const spatial = seededNoise1D(seed + 11, elapsed / 137);
   const texture = seededNoise1D(seed + 23, elapsed / 17);
-  const rare = sampleRareEvents(seed + 47, elapsed, change);
+  const rare = sampleRareEvents(seed + 47, elapsed, change, rareEventStrength);
 
   const destinations = {
     brightness: rangeValue(effectiveBrightnessRange, clamp(arc * 0.72 + texture * 0.18 + rare * 0.1), change),
@@ -173,7 +180,7 @@ export function sampleEvolution(recipe, elapsedSeconds) {
     spatial,
     texture,
     rare,
-    brightnessCeiling: ceiling,
+    dynamics,
     effectiveBrightnessRange,
     destinations,
   };
