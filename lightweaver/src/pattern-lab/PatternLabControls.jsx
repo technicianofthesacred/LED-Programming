@@ -12,13 +12,28 @@ const GENERATOR_LABELS = {
   'gray-scott-1d': 'Reaction Diffusion',
 };
 
-const MACROS = [
-  ['color', 'Color', 'Warmth and palette travel'],
-  ['movement', 'Movement', 'From drifting to animated'],
-  ['shape', 'Shape', 'Broad forms to finer structure'],
-  ['texture', 'Texture', 'Soft atmosphere to crisp detail'],
-  ['energy', 'Energy', 'Quiet glow to luminous presence'],
+const CONTROLS = [
+  ['color', 'macros', 'Color', 'Warmth and palette travel', 0, 100],
+  ['brightness', 'playback', 'Brightness', 'Master output within the installation limit', 0, 100],
+  ['movement', 'macros', 'Movement', 'Drift 0% · Flow 33% · Pulse 67% · Surge 100%', 0, 100],
+  ['speed', 'playback', 'Speed', 'Overall pattern pace', 25, 200],
+  ['shape', 'macros', 'Shape', 'Broad forms to finer structure', 0, 100],
+  ['texture', 'macros', 'Texture', 'Soft atmosphere to crisp detail', 0, 100],
 ];
+
+const MOVEMENT_ANCHORS = [
+  [0, 'Drift'],
+  [33, 'Flow'],
+  [67, 'Pulse'],
+  [100, 'Surge'],
+];
+
+function movementValueText(value) {
+  const [, label] = MOVEMENT_ANCHORS.reduce((nearest, anchor) => (
+    Math.abs(anchor[0] - value) < Math.abs(nearest[0] - value) ? anchor : nearest
+  ));
+  return `${label}, ${value}%`;
+}
 
 export default function PatternLabControls({
   patterns,
@@ -26,6 +41,7 @@ export default function PatternLabControls({
   selectedPatternId,
   onPatternChange,
   onMacroChange,
+  onPlaybackChange,
   onPaletteChange,
   onAdvancedChange,
   activeWorkflowStep,
@@ -99,19 +115,28 @@ export default function PatternLabControls({
         </div>
         <div className="plab-compact-step-body">
           <div className="plab-macros" aria-disabled={!recipe}>
-            {MACROS.map(([key, label, hint]) => {
-              const value = Math.round((recipe?.macros?.[key] ?? 0.5) * 100);
+            {CONTROLS.map(([key, group, label, hint, minimum, maximum]) => {
+              const fallback = key === 'brightness' ? 0.575 : key === 'speed' ? 1.125 : 0.5;
+              const value = Math.round((recipe?.[group]?.[key] ?? fallback) * 100);
+              const valueText = key === 'speed' ? `${(value / 100).toFixed(2)}×` : `${value}%`;
               return (
                 <label className="plab-macro" key={key}>
-                  <span className="plab-macro-label"><strong>{label}</strong><output aria-label={`${label} value`}>{value}%</output></span>
+                  <span className="plab-macro-label"><strong>{label}</strong><output aria-label={`${label} value`}>{valueText}</output></span>
                   <input
                     aria-label={label}
+                    aria-valuetext={key === 'movement'
+                      ? movementValueText(value)
+                      : valueText}
                     type="range"
-                    min="0"
-                    max="100"
+                    min={minimum}
+                    max={maximum}
                     value={value}
                     disabled={!recipe}
-                    onChange={event => onMacroChange(key, Number(event.target.value) / 100)}
+                    onChange={event => {
+                      const nextValue = Number(event.target.value) / 100;
+                      if (group === 'playback') onPlaybackChange?.(key, nextValue);
+                      else onMacroChange(key, nextValue);
+                    }}
                   />
                   <small>{hint}</small>
                 </label>
@@ -151,10 +176,8 @@ export default function PatternLabControls({
             <details className="plab-advanced">
               <summary>Advanced controls</summary>
               <dl>
-                <div><dt>Speed</dt><dd>{technical.movement.speedMultiplier.toFixed(2)}×</dd></div>
                 <div><dt>Spatial scale</dt><dd>{technical.shape.spatialScale.toFixed(2)}×</dd></div>
                 <div><dt>Detail</dt><dd>{technical.texture.detailScale.toFixed(2)}×</dd></div>
-                <div><dt>Brightness ceiling</dt><dd>{Math.round(technical.energy.brightness * 100)}%</dd></div>
               </dl>
               {generatorControls && (
                 <div className="plab-generator-advanced">

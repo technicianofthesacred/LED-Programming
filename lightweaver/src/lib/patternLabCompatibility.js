@@ -701,7 +701,7 @@ export function explainPatternLabDarkness(inputs = {}) {
     code: 'masked-out', message: 'The active mask removes this pixel.', action: 'Inspect or soften the layer mask.',
   });
   if (finite(inputs.brightness, 1) <= 0.01) explanations.push({
-    code: 'brightness-zero', message: 'Layer or master brightness is at zero.', action: 'Raise Energy, layer opacity, or master brightness.',
+    code: 'brightness-zero', message: 'Layer or master brightness is at zero.', action: 'Raise Brightness, layer opacity, or master brightness.',
   });
   if (inputs.allStripBrightnessZero) explanations.push({
     code: 'strip-brightness-zero', message: 'Every visible strip has zero brightness.', action: 'Raise brightness on at least one visible strip.',

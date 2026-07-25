@@ -109,8 +109,8 @@ function lookFromRecipe(recipe) {
   const color = hexToCardColor(paletteColor);
   const defaultLook = normalizeCardVisualLook({
     patternId: recipe.base.patternId,
-    brightness: technical.energy.brightness,
-    speed: technical.movement.speedMultiplier,
+    brightness: recipe.playback.brightness,
+    speed: recipe.playback.speed,
     hueShift: Math.round(technical.color.warmth * 18),
     customHue: color.customHue,
     customSaturation: Math.round(technical.color.saturation * 255),
@@ -142,8 +142,14 @@ function validPositiveInteger(value, maximum = Number.MAX_SAFE_INTEGER) {
 function normalizeManifest(value) {
   if (!record(value)
     || value.format !== 'lightweaver-lwseq-sidecar'
-    || value.version !== 1
+    || value.version !== 2
     || value.hashAlgorithm !== 'SHA-256'
+    || !record(value.recipe)
+    || !record(value.renderSettings)
+    || value.renderSettings.timeSource !== 'resolved-render-time'
+    || value.renderSettings.masterSpeed !== 1
+    || value.renderSettings.brightnessSource !== 'resolved-effective-brightness'
+    || value.renderSettings.audioTimeSource !== 'timeline-time'
     || !SHA256_PATTERN.test(value.recipeSha256)
     || !SHA256_PATTERN.test(value.layoutPhysicalOrderSha256)
     || !(value.audioLanesSha256 === null || SHA256_PATTERN.test(value.audioLanesSha256))
@@ -154,10 +160,23 @@ function normalizeManifest(value) {
     || !SHA256_PATTERN.test(value.lwseqSha256)) {
     return null;
   }
+  let recipe;
+  try {
+    recipe = normalizePatternLabRecipe(value.recipe);
+  } catch {
+    return null;
+  }
   return {
     format: 'lightweaver-lwseq-sidecar',
-    version: 1,
+    version: 2,
     hashAlgorithm: 'SHA-256',
+    recipe,
+    renderSettings: {
+      timeSource: 'resolved-render-time',
+      masterSpeed: 1,
+      brightnessSource: 'resolved-effective-brightness',
+      audioTimeSource: 'timeline-time',
+    },
     recipeSha256: value.recipeSha256,
     layoutPhysicalOrderSha256: value.layoutPhysicalOrderSha256,
     audioLanesSha256: value.audioLanesSha256,
@@ -308,6 +327,7 @@ async function validateBakeResult(bakeResult, normalizedRecipe) {
   if (!manifest || canonicalPatternLabBakeJson(manifest) !== bakeResult.sidecarJson) {
     throw new TypeError('The Pattern Lab bake sidecar is not canonical');
   }
+  if (canonicalPatternLabBakeJson(manifest.recipe) !== expectedRecipeJson) throw staleRecipeError();
   const outputs = normalizeAssetOutputs(bakeResult.outputs, manifest.pixelCount);
   if (!outputs) throw new TypeError('The Pattern Lab bake outputs are incomplete');
   assertHeader(bakeResult.bytes, manifest, outputs.length);

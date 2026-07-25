@@ -562,6 +562,14 @@ test('dark-output explanations cover masks, brightness, gamma, power, invalid ou
   assert.ok(Object.isFrozen(explanations));
 });
 
+test('zero Brightness guidance never names the removed Energy control', () => {
+  const explanation = explainPatternLabDarkness({ brightness: 0 })
+    .find(item => item.code === 'brightness-zero');
+
+  assert.equal(explanation?.action, 'Raise Brightness, layer opacity, or master brightness.');
+  assert.doesNotMatch(JSON.stringify(explanation), /\bEnergy\b/);
+});
+
 test('dark-output explanations distinguish zero strip brightness and an observed black frame', () => {
   const explanations = explainPatternLabDarkness({
     allStripBrightnessZero: true,

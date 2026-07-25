@@ -1,7 +1,6 @@
 import { buildGammaLut } from './frameEngine.js';
 import { pixelsFromWiring, remapFrameToWiring } from './export.js';
-import { sampleEvolution } from './patternLabEvolution.js';
-import { resolvePatternLabMacros } from './patternLabMacros.js';
+import { resolvePatternLabControls } from './patternLabControls.js';
 import { renderPatternLabRecipeFrame } from './patternLabPatternAdapter.js';
 import { assertPatternLabJsonSafe, normalizePatternLabRecipe } from './patternLabRecipe.js';
 import {
@@ -404,28 +403,14 @@ export function estimatePatternLabBake(input = {}) {
 }
 
 function renderOptionsAt(recipe, time) {
-  const macros = resolvePatternLabMacros(recipe);
-  const evolution = recipe.evolution.enabled ? sampleEvolution(recipe, time) : null;
-  const amount = evolution?.change ?? 0;
-  const destinations = evolution?.destinations;
+  const controls = resolvePatternLabControls(recipe, time);
   return {
-    masterSpeed: clamp(mix(
-      macros.movement.speedMultiplier,
-      0.4 + (destinations?.movement ?? 0.5) * 2.1,
-      amount,
-    ), 0.1, 3),
-    masterBrightness: clamp(mix(
-      macros.energy.brightness,
-      Math.min(macros.energy.brightness, destinations?.brightness ?? macros.energy.brightness),
-      amount,
-    ), 0.08, 1),
-    masterSaturation: clamp(mix(
-      macros.color.saturation,
-      0.55 + (destinations?.color ?? 0.5) * 0.45,
-      amount,
-    ), 0.25, 1),
-    masterHueShift: macros.color.warmth * 18
-      + ((destinations?.color ?? 0.5) - 0.5) * 72 * amount,
+    time: controls.renderTime,
+    masterSpeed: 1,
+    masterBrightness: controls.effectiveBrightness,
+    masterSaturation: controls.masterSaturation,
+    masterHueShift: controls.masterHueShift,
+    motionWeights: controls.motionWeights,
   };
 }
 
@@ -465,13 +450,13 @@ function renderDirectFrame(prepared, time) {
   }
   const options = renderOptionsAt(prepared.recipe, time);
   return renderPatternLabRecipeFrame(prepared.recipe, {
-    t: time,
+    ...options,
+    t: options.time,
     strips: renderStrips(prepared.strips),
     bpm: prepared.render.bpm,
     gammaLUT: buildGammaLut(prepared.render.gammaEnabled, prepared.render.gammaValue),
     symSettings: prepared.render.symSettings,
     audioBands: audioBandsAt(prepared.audioLanes, time),
-    ...options,
   }).pixels;
 }
 
@@ -549,20 +534,21 @@ function createWorkerRenderer(prepared, signal) {
     async render(time) {
       const requestId = sequence.current() + 1;
       const expectedSampleCount = prepared.sourcePixelCount;
+      const renderOptions = renderOptionsAt(prepared.recipe, time);
       const reply = await send('render', {
         recipe: prepared.recipe,
-        time,
+        time: renderOptions.time,
         mode: 'export',
         generation,
         layerCount: prepared.recipe.layers.length,
-        renderOptions: renderOptionsAt(prepared.recipe, time),
+        renderOptions,
       });
       const frame = validatePatternLabWorkerFrameReply(reply, {
         id: requestId,
         mode: 'export',
         expectedSampleCount,
         visiblePixelCount: prepared.sourcePixelCount,
-        time,
+        time: renderOptions.time,
         generation,
       });
       return Array.from({ length: prepared.sourcePixelCount }, (_, index) => ({
@@ -636,8 +622,15 @@ export async function bakePatternLabRecipe(input = {}) {
   ]);
   const sidecar = Object.freeze({
     format: 'lightweaver-lwseq-sidecar',
-    version: 1,
+    version: 2,
     hashAlgorithm: 'SHA-256',
+    recipe: prepared.recipe,
+    renderSettings: Object.freeze({
+      timeSource: 'resolved-render-time',
+      masterSpeed: 1,
+      brightnessSource: 'resolved-effective-brightness',
+      audioTimeSource: 'timeline-time',
+    }),
     recipeSha256,
     layoutPhysicalOrderSha256,
     audioLanesSha256,

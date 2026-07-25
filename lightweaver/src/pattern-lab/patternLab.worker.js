@@ -17,7 +17,11 @@ import {
   measurePatternLabGeneratorStateBytes,
   resolvePatternLabGeneratorInputs,
 } from '../lib/patternLabGenerators.js';
-import { blendPatternLabColors } from '../lib/patternLabCompositor.js';
+import {
+  blendPatternLabColors,
+  finalizePatternLabColors,
+} from '../lib/patternLabCompositor.js';
+import { applyPatternLabMotionToStrips } from '../lib/patternLabMotion.js';
 import { applyPatternLabTransform, samplePatternLabMask } from '../lib/patternLabTransforms.js';
 
 let initialized = false;
@@ -128,14 +132,14 @@ function disposeGeneratorRuntime() {
   generatorRuntime = null;
 }
 
-function statefulPattern(recipe, indices) {
+function statefulPattern(recipe, indices, controls) {
   const generatorId = recipe?.base?.kind;
   if (!PATTERN_LAB_GENERATOR_IDS.includes(generatorId)) {
     disposeGeneratorRuntime();
     return null;
   }
   const generator = getPatternLabGenerator(generatorId);
-  const inputs = resolvePatternLabGeneratorInputs(generatorId, recipe);
+  const inputs = resolvePatternLabGeneratorInputs(generatorId, recipe, controls);
   const seed = Number(recipe?.seed) >>> 0;
   const signature = `${generatorId}:${seed}:${indices.length}:${JSON.stringify(inputs)}`;
   const targetTime = Math.max(0, Number(recipe?.time) || 0);
@@ -166,6 +170,9 @@ async function renderRequest(requestId, payload) {
     sampleCount: requestedSamples,
     layerCount: payload.layerCount,
     geometryBytes: geometry.geometryBytes,
+    time: payload.time,
+    recipe: payload.recipe,
+    renderOptions: payload.renderOptions,
   });
 
   if (payload.testGenerator?.kind === 'loop') {
@@ -182,7 +189,7 @@ async function renderRequest(requestId, payload) {
   const indices = sampledIndices(geometry.visiblePixelCount, validated.sampleCount);
   const recipe = payload.recipe || {};
   const options = payload.renderOptions || {};
-  const stateful = statefulPattern({ ...recipe, time: payload.time }, indices);
+  const stateful = statefulPattern({ ...recipe, time: payload.time }, indices, options);
   const activeFn = stateful
     ? (index, x, y, _time, _cycle, _count, _palette, _beat, _beatSin, _params, _stripId, stripProgress) => {
       const sampleIndex = Math.max(0, Math.min(indices.length - 1, Math.round(index)));
@@ -196,19 +203,25 @@ async function renderRequest(requestId, payload) {
     }
     : compileAuthoritativePattern(recipe.base?.patternId, indices, geometry.visiblePixelCount);
   const sampled = sampledStrips(geometry, indices);
+  const motionSampled = applyPatternLabMotionToStrips(sampled, {
+    elapsedSeconds: Number(payload.time) || 0,
+    seed: recipe.seed,
+    motionWeights: options.motionWeights,
+    bounds: geometry.normalizationBounds,
+  });
   const frame = renderPixelFrame({
     t: Number(payload.time) || 0,
-    strips: sampled,
+    strips: stateful ? sampled : motionSampled,
     patternId: recipe.base?.patternId,
     activeFn,
     params: recipe.base?.params || {},
     paletteNorm: normalizePalette(recipe.palette),
     bpm: geometry.bpm,
     masterSpeed: options.masterSpeed,
-    masterBrightness: options.masterBrightness,
+    masterBrightness: 1,
     masterSaturation: options.masterSaturation,
     masterHueShift: options.masterHueShift,
-    gammaLUT: buildGammaLut(geometry.gammaEnabled, geometry.gammaValue),
+    gammaLUT: null,
     symSettings: geometry.symSettings,
     audioBands: geometry.audioBands,
     normBounds: geometry.normalizationBounds,
@@ -224,7 +237,7 @@ async function renderRequest(requestId, payload) {
       geometry.visiblePixelCount,
     );
     if (!layerFn) throw new RangeError(`Unknown Pattern Lab layer pattern: ${String(layer.generator.patternId)}`);
-    const preparedLayer = layerGeometry(sampled, layer, geometry.normalizationBounds);
+    const preparedLayer = layerGeometry(motionSampled, layer, geometry.normalizationBounds);
     const layerFrame = renderPixelFrame({
       t: Number(payload.time) || 0,
       strips: preparedLayer.strips,
@@ -234,10 +247,10 @@ async function renderRequest(requestId, payload) {
       paletteNorm: normalizePalette(layer.palette || recipe.palette),
       bpm: geometry.bpm,
       masterSpeed: options.masterSpeed,
-      masterBrightness: options.masterBrightness,
+      masterBrightness: 1,
       masterSaturation: options.masterSaturation,
       masterHueShift: options.masterHueShift,
-      gammaLUT: buildGammaLut(geometry.gammaEnabled, geometry.gammaValue),
+      gammaLUT: null,
       symSettings: geometry.symSettings,
       audioBands: geometry.audioBands,
       normBounds: geometry.normalizationBounds,
@@ -259,6 +272,10 @@ async function renderRequest(requestId, payload) {
       );
     });
   }
+  renderedPixels = finalizePatternLabColors(renderedPixels, {
+    masterBrightness: options.masterBrightness,
+    gammaLUT: buildGammaLut(geometry.gammaEnabled, geometry.gammaValue),
+  });
   if (cancelledRequests.delete(requestId)) return;
 
   const colors = new Uint8ClampedArray(renderedPixels.length * 3);
@@ -287,6 +304,7 @@ async function renderRequest(requestId, payload) {
     mode: validated.mode,
     time: Number(payload.time) || 0,
     generation: staticGeneration,
+    patternLabControlsApplied: true,
     totalSamples: geometry.visiblePixelCount,
     sampleCount: indices.length,
     colors: colors.buffer,

@@ -294,17 +294,7 @@ export default function usePatternLabWorker({
   useEffect(() => {
     if (!enabled || !recipe || !compactGeometry) return undefined;
     queuedRenderRef.current = {
-      recipe: {
-        base: {
-          kind: recipe.base?.kind,
-          patternId: recipe.base?.patternId,
-          params: recipe.base?.params || {},
-        },
-        seed: recipe.seed,
-        macros: recipe.macros || {},
-        palette: Array.isArray(recipe.palette) ? recipe.palette : [],
-        layers: Array.isArray(recipe.layers) ? recipe.layers : [],
-      },
+      recipe,
       time: Number(time) || 0,
       mode,
       generation: geometryGenerationRef.current,

@@ -11,6 +11,8 @@ import {
   measurePatternLabGeneratorStateBytes,
   resolvePatternLabGeneratorInputs,
 } from './patternLabGenerators.js';
+import { resolvePatternLabControls } from './patternLabControls.js';
+import { createPatternLabRecipe } from './patternLabRecipe.js';
 
 const COORDINATES = Object.freeze({ x: 0.37, y: 0.61, stripProgress: 0.43 });
 
@@ -50,7 +52,14 @@ test('the first stateful pack exposes the exact bounded lifecycle contract', () 
       assert.equal(typeof generator[method], 'function', `${id}.${method}`);
     }
     assert.ok(Object.isFrozen(generator));
-    assert.ok(PATTERN_LAB_GENERATOR_CONTROLS[id].artistic.length >= 3);
+    assert.deepEqual(PATTERN_LAB_GENERATOR_CONTROLS[id].artistic, [
+      'Color',
+      'Brightness',
+      'Movement',
+      'Speed',
+      'Shape',
+      'Texture',
+    ]);
     assert.ok(PATTERN_LAB_GENERATOR_CONTROLS[id].advanced.length >= 2);
   }
   assert.throws(() => getPatternLabGenerator('not-a-generator'), /unknown.*generator/i);
@@ -83,23 +92,28 @@ test('initialization is deterministic, seed-sensitive, typed, and bounded by pre
   );
 });
 
-test('artistic macros lead and advanced technical values are finite and clamped', () => {
+test('generator speed and intensity stay neutral while artistic values remain finite and clamped', () => {
   const calm = resolvePatternLabGeneratorInputs('particles', {
-    macros: { color: 0, movement: 0, shape: 0, texture: 0, energy: 0 },
+    macros: { color: 0, movement: 0, shape: 0, texture: 0 },
+    playback: { brightness: 0, speed: 0.25 },
     base: { params: { advanced: { particleCount: 9999, drag: -4 } } },
   });
   const alive = resolvePatternLabGeneratorInputs('particles', {
-    macros: { color: 1, movement: 1, shape: 1, texture: 1, energy: 1 },
+    macros: { color: 1, movement: 1, shape: 1, texture: 1 },
+    playback: { brightness: 1, speed: 2 },
   });
   assert.deepEqual(Object.keys(calm), ['artistic', 'advanced']);
-  assert.ok(calm.artistic.speed < alive.artistic.speed);
-  assert.ok(calm.artistic.intensity < alive.artistic.intensity);
+  assert.equal(calm.artistic.speed, 1);
+  assert.equal(alive.artistic.speed, 1);
+  assert.equal(calm.artistic.intensity, 1);
+  assert.equal(alive.artistic.intensity, 1);
   assert.equal(calm.advanced.particleCount, 96);
   assert.equal(calm.advanced.drag, 0);
 
   for (const id of PATTERN_LAB_GENERATOR_IDS) {
     const resolved = resolvePatternLabGeneratorInputs(id, {
-      macros: { color: Number.NaN, movement: -10, shape: 20, texture: 0.5, energy: Infinity },
+      macros: { color: Number.NaN, movement: -10, shape: 20, texture: 0.5 },
+      playback: { brightness: Infinity, speed: Infinity },
       base: { params: { advanced: { unknown: 123 } } },
     });
     assert.ok(Object.values(resolved.artistic).every(Number.isFinite));
@@ -107,6 +121,90 @@ test('artistic macros lead and advanced technical values are finite and clamped'
     assert.ok(Object.isFrozen(resolved));
     assert.ok(Object.isFrozen(resolved.artistic));
     assert.ok(Object.isFrozen(resolved.advanced));
+  }
+});
+
+test('Movement does not change the generator clock multiplier while playback Speed changes authoritative time', () => {
+  const source = {
+    evolution: { enabled: false },
+    playback: { brightness: 0.5, speed: 1 },
+  };
+  const driftRecipe = createPatternLabRecipe({
+    ...source,
+    macros: { color: 0.5, movement: 0, shape: 0.5, texture: 0.5 },
+  });
+  const surgeRecipe = createPatternLabRecipe({
+    ...source,
+    macros: { color: 0.5, movement: 1, shape: 0.5, texture: 0.5 },
+  });
+  const fastRecipe = createPatternLabRecipe({
+    ...source,
+    macros: { color: 0.5, movement: 0, shape: 0.5, texture: 0.5 },
+    playback: { brightness: 0.5, speed: 2 },
+  });
+  const driftInputs = resolvePatternLabGeneratorInputs('particles', driftRecipe);
+  const surgeInputs = resolvePatternLabGeneratorInputs('particles', surgeRecipe);
+  const driftClock = resolvePatternLabControls(driftRecipe, 12);
+  const surgeClock = resolvePatternLabControls(surgeRecipe, 12);
+  const fastClock = resolvePatternLabControls(fastRecipe, 12);
+  const supplied = resolvePatternLabGeneratorInputs('particles', driftRecipe, driftClock);
+
+  assert.equal(driftInputs.artistic.speed, 1);
+  assert.equal(surgeInputs.artistic.speed, 1);
+  assert.deepEqual(supplied.motionWeights, driftClock.motionWeights);
+  assert.equal(driftClock.masterSpeed, surgeClock.masterSpeed);
+  assert.equal(fastClock.renderTime, driftClock.renderTime * 2);
+});
+
+test('every generator gives each Movement anchor distinct behavior without changing its clock', () => {
+  const anchors = [0, 0.33, 0.67, 1];
+  for (const id of PATTERN_LAB_GENERATOR_IDS) {
+    const generator = getPatternLabGenerator(id);
+    const snapshots = anchors.map(movement => {
+      const source = createPatternLabRecipe({
+        seed: 0x12345678,
+        macros: { color: 0.5, movement, shape: 0.5, texture: 0.5 },
+        playback: { brightness: 0.5, speed: 1 },
+        evolution: { enabled: false },
+      });
+      const controls = resolvePatternLabControls(source, 0);
+      const state = generator.initialize({ sampleCount: 96, seed: source.seed });
+      const inputs = resolvePatternLabGeneratorInputs(id, source, controls);
+      generator.update(7.25, state, inputs);
+      const colors = Array.from({ length: 96 }, (_, pixel) => generator.render(pixel, {
+        index: pixel,
+        stripProgress: pixel / 95,
+        x: pixel / 95,
+        y: 0.5,
+      }, state));
+      return { colors, elapsedSeconds: state.elapsedSeconds, speed: state.speed };
+    });
+
+    assert.equal(new Set(snapshots.map(snapshot => JSON.stringify(snapshot.colors))).size, 4, id);
+    assert.deepEqual(snapshots.map(snapshot => snapshot.elapsedSeconds), [7.25, 7.25, 7.25, 7.25], id);
+    assert.deepEqual(snapshots.map(snapshot => snapshot.speed), [1, 1, 1, 1], id);
+  }
+});
+
+test('large cellular scrubs discard capped backlog and are idempotent at a fixed timestamp', () => {
+  for (const id of ['cellular-field', 'gray-scott-1d']) {
+    const generator = getPatternLabGenerator(id);
+    const source = createPatternLabRecipe({
+      seed: 0x12345678,
+      macros: { color: 0.5, movement: 0.33, shape: 0.5, texture: 0.5 },
+      playback: { brightness: 0.5, speed: 1 },
+      evolution: { enabled: false },
+    });
+    const controls = resolvePatternLabControls(source, 0);
+    const inputs = resolvePatternLabGeneratorInputs(id, source, controls);
+    const state = generator.initialize({ sampleCount: 96, seed: source.seed });
+    generator.update(900, state, inputs);
+    const before = typedArrays(state).map(array => [...array]);
+
+    generator.update(0, state, inputs);
+
+    assert.deepEqual(typedArrays(state).map(array => [...array]), before, id);
+    assert.equal(state.elapsedSeconds, 900, id);
   }
 });
 

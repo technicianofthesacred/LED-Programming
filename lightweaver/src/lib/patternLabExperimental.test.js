@@ -180,9 +180,13 @@ test('enabled graph and shader gates bind output to canonical Recipe payloads or
     { featureId: 'advancedGraph', target: 'bounded-recipe' },
     trustedArtifact(recipe),
   );
+  const normalizedRecipe = normalizePatternLabRecipe(recipe);
   assert.equal(recipeLowering.artifact.kind, 'pattern-lab-recipe');
-  assert.equal(recipeLowering.artifact.byteLength, new TextEncoder().encode(JSON.stringify(recipe)).byteLength);
-  assert.deepEqual(recipeLowering.artifact.payload, recipe);
+  assert.equal(
+    recipeLowering.artifact.byteLength,
+    new TextEncoder().encode(JSON.stringify(normalizedRecipe)).byteLength,
+  );
+  assert.deepEqual(recipeLowering.artifact.payload, normalizedRecipe);
 
   const shaderDescriptor = createPatternLabExperimentalDescriptor({ shaderBake: true });
   const bytes = generatedLwseq();

@@ -90,6 +90,27 @@ test('creates a new normalized look handoff without changing the recipe', async 
   assert.equal(JSON.stringify(source), before);
 });
 
+test('procedural handoff copies direct playback brightness and speed', async () => {
+  const source = recipe({
+    version: 2,
+    macros: { color: 0.6, movement: 0.45, shape: 0.5, texture: 0.5 },
+    playback: { brightness: 0.42, speed: 1.7 },
+    evolution: {
+      enabled: false,
+      character: 'slow-bloom',
+      durationSeconds: 300,
+      change: 0.35,
+      dynamics: { dynamicRange: 0.55, rareEventStrength: 0.4 },
+    },
+  });
+  const result = await createPatternLabHandoff({
+    recipe: source,
+    compatibility: compatibility('live-on-card'),
+  });
+  assert.equal(result.look.defaultLook.brightness, 0.42);
+  assert.equal(result.look.defaultLook.speed, 1.7);
+});
+
 test('fails closed on versionless or malformed compatibility results', async () => {
   const cases = [
     { classification: 'live-on-card', reasons: [] },

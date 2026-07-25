@@ -148,19 +148,93 @@ test('preview time is quantized to the 24 fps budget while final and export time
 });
 
 test('render validation rejects layer and typed-allocation overflow', () => {
+  const recipe = {
+    version: 2,
+    layers: [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
+  };
+  const renderOptions = {
+    masterSpeed: 1,
+    masterBrightness: 0.5,
+    masterSaturation: 0.8,
+    masterHueShift: 12,
+    motionWeights: { drift: 0, flow: 1, pulse: 0, surge: 0 },
+  };
   assert.deepEqual(validatePatternLabWorkerRenderRequest({
-    mode: 'preview', sampleCount: 300, layerCount: 3, geometryBytes: 4096, allocationBytes: 1,
+    mode: 'preview',
+    sampleCount: 300,
+    layerCount: 3,
+    geometryBytes: 4096,
+    allocationBytes: 1,
+    time: 12,
+    recipe,
+    renderOptions,
   }), { mode: 'preview', sampleCount: 300, layerCount: 3, allocationBytes: 6196 });
   assert.throws(
-    () => validatePatternLabWorkerRenderRequest({ mode: 'preview', sampleCount: 10, layerCount: 4 }),
+    () => validatePatternLabWorkerRenderRequest({
+      mode: 'preview', sampleCount: 10, layerCount: 4, time: 12, recipe, renderOptions,
+    }),
     { name: 'RangeError', message: 'Pattern Lab worker supports at most 3 layers' },
   );
   assert.throws(
     () => validatePatternLabWorkerRenderRequest({
-      mode: 'final', sampleCount: 10, layerCount: 0, geometryBytes: 4 * 1024 * 1024 + 1,
+      mode: 'final',
+      sampleCount: 10,
+      layerCount: 3,
+      geometryBytes: 4 * 1024 * 1024 + 1,
+      time: 12,
+      recipe,
+      renderOptions,
     }),
     { name: 'RangeError', message: 'Pattern Lab worker allocation exceeds 4194304 bytes' },
   );
+});
+
+test('render validation rejects stale recipe counts and malformed final control contracts', () => {
+  const valid = {
+    mode: 'preview',
+    sampleCount: 10,
+    layerCount: 1,
+    geometryBytes: 0,
+    time: 12,
+    recipe: { version: 2, layers: [{ id: 'layer' }] },
+    renderOptions: {
+      masterSpeed: 1,
+      masterBrightness: 0.5,
+      masterSaturation: 0.8,
+      masterHueShift: 12,
+      motionWeights: { drift: 0, flow: 1, pulse: 0, surge: 0 },
+    },
+  };
+  for (const candidate of [
+    { ...valid, layerCount: 0 },
+    { ...valid, time: Number.NaN },
+    { ...valid, time: '12' },
+    { ...valid, recipe: { version: 1, layers: [{ id: 'layer' }] } },
+    { ...valid, renderOptions: undefined },
+    { ...valid, renderOptions: { ...valid.renderOptions, masterSpeed: 2 } },
+    { ...valid, renderOptions: { ...valid.renderOptions, masterBrightness: -0.1 } },
+    { ...valid, renderOptions: { ...valid.renderOptions, masterBrightness: null } },
+    { ...valid, renderOptions: { ...valid.renderOptions, masterBrightness: '0.5' } },
+    { ...valid, renderOptions: { ...valid.renderOptions, masterSaturation: Infinity } },
+    { ...valid, renderOptions: { ...valid.renderOptions, masterHueShift: Number.NaN } },
+    { ...valid, renderOptions: { ...valid.renderOptions, masterHueShift: null } },
+    {
+      ...valid,
+      renderOptions: {
+        ...valid.renderOptions,
+        motionWeights: { drift: 0, flow: 0.5, pulse: 0, surge: 0 },
+      },
+    },
+    {
+      ...valid,
+      renderOptions: {
+        ...valid.renderOptions,
+        motionWeights: { drift: 0, flow: '1', pulse: 0, surge: 0 },
+      },
+    },
+  ]) {
+    assert.throws(() => validatePatternLabWorkerRenderRequest(candidate));
+  }
 });
 
 test('strict frame validation accepts bounded Uint32 indices and rejects malformed buffers', () => {
@@ -179,6 +253,7 @@ test('strict frame validation accepts bounded Uint32 indices and rejects malform
       mode: 'preview',
       time: 12.5,
       generation: 3,
+      patternLabControlsApplied: true,
       sampleCount: 2,
       totalSamples: 2,
       colors: new Uint8ClampedArray([1, 2, 3, 4, 5, 6]).buffer,
@@ -188,8 +263,11 @@ test('strict frame validation accepts bounded Uint32 indices and rejects malform
   const frame = validatePatternLabWorkerFrameReply(valid, pending);
   assert.deepEqual([...frame.colors], [1, 2, 3, 4, 5, 6]);
   assert.deepEqual([...frame.indices], [0, 1]);
+  assert.equal(frame.patternLabControlsApplied, true);
 
   for (const payload of [
+    { ...valid.payload, patternLabControlsApplied: false },
+    { ...valid.payload, patternLabControlsApplied: undefined },
     { ...valid.payload, colors: new ArrayBuffer(5) },
     { ...valid.payload, indices: new Uint16Array([0, 1]).buffer },
     { ...valid.payload, indices: new Uint32Array([10, 9]).buffer },

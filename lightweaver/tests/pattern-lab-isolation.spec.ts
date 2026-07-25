@@ -155,7 +155,7 @@ test('icon-only actions expose immediate styled tooltips on hover and keyboard f
   const workflow = page.getByRole('navigation', { name: 'Pattern Lab workflow' });
   const patternTooltips = new Map([
     ['Choose', 'Choose a base pattern'],
-    ['Sculpt', 'Shape color, movement, and form'],
+    ['Sculpt', 'Shape color, brightness, movement, speed, form, and texture'],
     ['Evolve', 'Build a long-changing journey'],
     ['Save', 'Save this variation privately'],
   ]);

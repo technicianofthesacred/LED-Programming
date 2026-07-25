@@ -4,7 +4,12 @@ import assert from 'node:assert/strict';
 import { PALETTE_DEFAULT } from '../data.js';
 import { CUSTOM_PATTERNS_KEY } from './customPatterns.js';
 import { blendPatternLabColors } from './patternLabCompositor.js';
-import { compilePattern, normalizePalette, renderPixelFrame } from './frameEngine.js';
+import {
+  buildGammaLut,
+  compilePattern,
+  normalizePalette,
+  renderPixelFrame,
+} from './frameEngine.js';
 import { recipeFromPattern, renderPatternLabRecipeFrame } from './patternLabPatternAdapter.js';
 import { parseParamsFromCode } from './patternParams.js';
 import { getPatternById } from './patternRegistry.js';
@@ -208,6 +213,49 @@ test('renders configured built-in layers through the bounded compositor', () => 
   ));
   assert.notDeepEqual(expected, base.pixels);
   assert.deepEqual(rendered.pixels, expected);
+});
+
+test('screen and multiply layers receive Pattern Lab brightness and gamma once after compositing', () => {
+  const gammaLUT = buildGammaLut(true, 2.2);
+  for (const blendMode of ['screen', 'multiply']) {
+    const recipe = recipeFromPattern('gradient', { palette: FIXED_PALETTE });
+    recipe.layers = [{
+      id: `${blendMode}-layer`,
+      name: `${blendMode} layer`,
+      generator: { kind: 'lightweaver-pattern', patternId: 'candle', params: defaultParams('candle') },
+      blendMode,
+      opacity: 0.73,
+    }];
+    const context = { t: FIXED_TIME, strips: FIXED_LAYOUT, bpm: 93 };
+    const neutral = renderPatternLabRecipeFrame(recipe, context);
+    const expected = neutral.pixels.map(color => ({
+      r: gammaLUT[Math.round(color.r * 0.5)],
+      g: gammaLUT[Math.round(color.g * 0.5)],
+      b: gammaLUT[Math.round(color.b * 0.5)],
+    }));
+    const rendered = renderPatternLabRecipeFrame(recipe, {
+      ...context,
+      masterBrightness: 0.5,
+      gammaLUT,
+    });
+
+    assert.deepEqual(rendered.pixels, expected, blendMode);
+  }
+});
+
+test('stateless Pattern Lab rendering applies Movement profiles spatially at one fixed clock', () => {
+  const recipe = recipeFromPattern('ripple', { palette: FIXED_PALETTE });
+  const context = { t: FIXED_TIME, strips: FIXED_LAYOUT, bpm: 93 };
+  const drift = renderPatternLabRecipeFrame(recipe, {
+    ...context,
+    motionWeights: { drift: 1, flow: 0, pulse: 0, surge: 0 },
+  });
+  const surge = renderPatternLabRecipeFrame(recipe, {
+    ...context,
+    motionWeights: { drift: 0, flow: 0, pulse: 0, surge: 1 },
+  });
+
+  assert.notDeepEqual(drift.pixels, surge.pixels);
 });
 
 test('palette-aware pattern keeps every representative pixel unchanged', () => {

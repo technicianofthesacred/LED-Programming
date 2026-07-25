@@ -6,7 +6,7 @@ import {
   createPatternLabDiagnosticsSnapshot,
   createPatternLabSimplificationVariant,
 } from '../lib/patternLabCompatibility.js';
-import { PATTERN_LAB_EVOLUTION_CHARACTERS, sampleEvolution } from '../lib/patternLabEvolution.js';
+import { PATTERN_LAB_EVOLUTION_CHARACTERS } from '../lib/patternLabEvolution.js';
 import { bakePatternLabRecipe } from '../lib/lwseqBake.js';
 import { OFFLINE_AUDIO_CAPABILITY } from '../lib/offlineAudioLanes.js';
 import { applyPatternLabHandoff, createPatternLabHandoff } from '../lib/patternLabHandoff.js';
@@ -14,9 +14,9 @@ import {
   PATTERN_LAB_GENERATOR_IDS,
   estimatePatternLabGeneratorBudgets,
 } from '../lib/patternLabGenerators.js';
-import { resolvePatternLabMacros } from '../lib/patternLabMacros.js';
+import { resolvePatternLabControls } from '../lib/patternLabControls.js';
 import { recipeFromPattern } from '../lib/patternLabPatternAdapter.js';
-import { normalizePatternLabRecipe } from '../lib/patternLabRecipe.js';
+import { normalizePatternLabRecipe, PATTERN_LAB_RECIPE_VERSION } from '../lib/patternLabRecipe.js';
 import { readPatternLabDraftState, savePatternLabDraft } from '../lib/patternLabStorage.js';
 import { PATTERN_LAB_WORKER_BUDGETS } from '../lib/patternLabWorkerProtocol.js';
 import { isBuiltInPattern, listBuiltInPatterns } from '../lib/patternRegistry.js';
@@ -32,7 +32,7 @@ import './pattern-lab.css';
 
 const WORKFLOW = [
   ['Choose', 'Begin with a built-in pattern.', 'Choose a base pattern', <svg viewBox="0 0 24 24"><path d="M4 7h6l2 2h8v10H4z"/><path d="M12 12v4M10 14h4"/></svg>],
-  ['Sculpt', 'Shape it with five creative controls.', 'Shape color, movement, and form', <svg viewBox="0 0 24 24"><path d="M4 7h7M15 7h5M4 12h3M11 12h9M4 17h10M18 17h2"/><circle cx="13" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="16" cy="17" r="2"/></svg>],
+  ['Sculpt', 'Shape it with six direct controls.', 'Shape color, brightness, movement, speed, form, and texture', <svg viewBox="0 0 24 24"><path d="M4 7h7M15 7h5M4 12h3M11 12h9M4 17h10M18 17h2"/><circle cx="13" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="16" cy="17" r="2"/></svg>],
   ['Evolve', 'Build a five-to-fifteen-minute journey.', 'Build a long-changing journey', <svg viewBox="0 0 24 24"><path d="M4 14c2-5 4-5 6 0s4 5 6 0 3-4 4-2"/><path d="M4 8h16"/></svg>],
   ['Save', 'Keep a private, repeatable variation.', 'Save this variation privately', <svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v6h7V3M8 15h8v6H8z"/></svg>],
 ];
@@ -76,19 +76,8 @@ function visibleGeometryPixelCount(geometry) {
   return geometryPixelCount({ strips: visible });
 }
 
-function clamp(value, minimum, maximum) {
-  return Math.min(maximum, Math.max(minimum, value));
-}
-
 function previewMasterBrightness(recipe, previewTime) {
-  const macroBrightness = resolvePatternLabMacros(recipe).energy.brightness;
-  const evolution = recipe?.evolution?.enabled ? sampleEvolution(recipe, previewTime) : null;
-  const amount = evolution?.change ?? 0;
-  const destination = Math.min(
-    macroBrightness,
-    evolution?.destinations?.brightness ?? macroBrightness,
-  );
-  return clamp(macroBrightness + (destination - macroBrightness) * amount, 0.08, 1);
+  return resolvePatternLabControls(recipe, previewTime).effectiveBrightness;
 }
 
 function allVisibleStripBrightnessZero(geometry, masterBrightness) {
@@ -215,7 +204,9 @@ function validateImportDocument(value) {
     add('$', 'must be a recipe object');
     return errors;
   }
-  if (Number(value.version) !== 1) add('$.version', 'must be 1');
+  if (![1, PATTERN_LAB_RECIPE_VERSION].includes(Number(value.version))) {
+    add('$.version', `must be 1 or ${PATTERN_LAB_RECIPE_VERSION}`);
+  }
   if (typeof value.id !== 'string' || !value.id.trim()) add('$.id', 'must be a non-empty string');
   if (!isBuiltInPattern(value.base?.patternId)) add('$.base.patternId', 'must name a built-in Lightweaver pattern');
   if (!PATTERN_LAB_EVOLUTION_CHARACTERS.includes(value.evolution?.character)) {
@@ -598,6 +589,13 @@ export default function PatternLabScreen() {
 
   function changeMacro(name, value) {
     setDraft(current => current ? { ...current, macros: { ...current.macros, [name]: value } } : current);
+    setComparison('draft');
+    setMessage('');
+    signalInstrumentResponse(1);
+  }
+
+  function changePlayback(name, value) {
+    setDraft(current => current ? { ...current, playback: { ...current.playback, [name]: value } } : current);
     setComparison('draft');
     setMessage('');
     signalInstrumentResponse(1);
@@ -1054,6 +1052,7 @@ export default function PatternLabScreen() {
                   : draft?.base?.patternId || ''}
                 onPatternChange={choosePattern}
                 onMacroChange={changeMacro}
+                onPlaybackChange={changePlayback}
                 onPaletteChange={changePalette}
                 onAdvancedChange={changeAdvanced}
                 activeWorkflowStep={activeWorkflowStep}

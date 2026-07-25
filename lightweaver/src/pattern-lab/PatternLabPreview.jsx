@@ -3,18 +3,13 @@ import {
   PATTERN_LAB_WORKER_BUDGETS,
   quantizePatternLabWorkerTime,
 } from '../lib/patternLabWorkerProtocol.js';
-import { resolvePatternLabMacros } from '../lib/patternLabMacros.js';
-import { sampleEvolution } from '../lib/patternLabEvolution.js';
+import { resolvePatternLabControls } from '../lib/patternLabControls.js';
 import { createPatternLabPreviewSession } from '../lib/patternLabPreviewSession.js';
 import { PatternPreview } from '../v3/PatternPreview.jsx';
 import usePatternLabWorker from './usePatternLabWorker.js';
 
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
-}
-
-function mix(from, to, amount) {
-  return from + (to - from) * amount;
 }
 
 const INTERACTION_SETTLE_MS = 180;
@@ -85,68 +80,38 @@ export default function PatternLabPreview({
   const physicalSessionRef = useRef(null);
   const [physicalPreview, setPhysicalPreview] = useState({ state: 'idle', active: false, error: null });
   const patternId = recipe.base.patternId;
-  const macros = resolvePatternLabMacros(recipe);
   const evolutionRecipe = useMemo(() => seedPreview && !recipe.evolution.enabled
     ? { ...recipe, evolution: { ...recipe.evolution, enabled: true } }
     : recipe, [recipe, seedPreview]);
-  const renderTime = seedPreview
+  const timelineTime = seedPreview
     ? evolutionRecipe.evolution.durationSeconds / 2
     : previewTime;
-  const evolution = evolutionRecipe.evolution.enabled
-    ? sampleEvolution(evolutionRecipe, renderTime)
-    : null;
-  const evolutionMix = evolution?.change ?? 0;
-  const destinations = evolution?.destinations;
-
-  const speed = clamp(mix(
-    macros.movement.speedMultiplier,
-    0.4 + (destinations?.movement ?? 0.5) * 2.1,
-    evolutionMix,
-  ), 0.1, 3);
-  const brightness = clamp(mix(
-    macros.energy.brightness,
-    Math.min(macros.energy.brightness, destinations?.brightness ?? macros.energy.brightness),
-    evolutionMix,
-  ), 0.08, 1);
-  const saturation = clamp(mix(
-    macros.color.saturation,
-    0.55 + (destinations?.color ?? 0.5) * 0.45,
-    evolutionMix,
-  ), 0.25, 1);
-  const hueShift = macros.color.warmth * 18
-    + ((destinations?.color ?? 0.5) - 0.5) * 72 * evolutionMix;
-  const shapeScale = mix(
-    macros.shape.spatialScale,
-    0.5 + (destinations?.shape ?? 0.5) * 2,
-    evolutionMix,
-  );
-  const texture = mix(
-    macros.texture.crispness,
-    destinations?.texture ?? macros.texture.crispness,
-    evolutionMix,
+  const controls = useMemo(
+    () => resolvePatternLabControls(evolutionRecipe, timelineTime),
+    [evolutionRecipe, timelineTime],
   );
   const renderOptions = useMemo(() => ({
-    masterSpeed: speed,
-    masterBrightness: brightness,
-    masterSaturation: saturation,
-    masterHueShift: hueShift,
-  }), [brightness, hueShift, saturation, speed]);
+    masterSpeed: 1,
+    masterBrightness: controls.effectiveBrightness,
+    masterSaturation: controls.masterSaturation,
+    masterHueShift: controls.masterHueShift,
+    motionWeights: controls.motionWeights,
+  }), [controls]);
   const settledWorkerMode = useSettledWorkerMode({
     playing,
     recipe: evolutionRecipe,
-    time: renderTime,
+    time: controls.renderTime,
     renderOptions,
   });
-  const stateful = recipe.base?.kind && recipe.base.kind !== 'lightweaver-pattern';
   const workerMode = thumbnail ? 'preview' : settledWorkerMode;
-  const workerTime = quantizePatternLabWorkerTime(renderTime, workerMode);
+  const workerTime = quantizePatternLabWorkerTime(controls.renderTime, workerMode);
   const worker = usePatternLabWorker({
     recipe: evolutionRecipe,
     geometry,
     time: workerTime,
     mode: workerMode,
     renderOptions,
-    enabled: !thumbnail || stateful,
+    enabled: true,
   });
   const workerFunction = useMemo(() => workerColorLookup(worker.frame), [worker.frame]);
   const physicalPixels = useMemo(() => patternLabFrameToCardPixels(worker.frame), [worker.frame]);
@@ -201,38 +166,48 @@ export default function PatternLabPreview({
       className={`plab-mapped-preview${thumbnail ? ' plab-mapped-preview-thumbnail' : ''}`}
       data-testid={thumbnail ? 'pattern-lab-variation-preview' : 'pattern-lab-mapped-preview'}
       aria-hidden={thumbnail ? 'true' : undefined}
-      data-worker-available={thumbnail && !stateful ? 'false' : String(worker.available)}
-      data-worker-state={thumbnail && !stateful ? 'static' : worker.status}
+      data-worker-available={String(worker.available)}
+      data-worker-state={worker.status}
       data-worker-request-id={worker.requestId ?? undefined}
       data-worker-frame-id={worker.frameRequestId ?? undefined}
       data-worker-sample-limit={workerSampleLimit}
       data-worker-error={worker.error?.message ?? undefined}
     >
-      <PatternPreview
-        patternId={patternId}
-        playing={playing}
-        controlledTime={renderTime}
-        compiledFn={workerFunction}
-        params={recipe.base.params}
-        palette={recipe.palette}
-        strips={displayGeometry.strips}
-        viewBox={displayGeometry.viewBox}
-        svgText={displayGeometry.svgText}
-        hidden={displayGeometry.hidden}
-        bpm={displayGeometry.bpm}
-        masterSpeed={workerFunction ? 1 : speed}
-        masterBrightness={workerFunction ? 1 : brightness}
-        masterSaturation={workerFunction ? 1 : saturation}
-        masterHueShift={workerFunction ? 0 : hueShift}
-        gammaEnabled={workerFunction ? false : displayGeometry.gammaEnabled}
-        gammaValue={displayGeometry.gammaValue}
-        symSettings={workerFunction ? null : displayGeometry.symSettings}
-        audioBands={workerFunction ? null : displayGeometry.audioBands}
-        motionSmoothing={thumbnail ? 'off' : geometry.motionSmoothing}
-        glow={clamp(1.4 - texture * 0.72, 0.5, 1.4)}
-        dotSize={clamp(3.25 - shapeScale * 0.5 + texture * 0.18, 1.5, 3.3)}
-        targetFps={thumbnail ? 8 : PATTERN_LAB_WORKER_BUDGETS.previewFps}
-      />
+      {workerFunction ? (
+        <PatternPreview
+          patternId={patternId}
+          playing={playing}
+          controlledTime={controls.renderTime}
+          compiledFn={workerFunction}
+          params={recipe.base.params}
+          palette={recipe.palette}
+          strips={displayGeometry.strips}
+          viewBox={displayGeometry.viewBox}
+          svgText={displayGeometry.svgText}
+          hidden={displayGeometry.hidden}
+          bpm={displayGeometry.bpm}
+          masterSpeed={1}
+          masterBrightness={1}
+          masterSaturation={1}
+          masterHueShift={0}
+          gammaEnabled={false}
+          gammaValue={displayGeometry.gammaValue}
+          symSettings={null}
+          audioBands={null}
+          motionSmoothing={thumbnail ? 'off' : geometry.motionSmoothing}
+          glow={clamp(1.4 - controls.texture * 0.72, 0.5, 1.4)}
+          dotSize={clamp(3.25 - controls.shapeScale * 0.5 + controls.texture * 0.18, 1.5, 3.3)}
+          targetFps={thumbnail ? 8 : PATTERN_LAB_WORKER_BUDGETS.previewFps}
+        />
+      ) : (
+        <div
+          className="plab-preview-preparing"
+          data-testid="pattern-lab-preparing"
+          role={thumbnail ? undefined : 'status'}
+        >
+          {!thumbnail && 'Preparing accurate preview…'}
+        </div>
+      )}
       {!thumbnail && (
         <div
           className="plab-live-preview"

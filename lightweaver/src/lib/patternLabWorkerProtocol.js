@@ -303,6 +303,33 @@ export function validatePatternLabWorkerRenderRequest(input = {}) {
   if (layerCount > PATTERN_LAB_WORKER_BUDGETS.maxLayers) {
     throw new RangeError(`Pattern Lab worker supports at most ${PATTERN_LAB_WORKER_BUDGETS.maxLayers} layers`);
   }
+  if (!input.recipe || input.recipe.version !== 2 || !Array.isArray(input.recipe.layers)
+    || input.recipe.layers.length !== layerCount) {
+    throw new RangeError('Pattern Lab worker recipe layer contract is stale or malformed');
+  }
+  const time = input.time;
+  if (typeof time !== 'number' || !Number.isFinite(time) || time < 0) {
+    throw new RangeError('Pattern Lab worker render time must be a finite non-negative number');
+  }
+  const options = input.renderOptions;
+  const weights = options?.motionWeights;
+  const motionNames = ['drift', 'flow', 'pulse', 'surge'];
+  const motionValues = motionNames.map(name => weights?.[name]);
+  if (!options || options.masterSpeed !== 1
+    || typeof options.masterBrightness !== 'number'
+    || !Number.isFinite(options.masterBrightness)
+    || options.masterBrightness < 0 || options.masterBrightness > 1
+    || typeof options.masterSaturation !== 'number'
+    || !Number.isFinite(options.masterSaturation)
+    || options.masterSaturation < 0 || options.masterSaturation > 1
+    || typeof options.masterHueShift !== 'number'
+    || !Number.isFinite(options.masterHueShift)
+    || Math.abs(options.masterHueShift) > 360
+    || motionValues.some(value => typeof value !== 'number'
+      || !Number.isFinite(value) || value < 0 || value > 1)
+    || Math.abs(motionValues.reduce((sum, value) => sum + value, 0) - 1) > 1e-9) {
+    throw new RangeError('Pattern Lab worker final control contract is malformed');
+  }
   const geometryBytes = Number(input.geometryBytes ?? 0);
   if (!Number.isSafeInteger(geometryBytes) || geometryBytes < 0) {
     throw new RangeError('Pattern Lab worker geometry allocation must be a non-negative safe integer');
@@ -335,6 +362,9 @@ export function validatePatternLabWorkerFrameReply(reply, pending) {
   }
   if (payload.time !== pending.time || payload.generation !== pending.generation) {
     throw new RangeError('Malformed Pattern Lab worker frame generation');
+  }
+  if (payload.patternLabControlsApplied !== true) {
+    throw new RangeError('Malformed Pattern Lab worker frame control contract');
   }
   if (!(payload.colors instanceof ArrayBuffer) || !(payload.indices instanceof ArrayBuffer)) {
     throw new RangeError('Malformed Pattern Lab worker frame buffers');

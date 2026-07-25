@@ -95,6 +95,53 @@ test('Pattern Inspector presents Choose, Sculpt, and Evolve as compact attached 
   expect(surfaceDistance(sectionSurfaces[1], sectionSurfaces[2])).toBeGreaterThanOrEqual(8);
 });
 
+test('shows six direct controls in exact order with no Energy', async ({ page }) => {
+  await page.getByLabel('Base pattern').selectOption('aurora');
+
+  const labels = await page.locator('.plab-macros input[type="range"]')
+    .evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label')));
+  expect(labels).toEqual(['Color', 'Brightness', 'Movement', 'Speed', 'Shape', 'Texture']);
+  await expect(page.getByLabel('Energy', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Energy', { exact: true })).toHaveCount(0);
+});
+
+test('exports Brightness and Speed as independent playback controls', async ({ page }) => {
+  await page.getByLabel('Base pattern').selectOption('aurora');
+  await page.getByRole('slider', { name: 'Movement', exact: true }).fill('88');
+  await page.getByRole('slider', { name: 'Brightness', exact: true }).fill('25');
+  await page.getByRole('slider', { name: 'Speed', exact: true }).fill('175');
+
+  await expect(page.getByLabel('Brightness value')).toHaveText('25%');
+  await expect(page.getByLabel('Speed value')).toHaveText('1.75×');
+
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export recipe' }).click();
+  const downloadedPath = await (await downloadPromise).path();
+  expect(downloadedPath).not.toBeNull();
+  const exported = JSON.parse(await readFile(downloadedPath!, 'utf8'));
+
+  expect(exported.macros.movement).toBe(0.88);
+  expect(exported.macros.energy).toBeUndefined();
+  expect(exported.playback).toEqual({ brightness: 0.25, speed: 1.75 });
+});
+
+test('announces continuous Movement through its nearest semantic anchor', async ({ page }) => {
+  await page.getByLabel('Base pattern').selectOption('aurora');
+  const movement = page.getByRole('slider', { name: 'Movement', exact: true });
+
+  await movement.fill('0');
+  await expect(movement).toHaveAttribute('aria-valuetext', 'Drift, 0%');
+  await movement.fill('33');
+  await expect(movement).toHaveAttribute('aria-valuetext', 'Flow, 33%');
+  await movement.fill('67');
+  await expect(movement).toHaveAttribute('aria-valuetext', 'Pulse, 67%');
+  await movement.fill('100');
+  await expect(movement).toHaveAttribute('aria-valuetext', 'Surge, 100%');
+  await movement.fill('42');
+  await expect(movement).toHaveAttribute('aria-valuetext', 'Flow, 42%');
+  await expect(page.getByText('Drift 0% · Flow 33% · Pulse 67% · Surge 100%')).toBeVisible();
+});
+
 test('keeps the active Inspector band synchronized with direct focus and workflow actions', async ({ page }) => {
   const workflow = page.getByRole('navigation', { name: 'Pattern Lab workflow' });
   const choose = page.getByTestId('pattern-lab-step-choose');
@@ -369,7 +416,7 @@ test('exports canonical recipes and rejects invalid imports without mutating the
   const downloadedPath = await download.path();
   expect(downloadedPath).not.toBeNull();
   const exported = JSON.parse(await readFile(downloadedPath!, 'utf8'));
-  expect(exported.version).toBe(1);
+  expect(exported.version).toBe(2);
   expect(exported.base.patternId).toBe('aurora');
   expect(exported.macros.movement).toBe(0.64);
 
@@ -481,6 +528,29 @@ test('uses an accessible lower controls drawer on a phone while keeping preview 
   expect(playHeight).toBeGreaterThanOrEqual(44);
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
   await expect(page.getByText('Advanced controls')).not.toHaveAttribute('open', '');
+});
+
+test('keeps all six controls reachable with 44px slider hit areas in the phone drawer', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Pattern controls', exact: true }).click();
+  await page.getByLabel('Base pattern').selectOption('aurora');
+
+  const controls = page.locator('.plab-macros input[type="range"]');
+  await expect(controls).toHaveCount(6);
+  for (const label of ['Color', 'Brightness', 'Movement', 'Speed', 'Shape', 'Texture']) {
+    const control = page.getByRole('slider', { name: label, exact: true });
+    await control.scrollIntoViewIfNeeded();
+    await expect(control).toBeVisible();
+    expect((await control.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  }
+
+  const movement = page.getByRole('slider', { name: 'Movement', exact: true });
+  await movement.focus();
+  await page.keyboard.press('Home');
+  await expect(movement).toHaveAttribute('aria-valuetext', 'Drift, 0%');
+  await page.keyboard.press('End');
+  await expect(movement).toHaveAttribute('aria-valuetext', 'Surge, 100%');
 });
 
 test('seed selection explicitly enables and persists the real Long Evolution workflow', async ({ page }) => {

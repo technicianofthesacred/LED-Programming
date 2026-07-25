@@ -9,6 +9,7 @@ import {
   canonicalPatternLabBakeJson,
   estimatePatternLabBake,
 } from './lwseqBake.js';
+import { resolvePatternLabControls } from './patternLabControls.js';
 
 function fixture() {
   return {
@@ -101,7 +102,38 @@ test('same canonical inputs produce byte-identical physical LWSEQ and hashes', a
   assert.equal(first.sidecar.pixelCount, 6);
   assert.equal(first.sidecar.frameCount, 300);
   assert.equal(first.sidecar.fps, 1);
+  assert.equal(first.recipe.version, 2);
+  assert.equal(first.sidecar.version, 2);
+  assert.equal(first.sidecar.recipe.version, 2);
+  assert.deepEqual(first.sidecar.renderSettings, {
+    timeSource: 'resolved-render-time',
+    masterSpeed: 1,
+    brightnessSource: 'resolved-effective-brightness',
+    audioTimeSource: 'timeline-time',
+  });
   assert.deepEqual(JSON.parse(first.sidecarJson), first.sidecar);
+});
+
+test('direct bake applies half brightness exactly once', async () => {
+  const input = fixture();
+  input.recipe = {
+    ...input.recipe,
+    version: 2,
+    palette: ['#ffffff', '#ffffff'],
+    macros: { color: 0.5, movement: 0.5, shape: 0.5, texture: 0.5 },
+    playback: { brightness: 0.5, speed: 1 },
+    evolution: {
+      ...input.recipe.evolution,
+      enabled: false,
+      dynamics: { dynamicRange: 0.55, rareEventStrength: 0.4 },
+    },
+  };
+  input.strips = input.strips.map(strip => ({ ...strip, brightness: 1, speed: 1, hueShift: 0 }));
+  const baked = await bakePatternLabRecipe({ ...input, fps: 1 });
+
+  assert.equal(baked.bytes[LWSEQ_HEADER_BYTES], 128);
+  assert.notEqual(baked.bytes[LWSEQ_HEADER_BYTES], 64);
+  assert.notEqual(baked.bytes[LWSEQ_HEADER_BYTES], 255);
 });
 
 test('baked bytes retain the standalone controller LWSEQ1 byte contract', async () => {
@@ -122,6 +154,7 @@ test('baked bytes retain the standalone controller LWSEQ1 byte contract', async 
 test('browser worker receives the complete normalized recipe contract', async () => {
   const originalWorker = globalThis.Worker;
   let capturedRecipe = null;
+  const capturedRenderPayloads = [];
   class FakeWorker {
     postMessage(request) {
       queueMicrotask(() => {
@@ -136,6 +169,7 @@ test('browser worker receives the complete normalized recipe contract', async ()
           return;
         }
         capturedRecipe ??= request.payload.recipe;
+        if (capturedRenderPayloads.length < 2) capturedRenderPayloads.push(request.payload);
         const colors = new Uint8ClampedArray(5 * 3);
         const indices = Uint32Array.from({ length: 5 }, (_, index) => index);
         this.onmessage?.({
@@ -146,6 +180,7 @@ test('browser worker receives the complete normalized recipe contract', async ()
               mode: 'export',
               time: request.payload.time,
               generation: request.payload.generation,
+              patternLabControlsApplied: true,
               totalSamples: 5,
               sampleCount: 5,
               colors: colors.buffer,
@@ -173,6 +208,13 @@ test('browser worker receives the complete normalized recipe contract', async ()
     globalThis.Worker = FakeWorker;
     const baked = await bakePatternLabRecipe({ ...input, fps: 1 });
     assert.deepEqual(capturedRecipe, baked.recipe);
+    const controls = resolvePatternLabControls(baked.recipe, 1);
+    assert.equal(capturedRenderPayloads[1].time, controls.renderTime);
+    assert.equal(capturedRenderPayloads[1].renderOptions.masterSpeed, 1);
+    assert.equal(
+      capturedRenderPayloads[1].renderOptions.masterBrightness,
+      controls.effectiveBrightness,
+    );
   } finally {
     if (originalWorker === undefined) delete globalThis.Worker;
     else globalThis.Worker = originalWorker;

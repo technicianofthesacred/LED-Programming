@@ -45,14 +45,15 @@ test('movement weights interpolate piecewise linearly and always sum to one', ()
   }
 });
 
-test('movement changes motion character and render warp without changing speed', () => {
+test('movement changes only spatial motion weights without changing the authoritative clock', () => {
   const samples = [0, .33, .67, 1].map(movement => resolvePatternLabControls(recipe({
     macros: { color: .5, movement, shape: .5, texture: .5 },
     playback: { brightness: .6, speed: 1.4 },
   }), 237.125));
   assert.deepEqual(new Set(samples.map(sample => sample.masterSpeed)), new Set([1.4]));
   assert.equal(new Set(samples.map(sample => sample.effectiveSpeed)).size, 1);
-  assert.equal(new Set(samples.map(sample => sample.renderTime.toFixed(9))).size, 4);
+  assert.equal(new Set(samples.map(sample => sample.renderTime.toFixed(9))).size, 1);
+  assert.equal(new Set(samples.map(sample => JSON.stringify(sample.motionWeights))).size, 4);
 });
 
 test('brightness is direct, monotonic, and zero produces zero', () => {

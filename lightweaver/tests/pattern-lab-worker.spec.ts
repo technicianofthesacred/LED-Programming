@@ -7,10 +7,33 @@ test.beforeEach(async ({ page }) => {
 test('renders mapped frames through the bounded module worker', async ({ page }) => {
   await page.getByLabel('Base pattern').selectOption('aurora');
   const preview = page.getByTestId('pattern-lab-mapped-preview');
+  const thumbnails = page.getByTestId('pattern-lab-variation-preview');
   await expect(preview.locator('canvas')).toBeVisible();
   await expect(preview).toHaveAttribute('data-worker-available', 'true');
   await expect(preview).toHaveAttribute('data-worker-state', 'frame');
   await expect(preview).toHaveAttribute('data-worker-sample-limit', '1024');
+  await expect(thumbnails).toHaveCount(4);
+  for (let index = 0; index < 4; index += 1) {
+    await expect(thumbnails.nth(index)).toHaveAttribute('data-worker-available', 'true');
+    await expect(thumbnails.nth(index)).toHaveAttribute('data-worker-state', 'frame');
+    await expect(thumbnails.nth(index).locator('canvas')).toBeVisible();
+  }
+
+  const thumbnail = thumbnails.first();
+  const movementFrame = await thumbnail.getAttribute('data-worker-frame-id');
+  const movementBefore = await thumbnail.locator('canvas').evaluate(canvas => canvas.toDataURL());
+  await page.getByRole('slider', { name: 'Movement', exact: true }).fill('100');
+  await expect.poll(async () => thumbnail.getAttribute('data-worker-frame-id')).not.toBe(movementFrame);
+  await expect.poll(() => thumbnail.locator('canvas').evaluate(canvas => canvas.toDataURL()))
+    .not.toBe(movementBefore);
+
+  const layerFrame = await thumbnail.getAttribute('data-worker-frame-id');
+  const layerBefore = await thumbnail.locator('canvas').evaluate(canvas => canvas.toDataURL());
+  await page.getByTestId('pattern-lab-layers').locator(':scope > summary').click();
+  await page.getByRole('button', { name: 'Add layer' }).click();
+  await expect.poll(async () => thumbnail.getAttribute('data-worker-frame-id')).not.toBe(layerFrame);
+  await expect.poll(() => thumbnail.locator('canvas').evaluate(canvas => canvas.toDataURL()))
+    .not.toBe(layerBefore);
 
   await page.getByRole('button', { name: 'Play', exact: true }).click();
   await expect(preview).toHaveAttribute('data-worker-sample-limit', '384');
@@ -30,7 +53,13 @@ test('initializes one compact transferable geometry snapshot and keeps render me
           recipeKeys: message?.payload?.recipe ? Object.keys(message.payload.recipe as object).sort() : [],
           baseKind: (message?.payload?.recipe as { base?: { kind?: string } })?.base?.kind,
           seed: (message?.payload?.recipe as { seed?: number })?.seed,
+          recipeVersion: (message?.payload?.recipe as { version?: number })?.version,
+          recipeLayerCount: (message?.payload?.recipe as { layers?: unknown[] })?.layers?.length,
+          payloadLayerCount: message?.payload?.layerCount,
           macroMovement: (message?.payload?.recipe as { macros?: { movement?: number } })?.macros?.movement,
+          masterSpeed: (message?.payload?.renderOptions as { masterSpeed?: number })?.masterSpeed,
+          masterBrightness: (message?.payload?.renderOptions as { masterBrightness?: number })?.masterBrightness,
+          motionWeights: (message?.payload?.renderOptions as { motionWeights?: Record<string, number> })?.motionWeights,
           coordinates: Object.prototype.toString.call((message?.payload?.geometry as { coordinates?: unknown })?.coordinates),
           transferCount: Array.isArray(transferOrOptions) ? transferOrOptions.length : 0,
         });
@@ -59,16 +88,31 @@ test('initializes one compact transferable geometry snapshot and keeps render me
     && Number(message.transferCount) === 2)).toBe(true);
   expect(renders.length).toBeGreaterThan(0);
   expect(renders.every(message => !message.hasGeometry)).toBe(true);
-  expect(renders.every(message => JSON.stringify(message.recipeKeys) === JSON.stringify(['base', 'layers', 'macros', 'palette', 'seed']))).toBe(true);
+  expect(renders.every(message => [
+    'base', 'evolution', 'id', 'layers', 'macros', 'name', 'palette', 'playback',
+    'provenance', 'requirements', 'seed', 'targets', 'version',
+  ].every(key => (message.recipeKeys as string[]).includes(key)))).toBe(true);
   expect(renders.every(message => message.baseKind === 'lightweaver-pattern')).toBe(true);
   expect(renders.every(message => Number.isInteger(message.seed))).toBe(true);
+  expect(renders.every(message => message.recipeVersion === 2)).toBe(true);
+  expect(renders.every(message => message.recipeLayerCount === message.payloadLayerCount)).toBe(true);
+  expect(renders.every(message => message.masterSpeed === 1)).toBe(true);
+  expect(renders.every(message => Number.isFinite(message.masterBrightness)
+    && Number(message.masterBrightness) >= 0
+    && Number(message.masterBrightness) <= 1)).toBe(true);
+  expect(renders.every(message => {
+    const weights = Object.values(message.motionWeights as Record<string, number>);
+    return weights.length === 4
+      && weights.every(weight => Number.isFinite(weight) && weight >= 0 && weight <= 1)
+      && Math.abs(weights.reduce((sum, weight) => sum + weight, 0) - 1) < 1e-9;
+  })).toBe(true);
   expect(renders.some(message => message.macroMovement === 0.5)).toBe(true);
 });
 
 test('matches full-layout pixels when preview sampling excludes a hidden extreme strip', async ({ page }) => {
   const result = await page.evaluate(async () => {
     const { compactPatternLabWorkerGeometry, clonePatternLabWorkerGeometryForTransfer } = await import('/src/lib/patternLabWorkerProtocol.js');
-    const { normalizePalette, renderPixelFrame } = await import('/src/lib/frameEngine.js');
+    const { renderPatternLabRecipeFrame } = await import('/src/lib/patternLabPatternAdapter.js');
     const visiblePixels = Array.from({ length: 500 }, (_, index) => ({
       x: index,
       y: Math.sin(index / 17) * 30,
@@ -84,6 +128,34 @@ test('matches full-layout pixels when preview sampling excludes a hidden extreme
     const compact = compactPatternLabWorkerGeometry(source);
     const transferred = clonePatternLabWorkerGeometryForTransfer(compact);
     const worker = new Worker(new URL('/src/pattern-lab/patternLab.worker.js', location.origin), { type: 'module' });
+    const recipe = {
+      version: 2,
+      id: 'hidden-extreme',
+      name: 'Hidden extreme',
+      base: { kind: 'lightweaver-pattern', patternId: 'aurora', params: {} },
+      palette: ['#102040', '#f09030'],
+      macros: { color: 0.5, movement: 0, shape: 0.5, texture: 0.5 },
+      playback: { brightness: 1, speed: 1 },
+      evolution: {
+        enabled: false,
+        character: 'slow-bloom',
+        durationSeconds: 600,
+        change: 0,
+        dynamics: { dynamicRange: 0.55, rareEventStrength: 0.4 },
+      },
+      seed: 1,
+      layers: [],
+      targets: [],
+      requirements: [],
+      provenance: [],
+    };
+    const renderOptions = {
+      masterSpeed: 1,
+      masterBrightness: 1,
+      masterSaturation: 1,
+      masterHueShift: 0,
+      motionWeights: { drift: 1, flow: 0, pulse: 0, surge: 0 },
+    };
     const frame = new Promise<Record<string, unknown>>(resolve => {
       worker.addEventListener('message', event => {
         if (event.data?.type === 'ready') {
@@ -93,14 +165,10 @@ test('matches full-layout pixels when preview sampling excludes a hidden extreme
             payload: {
               mode: 'preview',
               generation: 1,
-              recipe: { base: { patternId: 'aurora', params: {} }, palette: ['#102040', '#f09030'], layers: [] },
+              layerCount: 0,
+              recipe,
               time: 12.5,
-              renderOptions: {
-                masterSpeed: 1,
-                masterBrightness: 1,
-                masterSaturation: 1,
-                masterHueShift: 0,
-              },
+              renderOptions,
             },
           });
         }
@@ -115,7 +183,7 @@ test('matches full-layout pixels when preview sampling excludes a hidden extreme
 
     const indices = new Uint32Array(payload.indices as ArrayBuffer);
     const colors = new Uint8ClampedArray(payload.colors as ArrayBuffer);
-    const expected = renderPixelFrame({
+    const expected = renderPatternLabRecipeFrame(recipe, {
       t: 12.5,
       strips: [{
         id: 'visible', speed: 1, brightness: 1, hueShift: 0,
@@ -125,18 +193,13 @@ test('matches full-layout pixels when preview sampling excludes a hidden extreme
           i: index,
         })),
       }],
-      patternId: 'aurora',
-      params: {},
-      paletteNorm: normalizePalette(['#102040', '#f09030']),
       bpm: 91,
-      masterSpeed: 1,
-      masterBrightness: 1,
-      masterSaturation: 1,
-      masterHueShift: 0,
+      ...renderOptions,
       normBounds: compact.normalizationBounds,
     }).pixels;
     return {
       sampleCount: indices.length,
+      controlsApplied: payload.patternLabControlsApplied,
       indices: [...indices],
       actual: [...colors],
       expected: [...indices].flatMap(index => {
@@ -147,6 +210,7 @@ test('matches full-layout pixels when preview sampling excludes a hidden extreme
   });
 
   expect(result.sampleCount).toBe(384);
+  expect(result.controlsApplied).toBe(true);
   expect(result.indices).toEqual([...result.indices].sort((a, b) => a - b));
   expect(result.actual).toEqual(result.expected);
 });
@@ -166,10 +230,21 @@ test('uses preview samples during edits and restores a final frame after control
 test('coalesces changing control inputs to at most 24 worker renders per second', async ({ page }) => {
   await page.addInitScript(() => {
     const NativeWorker = window.Worker;
-    const telemetry = { renderTimes: [] as number[], terminations: 0 };
+    const telemetry = {
+      renderEvents: [] as Array<{ at: number; seed: number | null }>,
+      terminations: 0,
+    };
     class InstrumentedWorker extends NativeWorker {
       postMessage(message: unknown, transferOrOptions?: Transferable[] | StructuredSerializeOptions) {
-        if ((message as { type?: string })?.type === 'render') telemetry.renderTimes.push(performance.now());
+        const request = message as { type?: string; payload?: { recipe?: { seed?: number } } };
+        if (request?.type === 'render') {
+          telemetry.renderEvents.push({
+            at: performance.now(),
+            seed: Number.isInteger(request.payload?.recipe?.seed)
+              ? request.payload!.recipe!.seed!
+              : null,
+          });
+        }
         if (transferOrOptions === undefined) super.postMessage(message);
         else super.postMessage(message, transferOrOptions);
       }
@@ -185,9 +260,11 @@ test('coalesces changing control inputs to at most 24 worker renders per second'
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.getByLabel('Base pattern').selectOption('aurora');
   await expect(page.getByTestId('pattern-lab-mapped-preview')).toHaveAttribute('data-worker-state', 'frame');
+  const primarySeed = Number(await page.getByTestId('pattern-lab-seed').textContent());
   await page.evaluate(() => {
-    (window as typeof window & { __LW_PATTERN_LAB_WORKER_TELEMETRY__: { renderTimes: number[] } })
-      .__LW_PATTERN_LAB_WORKER_TELEMETRY__.renderTimes.length = 0;
+    (window as typeof window & {
+      __LW_PATTERN_LAB_WORKER_TELEMETRY__: { renderEvents: unknown[] };
+    }).__LW_PATTERN_LAB_WORKER_TELEMETRY__.renderEvents.length = 0;
   });
 
   await page.getByRole('slider', { name: 'Color', exact: true }).evaluate(async slider => {
@@ -199,10 +276,15 @@ test('coalesces changing control inputs to at most 24 worker renders per second'
     }
   });
   await page.waitForTimeout(300);
-  const times = await page.evaluate(() => (
-    (window as typeof window & { __LW_PATTERN_LAB_WORKER_TELEMETRY__: { renderTimes: number[] } })
-      .__LW_PATTERN_LAB_WORKER_TELEMETRY__.renderTimes
-  ));
+  const times = await page.evaluate(seed => (
+    (window as typeof window & {
+      __LW_PATTERN_LAB_WORKER_TELEMETRY__: {
+        renderEvents: Array<{ at: number; seed: number | null }>;
+      };
+    }).__LW_PATTERN_LAB_WORKER_TELEMETRY__.renderEvents
+      .filter(event => event.seed === seed)
+      .map(event => event.at)
+  ), primarySeed);
   expect(times.length).toBeGreaterThan(10);
   const elapsed = times.at(-1)! - times[0];
   expect(elapsed).toBeGreaterThan(1000);
@@ -241,6 +323,7 @@ test('does not publish a superseded frame before the coalesced replacement dispa
                   mode: 'final',
                   time: request.payload?.time,
                   generation: (request.payload as { generation?: number })?.generation,
+                  patternLabControlsApplied: true,
                   sampleCount: 2,
                   totalSamples: 2,
                   colors: new Uint8ClampedArray([1, 2, 3, 4, 5, 6]).buffer,
@@ -297,9 +380,25 @@ test('does not publish a superseded frame before the coalesced replacement dispa
     document.body.append(host);
     const root = createRoot(host);
     const recipe = {
-      base: { patternId: 'aurora', params: {} },
+      version: 2,
+      id: 'superseded-frame',
+      name: 'Superseded frame',
+      base: { kind: 'lightweaver-pattern', patternId: 'aurora', params: {} },
       palette: ['#102040', '#f09030'],
+      macros: { color: 0.5, movement: 0.5, shape: 0.5, texture: 0.5 },
+      playback: { brightness: 1, speed: 1 },
+      evolution: {
+        enabled: false,
+        character: 'slow-bloom',
+        durationSeconds: 600,
+        change: 0,
+        dynamics: { dynamicRange: 0.55, rareEventStrength: 0.4 },
+      },
+      seed: 1,
       layers: [],
+      targets: [],
+      requirements: [],
+      provenance: [],
     };
     const geometry = {
       strips: [{ id: 'race', pixels: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }],
@@ -310,6 +409,7 @@ test('does not publish a superseded frame before the coalesced replacement dispa
       masterBrightness: 1,
       masterSaturation: 1,
       masterHueShift: 0,
+      motionWeights: { drift: 0, flow: 1, pulse: 0, surge: 0 },
     };
     function Harness({ time }: { time: number }) {
       const result = usePatternLabWorker({ recipe, geometry, time, mode: 'final', renderOptions });
@@ -367,6 +467,34 @@ test('cancels queued work and rejects forged geometry budgets without trusting r
       hidden: {},
     });
     const initial = clonePatternLabWorkerGeometryForTransfer(compact);
+    const recipe = {
+      version: 2,
+      id: 'allocation-baseline',
+      name: 'Allocation baseline',
+      base: { kind: 'lightweaver-pattern', patternId: 'aurora', params: {} },
+      palette: ['#000000', '#ffffff'],
+      macros: { color: 0.5, movement: 0.5, shape: 0.5, texture: 0.5 },
+      playback: { brightness: 1, speed: 1 },
+      evolution: {
+        enabled: false,
+        character: 'slow-bloom',
+        durationSeconds: 600,
+        change: 0,
+        dynamics: { dynamicRange: 0.55, rareEventStrength: 0.4 },
+      },
+      seed: 1,
+      layers: [],
+      targets: [],
+      requirements: [],
+      provenance: [],
+    };
+    const renderOptions = {
+      masterSpeed: 1,
+      masterBrightness: 1,
+      masterSaturation: 1,
+      masterHueShift: 0,
+      motionWeights: { drift: 0, flow: 1, pulse: 0, surge: 0 },
+    };
     const worker = new Worker(new URL('/src/pattern-lab/patternLab.worker.js', location.origin), { type: 'module' });
     const replies: Array<{ type: string; requestId: number; payload?: Record<string, unknown> }> = [];
     const errors: string[] = [];
@@ -388,6 +516,9 @@ test('cancels queued work and rejects forged geometry budgets without trusting r
         mode: 'preview',
         generation: 1,
         layerCount: 0,
+        time: 0,
+        recipe,
+        renderOptions,
         testGenerator: { kind: 'delay', milliseconds: 180 },
       },
     });
@@ -407,7 +538,9 @@ test('cancels queued work and rejects forged geometry budgets without trusting r
         generation: 1,
         layerCount: 0,
         allocationBytes: 1,
-        recipe: { base: { patternId: 'aurora', params: {} }, palette: ['#000000', '#ffffff'] },
+        time: 0,
+        recipe,
+        renderOptions,
       },
     });
     await new Promise(resolve => setTimeout(resolve, 350));
@@ -617,15 +750,32 @@ test('replaces live geometry without mapping an old frame and falls back safely 
     document.body.append(host);
     const root = createRoot(host);
     const recipe = {
-      base: { patternId: 'aurora', params: {} },
+      version: 2,
+      id: 'geometry-replacement',
+      name: 'Geometry replacement',
+      base: { kind: 'lightweaver-pattern', patternId: 'aurora', params: {} },
       palette: ['#102040', '#f09030'],
+      macros: { color: 0.5, movement: 0.5, shape: 0.5, texture: 0.5 },
+      playback: { brightness: 1, speed: 1 },
+      evolution: {
+        enabled: false,
+        character: 'slow-bloom',
+        durationSeconds: 600,
+        change: 0,
+        dynamics: { dynamicRange: 0.55, rareEventStrength: 0.4 },
+      },
+      seed: 1,
       layers: [],
+      targets: [],
+      requirements: [],
+      provenance: [],
     };
     const stableRenderOptions = {
       masterSpeed: 1,
       masterBrightness: 1,
       masterSaturation: 1,
       masterHueShift: 0,
+      motionWeights: { drift: 0, flow: 1, pulse: 0, surge: 0 },
     };
     function Harness({ geometry }: { geometry: Record<string, unknown> }) {
       const result = usePatternLabWorker({
@@ -698,7 +848,7 @@ test('replaces live geometry without mapping an old frame and falls back safely 
   expect(invalidCounts.created).toBe(invalidCounts.terminated);
 });
 
-test('falls back to the existing mapped renderer when Worker is unavailable', async ({ page }) => {
+test('shows a neutral preparing state instead of an inaccurate base when Worker is unavailable', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(window, 'Worker', { configurable: true, value: undefined });
   });
@@ -707,7 +857,8 @@ test('falls back to the existing mapped renderer when Worker is unavailable', as
   const preview = page.getByTestId('pattern-lab-mapped-preview');
   await expect(preview).toHaveAttribute('data-worker-available', 'false');
   await expect(preview).toHaveAttribute('data-worker-state', 'fallback');
-  await expect(preview.locator('canvas')).toBeVisible();
+  await expect(preview.locator('canvas')).toHaveCount(0);
+  await expect(preview.getByTestId('pattern-lab-preparing')).toBeVisible();
   await page.getByRole('button', { name: 'Play', exact: true }).click();
   await expect(page.getByTestId('pattern-lab-time')).not.toHaveText('0:00 / 10:00');
 });

@@ -67,6 +67,30 @@ export function blendPatternLabColors(backdrop, source, mode = 'normal', opacity
   };
 }
 
+export function finalizePatternLabColors(colors, {
+  masterBrightness = 1,
+  gammaLUT = null,
+} = {}) {
+  if (!Array.isArray(colors)) throw new TypeError('Pattern Lab final colors must be an array');
+  const brightness = clamp(masterBrightness, 0, 1);
+  if (gammaLUT !== null && (!(gammaLUT instanceof Uint8Array) || gammaLUT.length !== 256)) {
+    throw new TypeError('Pattern Lab gamma LUT must contain exactly 256 bytes');
+  }
+  return colors.map(color => {
+    const scaled = normalizeColor({
+      r: color?.r * brightness,
+      g: color?.g * brightness,
+      b: color?.b * brightness,
+    });
+    if (!gammaLUT) return scaled;
+    return {
+      r: gammaLUT[scaled.r],
+      g: gammaLUT[scaled.g],
+      b: gammaLUT[scaled.b],
+    };
+  });
+}
+
 export function compositePatternLabLayers(layers, background = { r: 0, g: 0, b: 0 }) {
   if (!Array.isArray(layers)) throw new TypeError('Pattern Lab layers must be an array');
   if (layers.length > MAX_LAYERS) throw new RangeError('Pattern Lab supports at most 3 layers');

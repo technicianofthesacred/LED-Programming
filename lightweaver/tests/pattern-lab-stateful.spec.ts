@@ -138,18 +138,32 @@ test('the real worker renders the deterministic bounded stateful generator pack'
             layerCount: 0,
             time,
             recipe: {
+              version: 2,
               id: `stateful-${generatorId}`,
+              name: `Stateful ${generatorId}`,
               seed,
               base: { kind: generatorId, params: { advanced: {} } },
               palette: ['#101020', '#40b0ff', '#ffe090'],
-              macros: { color: 0.62, movement: 0.58, shape: 0.44, texture: 0.71, energy: 0.73 },
+              macros: { color: 0.62, movement: 0.58, shape: 0.44, texture: 0.71 },
+              playback: { brightness: 1, speed: 1 },
+              evolution: {
+                enabled: false,
+                character: 'slow-bloom',
+                durationSeconds: 600,
+                change: 0,
+                dynamics: { dynamicRange: 0.73, rareEventStrength: 0.4 },
+              },
               layers: [],
+              targets: [],
+              requirements: [],
+              provenance: [],
             },
             renderOptions: {
               masterSpeed: 1,
               masterBrightness: 1,
               masterSaturation: 1,
               masterHueShift: 0,
+              motionWeights: { drift: 0, flow: 1, pulse: 0, surge: 0 },
             },
           },
         });
@@ -162,6 +176,7 @@ test('the real worker renders the deterministic bounded stateful generator pack'
           checksum: [...colors].reduce((sum, value, index) => (sum + value * (index + 1)) >>> 0, 0),
           lit: [...colors].some(value => value > 0),
           sampleCount: frameReply.payload.sampleCount,
+          controlsApplied: frameReply.payload.patternLabControlsApplied,
         });
         stats.push(statsReply.payload);
       }
@@ -192,6 +207,7 @@ test('the real worker renders the deterministic bounded stateful generator pack'
   for (const [generatorId, run] of Object.entries(result.pack)) {
     expect(run.frames.every(frame => frame.lit), generatorId).toBe(true);
     expect(run.frames.every(frame => frame.sampleCount === 96), generatorId).toBe(true);
+    expect(run.frames.every(frame => frame.controlsApplied === true), generatorId).toBe(true);
     expect(run.stats.every(stats => stats.generatorId === generatorId), generatorId).toBe(true);
     expect(run.stats.every(stats => Number(stats.generatorStateBytes) > 0), generatorId).toBe(true);
     expect(run.stats.every(stats => Number(stats.allocatedBytes) <= result.budget), generatorId).toBe(true);

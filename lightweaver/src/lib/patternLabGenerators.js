@@ -1,3 +1,9 @@
+import {
+  DEFAULT_PATTERN_LAB_MOTION_WEIGHTS,
+  normalizePatternLabMotionWeights,
+  patternLabMotionCoordinate,
+} from './patternLabMotion.js';
+
 export const PATTERN_LAB_GENERATOR_IDS = Object.freeze([
   'particles',
   'ripple',
@@ -43,7 +49,14 @@ const ADVANCED = {
 
 function freezeControls() {
   const result = {};
-  const artistic = Object.freeze(['Color', 'Movement', 'Shape', 'Texture', 'Energy']);
+  const artistic = Object.freeze([
+    'Color',
+    'Brightness',
+    'Movement',
+    'Speed',
+    'Shape',
+    'Texture',
+  ]);
   for (const id of PATTERN_LAB_GENERATOR_IDS) {
     result[id] = Object.freeze({
       artistic,
@@ -142,13 +155,25 @@ function colorFromLevel(level, state, offset = 0) {
   };
 }
 
+function motionCoordinate(progress, state) {
+  return patternLabMotionCoordinate(progress, {
+    elapsedSeconds: state.elapsedSeconds,
+    seed: state.seed,
+    motionWeights: state.motionWeights || DEFAULT_PATTERN_LAB_MOTION_WEIGHTS,
+  });
+}
+
 function updateArtisticState(state, inputs) {
   const artistic = inputs?.artistic || DEFAULT_INPUTS.artistic;
-  state.speed = clamp(artistic.speed, 0.15, 3, 1.575);
-  state.intensity = clamp01(artistic.intensity, 0.56);
+  state.speed = clamp(artistic.speed, 0.15, 3, 1);
+  state.intensity = clamp01(artistic.intensity, 1);
   state.density = clamp01(artistic.density, 0.55);
   state.scale = clamp(artistic.scale, 0.5, 3, 1.75);
   state.colorShift = clamp01(artistic.colorShift, 0.5);
+  if (state.motionWeightsSource !== inputs?.motionWeights) {
+    state.motionWeightsSource = inputs?.motionWeights;
+    state.motionWeights = normalizePatternLabMotionWeights(inputs?.motionWeights);
+  }
 }
 
 function disposeTypedState(state, generatorId) {
@@ -168,18 +193,18 @@ export function measurePatternLabGeneratorStateBytes(state) {
 }
 
 const DEFAULT_INPUTS = Object.freeze({
-  artistic: Object.freeze({ speed: 1.575, intensity: 0.56, density: 0.55, scale: 1.75, colorShift: 0.5 }),
+  artistic: Object.freeze({ speed: 1, intensity: 1, density: 0.55, scale: 1.75, colorShift: 0.5 }),
   advanced: Object.freeze({}),
 });
 
-export function resolvePatternLabGeneratorInputs(generatorId, recipe = {}) {
+export function resolvePatternLabGeneratorInputs(generatorId, recipe = {}, controls = {}) {
   if (!PATTERN_LAB_GENERATOR_IDS.includes(generatorId)) {
     throw new RangeError(`Unknown Pattern Lab generator: ${String(generatorId)}`);
   }
   const macros = recipe?.macros || {};
   const artistic = Object.freeze({
-    speed: 0.15 + clamp01(macros.movement) * 2.85,
-    intensity: 0.12 + clamp01(macros.energy) * 0.88,
+    speed: 1,
+    intensity: 1,
     density: 0.1 + clamp01(macros.texture) * 0.9,
     scale: 0.5 + clamp01(macros.shape) * 2.5,
     colorShift: clamp01(macros.color),
@@ -190,7 +215,19 @@ export function resolvePatternLabGeneratorInputs(generatorId, recipe = {}) {
     const bounded = clamp(source[key], minimum, maximum, defaultValue);
     advanced[key] = integer ? Math.round(bounded) : bounded;
   }
-  return Object.freeze({ artistic, advanced: Object.freeze(advanced) });
+  const motionWeights = controls?.motionWeights;
+  const hasMotionWeights = ['drift', 'flow', 'pulse', 'surge']
+    .every(name => Number.isFinite(Number(motionWeights?.[name])));
+  return Object.freeze({
+    artistic,
+    ...(hasMotionWeights ? {
+      motionWeights: Object.freeze(Object.fromEntries(
+        ['drift', 'flow', 'pulse', 'surge']
+          .map(name => [name, clamp01(motionWeights[name], 0)]),
+      )),
+    } : {}),
+    advanced: Object.freeze(advanced),
+  });
 }
 
 const particles = Object.freeze({
@@ -228,7 +265,10 @@ const particles = Object.freeze({
   },
   render(pixel, coordinates, state) {
     requireLiveState(state, 'particles');
-    const progress = coordinateProgress(pixel, coordinates, state.sampleCount);
+    const progress = motionCoordinate(
+      coordinateProgress(pixel, coordinates, state.sampleCount),
+      state,
+    );
     const width = 0.012 + state.density * 0.075 / state.scale;
     let level = 0;
     for (let index = 0; index < state.particleCount; index += 1) {
@@ -278,7 +318,10 @@ const ripple = Object.freeze({
   },
   render(pixel, coordinates, state) {
     requireLiveState(state, 'ripple');
-    const progress = coordinateProgress(pixel, coordinates, state.sampleCount);
+    const progress = motionCoordinate(
+      coordinateProgress(pixel, coordinates, state.sampleCount),
+      state,
+    );
     let level = 0;
     for (let index = 0; index < state.emitterCount; index += 1) {
       const distance = circularDistance(progress, state.centers[index]);
@@ -327,7 +370,10 @@ const randomWalkers = Object.freeze({
   },
   render(pixel, coordinates, state) {
     requireLiveState(state, 'random-walkers');
-    const progress = coordinateProgress(pixel, coordinates, state.sampleCount);
+    const progress = motionCoordinate(
+      coordinateProgress(pixel, coordinates, state.sampleCount),
+      state,
+    );
     let level = 0;
     for (let index = 0; index < state.walkerCount; index += 1) {
       const distance = circularDistance(progress, state.positions[index]);
@@ -374,17 +420,18 @@ const cellularField = Object.freeze({
     state.rule = Math.round(clamp(inputs.advanced?.rule, 0, 255, 110));
     state.stepsPerSecond = clamp(inputs.advanced?.stepsPerSecond, 0.25, 24, 5) * (0.5 + state.speed * 0.5);
     state.accumulator += seconds * state.stepsPerSecond;
-    const steps = Math.min(
-      PATTERN_LAB_GENERATOR_BUDGETS.maxSimulationStepsPerUpdate,
-      Math.floor(state.accumulator),
-    );
-    state.accumulator -= steps;
+    const pendingSteps = Math.floor(state.accumulator);
+    const steps = Math.min(PATTERN_LAB_GENERATOR_BUDGETS.maxSimulationStepsPerUpdate, pendingSteps);
+    state.accumulator -= pendingSteps;
     for (let step = 0; step < steps; step += 1) cellularStep(state);
     return state;
   },
   render(pixel, coordinates, state) {
     requireLiveState(state, 'cellular-field');
-    const progress = coordinateProgress(pixel, coordinates, state.sampleCount);
+    const progress = motionCoordinate(
+      coordinateProgress(pixel, coordinates, state.sampleCount),
+      state,
+    );
     const index = Math.min(state.cells.length - 1, Math.floor(progress * state.cells.length));
     const near = state.cells[index]
       + state.cells[(index + state.cells.length - 1) % state.cells.length] * 0.35
@@ -443,17 +490,18 @@ const grayScott = Object.freeze({
     state.diffusionV = clamp(inputs.advanced?.diffusionV, 0.005, 0.15, 0.08);
     state.stepsPerSecond = clamp(inputs.advanced?.stepsPerSecond, 0.25, 24, 8) * (0.5 + state.speed * 0.25);
     state.accumulator += seconds * state.stepsPerSecond;
-    const steps = Math.min(
-      PATTERN_LAB_GENERATOR_BUDGETS.maxSimulationStepsPerUpdate,
-      Math.floor(state.accumulator),
-    );
-    state.accumulator -= steps;
+    const pendingSteps = Math.floor(state.accumulator);
+    const steps = Math.min(PATTERN_LAB_GENERATOR_BUDGETS.maxSimulationStepsPerUpdate, pendingSteps);
+    state.accumulator -= pendingSteps;
     for (let step = 0; step < steps; step += 1) grayScottStep(state);
     return state;
   },
   render(pixel, coordinates, state) {
     requireLiveState(state, 'gray-scott-1d');
-    const progress = coordinateProgress(pixel, coordinates, state.sampleCount);
+    const progress = motionCoordinate(
+      coordinateProgress(pixel, coordinates, state.sampleCount),
+      state,
+    );
     const index = Math.min(state.v.length - 1, Math.floor(progress * state.v.length));
     const level = clamp01((state.v[index] - state.u[index] + 1) * (0.35 + state.density * 0.65), 0);
     return colorFromLevel(level, state, progress * 0.22 + state.v[index] * 0.2);

@@ -40,35 +40,6 @@ function movementWeights(value) {
   return weights;
 }
 
-function zeroedWave(time, period, phase) {
-  return Math.sin(time / period * TAU + phase) - Math.sin(phase);
-}
-
-function compositeMotionWarp(time, duration, seed, weights, modulationDepth) {
-  const phase = ((seed % 4093) / 4093) * TAU;
-  const waves = {
-    drift: (
-      zeroedWave(time, duration * Math.SQRT2, phase) * 0.62
-      + zeroedWave(time, duration * Math.sqrt(5), phase + 1.7) * 0.38
-    ),
-    flow: (
-      zeroedWave(time, duration * 0.73, phase + 0.4) * 0.58
-      + zeroedWave(time, duration * Math.sqrt(3), phase + 2.1) * 0.42
-    ),
-    pulse: (
-      zeroedWave(time, duration * 0.47, phase + 1.1) * 0.72
-      + zeroedWave(time, duration * Math.sqrt(2 / 3), phase + 2.8) * 0.28
-    ),
-    surge: (
-      zeroedWave(time, duration * 0.31, phase + 2.4) * 0.67
-      + zeroedWave(time, duration / Math.sqrt(7), phase + 0.8) * 0.33
-    ),
-  };
-  const blended = Object.entries(weights)
-    .reduce((sum, [name, weight]) => sum + waves[name] * weight, 0);
-  return blended * modulationDepth * 4;
-}
-
 function evolutionRateClock(recipe, evolution, elapsed) {
   if (!evolution.enabled || evolution.change === 0) {
     return { factor: 1, time: elapsed };
@@ -137,14 +108,7 @@ export function resolvePatternLabControls(recipe, elapsedSeconds = 0) {
     destinations?.texture ?? technical.texture.crispness,
     evolutionMix,
   ), 0, 1, technical.texture.crispness);
-  const unscaledRenderTime = Math.max(0, evolutionClock.time + compositeMotionWarp(
-    evolutionClock.time,
-    normalized.evolution.durationSeconds,
-    normalized.seed,
-    motionWeights,
-    technical.movement.modulationDepth,
-  ));
-  const renderTime = unscaledRenderTime * masterSpeed;
+  const renderTime = Math.max(0, evolutionClock.time) * masterSpeed;
 
   return {
     technical,

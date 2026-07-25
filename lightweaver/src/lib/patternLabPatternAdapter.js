@@ -1,6 +1,10 @@
 import { PALETTE_DEFAULT } from '../data.js';
-import { blendPatternLabColors } from './patternLabCompositor.js';
+import {
+  blendPatternLabColors,
+  finalizePatternLabColors,
+} from './patternLabCompositor.js';
 import { normalizePalette, renderPixelFrame } from './frameEngine.js';
+import { applyPatternLabMotionToStrips } from './patternLabMotion.js';
 import { createPatternLabRecipe, normalizePatternLabRecipe } from './patternLabRecipe.js';
 import { applyPatternLabTransform, samplePatternLabMask } from './patternLabTransforms.js';
 import { parseParamsFromCode } from './patternParams.js';
@@ -105,6 +109,27 @@ function renderRecipeLayer(layer, renderContext, fallbackPalette) {
   return { ...geometry, frame };
 }
 
+function finalizeFrame(frame, options) {
+  const pixels = finalizePatternLabColors(frame.pixels, options);
+  let offset = 0;
+  const stripFrames = frame.stripFrames.map(strip => {
+    const leds = strip.leds.map(led => ({ ...led, ...pixels[offset++] }));
+    const totals = leds.reduce((sum, color) => ({
+      r: sum.r + color.r,
+      g: sum.g + color.g,
+      b: sum.b + color.b,
+    }), { r: 0, g: 0, b: 0 });
+    return {
+      ...strip,
+      leds,
+      avgR: leds.length ? Math.round(totals.r / leds.length) : 0,
+      avgG: leds.length ? Math.round(totals.g / leds.length) : 0,
+      avgB: leds.length ? Math.round(totals.b / leds.length) : 0,
+    };
+  });
+  return { ...frame, pixels, stripFrames };
+}
+
 export function recipeFromPattern(patternId, context = {}) {
   const pattern = requireBuiltInPattern(patternId);
 
@@ -126,8 +151,24 @@ export function renderPatternLabRecipeFrame(recipe, context = {}) {
   const normalized = normalizePatternLabRecipe(recipe);
   requireBuiltInPattern(normalized.base.patternId);
 
-  const renderContext = { ...context };
+  const finalOptions = {
+    masterBrightness: context.masterBrightness ?? 1,
+    gammaLUT: context.gammaLUT ?? null,
+  };
+  const renderContext = {
+    ...context,
+    masterBrightness: 1,
+    gammaLUT: null,
+  };
   for (const key of RECIPE_OWNED_RENDER_KEYS) delete renderContext[key];
+  const bounds = geometryBounds(renderContext.strips, renderContext.normBounds);
+  renderContext.normBounds = bounds;
+  renderContext.strips = applyPatternLabMotionToStrips(renderContext.strips, {
+    elapsedSeconds: renderContext.t,
+    seed: normalized.seed,
+    motionWeights: context.motionWeights,
+    bounds,
+  });
 
   // The legacy stateless renderer has no seed input. Ignoring recipe.seed here
   // preserves its exact output; Pattern Lab evolution consumes seed separately.
@@ -159,5 +200,5 @@ export function renderPatternLabRecipeFrame(recipe, context = {}) {
       }),
     };
   }
-  return frame;
+  return finalizeFrame(frame, finalOptions);
 }
