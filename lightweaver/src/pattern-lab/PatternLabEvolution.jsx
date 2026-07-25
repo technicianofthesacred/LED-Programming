@@ -22,6 +22,8 @@ export default function PatternLabEvolution({
   onEvolutionChange,
   onPreviewTime,
   onAudioAnalysis,
+  activeWorkflowStep,
+  instrumentResponse,
 }) {
   const evolution = recipe?.evolution;
   const duration = evolution?.durationSeconds ?? 600;
@@ -54,116 +56,137 @@ export default function PatternLabEvolution({
   }
 
   return (
-    <section className="plab-control-section plab-evolution" aria-labelledby="plab-evolution-heading">
-      <div className="plab-section-heading">
-        <span className="plab-section-index">03</span>
-        <div>
-          <h2 id="plab-evolution-heading">Add long evolution</h2>
-          <p>Let several slow clocks unfold without a short obvious loop.</p>
+    <section
+      className="plab-control-section plab-compact-step plab-evolution"
+      aria-labelledby="plab-evolution-heading"
+      data-testid="pattern-lab-step-evolve"
+      data-workflow-step="2"
+      data-active={activeWorkflowStep === 2 ? 'true' : 'false'}
+    >
+      <div className="plab-compact-step-heading plab-evolution-heading">
+        {instrumentResponse.step === 2 && instrumentResponse.sequence > 0 && (
+          <span
+            key={instrumentResponse.sequence}
+            className="plab-local-ack"
+            data-testid="pattern-lab-step-ack"
+            data-response-sequence={instrumentResponse.sequence}
+            aria-hidden="true"
+          />
+        )}
+        <div className="plab-compact-step-title">
+          <span className="plab-section-index">03</span>
+          <h2 id="plab-evolution-heading" tabIndex="-1">Evolve</h2>
+          <span className="plab-step-meta">5–15 min</span>
         </div>
-      </div>
-
-      <label className="plab-switch-row">
-        <span><strong>Long Evolution</strong><small>Five to fifteen minutes</small></span>
-        <input
-          type="checkbox"
-          checked={Boolean(evolution?.enabled)}
-          disabled={!recipe}
-          onChange={event => onEvolutionChange('enabled', event.target.checked)}
-        />
-      </label>
-
-      <div className="plab-evolution-fields" aria-disabled={!recipe || !evolution?.enabled}>
-        <label className="plab-field">
-          <span>Evolution character</span>
-          <select
-            value={evolution?.character ?? 'slow-bloom'}
-            disabled={!recipe || !evolution?.enabled}
-            onChange={event => onEvolutionChange('character', event.target.value)}
-          >
-            {PATTERN_LAB_EVOLUTION_CHARACTERS.map(character => (
-              <option key={character} value={character}>{CHARACTER_LABELS[character]}</option>
-            ))}
-          </select>
-        </label>
-
-        <label className="plab-macro">
-          <span className="plab-macro-label"><strong>Duration</strong><output>{Math.round(duration / 60)} min</output></span>
+        <label className="plab-evolution-toggle">
+          <span>Long Evolution</span>
           <input
-            aria-label="Duration (minutes)"
-            type="range"
-            min="5"
-            max="15"
-            step="1"
-            value={Math.round(duration / 60)}
-            disabled={!recipe || !evolution?.enabled}
-            onChange={event => onEvolutionChange('durationSeconds', Number(event.target.value) * 60)}
+            type="checkbox"
+            checked={Boolean(evolution?.enabled)}
+            disabled={!recipe}
+            onChange={event => onEvolutionChange('enabled', event.target.checked)}
           />
         </label>
+      </div>
 
-        <label className="plab-macro">
-          <span className="plab-macro-label"><strong>Change</strong><output>{Math.round((evolution?.change ?? 0.35) * 100)}%</output></span>
+      <div className="plab-compact-step-body">
+        <div
+          className="plab-evolution-fields"
+          aria-disabled={!recipe || !evolution?.enabled}
+          data-enabled={Boolean(recipe && evolution?.enabled)}
+          data-testid="pattern-lab-evolution-fields"
+        >
+          <label className="plab-field">
+            <span>Evolution character</span>
+            <select
+              value={evolution?.character ?? 'slow-bloom'}
+              disabled={!recipe || !evolution?.enabled}
+              onChange={event => onEvolutionChange('character', event.target.value)}
+            >
+              {PATTERN_LAB_EVOLUTION_CHARACTERS.map(character => (
+                <option key={character} value={character}>{CHARACTER_LABELS[character]}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="plab-macro">
+            <span className="plab-macro-label"><strong>Duration</strong><output>{Math.round(duration / 60)} min</output></span>
+            <input
+              aria-label="Duration (minutes)"
+              type="range"
+              min="5"
+              max="15"
+              step="1"
+              value={Math.round(duration / 60)}
+              disabled={!recipe || !evolution?.enabled}
+              onChange={event => onEvolutionChange('durationSeconds', Number(event.target.value) * 60)}
+            />
+          </label>
+
+          <label className="plab-macro">
+            <span className="plab-macro-label"><strong>Change</strong><output>{Math.round((evolution?.change ?? 0.35) * 100)}%</output></span>
+            <input
+              aria-label="Change amount"
+              type="range"
+              min="0"
+              max="100"
+              value={Math.round((evolution?.change ?? 0.35) * 100)}
+              disabled={!recipe || !evolution?.enabled}
+              onChange={event => onEvolutionChange('change', Number(event.target.value) / 100)}
+            />
+          </label>
+        </div>
+
+        <div className="plab-scrub">
+          <div className="plab-scrub-heading">
+            <strong>Preview the journey</strong>
+            <output data-testid="pattern-lab-time">{formatTime(previewTime)} / {formatTime(duration)}</output>
+          </div>
+          <div className="plab-position-buttons" aria-label="Preview positions">
+            <button type="button" className="btn" disabled={!recipe} onClick={() => onPreviewTime(0)}>Beginning</button>
+            <button type="button" className="btn" disabled={!recipe} onClick={() => onPreviewTime(duration / 2)}>Middle</button>
+            <button type="button" className="btn" disabled={!recipe} onClick={() => onPreviewTime(duration)}>End</button>
+          </div>
           <input
-            aria-label="Change amount"
+            className="plab-time-range"
+            aria-label="Preview time"
             type="range"
             min="0"
-            max="100"
-            value={Math.round((evolution?.change ?? 0.35) * 100)}
-            disabled={!recipe || !evolution?.enabled}
-            onChange={event => onEvolutionChange('change', Number(event.target.value) / 100)}
+            max={duration}
+            step="1"
+            value={Math.min(previewTime, duration)}
+            disabled={!recipe}
+            onChange={event => onPreviewTime(Number(event.target.value))}
           />
-        </label>
-      </div>
-
-      <div className="plab-scrub">
-        <div className="plab-scrub-heading">
-          <strong>Preview the journey</strong>
-          <output data-testid="pattern-lab-time">{formatTime(previewTime)} / {formatTime(duration)}</output>
         </div>
-        <div className="plab-position-buttons" aria-label="Preview positions">
-          <button type="button" className="btn" disabled={!recipe} onClick={() => onPreviewTime(0)}>Beginning</button>
-          <button type="button" className="btn" disabled={!recipe} onClick={() => onPreviewTime(duration / 2)}>Middle</button>
-          <button type="button" className="btn" disabled={!recipe} onClick={() => onPreviewTime(duration)}>End</button>
-        </div>
-        <input
-          className="plab-time-range"
-          aria-label="Preview time"
-          type="range"
-          min="0"
-          max={duration}
-          step="1"
-          value={Math.min(previewTime, duration)}
-          disabled={!recipe}
-          onChange={event => onPreviewTime(Number(event.target.value))}
-        />
-      </div>
 
-      <details className="plab-advanced plab-audio-lanes">
-        <summary>Offline audio lanes</summary>
-        <p>Choose a WAV file to derive bass, mid, high, onset, and motion lanes. The audio stays on this device; only numbers and its fingerprint enter the recipe.</p>
-        <label className="plab-field">
-          <span>WAV audio file</span>
-          <input
-            aria-label="WAV audio file"
-            type="file"
-            accept="audio/wav,.wav"
-            disabled={!recipe || audioStatus.state === 'analyzing'}
-            onChange={event => analyzeAudio(event.target.files?.[0])}
-          />
-        </label>
-        {recipe?.offlineAudio && (
-          <button type="button" className="btn" onClick={() => {
-            analysisController.current?.abort();
-            onAudioAnalysis?.(null, null);
-            setAudioStatus({ state: 'idle', message: 'Offline audio lanes removed.' });
-          }}>Remove audio lanes</button>
-        )}
-        {(audioStatus.message || recipe?.offlineAudio) && (
-          <p role={audioStatus.state === 'error' ? 'alert' : 'status'} data-audio-state={audioStatus.state}>
-            {audioStatus.message || `Audio fingerprint ${recipe.offlineAudio.audioFingerprint.sha256.slice(0, 10)}… · Bake only`}
-          </p>
-        )}
-      </details>
+        <details className="plab-advanced plab-audio-lanes">
+          <summary>Offline audio lanes</summary>
+          <p>Choose a WAV file to derive bass, mid, high, onset, and motion lanes. The audio stays on this device; only numbers and its fingerprint enter the recipe.</p>
+          <label className="plab-field">
+            <span>WAV audio file</span>
+            <input
+              aria-label="WAV audio file"
+              type="file"
+              accept="audio/wav,.wav"
+              disabled={!recipe || audioStatus.state === 'analyzing'}
+              onChange={event => analyzeAudio(event.target.files?.[0])}
+            />
+          </label>
+          {recipe?.offlineAudio && (
+            <button type="button" className="btn" onClick={() => {
+              analysisController.current?.abort();
+              onAudioAnalysis?.(null, null);
+              setAudioStatus({ state: 'idle', message: 'Offline audio lanes removed.' });
+            }}>Remove audio lanes</button>
+          )}
+          {(audioStatus.message || recipe?.offlineAudio) && (
+            <p role={audioStatus.state === 'error' ? 'alert' : 'status'} data-audio-state={audioStatus.state}>
+              {audioStatus.message || `Audio fingerprint ${recipe.offlineAudio.audioFingerprint.sha256.slice(0, 10)}… · Bake only`}
+            </p>
+          )}
+        </details>
+      </div>
     </section>
   );
 }

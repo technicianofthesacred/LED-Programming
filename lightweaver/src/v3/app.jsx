@@ -211,24 +211,43 @@ const I = {
   installer: <svg viewBox="0 0 24 24"><path d="M3 13l2.5-7.5A1 1 0 0 1 6.5 5h11a1 1 0 0 1 1 .7L21 13v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M3 13h5l1.5 2.2h5L16 13h5"/></svg>,
   production: <svg viewBox="0 0 24 24"><path d="M4 7h16v12H4zM8 7V4h8v3"/><path d="M8 12h8M12 10v4"/></svg>,
   card: <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5M2 9h2M2 15h2M20 9h2M20 15h2"/></svg>,
+  newProject: <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>,
+  importProject: <svg viewBox="0 0 24 24"><path d="M4 7h6l2 2h8v10H4z"/><path d="M12 11v6M9 14l3 3 3-3"/></svg>,
+  preferences: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>,
+  exportProject: <svg viewBox="0 0 24 24"><path d="M12 16V5M8 9l4-4 4 4"/><path d="M5 19h14"/></svg>,
+  saveProject: <svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v6h7V3M8 15h8v6H8z"/></svg>,
 };
 
 /* ---------- Top bar (wired to real project state via props) ---------- */
 function TopBar({ projectName, saveLabel, onNew, onLoad, onDownload, onSave, onPreferences }) {
+  const action = ({ label, title, icon, primary = false, tooltipAlign, onClick }) => (
+    <button
+      type="button"
+      className={`${primary ? 'btn primary' : 'link-btn'} top-action`}
+      aria-label={label}
+      title={title}
+      data-tooltip={label}
+      data-tooltip-align={tooltipAlign}
+      onClick={onClick}
+    >
+      <span className="top-action-icon" aria-hidden="true">{icon}</span>
+      <span className="top-action-label">{label}</span>
+    </button>
+  );
   return (
     <header className="topbar">
-      <div className="brand"><span className="glyph" /><span className="name">Lightweaver</span></div>
+      <div className="brand" role="img" aria-label="Lightweaver"><span className="glyph" /><span className="name">Lightweaver</span></div>
       <nav className="crumb">
         <span>Projects</span><span className="sep">/</span><span className="proj">{projectName}</span>
         {saveLabel && <span className="savechip"><span className="dot" />{saveLabel}</span>}
       </nav>
       <div className="top-right">
-        <button className="link-btn" title="Start a new empty project" onClick={onNew}>New project</button>
-        <button className="link-btn" title="Open a project file from your computer" onClick={onLoad}>Import project</button>
-        <button className="link-btn" title="Open Studio preferences" onClick={onPreferences}>Preferences</button>
+        {action({ label: 'New project', title: 'Start a new empty project', icon: I.newProject, onClick: onNew })}
+        {action({ label: 'Import project', title: 'Open a project file from your computer', icon: I.importProject, onClick: onLoad })}
+        {action({ label: 'Preferences', title: 'Open Studio preferences', icon: I.preferences, onClick: onPreferences })}
         <span className="top-div" />
-        <button className="link-btn" title="Download a portable project file to your computer (import it anytime)" onClick={onDownload}>Export project</button>
-        <button className="btn primary" title="Save the project in this browser" onClick={onSave}>Save project</button>
+        {action({ label: 'Export project', title: 'Download a portable project file to your computer (import it anytime)', icon: I.exportProject, onClick: onDownload })}
+        {action({ label: 'Save project', title: 'Save the project in this browser', icon: I.saveProject, primary: true, tooltipAlign: 'end', onClick: onSave })}
       </div>
     </header>
   );

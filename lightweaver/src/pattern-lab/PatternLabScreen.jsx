@@ -31,10 +31,10 @@ import PatternLabVariants from './PatternLabVariants.jsx';
 import './pattern-lab.css';
 
 const WORKFLOW = [
-  ['01', 'Choose', 'Begin with a built-in pattern.'],
-  ['02', 'Sculpt', 'Shape it with five creative controls.'],
-  ['03', 'Evolve', 'Build a five-to-fifteen-minute journey.'],
-  ['04', 'Save', 'Keep a private, repeatable variation.'],
+  ['Choose', 'Begin with a built-in pattern.', 'Choose a base pattern', <svg viewBox="0 0 24 24"><path d="M4 7h6l2 2h8v10H4z"/><path d="M12 12v4M10 14h4"/></svg>],
+  ['Sculpt', 'Shape it with five creative controls.', 'Shape color, movement, and form', <svg viewBox="0 0 24 24"><path d="M4 7h7M15 7h5M4 12h3M11 12h9M4 17h10M18 17h2"/><circle cx="13" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="16" cy="17" r="2"/></svg>],
+  ['Evolve', 'Build a five-to-fifteen-minute journey.', 'Build a long-changing journey', <svg viewBox="0 0 24 24"><path d="M4 14c2-5 4-5 6 0s4 5 6 0 3-4 4-2"/><path d="M4 8h16"/></svg>],
+  ['Save', 'Keep a private, repeatable variation.', 'Save this variation privately', <svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v6h7V3M8 15h8v6H8z"/></svg>],
 ];
 const COMPATIBILITY_OUTCOMES = [
   ['live-on-card', 'Live on card'],
@@ -331,6 +331,13 @@ export default function PatternLabScreen() {
   const [message, setMessage] = useState('');
   const [importErrors, setImportErrors] = useState([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [activeWorkflowStep, setActiveWorkflowStep] = useState(0);
+  const [instrumentResponse, setInstrumentResponse] = useState({
+    sequence: 0,
+    kind: null,
+    step: 0,
+    patternSequence: 0,
+  });
   const [variationRound, setVariationRound] = useState(0);
   const [seedLocked, setSeedLocked] = useState(false);
   const [previewFrameSignals, setPreviewFrameSignals] = useState({
@@ -544,10 +551,27 @@ export default function PatternLabScreen() {
     runtimeMetrics,
   ]);
 
+  function signalInstrumentResponse(step, kind = 'control') {
+    setActiveWorkflowStep(step);
+    setInstrumentResponse(current => ({
+      sequence: current.sequence + 1,
+      kind,
+      step,
+      patternSequence: current.patternSequence + (kind === 'pattern' ? 1 : 0),
+    }));
+  }
+
+  function activateInspectorStep(event) {
+    const section = event.target.closest?.('[data-workflow-step]');
+    const step = Number(section?.dataset.workflowStep);
+    if (Number.isInteger(step) && step >= 0 && step <= 2) setActiveWorkflowStep(step);
+  }
+
   function choosePattern(patternId) {
     if (!patternId) {
       setSourceRecipe(null);
       setDraft(null);
+      setActiveWorkflowStep(0);
       return;
     }
     const generatorId = patternId.startsWith('generator:') ? patternId.slice('generator:'.length) : '';
@@ -569,12 +593,14 @@ export default function PatternLabScreen() {
     setImportErrors([]);
     setVariationRound(0);
     setSeedLocked(false);
+    signalInstrumentResponse(0, 'pattern');
   }
 
   function changeMacro(name, value) {
     setDraft(current => current ? { ...current, macros: { ...current.macros, [name]: value } } : current);
     setComparison('draft');
     setMessage('');
+    signalInstrumentResponse(1);
   }
 
   function changeAdvanced(name, value) {
@@ -590,12 +616,14 @@ export default function PatternLabScreen() {
     } : current);
     setComparison('draft');
     setMessage('');
+    signalInstrumentResponse(1);
   }
 
   function changePalette(palette) {
     setDraft(current => current ? { ...current, palette: [...palette] } : current);
     setComparison('draft');
     setMessage('');
+    signalInstrumentResponse(1);
   }
 
   function changeEvolution(name, value) {
@@ -603,6 +631,7 @@ export default function PatternLabScreen() {
     if (name === 'durationSeconds') setPreviewTime(current => Math.min(current, value));
     setComparison('draft');
     setMessage('');
+    signalInstrumentResponse(2);
   }
 
   function changeAudioAnalysis(analysis, requirement) {
@@ -623,6 +652,12 @@ export default function PatternLabScreen() {
     });
     setComparison('draft');
     setMessage('');
+    signalInstrumentResponse(2);
+  }
+
+  function changePreviewTime(value) {
+    setPreviewTime(value);
+    signalInstrumentResponse(2);
   }
 
   function chooseSeed(seed) {
@@ -642,6 +677,22 @@ export default function PatternLabScreen() {
   function closeDrawer() {
     setDrawerOpen(false);
     requestAnimationFrame(() => drawerTriggerRef.current?.focus());
+  }
+
+  function openWorkflowStep(index) {
+    setActiveWorkflowStep(index);
+    if (mobileDrawer) setDrawerOpen(true);
+    const targetId = [
+      'plab-base-pattern',
+      'plab-sculpt-heading',
+      'plab-evolution-heading',
+      'plab-save-private',
+    ][index];
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const target = document.getElementById(targetId);
+      target?.scrollIntoView({ block: 'nearest' });
+      target?.focus({ preventScroll: true });
+    }));
   }
 
   function trapDrawerFocus(event) {
@@ -756,6 +807,7 @@ export default function PatternLabScreen() {
       setDrafts(state.drafts);
       setDraftState(state.status === 'empty' || state.status === 'restored' ? 'ready' : state.status);
       setMessage(`Saved privately — ${saved.name}`);
+      setActiveWorkflowStep(3);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not save this private draft.');
     }
@@ -868,26 +920,42 @@ export default function PatternLabScreen() {
   return (
     <main className="screen plab-screen" data-testid="pattern-lab-screen">
       <div className="plab-scroll">
-        <header className="plab-header" inert={mobileDrawer && drawerOpen ? '' : undefined}>
-          <div>
-            <span className="plab-kicker">Separate creative workspace</span>
+        <header className="plab-toolbar" data-testid="pattern-lab-toolbar" inert={mobileDrawer && drawerOpen ? '' : undefined}>
+          <div className="plab-toolbar-identity">
+            <svg className="plab-toolbar-mark" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9 3h6M10 3v5l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3"/>
+              <path d="M7.8 15h8.4"/>
+            </svg>
             <h1>Pattern Lab</h1>
-            <p>Turn familiar looks into detailed five-to-fifteen-minute light journeys. Nothing here changes your project or connected card.</p>
+            <span
+              className="plab-private-status"
+              role="status"
+              aria-label="Private workspace. Your project and lights stay unchanged."
+              title="Private workspace: your project and lights stay unchanged"
+              data-tooltip="Private workspace: your project and lights stay unchanged"
+              data-tooltip-align="start"
+            >
+              <span aria-hidden="true" />
+            </span>
           </div>
-          <div className="plab-isolation" role="status">
-            <span className="plab-isolation-mark" aria-hidden="true" />
-            <span><strong>Private workspace</strong>Your active project and connected lights stay unchanged.</span>
-          </div>
+          <nav className="plab-workflow" aria-label="Pattern Lab workflow">
+            {WORKFLOW.map(([title, description, tooltip, icon], index) => (
+              <button
+                key={title}
+                type="button"
+                className="plab-workflow-step"
+                aria-label={title}
+                aria-current={activeWorkflowStep === index ? 'step' : undefined}
+                title={`${title}: ${description}`}
+                data-tooltip={tooltip}
+                data-tooltip-align={index > 0 ? 'end' : undefined}
+                onClick={() => openWorkflowStep(index)}
+              >
+                <span className="plab-step-icon" aria-hidden="true">{icon}</span>
+              </button>
+            ))}
+          </nav>
         </header>
-
-        <ol className="plab-workflow" aria-label="Pattern Lab workflow" inert={mobileDrawer && drawerOpen ? '' : undefined}>
-          {WORKFLOW.map(([number, title, description], index) => (
-            <li key={title} className={index === 0 ? 'current' : ''} aria-current={index === 0 ? 'step' : undefined}>
-              <span className="plab-step-number">{number}</span>
-              <span><strong>{title}</strong><small>{description}</small></span>
-            </li>
-          ))}
-        </ol>
 
         <section className="plab-workspace" aria-label="Pattern authoring workspace">
           <div className="plab-preview" inert={mobileDrawer && drawerOpen ? '' : undefined}>
@@ -909,13 +977,20 @@ export default function PatternLabScreen() {
             </div>
             <div className="plab-stage" ref={previewStageRef}>
               {previewRecipe ? (
-                <PatternLabPreview
-                  recipe={previewRecipe}
-                  previewTime={previewTime}
-                  playing={playing}
-                  geometry={geometry}
-                  fallbackLook={project.standaloneController?.defaultLook}
-                />
+                <div
+                  key={`pattern-${instrumentResponse.patternSequence}`}
+                  className={`plab-preview-content${instrumentResponse.patternSequence > 0 ? ' is-pattern-transition' : ''}`}
+                  data-testid="pattern-lab-preview-content"
+                  data-pattern-transition={instrumentResponse.patternSequence > 0 ? 'true' : 'false'}
+                >
+                  <PatternLabPreview
+                    recipe={previewRecipe}
+                    previewTime={previewTime}
+                    playing={playing}
+                    geometry={geometry}
+                    fallbackLook={project.standaloneController?.defaultLook}
+                  />
+                </div>
               ) : (
                 <>
                   <SculpturePlaceholder />
@@ -929,6 +1004,16 @@ export default function PatternLabScreen() {
                     }}>Choose pattern</button>
                   </div>
                 </>
+              )}
+              {instrumentResponse.sequence > 0 && (
+                <span
+                  key={instrumentResponse.sequence}
+                  className="plab-preview-response"
+                  data-testid="pattern-lab-preview-response"
+                  data-response-kind={instrumentResponse.kind}
+                  data-response-sequence={instrumentResponse.sequence}
+                  aria-hidden="true"
+                />
               )}
             </div>
           </div>
@@ -945,6 +1030,8 @@ export default function PatternLabScreen() {
             aria-modal={mobileDrawer && drawerOpen ? 'true' : undefined}
             aria-hidden={mobileDrawer && !drawerOpen ? 'true' : undefined}
             inert={mobileDrawer && !drawerOpen ? '' : undefined}
+            onFocusCapture={activateInspectorStep}
+            onPointerDownCapture={activateInspectorStep}
             onKeyDown={trapDrawerFocus}
           >
             <div className="plab-control-heading">
@@ -969,14 +1056,18 @@ export default function PatternLabScreen() {
                 onMacroChange={changeMacro}
                 onPaletteChange={changePalette}
                 onAdvancedChange={changeAdvanced}
+                activeWorkflowStep={activeWorkflowStep}
+                instrumentResponse={instrumentResponse}
               />
             </div>
             <PatternLabEvolution
               recipe={draft}
               previewTime={previewTime}
               onEvolutionChange={changeEvolution}
-              onPreviewTime={setPreviewTime}
+              onPreviewTime={changePreviewTime}
               onAudioAnalysis={changeAudioAnalysis}
+              activeWorkflowStep={activeWorkflowStep}
+              instrumentResponse={instrumentResponse}
             />
             <PatternLabVariants
               recipe={draft}
@@ -1083,7 +1174,7 @@ export default function PatternLabScreen() {
             {message && <p className="plab-save-status" data-testid="pattern-lab-save-status" aria-live="polite">{message}</p>}
 
             <div className="plab-actions">
-              <button type="button" className="btn primary" disabled={!draft} onClick={saveDraft}>Save private draft</button>
+              <button id="plab-save-private" type="button" className="btn primary" disabled={!draft} onClick={saveDraft}>Save private draft</button>
               <button type="button" className="btn" disabled={!draft} onClick={exportRecipe}>Export recipe</button>
               <button type="button" className="btn" onClick={() => importRef.current?.click()}>Import recipe</button>
               <input ref={importRef} className="plab-file-input" aria-label="Import recipe" type="file" accept=".lwrecipe.json,application/json" onChange={importRecipe} />

@@ -177,7 +177,7 @@ input[type=number]::-webkit-outer-spin-button {
   border-bottom: 1px solid var(--border-hair);
   background: var(--bg-app);
 }
-.brand { display: flex; align-items: center; gap: 9px; }
+.brand { min-width: 0; display: flex; align-items: center; gap: 9px; flex: 0 0 auto; }
 .brand .glyph {
   width: 17px; height: 17px; border-radius: 50%;
   background: conic-gradient(from 220deg, var(--accent), oklch(0.30 0.01 75) 55%, var(--accent));
@@ -187,9 +187,17 @@ input[type=number]::-webkit-outer-spin-button {
   font-weight: 600; font-size: 14.5px; letter-spacing: 0.01em; color: var(--text-hi);
 }
 
-.crumb { display: flex; align-items: center; gap: 9px; color: var(--text-lo); font-size: 12.5px; }
+.crumb { min-width: 0; overflow: hidden; display: flex; align-items: center; gap: 9px; flex: 1 1 auto; color: var(--text-lo); font-size: 12.5px; }
 .crumb .sep { color: var(--text-faint); }
-.crumb .proj { color: var(--text-hi); font-weight: 500; }
+.crumb .proj {
+  min-width: 0;
+  overflow: hidden;
+  flex: 1 1 auto;
+  color: var(--text-hi);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .savechip {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 2px 9px 2px 7px; border-radius: 100px;
@@ -199,7 +207,7 @@ input[type=number]::-webkit-outer-spin-button {
 .savechip .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--ok); }
 .savechip .t { color: var(--text-lo); font-family: var(--font-mono); font-size: 10.5px; }
 
-.top-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.top-right { min-width: 0; display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .top-div { width: 1px; height: 18px; background: var(--border-hair); margin: 0 5px; }
 .link-btn {
   display: inline-flex; align-items: center; gap: 6px;
@@ -209,6 +217,57 @@ input[type=number]::-webkit-outer-spin-button {
 }
 .link-btn:hover { background: var(--bg-elev); color: var(--text-hi); }
 .link-btn .arrow { color: var(--text-faint); font-family: var(--font-mono); }
+.top-action { justify-content: center; }
+.top-action-icon {
+  width: 17px;
+  height: 17px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+.top-action-icon svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Shared immediate tooltip for compact icon actions. Native titles remain as
+   a fallback, while this surface appears without browser tooltip delay. */
+[data-tooltip] { position: relative; }
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 6px);
+  left: 50%;
+  width: max-content;
+  max-width: min(220px, calc(100vw - 16px));
+  padding: 6px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm);
+  background: var(--bg-elev-2);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--bg-canvas) 58%, transparent);
+  color: var(--text-hi);
+  font: 500 10.5px/1.35 var(--font-sans);
+  text-align: left;
+  white-space: normal;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+[data-tooltip-align="start"]::after { left: 0; transform: none; }
+[data-tooltip-align="end"]::after { right: 0; left: auto; transform: none; }
+[data-tooltip]:focus-visible { z-index: 81; }
+[data-tooltip]:focus-visible::after { opacity: 1; visibility: visible; }
+@media (hover: hover) {
+  [data-tooltip]:hover { z-index: 81; }
+  [data-tooltip]:hover::after { opacity: 1; visibility: visible; }
+}
 
 .btn {
   display: inline-flex; align-items: center; gap: 7px;
@@ -687,6 +746,18 @@ input[type=number]::-webkit-outer-spin-button {
    (topbar actions, status-bar telemetry) wraps rather than pushing
    `document.documentElement.scrollWidth` past the viewport.
    ============================================================ */
+@media (max-width: 1500px) {
+  .topbar { gap: 12px; }
+  .top-action {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+    padding: 0;
+  }
+  .top-action-label { display: none; }
+}
+
 @media (max-width: 1024px) {
   .status-bar {
     flex-wrap: wrap; height: auto; min-height: 32px;
@@ -704,8 +775,22 @@ input[type=number]::-webkit-outer-spin-button {
     grid-template-rows: minmax(52px, auto) minmax(48px, auto) 1fr minmax(32px, auto);
   }
 
-  .topbar { flex-wrap: wrap; height: auto; min-height: 52px; row-gap: 8px; padding: 8px 14px; }
-  .top-right { flex-wrap: wrap; row-gap: 6px; }
+  .topbar {
+    height: auto;
+    min-height: 52px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      "brand actions"
+      "crumb crumb";
+    gap: 5px 8px;
+    padding: 6px 12px;
+  }
+  .topbar .brand { grid-area: brand; }
+  .topbar .crumb { grid-area: crumb; width: 100%; }
+  .top-right { grid-area: actions; justify-self: end; gap: 4px; }
+  .top-div { display: none; }
+  .top-action { width: 44px; height: 44px; min-width: 44px; min-height: 44px; }
 
   .status-bar { flex-wrap: wrap; height: auto; min-height: 32px; row-gap: 6px; padding: 6px 12px; }
   .sb-card { flex-wrap: wrap; row-gap: 4px; }
@@ -728,12 +813,12 @@ input[type=number]::-webkit-outer-spin-button {
 }
 
 @media (min-width: 641px) and (max-width: 720px) {
-  /* Same wrap treatment as <=640: five project actions plus fallback-font
-     metrics can exceed these widths and horizontally scroll the whole app. */
-  .topbar { gap: 10px; padding-inline: 12px; flex-wrap: wrap; height: auto; min-height: 52px; row-gap: 6px; }
-  .topbar .crumb { display: none; }
-  .top-right { min-width: 0; flex-wrap: wrap; row-gap: 6px; }
-  .top-right .link-btn { padding-inline: 7px; }
+  .topbar { gap: 8px; padding-inline: 12px; }
+  .top-action { width: 44px; height: 44px; min-width: 44px; min-height: 44px; }
+}
+
+@media (max-width: 360px) {
+  .brand .name { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

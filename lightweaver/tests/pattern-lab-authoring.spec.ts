@@ -46,6 +46,157 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/#screen=pattern-lab', { waitUntil: 'domcontentloaded' });
 });
 
+test('Pattern Inspector presents Choose, Sculpt, and Evolve as compact attached step groups', async ({ page }) => {
+  const choose = page.getByTestId('pattern-lab-step-choose');
+  const sculpt = page.getByTestId('pattern-lab-step-sculpt');
+  const evolve = page.getByTestId('pattern-lab-step-evolve');
+
+  await expect(choose.getByRole('heading', { name: 'Choose', exact: true })).toHaveAttribute('id', 'plab-source-heading');
+  await expect(choose.getByLabel('Base pattern')).toBeVisible();
+  await expect(choose.getByText('Base pattern', { exact: true })).toHaveCount(0);
+  await expect(choose.getByText(/Start with a built-in Lightweaver look/i)).toHaveCount(0);
+
+  await expect(sculpt.getByRole('heading', { name: 'Sculpt', exact: true })).toHaveAttribute('id', 'plab-sculpt-heading');
+  await expect(sculpt.getByText(/Five creative controls, with no code required/i)).toHaveCount(0);
+
+  const evolveHeading = evolve.locator('.plab-compact-step-heading');
+  await expect(evolveHeading.getByRole('heading', { name: 'Evolve', exact: true })).toHaveAttribute('id', 'plab-evolution-heading');
+  await expect(evolveHeading.getByRole('checkbox', { name: /Long Evolution/i })).toBeVisible();
+  await expect(evolveHeading.getByText('5–15 min')).toBeVisible();
+  await expect(evolve.getByText(/Let several slow clocks unfold/i)).toHaveCount(0);
+
+  for (const group of [choose, sculpt, evolve]) {
+    const heading = group.locator('.plab-compact-step-heading');
+    expect(await heading.evaluate(element => {
+      const styles = getComputedStyle(element);
+      return {
+        borderBottomWidth: styles.borderBottomWidth,
+        height: Number.parseFloat(styles.height),
+      };
+    })).toMatchObject({ borderBottomWidth: '1px' });
+    expect(Number.parseFloat(await heading.evaluate(element => getComputedStyle(element).height)))
+      .toBeLessThanOrEqual(54);
+  }
+
+  const sectionSurfaces = await Promise.all([choose, sculpt, evolve].map(group => group.evaluate(element => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Canvas context unavailable');
+    context.fillStyle = getComputedStyle(element).backgroundColor;
+    context.fillRect(0, 0, 1, 1);
+    return Array.from(context.getImageData(0, 0, 1, 1).data.slice(0, 3));
+  })));
+  const surfaceDistance = (left: number[], right: number[]) => Math.sqrt(
+    left.reduce((sum, channel, index) => sum + ((channel - right[index]) ** 2), 0),
+  );
+  expect(surfaceDistance(sectionSurfaces[0], sectionSurfaces[1])).toBeGreaterThanOrEqual(8);
+  expect(surfaceDistance(sectionSurfaces[1], sectionSurfaces[2])).toBeGreaterThanOrEqual(8);
+});
+
+test('keeps the active Inspector band synchronized with direct focus and workflow actions', async ({ page }) => {
+  const workflow = page.getByRole('navigation', { name: 'Pattern Lab workflow' });
+  const choose = page.getByTestId('pattern-lab-step-choose');
+  const sculpt = page.getByTestId('pattern-lab-step-sculpt');
+  const evolve = page.getByTestId('pattern-lab-step-evolve');
+
+  await expect(choose).toHaveAttribute('data-active', 'true');
+  await expect(workflow.getByRole('button', { name: 'Choose' })).toHaveAttribute('aria-current', 'step');
+
+  await page.getByLabel('Base pattern').selectOption('aurora');
+  await expect(choose).toHaveAttribute('data-active', 'true');
+  await expect(workflow.getByRole('button', { name: 'Choose' })).toHaveAttribute('aria-current', 'step');
+
+  await page.getByRole('slider', { name: 'Color', exact: true }).focus();
+  await expect(sculpt).toHaveAttribute('data-active', 'true');
+  await expect(workflow.getByRole('button', { name: 'Sculpt' })).toHaveAttribute('aria-current', 'step');
+
+  await workflow.getByRole('button', { name: 'Evolve' }).click();
+  await expect(evolve).toHaveAttribute('data-active', 'true');
+  await expect(workflow.getByRole('button', { name: 'Evolve' })).toHaveAttribute('aria-current', 'step');
+
+  await page.getByLabel('Base pattern').focus();
+  await expect(choose).toHaveAttribute('data-active', 'true');
+  await expect(workflow.getByRole('button', { name: 'Choose' })).toHaveAttribute('aria-current', 'step');
+});
+
+test('gives pattern and control changes one bounded preview response with local acknowledgment', async ({ page }) => {
+  await page.getByLabel('Base pattern').selectOption('aurora');
+
+  const previewResponse = page.getByTestId('pattern-lab-preview-response');
+  const previewContent = page.getByTestId('pattern-lab-preview-content');
+  await expect(previewResponse).toHaveAttribute('data-response-kind', 'pattern');
+  await expect(previewContent).toHaveAttribute('data-pattern-transition', 'true');
+  expect(await previewContent.evaluate(element => getComputedStyle(element).animationName))
+    .toContain('plab-preview-crossfade');
+
+  const firstSequence = await previewResponse.getAttribute('data-response-sequence');
+  await page.getByRole('slider', { name: 'Color', exact: true }).fill('72');
+  await expect(previewResponse).toHaveAttribute('data-response-kind', 'control');
+  await expect(previewResponse).not.toHaveAttribute('data-response-sequence', firstSequence || '');
+  const responseMotion = await previewResponse.evaluate(element => {
+    const styles = getComputedStyle(element);
+    return {
+      animationName: styles.animationName,
+      duration: Number.parseFloat(styles.animationDuration),
+      timing: styles.animationTimingFunction,
+    };
+  });
+  expect(responseMotion.animationName).toContain('plab-preview-bloom');
+  expect(responseMotion.duration).toBeGreaterThanOrEqual(.15);
+  expect(responseMotion.duration).toBeLessThanOrEqual(.25);
+  expect(responseMotion.timing).toContain('cubic-bezier');
+
+  const sculptAcknowledgment = page.getByTestId('pattern-lab-step-sculpt').getByTestId('pattern-lab-step-ack');
+  await expect(sculptAcknowledgment).toHaveAttribute('data-response-sequence', /\d+/);
+  expect(await sculptAcknowledgment.evaluate(element => getComputedStyle(element).animationName))
+    .toContain('plab-local-ack');
+});
+
+test('reveals Long Evolution controls with transform and opacity, then removes motion when requested', async ({ page }) => {
+  await page.getByLabel('Base pattern').selectOption('aurora');
+  const evolutionFields = page.getByTestId('pattern-lab-evolution-fields');
+  const evolutionToggle = page.getByRole('checkbox', { name: /Long Evolution/ });
+
+  await expect(evolutionFields).toHaveAttribute('data-enabled', 'false');
+  const disabledMotion = await evolutionFields.evaluate(element => {
+    const styles = getComputedStyle(element);
+    return {
+      transform: styles.transform,
+      transitionProperty: styles.transitionProperty,
+      transitionDuration: styles.transitionDuration,
+    };
+  });
+  expect(disabledMotion.transform).not.toBe('none');
+  expect(disabledMotion.transitionProperty).toContain('opacity');
+  expect(disabledMotion.transitionProperty).toContain('transform');
+  expect(disabledMotion.transitionDuration).toContain('0.2');
+
+  await evolutionToggle.check();
+  await expect(evolutionFields).toHaveAttribute('data-enabled', 'true');
+  await expect(evolutionFields).toHaveAttribute('aria-disabled', 'false');
+
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByLabel('Base pattern').selectOption('aurora');
+  const reducedFields = page.getByTestId('pattern-lab-evolution-fields');
+  const reducedResponse = page.getByTestId('pattern-lab-preview-response');
+  const reducedStyles = await reducedFields.evaluate(element => {
+    const styles = getComputedStyle(element);
+    return {
+      transform: styles.transform,
+      transitionDuration: styles.transitionDuration,
+    };
+  });
+  expect(reducedStyles.transform).toBe('none');
+  expect(reducedStyles.transitionDuration.split(',').every(value => value.trim() === '0s')).toBe(true);
+  expect(await reducedResponse.evaluate(element => getComputedStyle(element).animationName)).toBe('none');
+  await page.getByRole('checkbox', { name: /Long Evolution/ }).check();
+  await expect(reducedFields).toHaveAttribute('data-enabled', 'true');
+  expect(await reducedFields.evaluate(element => getComputedStyle(element).transform)).toBe('none');
+});
+
 test('creates, compares, and reopens a long private pattern without changing the project', async ({ page }) => {
   const projectBefore = await projectBytes(page);
 
