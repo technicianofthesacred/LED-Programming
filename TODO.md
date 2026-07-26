@@ -27,6 +27,9 @@ plan is a reference library, not one large job to execute.
 
 ## Soon
 
+- [ ] **Card OTA decision.** _(you-required)_ Decide whether cards should self-update from the signed release feed (infrastructure exists: signed manifest + verification) or stay USB-flash-only; USB-only is the deliberate current model — see THINKING.md 2026-07-26 for the tradeoff before building anything.
+- [ ] **Studio build stamp.** _(agent-runnable)_ Small always-visible build id + date in the Studio (Vite define from git sha) so "which version am I looking at" is answerable at a glance — repeated mobile-Chrome cache confusion on 2026-07-18/26 cost real debugging time.
+
 ### Pattern Lab release acceptance (feature branch source complete)
 
 - [x] Wire the existing immutable handoff contract to a visible **Use in Project** confirmation that adds a new look or sequence asset without overwriting built-ins or saved looks.
