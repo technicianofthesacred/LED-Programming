@@ -135,3 +135,37 @@ plus a paper card handed to the buyer plus a support URL is enough.
 **What this entry exists to prevent:** Future Claude reading this file: don't re-propose accounts, Stripe checkout, or a cloud pattern catalog for Lightweaver without first checking whether the in-person sales shape has changed. If Adrian still hands pieces to people he meets, the answer to "let's add auth" is still no. The unlock is a website-driven sale or ≥5 pieces in the wild, not a feeling that "we should have accounts by now."
 
 ---
+
+## 2026-07-26 — "Live" means at the address Adrian uses; OTA deliberately deferred
+
+**Topic:** During the wiring/sizing UI redesign sessions (PRs #32–#35 and the
+strips-first follow-ons), repeated confusion about whether shipped work was
+visible: merged-to-main ≠ deployed ≠ what Adrian's phone showed (mobile Chrome
+cache), and Adrian set a standard: **a thing is "live" only when it fully works
+at the address he uses.** Anything else must be named precisely: "deployed to
+the web app" (led.mandalacodes.com serves it) or "published, needs a flash"
+(signed firmware on the site awaiting a USB flash).
+
+**Architecture facts pinned while resolving this (verified in source):**
+- The card serves ONLY the C++-embedded visitor scene-selector and advanced
+  setup pages. Every Studio screen (Wire/Size/Draw, commissioning) runs from
+  led.mandalacodes.com in a browser and reaches the card through the bridge
+  tab. "The card's wiring UI" does not exist — it always was the website.
+- There is NO OTA path. Cards never poll for updates and cannot be updated
+  over the LAN. The only firmware path: CI compiles/signs/publishes the
+  factory bin on merge to main, then a human flashes over USB Web Serial from
+  the Studio flash screen.
+
+**Rejected for now: building card OTA without an explicit owner decision.**
+The signing/manifest/verification infrastructure already exists and would
+support it, but a gallery wall piece that updates itself mid-show — or bricks
+on a failed write — is a product decision, not a technical one. USB bench
+flashing stands until Adrian explicitly opts in. The unlock trigger: Adrian
+asks for it, or ≥ several pieces live in customers' homes where bench
+reflashing stops scaling (which intersects the 2026-05-28 cloud-catalog
+thresholds — read that entry too before proposing).
+
+**Also learned, cheap to fix later:** mobile Chrome has no hard refresh
+(clear site data is the only reliable path), which twice made Adrian believe
+deployed work wasn't deployed. The build-stamp TODO exists so version
+questions become observable instead of argued.
