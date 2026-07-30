@@ -985,8 +985,8 @@ export function DrawModePanel({
           );
         })()}
 
-        {/* ── Strips list ── */}
-        {strips.length > 0 && !starterLayoutActive && (
+        {/* ── Add strip + strips list ── */}
+        {!starterLayoutActive && (
           <>
             <div className="panel-divider"/>
             {/* Always-visible add path (bench test: users never found Duplicate
