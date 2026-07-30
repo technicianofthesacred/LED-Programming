@@ -1,5 +1,10 @@
 import { test, expect } from '@playwright/test';
 
+test.beforeEach(async ({ page }) => {
+  await page.route('http://lightweaver.local/**', route => route.abort());
+  await page.route('http://192.168.4.1/**', route => route.abort());
+});
+
 test('install mode is a single safe workflow without technician controls', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
