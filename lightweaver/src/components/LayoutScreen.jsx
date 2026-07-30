@@ -50,7 +50,7 @@ export function LayoutScreen({ connected, cardHost }) {
     enableLightPreview, effectiveGlowMode, effectiveShowLight, glowStdDev,
     drawMode, setDrawMode, waypoints, ghostPt, setGhostPt,
     ghostD,
-    zoom, setZoom, isPanning, spaceRef, resetView,
+    zoom, zoomByFactor, isPanning, spaceRef, resetView,
     computedViewBox, vbScale, rubberBand, cursorSvgPt,
     startStripMove, movingStripIds, stripDragSuppressClickRef,
     handleSvgMouseDown, handleSvgClick, handleSvgDblClick, handleSvgMouseMove,
@@ -219,9 +219,9 @@ export function LayoutScreen({ connected, cardHost }) {
 
           {/* Zoom cluster */}
           <div className="la-zoom" role="group" aria-label="View">
-            <button onClick={() => setZoom(z => Math.max(0.15, z / 1.25))} title="Zoom out (-)">−</button>
-            <button className="zv" onClick={resetView} title="Reset view (F)">{Math.round(zoom * 100)}%</button>
-            <button onClick={() => setZoom(z => Math.min(40, z * 1.25))} title="Zoom in (+)">+</button>
+            <button onClick={() => zoomByFactor(1 / 1.25)} title="Zoom out (-)">−</button>
+            <button className="zv" onClick={resetView} title="Fit all (F)">Fit all</button>
+            <button onClick={() => zoomByFactor(1.25)} title="Zoom in (+)">+</button>
           </div>
 
           <div className="tb-div"/>

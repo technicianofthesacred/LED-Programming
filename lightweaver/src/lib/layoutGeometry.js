@@ -395,6 +395,51 @@ export function parsedVb(viewBox) {
   return { x: parts[0] || 0, y: parts[1] || 0, w: parts[2] || 640, h: parts[3] || 400 };
 }
 
+// Numerical safety rails only: these prevent zero/Infinity from reaching SVG
+// math while keeping six orders of magnitude available in either direction.
+const MIN_SAFE_ZOOM = 1e-6;
+const MAX_SAFE_ZOOM = 1e6;
+
+export function zoomBy(currentZoom, factor) {
+  const current = Number.isFinite(currentZoom) && currentZoom > 0 ? currentZoom : 1;
+  const multiplier = Number.isFinite(factor) && factor > 0 ? factor : 1;
+  return Math.max(MIN_SAFE_ZOOM, Math.min(MAX_SAFE_ZOOM, current * multiplier));
+}
+
+export function layoutViewBox(viewBox, { zoom = 1, panX = 0, panY = 0 } = {}) {
+  const base = parsedVb(viewBox);
+  const safeZoom = zoomBy(zoom, 1);
+  const width = base.w / safeZoom;
+  const height = base.h / safeZoom;
+  const centerX = base.x + base.w / 2 + (Number.isFinite(panX) ? panX : 0);
+  const centerY = base.y + base.h / 2 + (Number.isFinite(panY) ? panY : 0);
+  return { x: centerX - width / 2, y: centerY - height / 2, width, height };
+}
+
+export function fitViewToBounds(viewBox, bounds, { paddingRatio = 0.08 } = {}) {
+  const base = parsedVb(viewBox);
+  const bx = Number.isFinite(bounds?.x) ? bounds.x : base.x;
+  const by = Number.isFinite(bounds?.y) ? bounds.y : base.y;
+  const bw = Number.isFinite(bounds?.width) && bounds.width >= 0 ? bounds.width : base.w;
+  const bh = Number.isFinite(bounds?.height) && bounds.height >= 0 ? bounds.height : base.h;
+  const left = Math.min(base.x, bx);
+  const top = Math.min(base.y, by);
+  const right = Math.max(base.x + base.w, bx + bw);
+  const bottom = Math.max(base.y + base.h, by + bh);
+  const padding = Math.max(0, Number.isFinite(paddingRatio) ? paddingRatio : 0.08);
+  const contentWidth = Math.max(Number.EPSILON, right - left);
+  const contentHeight = Math.max(Number.EPSILON, bottom - top);
+  const zoom = zoomBy(1, Math.min(
+    base.w / (contentWidth * (1 + padding * 2)),
+    base.h / (contentHeight * (1 + padding * 2)),
+  ));
+  return {
+    zoom,
+    panX: left + contentWidth / 2 - (base.x + base.w / 2),
+    panY: top + contentHeight / 2 - (base.y + base.h / 2),
+  };
+}
+
 export const STRIP_COLORS = [
   'oklch(80% 0.130 72)',  'oklch(78% 0.140 40)',  'oklch(74% 0.075 168)',
   'oklch(80% 0.110 95)',  'oklch(78% 0.150 30)',  'oklch(72% 0.090 200)',

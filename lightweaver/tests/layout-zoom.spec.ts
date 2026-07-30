@@ -1,4 +1,11 @@
 import { test, expect } from '@playwright/test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+const SVG_UNITS_PER_MM = 3.7795;
+const FIVE_METRES_MM = 5000;
+const FIVE_METRES_SVG_UNITS = FIVE_METRES_MM * SVG_UNITS_PER_MM;
 
 async function svgPointAtClient(svg: any, clientX: number, clientY: number) {
   return svg.evaluate((element: SVGSVGElement, point: { x: number; y: number }) => {
@@ -37,4 +44,38 @@ test('wheel zoom keeps the artwork point beneath an off-center cursor fixed', as
   // tolerance is tighter than a screen pixel while allowing that rounding.
   expect(Math.abs(after.x - before.x)).toBeLessThan(0.1);
   expect(Math.abs(after.y - before.y)).toBeLessThan(0.1);
+});
+
+test('toolbar zoom travels below the former 15% limit', async ({ page }) => {
+  await page.addInitScript(() => localStorage.clear());
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+
+  const zoomOut = page.getByTitle('Zoom out (-)');
+  for (let index = 0; index < 12; index += 1) await zoomOut.click();
+
+  const visibleWidth = Number((await page.locator('.lw-viewport svg').getAttribute('viewBox'))?.split(/\s+/)[2]);
+  expect(visibleWidth).toBeGreaterThan(640 / 0.1);
+});
+
+test('Fit all frames artwork geometry outside the imported viewBox', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-fit-all-'));
+  const fixture = path.join(tmp, 'five-metre-strip.svg');
+  fs.writeFileSync(fixture, `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 400">
+  <g id="long-strip" data-name="Five metre strip">
+    <path d="M 0 200 H ${FIVE_METRES_SVG_UNITS}" fill="none" stroke="#fff" stroke-width="2"/>
+  </g>
+</svg>`);
+
+  await page.addInitScript(() => localStorage.clear());
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.setInputFiles('input[accept=".svg"]', fixture);
+
+  await page.getByRole('button', { name: 'Fit all' }).click();
+  const canvasBox = await page.locator('.lw-viewport svg').boundingBox();
+  const artworkBox = await page.locator('[data-artwork-path-id="long-strip-p0"]').boundingBox();
+  if (!canvasBox || !artworkBox) throw new Error('layout fit geometry unavailable');
+
+  expect(artworkBox.x).toBeGreaterThan(canvasBox.x);
+  expect(artworkBox.x + artworkBox.width).toBeLessThan(canvasBox.x + canvasBox.width);
 });
