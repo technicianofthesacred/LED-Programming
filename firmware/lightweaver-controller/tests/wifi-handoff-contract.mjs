@@ -87,17 +87,26 @@ assert.ok(setupMarkupStart >= 0 && liveMarkupStart > setupMarkupStart,
   'advanced page must keep a separate first-time setup branch');
 const setupMarkup = advancedRoot.slice(setupMarkupStart, liveMarkupStart);
 
-assert.match(advancedRoot, /<body class='/,
-  'advanced page must expose a mode class for setup-only density');
+assert.match(advancedRoot,
+  /page \+= needsSetup \? F\("setup-mode"\) : F\("control-mode"\);/,
+  'advanced page must select setup-mode only for first-time setup and control-mode otherwise');
 assert.match(advancedRoot, /\.setup-mode \.wrap\{[^}]*safe-area-inset-top/,
   'compact setup must preserve safe-area padding without the spacious live shell');
-assert.match(advancedRoot, /\.setup-mode [^}]*font-size:16px/,
-  'compact setup must retain 16px form text to avoid iOS focus zoom');
-assert.match(advancedRoot, /\.setup-mode [^}]*min-height:44px/,
-  'compact setup controls must retain 44px touch targets');
+assert.match(advancedRoot,
+  /\.setup-mode input\[type=text\],\.setup-mode input\[type=password\],\.setup-mode select\{[^}]*height:44px[^}]*font-size:16px/,
+  'compact setup inputs and select must retain a 44px height and 16px text to avoid iOS focus zoom');
+assert.match(advancedRoot, /\.setup-mode button\{[^}]*min-height:44px/,
+  'compact setup buttons must retain 44px touch targets');
+assert.match(advancedRoot, /\.setup-options summary\{[^}]*min-height:44px/,
+  'compact setup disclosure must retain a 44px touch target');
+assert.match(advancedRoot,
+  /<div class='head'><h1>Lightweaver<\/h1>"\);\s*if \(!needsSetup\) \{[\s\S]*id='piece-name'/,
+  'setup must show one Lightweaver identity while the live page keeps its piece name');
+assert.doesNotMatch(setupMarkup, /piece-name/,
+  'setup markup must not repeat the live piece identity');
 
-assert.ok(setupMarkup.includes('<h2>Join WiFi</h2>'),
-  'setup must lead with the concise Join WiFi label');
+assert.ok(setupMarkup.includes('<h2>Join Wi&#8209;Fi</h2>'),
+  'setup must lead with the concise Join Wi-Fi label');
 assert.doesNotMatch(setupMarkup, /Join the card to your home WiFi/,
   'setup must not repeat a long explanation before the form');
 assert.ok(setupMarkup.includes("class='setup-network'"),
@@ -110,6 +119,22 @@ assert.ok(setupMarkup.indexOf("id='ssid-manual'") > setupMarkup.indexOf('<summar
   'Hidden network must remain available inside More options');
 assert.ok(setupMarkup.indexOf("id='hn'") > setupMarkup.indexOf("id='ssid-manual'"),
   'Hostname must remain available after Hidden network inside More options');
+const setupOrder = [
+  "for='ssid'>Network",
+  "id='ssid'",
+  "id='rescan'",
+  "for='pw'>Password",
+  "id='pw'",
+  '<summary>More options</summary>',
+  "id='ssid-manual'",
+  "id='hn'",
+  "id='join'",
+  "id='msg'",
+];
+for (let index = 1; index < setupOrder.length; index += 1) {
+  assert.ok(setupMarkup.indexOf(setupOrder[index]) > setupMarkup.indexOf(setupOrder[index - 1]),
+    `${setupOrder[index]} must follow ${setupOrder[index - 1]} in the setup flow`);
+}
 for (const [label, id] of [
   ['Network', 'ssid'],
   ['Password', 'pw'],
@@ -124,6 +149,39 @@ assert.match(setupMarkup, /id='msg'[^>]*role='status'[^>]*aria-live='polite'/,
 assert.match(advancedRoot,
   /if\(!nets\.length\)\{[^}]*setup-more[^}]*open=true/,
   'a zero-network result must reveal the hidden-network recovery field');
+
+const scanUiCppStart = advancedRoot.indexOf('"const setScanPlaceholder=');
+const scanUiCppEnd = advancedRoot.indexOf('"let scanPolls=0', scanUiCppStart);
+assert.notEqual(scanUiCppStart, -1, 'setup must emit the network rendering helper');
+assert.ok(scanUiCppEnd > scanUiCppStart, 'network rendering helper must precede scan polling');
+const scanSelect = {
+  children: [],
+  set innerHTML(_) { this.children = []; },
+  appendChild(child) { this.children.push(child); },
+};
+const scanMore = { open: false };
+const scanContext = {
+  $: id => ({ ssid: scanSelect, 'setup-more': scanMore })[id],
+  document: { createElement: () => ({ value: '', textContent: '' }) },
+};
+vm.runInNewContext(
+  `${decodeCppStrings(advancedRoot.slice(scanUiCppStart, scanUiCppEnd))};globalThis.renderNets=renderNets`,
+  scanContext,
+);
+scanContext.renderNets([]);
+assert.equal(scanMore.open, true,
+  'executing a zero-network result must open More options for manual SSID recovery');
+assert.match(scanSelect.children[0].textContent, /No networks found/,
+  'executing a zero-network result must explain the recovery choice');
+
+assert.match(advancedRoot,
+  /const manual=\$\('ssid-manual'\)\.value\.trim\(\);const ssid=manual\|\|\$\('ssid'\)\.value;/,
+  'manual SSID must override the selected scan result when supplied');
+assert.match(advancedRoot,
+  /post\('\/api\/wifi',\{ssid:ssid,password:\$\('pw'\)\.value,hostname:\$\('hn'\)\.value\}\)/,
+  'WiFi submission must preserve manual SSID, password, and hostname fields');
+assert.ok(setupMarkup.includes("Save and join Wi&#8209;Fi"),
+  'the primary action must use the approved Wi-Fi wording');
 
 assert.match(advancedRoot, /const\s+pollWifiJoin\s*=\s*async/,
   'the setup page must poll card status after credentials are accepted');

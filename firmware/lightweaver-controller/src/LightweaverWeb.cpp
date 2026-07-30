@@ -829,7 +829,7 @@ void handleAdvancedRoot() {
 
   if (needsSetup) {
     // First-time setup — only show the WiFi join form
-    page += F("<div class='card'><h2>Join WiFi</h2>"
+    page += F("<div class='card'><h2>Join Wi&#8209;Fi</h2>"
               "<label class='field' for='ssid'>Network</label>"
               "<div class='setup-network'>"
                 "<select id='ssid'><option value=''>Scanning…</option></select>"
@@ -845,7 +845,7 @@ void handleAdvancedRoot() {
                   "<input type='text' id='hn' value='lightweaver'>"
                 "</div>"
               "</details>"
-              "<div class='row join-row'><button class='primary' id='join' type='button'>Save and join WiFi</button></div>"
+              "<div class='row join-row'><button class='primary' id='join' type='button'>Save and join Wi&#8209;Fi</button></div>"
               "<p class='note' id='msg' role='status' aria-live='polite'></p>"
               "</div>");
   } else {
