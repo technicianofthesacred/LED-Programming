@@ -197,6 +197,23 @@ test('"+ Add strip" offers icon tiles and preserves size during manual LED entry
   expect(await fileChooserPromise).toBeTruthy();
 });
 
+test('removing the last strip keeps Add strip available and can create its replacement', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await gotoFreshLayout(page);
+  await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
+  await page.getByLabel('Strip actions').getByRole('button', { name: 'Remove strip' }).click();
+
+  await expect(page.locator('.la-strip-row')).toHaveCount(0);
+  const addButton = page.getByTestId('layout-add-strip');
+  await expect(addButton).toBeVisible();
+  await addButton.click();
+  await page.getByTestId('layout-add-strip-chooser').getByRole('button', { name: 'Circle', exact: true }).click();
+
+  await expect(page.locator('.la-strip-row')).toHaveCount(1);
+  await expect(page.locator('.la-strip-row')).toContainText('Circle');
+  await expect(page.locator('path[data-strip-path]')).toHaveCount(1);
+});
+
 test('Add strip appears before the LED strips inventory heading', async ({ page }) => {
   await gotoFreshLayout(page);
   await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
