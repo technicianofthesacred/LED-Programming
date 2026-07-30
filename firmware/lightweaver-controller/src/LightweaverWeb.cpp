@@ -800,29 +800,53 @@ void handleAdvancedRoot() {
             ".link{display:block;text-align:center;color:#c89b5c;text-decoration:none;font-size:14px;padding:18px;margin-top:8px;border:1px solid #c89b5c;border-radius:10px}"
             ".link:active{background:rgba(200,155,92,0.1)}"
             ".foot{text-align:center;color:#5a5247;font-size:11px;margin-top:32px;font-family:ui-monospace,SF Mono,monospace}"
-            "</style></head><body><div class='wrap'>");
+            ".setup-mode .wrap{max-width:520px;padding:max(12px,env(safe-area-inset-top)) max(14px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left))}"
+            ".setup-mode .head{margin-bottom:10px}"
+            ".setup-mode .card{padding:14px;border-radius:10px;margin-bottom:0}"
+            ".setup-mode .card h2{margin-bottom:5px}"
+            ".setup-mode label.field{margin:8px 0 4px}"
+            ".setup-mode input[type=text],.setup-mode input[type=password],.setup-mode select{height:44px;padding:8px 11px;font-size:16px}"
+            ".setup-mode button{min-height:44px;padding:10px 12px}"
+            ".setup-network{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}"
+            ".setup-network #rescan{min-width:84px}"
+            ".setup-options{background:transparent;border:0;border-radius:0;margin:4px 0 0}"
+            ".setup-options summary{min-height:44px;padding:8px 0 4px;font-size:12px;color:#9a8d75}"
+            ".setup-options .body{padding:0}"
+            ".setup-mode .join-row{margin-top:10px}"
+            ".setup-mode .foot{margin-top:14px}"
+            "@media(max-width:300px){.setup-network{grid-template-columns:1fr}.setup-network #rescan{width:100%}}"
+            "</style></head><body class='");
+  page += needsSetup ? F("setup-mode") : F("control-mode");
+  page += F("'><div class='wrap'>");
 
-  page += F("<div class='head'>"
-            "<h1>Lightweaver</h1>"
-            "<span class='piece' id='piece-name'>");
-  page += escapeHtml(cfg.pieceName);
-  page += F("</span></div>");
+  page += F("<div class='head'><h1>Lightweaver</h1>");
+  if (!needsSetup) {
+    page += F("<span class='piece' id='piece-name'>");
+    page += escapeHtml(cfg.pieceName);
+    page += F("</span>");
+  }
+  page += F("</div>");
 
   if (needsSetup) {
     // First-time setup — only show the WiFi join form
-    page += F("<div class='card'><h2>Set up</h2>"
-              "<p class='note'>Join the card to your home WiFi to control it from anywhere on your network.</p>"
-              "<label class='field'>Network</label>"
-              "<select id='ssid'><option value=''>Scanning…</option></select>"
-              "<div class='row'><button class='ghost' id='rescan' type='button'>Rescan</button></div>"
-              "<label class='field'>Hidden network name (optional)</label>"
-              "<input type='text' id='ssid-manual' autocomplete='off' placeholder='Type a network name if it is not listed'>"
-              "<label class='field'>Password</label>"
+    page += F("<div class='card'><h2>Join WiFi</h2>"
+              "<label class='field' for='ssid'>Network</label>"
+              "<div class='setup-network'>"
+                "<select id='ssid'><option value=''>Scanning…</option></select>"
+                "<button class='ghost' id='rescan' type='button'>Rescan</button>"
+              "</div>"
+              "<label class='field' for='pw'>Password</label>"
               "<input type='password' id='pw' autocomplete='off'>"
-              "<label class='field'>Hostname</label>"
-              "<input type='text' id='hn' value='lightweaver'>"
-              "<div class='row'><button class='primary' id='join'>Save and join WiFi</button></div>"
-              "<p class='note' id='msg'></p>"
+              "<details class='setup-options' id='setup-more'>"
+                "<summary>More options</summary><div class='body'>"
+                  "<label class='field' for='ssid-manual'>Hidden network name (optional)</label>"
+                  "<input type='text' id='ssid-manual' autocomplete='off' placeholder='Type a network name if it is not listed'>"
+                  "<label class='field' for='hn'>Hostname</label>"
+                  "<input type='text' id='hn' value='lightweaver'>"
+                "</div>"
+              "</details>"
+              "<div class='row join-row'><button class='primary' id='join' type='button'>Save and join WiFi</button></div>"
+              "<p class='note' id='msg' role='status' aria-live='polite'></p>"
               "</div>");
   } else {
     // Live control surface
@@ -962,7 +986,7 @@ void handleAdvancedRoot() {
     // until scanning:false (capped at ~30s), show a Scanning placeholder
     // meanwhile, and offer Rescan + a manual SSID field for hidden networks.
     page += F("const setScanPlaceholder=text=>{const sel=$('ssid');sel.innerHTML='';const o=document.createElement('option');o.value='';o.textContent=text;sel.appendChild(o)};"
-              "const renderNets=nets=>{const sel=$('ssid');sel.innerHTML='';nets.forEach(n=>{const o=document.createElement('option');o.value=n.ssid;o.textContent=n.ssid+(n.rssi?' ('+n.rssi+'dBm)':'');sel.appendChild(o)});if(!nets.length)setScanPlaceholder('No networks found — rescan or type the name below')};"
+              "const renderNets=nets=>{const sel=$('ssid');sel.innerHTML='';nets.forEach(n=>{const o=document.createElement('option');o.value=n.ssid;o.textContent=n.ssid+(n.rssi?' ('+n.rssi+'dBm)':'');sel.appendChild(o)});if(!nets.length){setScanPlaceholder('No networks found — rescan or type the name below');$('setup-more').open=true}};"
               "let scanPolls=0,scanTimer=null;"
               "const pollScan=async()=>{scanTimer=null;try{const d=await get('/api/wifi/scan');if(d.scanning){if(scanPolls++<20){scanTimer=setTimeout(pollScan,1500)}else{renderNets([])}return}renderNets(d.networks||[])}catch(_){if(scanPolls++<20){scanTimer=setTimeout(pollScan,1500)}else{renderNets([])}}};"
               "const startScan=()=>{scanPolls=0;if(scanTimer){clearTimeout(scanTimer);scanTimer=null}setScanPlaceholder('Scanning…');pollScan()};"

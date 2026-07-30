@@ -80,6 +80,51 @@ assert.doesNotMatch(web, /Saved\. Rebooting[^'\"]*/,
   'the setup page must not claim an accepted nonblocking handoff will reboot');
 
 const advancedRoot = functionBody(web, /void\s+handleAdvancedRoot\s*\(\)\s*\{/);
+
+const setupMarkupStart = advancedRoot.indexOf('if (needsSetup) {');
+const liveMarkupStart = advancedRoot.indexOf('} else {', setupMarkupStart);
+assert.ok(setupMarkupStart >= 0 && liveMarkupStart > setupMarkupStart,
+  'advanced page must keep a separate first-time setup branch');
+const setupMarkup = advancedRoot.slice(setupMarkupStart, liveMarkupStart);
+
+assert.match(advancedRoot, /<body class='/,
+  'advanced page must expose a mode class for setup-only density');
+assert.match(advancedRoot, /\.setup-mode \.wrap\{[^}]*safe-area-inset-top/,
+  'compact setup must preserve safe-area padding without the spacious live shell');
+assert.match(advancedRoot, /\.setup-mode [^}]*font-size:16px/,
+  'compact setup must retain 16px form text to avoid iOS focus zoom');
+assert.match(advancedRoot, /\.setup-mode [^}]*min-height:44px/,
+  'compact setup controls must retain 44px touch targets');
+
+assert.ok(setupMarkup.includes('<h2>Join WiFi</h2>'),
+  'setup must lead with the concise Join WiFi label');
+assert.doesNotMatch(setupMarkup, /Join the card to your home WiFi/,
+  'setup must not repeat a long explanation before the form');
+assert.ok(setupMarkup.includes("class='setup-network'"),
+  'Network and Rescan must share the compact setup row');
+assert.ok(setupMarkup.includes("<details class='setup-options' id='setup-more'>"),
+  'optional fields must use a native More options disclosure');
+assert.ok(setupMarkup.includes('<summary>More options</summary>'),
+  'the optional-field disclosure must have a clear summary');
+assert.ok(setupMarkup.indexOf("id='ssid-manual'") > setupMarkup.indexOf('<summary>More options</summary>'),
+  'Hidden network must remain available inside More options');
+assert.ok(setupMarkup.indexOf("id='hn'") > setupMarkup.indexOf("id='ssid-manual'"),
+  'Hostname must remain available after Hidden network inside More options');
+for (const [label, id] of [
+  ['Network', 'ssid'],
+  ['Password', 'pw'],
+  ['Hidden network name (optional)', 'ssid-manual'],
+  ['Hostname', 'hn'],
+]) {
+  assert.ok(setupMarkup.includes(`<label class='field' for='${id}'>${label}</label>`),
+    `${label} must remain explicitly associated with ${id}`);
+}
+assert.match(setupMarkup, /id='msg'[^>]*role='status'[^>]*aria-live='polite'/,
+  'join feedback must remain an announced status region');
+assert.match(advancedRoot,
+  /if\(!nets\.length\)\{[^}]*setup-more[^}]*open=true/,
+  'a zero-network result must reveal the hidden-network recovery field');
+
 assert.match(advancedRoot, /const\s+pollWifiJoin\s*=\s*async/,
   'the setup page must poll card status after credentials are accepted');
 assert.match(advancedRoot, /w\.handoffGeneration\s*!==\s*expectedGeneration/,
