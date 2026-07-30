@@ -18,6 +18,9 @@ import {
   ptsToD,
   svgPt,
   parsedVb,
+  zoomBy,
+  layoutViewBox,
+  fitViewToBounds,
   pathIntersectsRect,
 } from '../../../lib/layoutGeometry.js';
 import { isClosedPathData } from '../../../lib/pathClosure.js';
@@ -151,6 +154,8 @@ export function useLayoutCanvasInteraction(ctx, deps) {
   const [zoom, setZoom]   = useState(1.0);
   const [panX, setPanX]   = useState(0);
   const [panY, setPanY]   = useState(0);
+  const viewBoxRef        = useRef(viewBox);
+  viewBoxRef.current      = viewBox;
   const spaceRef          = useRef(false);
   const isPanningRef      = useRef(false);
   const panAnchorRef      = useRef(null);
@@ -188,15 +193,41 @@ export function useLayoutCanvasInteraction(ctx, deps) {
 
   // ── Computed viewBox with pan/zoom ─────────────────────────────────────────
   const computedViewBox = useMemo(() => {
-    const vb = parsedVb(viewBox);
-    const w = vb.w / zoom;
-    const h = vb.h / zoom;
-    const cx = vb.x + vb.w / 2;
-    const cy = vb.y + vb.h / 2;
-    return `${(cx - w / 2 + panX).toFixed(2)} ${(cy - h / 2 + panY).toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)}`;
+    const visible = layoutViewBox(viewBox, { zoom, panX, panY });
+    return `${visible.x} ${visible.y} ${visible.width} ${visible.height}`;
   }, [viewBox, zoom, panX, panY]);
 
-  const resetView = () => { setZoom(1); setPanX(0); setPanY(0); };
+  const resetView = useCallback(() => {
+    // Let an import/load commit its new SVG tree before measuring. Manual Fit all
+    // uses the same path, and no edit operation calls this automatically.
+    requestAnimationFrame(() => {
+      let bounds = null;
+      try {
+        bounds = svgRef.current?.getBBox?.() || null;
+      } catch {
+        bounds = null;
+      }
+      const fit = fitViewToBounds(viewBoxRef.current, bounds);
+      setZoom(fit.zoom);
+      setPanX(fit.panX);
+      setPanY(fit.panY);
+    });
+  }, [svgRef]);
+
+  const zoomByFactor = useCallback((factor, anchorClientPoint = null) => {
+    const nextZoom = zoomBy(zoom, factor);
+    if (nextZoom === zoom) return;
+    if (anchorClientPoint && svgRef.current) {
+      const point = svgPt(svgRef.current, anchorClientPoint.clientX, anchorClientPoint.clientY);
+      const vb = parsedVb(viewBox);
+      const currentCenterX = vb.x + vb.w / 2 + panX;
+      const currentCenterY = vb.y + vb.h / 2 + panY;
+      const anchorRatio = 1 - zoom / nextZoom;
+      setPanX(panX + (point.x - currentCenterX) * anchorRatio);
+      setPanY(panY + (point.y - currentCenterY) * anchorRatio);
+    }
+    setZoom(nextZoom);
+  }, [zoom, panX, panY, viewBox, svgRef]);
 
   // Loading a project resets only EPHEMERAL view state.
   useEffect(() => {
@@ -408,14 +439,23 @@ export function useLayoutCanvasInteraction(ctx, deps) {
   // ── Keyboard shortcuts ─────────────────────────────────────────────────────
   useEffect(() => {
     const onKeyDown = (e) => {
+      // Fit is a viewport command, so it remains available while editing a field
+      // and must win over the browser's own page-zoom reset.
+      if ((e.ctrlKey || e.metaKey) && e.key === '0') {
+        e.preventDefault();
+        resetView();
+        return;
+      }
+      const isTextEditingTarget = ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)
+        || e.target.isContentEditable;
       if (e.code === 'Space') {
         spaceRef.current = true;
-        if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
+        if (!isTextEditingTarget) {
           e.preventDefault();
         }
         return;
       }
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+      if (isTextEditingTarget) return;
 
       // Draw mode: backspace removes last waypoint
       if (drawMode && e.key === 'Backspace') {
@@ -862,18 +902,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
     e.preventDefault();
     if (!svgRef.current) return;
     const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-    const nextZoom = Math.max(0.15, Math.min(40, zoom * factor));
-    if (nextZoom === zoom) return;
-
-    const point = svgPt(svgRef.current, e.clientX, e.clientY);
-    const vb = parsedVb(viewBox);
-    const currentCenterX = vb.x + vb.w / 2 + panX;
-    const currentCenterY = vb.y + vb.h / 2 + panY;
-    const anchorRatio = 1 - zoom / nextZoom;
-
-    setPanX(panX + (point.x - currentCenterX) * anchorRatio);
-    setPanY(panY + (point.y - currentCenterY) * anchorRatio);
-    setZoom(nextZoom);
+    zoomByFactor(factor, { clientX: e.clientX, clientY: e.clientY });
   };
 
   // Ghost path for draw mode
@@ -926,7 +955,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
     drawStats, ghostD,
     selectedPathDecorations,
     // pan/zoom
-    zoom, setZoom,
+    zoom, zoomByFactor,
     panX, panY,
     isPanning,
     spaceRef,
