@@ -219,9 +219,15 @@ export function LayoutScreen({ connected, cardHost }) {
 
           {/* Zoom cluster */}
           <div className="la-zoom" role="group" aria-label="View">
-            <button onClick={() => zoomByFactor(1 / 1.25)} title="Zoom out (-)">−</button>
-            <button className="zv" onClick={resetView} title="Fit all (F)">Fit all</button>
-            <button onClick={() => zoomByFactor(1.25)} title="Zoom in (+)">+</button>
+            <button onClick={() => zoomByFactor(1 / 1.25)} aria-label="Zoom out" title="Zoom out (-)">−</button>
+            <span
+              className="zv"
+              aria-label={`Zoom ${Math.round(zoom * 100)}%`}
+              data-testid="layout-zoom-percentage">
+              {Math.round(zoom * 100)}%
+            </span>
+            <button onClick={() => zoomByFactor(1.25)} aria-label="Zoom in" title="Zoom in (+)">+</button>
+            <button onClick={resetView} aria-label="Fit all" title="Fit all (F, Cmd/Ctrl+0)">Fit</button>
           </div>
 
           <div className="tb-div"/>

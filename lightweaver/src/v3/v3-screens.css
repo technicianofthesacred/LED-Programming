@@ -842,7 +842,7 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .la-zoom { display: inline-flex; align-items: center; background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-sm); padding: 2px; gap: 2px; }
 .la-zoom button { height: 24px; min-width: 26px; padding: 0 8px; border-radius: 4px; font-size: 13px; color: var(--text-mid); transition: background .12s, color .12s; }
 .la-zoom button:hover { background: var(--bg-elev-2); color: var(--text-hi); }
-.la-zoom .zv { font-family: var(--font-mono); font-size: 11px; min-width: 42px; }
+.la-zoom .zv { display: inline-flex; align-items: center; justify-content: center; height: 24px; font-family: var(--font-mono); font-size: 11px; min-width: 42px; }
 
 .la-overlay { position: absolute; display: flex; flex-direction: column; gap: 3px; font-family: var(--font-mono); font-size: 10.5px; pointer-events: none; }
 .la-overlay.tl { top: 12px; left: 14px; }

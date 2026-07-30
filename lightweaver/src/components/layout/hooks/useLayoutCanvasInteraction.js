@@ -439,14 +439,23 @@ export function useLayoutCanvasInteraction(ctx, deps) {
   // ── Keyboard shortcuts ─────────────────────────────────────────────────────
   useEffect(() => {
     const onKeyDown = (e) => {
+      // Fit is a viewport command, so it remains available while editing a field
+      // and must win over the browser's own page-zoom reset.
+      if ((e.ctrlKey || e.metaKey) && e.key === '0') {
+        e.preventDefault();
+        resetView();
+        return;
+      }
+      const isTextEditingTarget = ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)
+        || e.target.isContentEditable;
       if (e.code === 'Space') {
         spaceRef.current = true;
-        if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
+        if (!isTextEditingTarget) {
           e.preventDefault();
         }
         return;
       }
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+      if (isTextEditingTarget) return;
 
       // Draw mode: backspace removes last waypoint
       if (drawMode && e.key === 'Backspace') {
