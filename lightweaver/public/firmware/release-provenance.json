@@ -1,17 +1,17 @@
 {
   "schemaVersion": 1,
-  "sourceRevision": "974a19fa40c15922bfab9ebc321c09f99f7e64dd",
-  "workflowRun": "30637998000",
+  "sourceRevision": "77f9e71f44fc57c33a7e64d40886d678cdbd173d",
+  "workflowRun": "30640840149",
   "target": "esp32-s3-n16r8",
   "firmwareVersion": "1.0.0",
-  "buildId": "974a19fa40c15922bfab9ebc321c09f99f7e64dd",
+  "buildId": "77f9e71f44fc57c33a7e64d40886d678cdbd173d",
   "image": {
-    "url": "/firmware/releases/1.0.0/974a19fa40c15922bfab9ebc321c09f99f7e64dd/lightweaver-controller-esp32s3-factory.bin",
-    "size": 1252864,
-    "sha256": "eeabcb907c9329f52551efad5c7bc003f3155bff435ee5045b7cef7313250138"
+    "url": "/firmware/releases/1.0.0/77f9e71f44fc57c33a7e64d40886d678cdbd173d/lightweaver-controller-esp32s3-factory.bin",
+    "size": 1252816,
+    "sha256": "f2665979c6f93bc10f9afbf6f804c2be390f91e9982f976835f3e78c6fd6d2d3"
   },
   "toolchain": {
-    "sourceRevision": "974a19fa40c15922bfab9ebc321c09f99f7e64dd",
+    "sourceRevision": "77f9e71f44fc57c33a7e64d40886d678cdbd173d",
     "platformio": "6.1.19",
     "platform": "espressif32@7.0.1",
     "framework": "framework-arduinoespressif32@3.20017.241212+sha.dcc1105b",
