@@ -89,10 +89,10 @@ assert.match(main, /esp_task_wdt_reset\(\)[\s\S]*yield\(\)/,
 const saveStart = storage.indexOf('bool saveRuntimeConfigJson(');
 const saveEnd = storage.indexOf('bool suppressSdProjectAutorunAfterFactoryReset(', saveStart);
 const save = storage.slice(saveStart, saveEnd);
-assert.match(save, /bool\s+committed\s*=\s*prefs\.putString\(NVS_KNOWN_GOOD_CONFIG_KEY/,
-  'the canonical known-good write must be tracked separately from best-effort cleanup');
-assert.match(save, /if\s*\(!committed\)[\s\S]*message\s*=\s*"nvs write failed"/,
-  'only failure to commit canonical config may return a save failure');
+assert.match(save, /bool\s+committed\s*=\s*canonicalReadback\s*==\s*json/,
+  'the canonical known-good commit must be decided by exact durable readback');
+assert.match(save, /if\s*\(!committed\)[\s\S]*runtime unchanged/,
+  'a failed canonical readback must leave the active runtime unchanged');
 assert.match(save, /cleanup warning/,
   'post-commit cleanup failure must be reported as a truthful warning');
 assert.match(wledRealtime, /FrameSource\s+sourceBeforeClaim\s*=\s*frameSourceActive\(\)/,

@@ -46,8 +46,8 @@ assert.ok(
 );
 assert.match(
   save,
-  /putString\(NVS_KNOWN_GOOD_CONFIG_KEY, json\)\s*==\s*json\.length\(\)/,
-  'the complete validated multi-look package must be durably stored, not only its first pattern',
+  /putString\(NVS_KNOWN_GOOD_CONFIG_KEY, json\)[\s\S]*canonicalReadback\s*==\s*json/,
+  'the complete validated multi-look package must be durably stored and exactly read back, not only its first pattern',
 );
 
 const parseStart = storage.indexOf('void applyJsonToConfig(');

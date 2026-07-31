@@ -47,8 +47,13 @@ assert.doesNotMatch(
 const nvsLoad = storage.match(/ProvisioningStorageState loadNvsConfigKeyStrict\([\s\S]*?\n\}/)?.[0] || '';
 assert.match(
   nvsLoad,
-  /allowLegacyDigestUpgrade\s*&&\s*upgradeLegacyNvsWiringDigest\(json\)[\s\S]*validateRuntimeConfigJsonStrict\(json[\s\S]*prefs\.putString\(key, json\)[\s\S]*prefs\.getString\(key,[\s\S]*prefs\.putString\(key, originalJson\)/,
-  'the opted-in persisted NVS config receives an exact-match upgrade with readback and rollback',
+  /allowLegacyDigestUpgrade\s*&&\s*upgradeLegacyNvsWiringDigest\(json\)[\s\S]*validateRuntimeConfigJsonStrict\(json[\s\S]*prefs\.putString\(key, json\)[\s\S]*prefs\.end\(\)[\s\S]*prefs\.begin\(NVS_NAMESPACE, true\)[\s\S]*prefs\.getString\(key/,
+  'the opted-in persisted NVS config receives an exact-match upgrade with durable readback',
+);
+assert.doesNotMatch(
+  nvsLoad,
+  /prefs\.putString\(key, originalJson\)/,
+  'a failed legacy upgrade must inspect the durable original instead of blindly appending a rollback copy under NVS pressure',
 );
 assert.match(
   storage,

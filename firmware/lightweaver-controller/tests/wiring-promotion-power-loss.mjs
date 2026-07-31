@@ -69,6 +69,9 @@ function assertRecoverableCommittedState(state, message) {
 
 const restoreBody = functionBody('restorePreviousKnownGood', 'finalizeCommittedPromotion');
 const armedRestoreBody = restoreBody.slice(restoreBody.indexOf('String previous'));
+assert.match(armedRestoreBody,
+  /String currentKnownGood = prefs\.getString\(NVS_KNOWN_GOOD_CONFIG_KEY[\s\S]*currentKnownGood == previous[\s\S]*prefs\.putString\(NVS_KNOWN_GOOD_CONFIG_KEY/,
+  'rollback must treat an unchanged old canonical as already restored instead of appending another full string under NVS pressure');
 const restoreActions = orderedActions(armedRestoreBody, [
   ['restore-known-good', 'prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY'],
   ['disarm', 'prefs.putBool(NVS_PROMOTION_ARMED_KEY, false)'],
@@ -130,9 +133,25 @@ const saveStart = storage.indexOf('bool saveRuntimeConfigJson(');
 const saveEnd = storage.indexOf('bool stageRuntimeConfigJson(', saveStart);
 const saveBody = storage.slice(saveStart, saveEnd);
 const clearConfirmed = saveBody.indexOf('prefs.remove(NVS_CONFIRMED_ID_KEY)');
+const rejectCandidate = saveBody.indexOf('readCandidateState(prefs) != WIRING_CANDIDATE_NONE');
+const snapshotKnownGood = saveBody.indexOf('String previousCanonical = prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY');
+const pruneLegacy = saveBody.indexOf('prefs.remove(NVS_LEGACY_CONFIG_KEY)');
 const replaceKnownGood = saveBody.indexOf('prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, json)');
 assert.ok(clearConfirmed >= 0 && replaceKnownGood > clearConfirmed,
   'ordinary known-good writes must fence confirmed activation replay before replacing config identity');
+assert.ok(rejectCandidate >= 0 && snapshotKnownGood > rejectCandidate &&
+  pruneLegacy > snapshotKnownGood && replaceKnownGood > pruneLegacy,
+  'repeated installs may reclaim only the downgrade copy after rejecting active wiring transactions, before replacing canonical known-good');
+const compactionBoundary = saveBody.slice(pruneLegacy, replaceKnownGood);
+assert.match(compactionBoundary, /prefs\.end\(\)[\s\S]*prefs\.begin\(NVS_NAMESPACE, false\)/,
+  'the card must commit a crash boundary after pruning the duplicate before requesting the next allocation');
+assert.doesNotMatch(saveBody.slice(replaceKnownGood), /prefs\.putString\(NVS_LEGACY_CONFIG_KEY, json\)/,
+  'ordinary saves must retire the full legacy mirror instead of recreating 2x steady-state NVS pressure');
+assert.match(saveBody.slice(replaceKnownGood),
+  /prefs\.end\(\)[\s\S]*prefs\.begin\(NVS_NAMESPACE, false\)[\s\S]*prefs\.getString\(NVS_KNOWN_GOOD_CONFIG_KEY/,
+  'the canonical replacement must be closed, reopened, and compared byte-for-byte before the live config changes');
+assert.doesNotMatch(saveBody, /putString\(NVS_WIFI_KEY|remove\(NVS_WIFI_KEY|prefs\.clear\(\)/,
+  'a project install must never mutate saved WiFi or erase the namespace');
 
 const replayModel = { knownGood: 'config-a', confirmedId: 'activation-a' };
 assert.equal(replayModel.confirmedId === 'activation-a', true, 'confirm A is initially replay-safe');
@@ -351,10 +370,20 @@ assert.doesNotMatch(storage, /candidate metadata corrupt: orphan confirmation/,
 const stageBody = functionBody('stageRuntimeConfigJson', 'activateStagedRuntimeConfig');
 const stageValidateMetadata = stageBody.indexOf('validateCandidateMetadataForBoot');
 const stageCleanupPrior = stageBody.indexOf('finalizeCommittedPromotion');
+const stagePruneLegacy = stageBody.indexOf('prefs.remove(NVS_LEGACY_CONFIG_KEY)');
+const stageStoreCandidate = stageBody.indexOf('prefs.putString(NVS_CANDIDATE_CONFIG_KEY, json)');
 const stageClearConfirmation = stageBody.indexOf('prefs.remove(NVS_CONFIRMED_ID_KEY)');
 const stageMarkCandidate = stageBody.indexOf('writeCandidateState(prefs, WIRING_CANDIDATE_STAGED)');
 assert.ok(stageValidateMetadata >= 0 && stageCleanupPrior > stageValidateMetadata,
   'staging must fail closed on corrupt promotion metadata before cleanup touches its journal');
+assert.ok(stagePruneLegacy > stageCleanupPrior && stageStoreCandidate > stagePruneLegacy,
+  'staging must retire only the redundant legacy mirror while canonical known-good remains intact');
+assert.match(stageBody.slice(stagePruneLegacy, stageStoreCandidate),
+  /prefs\.end\(\)[\s\S]*prefs\.begin\(NVS_NAMESPACE, false\)/,
+  'staging must commit legacy pruning before allocating a full candidate config');
+assert.match(stageBody.slice(stageStoreCandidate),
+  /prefs\.end\(\)[\s\S]*prefs\.begin\(NVS_NAMESPACE, false\)[\s\S]*prefs\.getString\(NVS_CANDIDATE_CONFIG_KEY/,
+  'staging must exactly read back the candidate before assigning an activation id');
 assert.ok(stageClearConfirmation >= 0 && stageMarkCandidate > stageClearConfirmation,
   'staging must clear the prior confirmation fence before making candidate A bootable');
 assert.match(stageBody, /confirmationCleared/,
@@ -422,7 +451,6 @@ function applyWrite(state, write) {
   if (write === 'clear-discovery') state.discoveryActive = false;
   if (write === 'mark-booting') state.candidateState = 2;
   if (write === 'mark-awaiting') state.candidateState = 3;
-  if (write === 'write-legacy') state.legacyConfig = state.candidateConfig;
   if (write === 'journal-old') state.previousKnown = state.knownGood ?? SENTINEL;
   if (write === 'arm') state.armed = true;
   if (write === 'promote-candidate') state.knownGood = state.candidateConfig;
@@ -495,7 +523,7 @@ for (let cut = 0; cut <= activateWrites.length; cut += 1) {
 
 const awaitingState = { ...stagedState, candidateState: 3 };
 const confirmWrites = [
-  'journal-old', 'arm', 'promote-candidate', 'confirm-id', 'mark-none', 'write-legacy',
+  'journal-old', 'arm', 'promote-candidate', 'confirm-id', 'mark-none',
   'disarm', 'drop-journal', 'drop-candidate', 'drop-candidate-id',
 ];
 const confirmBody = functionBody('confirmCandidateRuntimeConfig', 'rollbackCandidateRuntimeConfig');
@@ -505,8 +533,9 @@ const confirmPrefixWrites = orderedActions(confirmBody, [
   ['promote-candidate', 'prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, candidate)'],
   ['confirm-id', 'prefs.putString(NVS_CONFIRMED_ID_KEY, activationId)'],
   ['mark-none', 'writeCandidateState(prefs, WIRING_CANDIDATE_NONE)'],
-  ['write-legacy', 'prefs.putString(NVS_LEGACY_CONFIG_KEY, candidate)'],
 ]);
+assert.doesNotMatch(confirmBody, /putString\(NVS_LEGACY_CONFIG_KEY, candidate\)/,
+  'confirmed candidates must not recreate the retired full-config mirror');
 assert.deepEqual([...confirmPrefixWrites, ...finalizeActions], confirmWrites,
   'confirmation fault model must enumerate the firmware NVS write order');
 for (let cut = 0; cut <= confirmWrites.length; cut += 1) {

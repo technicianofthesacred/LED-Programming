@@ -76,6 +76,17 @@ assert.doesNotMatch(stageBody, /config\s*=\s*\*parsed/, 'staging must not mutate
 assert.match(storage, /readNvsString\(prefs,\s*NVS_LEGACY_CONFIG_KEY/);
 assert.match(storage, /putString\(NVS_KNOWN_GOOD_CONFIG_KEY/);
 assert.match(storage, /known-good migration failed/);
+const migrateStart = storage.indexOf('ProvisioningStorageState migrateLegacyKnownGood(');
+const migrateEnd = storage.indexOf('const char* candidateStateLabel(', migrateStart);
+const migrateBody = storage.slice(migrateStart, migrateEnd);
+const migrateWrite = migrateBody.indexOf('prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, legacy)');
+const migrateReadback = migrateBody.indexOf('prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY', migrateWrite);
+const migratePrune = migrateBody.indexOf('prefs.remove(NVS_LEGACY_CONFIG_KEY)', migrateReadback);
+assert.ok(migrateWrite >= 0 && migrateReadback > migrateWrite && migratePrune > migrateReadback,
+  'legacy-only migration must copy and exactly read back canonical known-good before retiring the duplicate');
+assert.match(migrateBody.slice(migrateWrite, migrateReadback),
+  /prefs\.end\(\)[\s\S]*prefs\.begin\(NVS_NAMESPACE, true\)/,
+  'legacy-only migration must cross a durable boundary before trusting canonical readback');
 
 const loadStart = storage.indexOf('RuntimeLoadResult loadRuntimeConfig(');
 const saveStart = storage.indexOf('bool saveRuntimeConfigJson(', loadStart);

@@ -934,20 +934,22 @@ ProvisioningStorageState loadNvsConfigKeyStrict(const char* key,
       message = "legacy wiring digest upgrade could not open canonical storage";
       return ProvisioningStorageState::Error;
     }
-    bool wroteUpgrade = prefs.putString(key, json) == json.length();
-    String readback = wroteUpgrade ? prefs.getString(key, "") : "";
-    if (!wroteUpgrade || readback != json) {
-      bool restoredOriginal =
-          prefs.putString(key, originalJson) == originalJson.length() &&
-          prefs.getString(key, "") == originalJson;
-      prefs.end();
+    prefs.putString(key, json);
+    prefs.end();
+    if (!prefs.begin(NVS_NAMESPACE, true)) {
       configParsed = false;
-      message = restoredOriginal
-          ? "legacy wiring digest upgrade failed; original config restored"
-          : "legacy wiring digest upgrade failed and original restore failed";
+      message = "legacy wiring digest upgrade readback unavailable";
       return ProvisioningStorageState::Error;
     }
+    String readback = prefs.getString(key, "");
     prefs.end();
+    if (readback != json) {
+      configParsed = false;
+      message = readback == originalJson
+          ? "legacy wiring digest upgrade failed; original config remains intact"
+          : "legacy wiring digest upgrade failed; canonical readback changed unexpectedly";
+      return ProvisioningStorageState::Error;
+    }
   }
   return ProvisioningStorageState::Present;
 }
@@ -973,11 +975,16 @@ bool restorePreviousKnownGood(Preferences& prefs) {
   }
   if (!prefs.isKey(NVS_PREVIOUS_KNOWN_GOOD_KEY)) return false;
   String previous = prefs.getString(NVS_PREVIOUS_KNOWN_GOOD_KEY, "");
-  bool restored = previous == NVS_NO_PREVIOUS_KNOWN_GOOD
-    ? (!prefs.isKey(NVS_KNOWN_GOOD_CONFIG_KEY) || prefs.remove(NVS_KNOWN_GOOD_CONFIG_KEY))
-    : previous.length()
-    ? prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, previous) == previous.length()
-    : false;
+  String currentKnownGood = prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "");
+  bool restored = false;
+  if (previous == NVS_NO_PREVIOUS_KNOWN_GOOD) {
+    restored = !prefs.isKey(NVS_KNOWN_GOOD_CONFIG_KEY) ||
+               prefs.remove(NVS_KNOWN_GOOD_CONFIG_KEY);
+  } else if (previous.length()) {
+    restored = currentKnownGood == previous ||
+               (prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, previous) == previous.length() &&
+                prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "") == previous);
+  }
   if (!restored) return false;
   bool disarmed = prefs.putBool(NVS_PROMOTION_ARMED_KEY, false) > 0 ||
                   !prefs.getBool(NVS_PROMOTION_ARMED_KEY, false);
@@ -1112,10 +1119,28 @@ ProvisioningStorageState migrateLegacyKnownGood(String& message) {
     prefs.end();
     return ProvisioningStorageState::Error;
   }
-  bool ok = prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, legacy) == legacy.length();
+  prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, legacy);
   prefs.end();
-  if (!ok) message = "known-good migration failed; legacy config preserved";
-  return ok ? ProvisioningStorageState::Present : ProvisioningStorageState::Error;
+  if (!prefs.begin(NVS_NAMESPACE, true)) {
+    message = "known-good migration readback unavailable; legacy config preserved";
+    return ProvisioningStorageState::Error;
+  }
+  String canonicalReadback = prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "");
+  prefs.end();
+  if (canonicalReadback != legacy) {
+    message = "known-good migration failed; legacy config preserved";
+    return ProvisioningStorageState::Error;
+  }
+  // Once the canonical copy has crossed a close/reopen boundary and matches
+  // exactly, the old full-size key is no longer needed. Its removal is
+  // best-effort because canonical known-good is already authoritative.
+  if (prefs.begin(NVS_NAMESPACE, false)) {
+    if (prefs.isKey(NVS_LEGACY_CONFIG_KEY)) {
+      prefs.remove(NVS_LEGACY_CONFIG_KEY);
+    }
+    prefs.end();
+  }
+  return ProvisioningStorageState::Present;
 }
 
 const char* candidateStateLabel(WiringCandidateState state) {
@@ -1476,12 +1501,43 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
     message = "prior confirmation fence failed";
     return false;
   }
-  bool committed = prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, json) == json.length();
+
+  String previousCanonical = prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "");
+
+  // NVS strings occupy page-sized entry runs and updates are append-first.
+  // Keeping a second full config beside knownGoodConfig can leave no page for
+  // the next canonical update even when the replacement is well below the
+  // per-string limit. Drop only the downgrade copy while the old canonical
+  // config is still intact, then close/reopen to commit that crash boundary
+  // before the next allocation can reclaim stale entries. WiFi and every
+  // canonical/project key remain untouched.
+  bool legacySpaceReclaimed = !prefs.isKey(NVS_LEGACY_CONFIG_KEY) ||
+                              (prefs.remove(NVS_LEGACY_CONFIG_KEY) &&
+                               !prefs.isKey(NVS_LEGACY_CONFIG_KEY));
+  prefs.end();
+  if (!legacySpaceReclaimed) {
+    delete parsed;
+    message = "nvs duplicate cleanup failed before install";
+    return false;
+  }
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    delete parsed;
+    message = "nvs canonical write reopen failed";
+    return false;
+  }
+  if (previousCanonical != json) {
+    prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, json);
+  }
+  prefs.end();
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    delete parsed;
+    message = "nvs canonical readback reopen failed; runtime unchanged";
+    return false;
+  }
+  String canonicalReadback = prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "");
+  bool committed = canonicalReadback == json;
   bool cleanupOk = true;
   if (committed) {
-    // Keep the old key as a downgrade fallback, but only after the canonical
-    // known-good write succeeds.
-    cleanupOk = prefs.putString(NVS_LEGACY_CONFIG_KEY, json) == json.length() && cleanupOk;
     cleanupOk = writeCandidateState(prefs, WIRING_CANDIDATE_NONE) && cleanupOk;
     cleanupOk = (!prefs.isKey(NVS_CANDIDATE_CONFIG_KEY) ||
                  prefs.remove(NVS_CANDIDATE_CONFIG_KEY)) && cleanupOk;
@@ -1493,7 +1549,9 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
   prefs.end();
   if (!committed) {
     delete parsed;
-    message = "nvs write failed";
+    message = canonicalReadback == previousCanonical
+        ? "nvs write failed; previous project remains intact and runtime unchanged"
+        : "nvs write failed; canonical readback changed unexpectedly and runtime unchanged";
     return false;
   }
   WifiConfig preservedWifi = config.wifi;
@@ -1562,8 +1620,29 @@ bool stageRuntimeConfigJson(const String& json, String& activationId, String& me
     message = "prior promotion cleanup failed";
     return false;
   }
+  // Legacy firmware mirrored every full project under `config`. The canonical
+  // project remains bootable while this redundant copy is retired, giving NVS
+  // room to allocate and exactly verify the candidate.
+  bool legacySpaceReclaimed = !prefs.isKey(NVS_LEGACY_CONFIG_KEY) ||
+                              (prefs.remove(NVS_LEGACY_CONFIG_KEY) &&
+                               !prefs.isKey(NVS_LEGACY_CONFIG_KEY));
+  prefs.end();
+  if (!legacySpaceReclaimed) {
+    message = "nvs duplicate cleanup failed before candidate staging";
+    return false;
+  }
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    message = "nvs candidate write reopen failed";
+    return false;
+  }
   activationId = makeActivationId();
-  bool stored = prefs.putString(NVS_CANDIDATE_CONFIG_KEY, json) == json.length();
+  prefs.putString(NVS_CANDIDATE_CONFIG_KEY, json);
+  prefs.end();
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    message = "nvs candidate readback reopen failed";
+    return false;
+  }
+  bool stored = prefs.getString(NVS_CANDIDATE_CONFIG_KEY, "") == json;
   bool idStored = stored && prefs.putString(NVS_CANDIDATE_ID_KEY, activationId) == activationId.length();
   bool confirmationCleared = idStored &&
     (!prefs.isKey(NVS_CONFIRMED_ID_KEY) || prefs.remove(NVS_CONFIRMED_ID_KEY));
@@ -1627,17 +1706,25 @@ bool confirmCandidateRuntimeConfig(const String& activationId, String& message) 
     message = "no candidate awaiting confirmation";
     return false;
   }
+  bool legacySpaceReclaimed = !prefs.isKey(NVS_LEGACY_CONFIG_KEY) ||
+                              (prefs.remove(NVS_LEGACY_CONFIG_KEY) &&
+                               !prefs.isKey(NVS_LEGACY_CONFIG_KEY));
+  if (!legacySpaceReclaimed) {
+    prefs.end();
+    message = "nvs duplicate cleanup failed before candidate confirmation";
+    return false;
+  }
   String previous = prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "");
   bool journaled = previous.length()
     ? prefs.putString(NVS_PREVIOUS_KNOWN_GOOD_KEY, previous) == previous.length()
     : prefs.putString(NVS_PREVIOUS_KNOWN_GOOD_KEY, NVS_NO_PREVIOUS_KNOWN_GOOD) ==
         strlen(NVS_NO_PREVIOUS_KNOWN_GOOD);
   bool armed = journaled && prefs.putBool(NVS_PROMOTION_ARMED_KEY, true) > 0;
-  bool promoted = armed && prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, candidate) == candidate.length();
+  bool promoted = armed && prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, candidate) == candidate.length() &&
+                  prefs.getString(NVS_KNOWN_GOOD_CONFIG_KEY, "") == candidate;
   bool confirmed = promoted && prefs.putString(NVS_CONFIRMED_ID_KEY, activationId) == activationId.length();
   promoted = confirmed && writeCandidateState(prefs, WIRING_CANDIDATE_NONE);
   if (promoted) {
-    prefs.putString(NVS_LEGACY_CONFIG_KEY, candidate);
     bool suppressionCleared = !prefs.isKey(NVS_SD_AUTORUN_SUPPRESSED_KEY) ||
                               prefs.remove(NVS_SD_AUTORUN_SUPPRESSED_KEY);
     promoted = suppressionCleared && finalizeCommittedPromotion(prefs);
