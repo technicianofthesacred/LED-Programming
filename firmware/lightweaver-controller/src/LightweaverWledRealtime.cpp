@@ -5,6 +5,7 @@
 
 #include "LightweaverFrameSource.h"
 #include "LightweaverConnectivityPolicy.h"
+#include "LightweaverRuntimeApi.h"
 #include "LightweaverWledRealtimePolicy.h"
 
 // WLED realtime UDP listens on port 21324 by default.
@@ -81,7 +82,24 @@ void handleWledRealtime() {
     }
     if (!g_started) return;
   }
-  if (g_leds == nullptr || g_totalPixels == 0) return;
+  if (!runtimeCommandReady() || g_leds == nullptr || g_totalPixels == 0) {
+    // Discard queued frames while control is locked. Leaving them buffered
+    // would let stale pixels claim output as soon as a candidate or recovery
+    // transition becomes ready.
+    for (int safety = 0; safety < 8; safety++) {
+      int packetSize = g_udp.parsePacket();
+      if (packetSize <= 0) return;
+      uint8_t dump[64];
+      int remaining = packetSize;
+      while (remaining > 0) {
+        int chunk = remaining > int(sizeof(dump)) ? int(sizeof(dump)) : remaining;
+        int got = g_udp.read(dump, chunk);
+        if (got <= 0) break;
+        remaining -= got;
+      }
+    }
+    return;
+  }
 
   // Drain every queued packet; we always want the freshest frame, not the
   // oldest. If a sender outpaces us we'd rather drop intermediate frames

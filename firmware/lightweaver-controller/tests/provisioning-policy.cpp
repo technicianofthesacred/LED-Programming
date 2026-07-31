@@ -68,10 +68,12 @@ int main() {
 
   static_assert(LW_FACTORY_BEACON_PIXEL_LIMIT == 8,
                 "factory beacon must remain bounded to eight pixels");
-  static_assert(LW_FACTORY_BEACON_BRIGHTNESS_LIMIT <= 24,
-                "factory beacon must remain dim");
+  static_assert(LW_FACTORY_BEACON_BRIGHTNESS_LIMIT == 24,
+                "factory beacon must use the brightest approved bench-safe level");
   static_assert(LW_FACTORY_BEACON_MAX_MILLIAMPS <= 100,
                 "factory beacon must retain a conservative current ceiling");
+  static_assert(LW_FACTORY_BEACON_STEP_MS == 3000,
+                "each output must remain selected long enough to inspect on a bench");
   for (size_t step = 0; step < LW_APPROVED_OUTPUT_GPIO_COUNT; step++) {
     assert(factoryBeaconPinForStep(step) == LW_APPROVED_OUTPUT_GPIOS[step]);
   }
@@ -97,13 +99,36 @@ int main() {
   beacon.recoveryActive = true;
   assert(!factoryBeaconMayOwnOutput(beacon));
   beacon.recoveryActive = false;
+  beacon.phase = ProvisioningPhase::Recovering;
+  assert(factoryBeaconMayOwnOutput(beacon));
   beacon.phase = ProvisioningPhase::Ready;
   assert(!factoryBeaconMayOwnOutput(beacon));
 
+  assert(!provisioningOutputReady(false, 0));
+  assert(!provisioningOutputReady(true, 0));
+  assert(!provisioningOutputReady(false, 1));
+  assert(provisioningOutputReady(true, 1));
+
+  assert(provisioningUsesFactoryBeacon(ProvisioningPhase::Factory, 0));
+  assert(provisioningUsesFactoryBeacon(ProvisioningPhase::Factory, 1));
+  assert(provisioningUsesFactoryBeacon(ProvisioningPhase::Recovering, 0));
+  assert(!provisioningUsesFactoryBeacon(ProvisioningPhase::Recovering, 1));
+  assert(!provisioningUsesFactoryBeacon(ProvisioningPhase::Ready, 0));
+  assert(!provisioningUsesFactoryBeacon(ProvisioningPhase::Ready, 1));
+
+  // A long initial hold is conspicuous even when the operator looks up late,
+  // followed by a second long pulse that distinguishes discovery from a
+  // continuously powered strip. The final dark interval makes pin changes
+  // electrically and visually unambiguous.
   assert(factoryBeaconPulseOn(0));
-  assert(!factoryBeaconPulseOn(150));
-  assert(factoryBeaconPulseOn(250));
-  assert(!factoryBeaconPulseOn(400));
+  assert(factoryBeaconPulseOn(1199));
+  assert(!factoryBeaconPulseOn(1200));
+  assert(!factoryBeaconPulseOn(1599));
+  assert(factoryBeaconPulseOn(1600));
+  assert(factoryBeaconPulseOn(2399));
+  assert(!factoryBeaconPulseOn(2400));
+  assert(!factoryBeaconPulseOn(2999));
+  assert(factoryBeaconPulseOn(3000));
 
   assert(provisioningFactoryResetMayComplete(true, true));
   assert(!provisioningFactoryResetMayComplete(true, false));

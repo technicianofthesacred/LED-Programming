@@ -259,6 +259,11 @@ bool hexToRgb(const char* s, uint8_t& r, uint8_t& g, uint8_t& b) {
 // native runtime API.
 void handleStatePost() {
   sendCors();
+  if (!runtimeCommandReady() || totalPixels == 0) {
+    serverPtr->send(423, "application/json",
+                    "{\"success\":false,\"error\":\"card is not ready for runtime control\"}");
+    return;
+  }
   if (serverPtr->clientContentLength() > LW_WLED_STATE_MAX_BODY_BYTES) {
     serverPtr->send(413, "application/json", "{\"success\":false,\"error\":\"state request too large\"}");
     return;

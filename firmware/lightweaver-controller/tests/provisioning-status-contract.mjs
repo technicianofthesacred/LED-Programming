@@ -126,7 +126,10 @@ assert.match(firmwareInfo, /doc\["commandReady"\]\s*=\s*runtimeCommandReady\(\)/
   'firmware-info command readiness must come from live runtime truth');
 assert.match(runtimeApi, /bool\s+runtimeCommandReady\s*\(\)/);
 assert.match(runtimeApi, /bool\s+runtimeOutputReady\s*\(\)/);
-assert.match(main, /ProvisioningReadinessInputs[\s\S]*webRuntimeServing[\s\S]*ledOutputsReady[\s\S]*transitionPending/,
+const commandReady = functionBody(main, /bool\s+runtimeCommandReady\s*\(/);
+assert.match(commandReady, /inputs\.outputReady\s*=\s*runtimeOutputReady\(\)/,
+  'command readiness must consume public project-output readiness, not controller-only state');
+assert.match(main, /ProvisioningReadinessInputs[\s\S]*webRuntimeServing[\s\S]*runtimeOutputReady\(\)[\s\S]*transitionPending/,
   'commandReady must require web serving, initialized output, and no transition');
 
 const affectedOutputCount = functionBody(main, /uint8_t\s+runtimeAffectedOutputCount\s*\(/);

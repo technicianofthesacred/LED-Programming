@@ -52,6 +52,7 @@ bool hexToRgb(const char* s, uint8_t& r, uint8_t& g, uint8_t& b) {
 // Translate a WLED-shaped JSON state message into a frame write (live preview
 // path) or a state mutation. Mirrors the HTTP POST /json/state handler.
 void applyState(uint8_t* payload, size_t length) {
+  if (!runtimeCommandReady() || totalPixels == 0) return;
   if (length > LW_WLED_WS_MAX_PAYLOAD_BYTES) return;
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, payload, length);

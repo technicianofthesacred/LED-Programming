@@ -281,7 +281,7 @@ void setup() {
       fail(ERROR_PIN, "safe discovery output setup failed");
       return;
     }
-  } else if (runtimeConfig.runtimePhase == ProvisioningPhase::Factory) {
+  } else if (provisioningUsesFactoryBeacon(runtimeConfig.runtimePhase, outputCount)) {
     if (runtimeRecoveryAfterRestartPending()) {
       String recoveryMessage;
       if (!clearRuntimeRecoveryAfterRestart(recoveryMessage)) {
@@ -567,6 +567,10 @@ bool loadProfile() {
 
 bool setupLedOutputs() {
   ledOutputsReady = false;
+  if (outputCount == 0) {
+    fail(ERROR_CONFIG, "no LED outputs configured");
+    return false;
+  }
   FastLED.setCorrection(TypicalLEDStrip);
   // FastLED owns one controller group, so this ceiling applies to the combined
   // draw of every output registered below rather than independently per GPIO.
@@ -1838,7 +1842,9 @@ const char* runtimeProvisioningPhase() {
   return provisioningPhaseLabel(runtimeReportedProvisioningPhase());
 }
 
-bool runtimeOutputReady() { return ledOutputsReady; }
+bool runtimeOutputReady() {
+  return provisioningOutputReady(ledOutputsReady, outputCount);
+}
 bool runtimeConfigValid() { return runtimeConfig.configValid; }
 bool runtimeKnownGoodProject() { return runtimeConfig.knownGoodProject; }
 
@@ -1851,7 +1857,7 @@ bool runtimeCommandReady() {
   inputs.configValid = runtimeConfig.configValid;
   inputs.knownGoodProject = runtimeConfig.knownGoodProject;
   inputs.webServing = webRuntimeServing;
-  inputs.outputReady = ledOutputsReady;
+  inputs.outputReady = runtimeOutputReady();
   inputs.transitionPending = transitionPending;
   return provisioningCommandReady(inputs);
 }
@@ -2243,7 +2249,7 @@ String runtimeWiringSafetyStatus() {
   }
   doc["remainingProbationMs"] = remaining;
   doc["nextStep"] = nextStep;
-  doc["outputsReady"] = ledOutputsReady;
+  doc["outputsReady"] = runtimeOutputReady();
   JsonArray currentOutputs = doc["currentOutputs"].to<JsonArray>();
   for (uint8_t i = 0; i < outputCount; i++) {
     JsonObject output = currentOutputs.add<JsonObject>();

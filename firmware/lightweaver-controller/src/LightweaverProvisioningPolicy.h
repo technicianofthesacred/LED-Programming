@@ -10,9 +10,12 @@ static constexpr const uint8_t (&LW_APPROVED_OUTPUT_GPIOS)[LW_CARD_HARDWARE_OUTP
     LW_CARD_HARDWARE_OUTPUT_GPIOS;
 constexpr size_t LW_APPROVED_OUTPUT_GPIO_COUNT = LW_CARD_HARDWARE_OUTPUT_GPIO_COUNT;
 constexpr uint16_t LW_FACTORY_BEACON_PIXEL_LIMIT = 8;
-constexpr uint8_t LW_FACTORY_BEACON_BRIGHTNESS_LIMIT = 20;
+constexpr uint8_t LW_FACTORY_BEACON_BRIGHTNESS_LIMIT = 24;
 constexpr uint32_t LW_FACTORY_BEACON_MAX_MILLIAMPS = 100;
-constexpr uint32_t LW_FACTORY_BEACON_STEP_MS = 1200;
+constexpr uint32_t LW_FACTORY_BEACON_STEP_MS = 3000;
+constexpr uint32_t LW_FACTORY_BEACON_STEADY_ON_MS = 1200;
+constexpr uint32_t LW_FACTORY_BEACON_SECOND_ON_START_MS = 1600;
+constexpr uint32_t LW_FACTORY_BEACON_SECOND_ON_END_MS = 2400;
 constexpr uint32_t LW_FACTORY_BEACON_SAFETY_POLL_MS = 100;
 
 enum class ProvisioningPhase : uint8_t {
@@ -84,6 +87,17 @@ constexpr bool provisioningCommandReady(const ProvisioningReadinessInputs& input
          !input.transitionPending;
 }
 
+constexpr bool provisioningOutputReady(bool controllerReady,
+                                       size_t outputCount) {
+  return controllerReady && outputCount > 0;
+}
+
+constexpr bool provisioningUsesFactoryBeacon(ProvisioningPhase phase,
+                                              size_t outputCount) {
+  return phase == ProvisioningPhase::Factory ||
+         (phase == ProvisioningPhase::Recovering && outputCount == 0);
+}
+
 constexpr bool provisioningControlAdmitted(bool commandReady) {
   return commandReady;
 }
@@ -128,14 +142,18 @@ constexpr uint8_t factoryBeaconPinForStep(size_t step) {
 }
 
 constexpr bool factoryBeaconPulseOn(uint32_t elapsedInStepMs) {
-  return elapsedInStepMs % LW_FACTORY_BEACON_STEP_MS < 120 ||
-         (elapsedInStepMs % LW_FACTORY_BEACON_STEP_MS >= 240 &&
-          elapsedInStepMs % LW_FACTORY_BEACON_STEP_MS < 360);
+  return elapsedInStepMs % LW_FACTORY_BEACON_STEP_MS <
+             LW_FACTORY_BEACON_STEADY_ON_MS ||
+         (elapsedInStepMs % LW_FACTORY_BEACON_STEP_MS >=
+              LW_FACTORY_BEACON_SECOND_ON_START_MS &&
+          elapsedInStepMs % LW_FACTORY_BEACON_STEP_MS <
+              LW_FACTORY_BEACON_SECOND_ON_END_MS);
 }
 
 constexpr bool factoryBeaconMayOwnOutput(
     const FactoryBeaconOwnershipInputs& input) {
-  return input.phase == ProvisioningPhase::Factory &&
+  return (input.phase == ProvisioningPhase::Factory ||
+          input.phase == ProvisioningPhase::Recovering) &&
          input.outputReady &&
          !input.commandActivity &&
          !input.wifiTransition &&

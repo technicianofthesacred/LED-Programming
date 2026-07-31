@@ -44,14 +44,27 @@ assert.match(policy, /LW_APPROVED_OUTPUT_GPIOS[\s\S]*LW_CARD_HARDWARE_OUTPUT_GPI
   'provisioning must consume the generated hardware contract');
 assert.match(hardware, /LW_CARD_HARDWARE_OUTPUT_GPIOS\[\]\s*=\s*\{16, 17, 18, 21\}/);
 assert.match(policy, /LW_FACTORY_BEACON_PIXEL_LIMIT\s*=\s*8/);
-assert.match(policy, /LW_FACTORY_BEACON_BRIGHTNESS_LIMIT\s*=\s*(?:1[0-9]|2[0-4])/);
+assert.match(policy, /LW_FACTORY_BEACON_BRIGHTNESS_LIMIT\s*=\s*24/,
+  'the beacon must use the brightest approved bench-safe level');
 assert.match(policy, /LW_FACTORY_BEACON_MAX_MILLIAMPS\s*=\s*100/);
+assert.match(policy, /LW_FACTORY_BEACON_STEP_MS\s*=\s*3000/,
+  'each output must stay selected long enough for a clear human observation');
+assert.match(policy, /factoryBeaconPulseOn[\s\S]*<\s*LW_FACTORY_BEACON_STEADY_ON_MS[\s\S]*>=\s*LW_FACTORY_BEACON_SECOND_ON_START_MS[\s\S]*<\s*LW_FACTORY_BEACON_SECOND_ON_END_MS/,
+  'the visibility pattern must provide a long steady hold and a distinct second pulse');
 
 const factorySetup = functionBody(main, 'bool setupFactoryBeaconOutputs()', 'bool setupSafeDiscoveryOutputs(');
 assert.match(factorySetup, /LW_APPROVED_OUTPUT_GPIO_COUNT/);
 assert.match(factorySetup, /addLedsForPin\(LW_APPROVED_OUTPUT_GPIOS\[i\]/);
 assert.match(factorySetup, /LW_FACTORY_BEACON_PIXEL_LIMIT/);
 assert.doesNotMatch(factorySetup, /38|39|40|48/);
+
+const normalSetup = functionBody(main, 'bool setupLedOutputs()', 'bool setupFactoryBeaconOutputs()');
+const rejectEmptyAt = normalSetup.indexOf('outputCount == 0');
+const readyAt = normalSetup.indexOf('ledOutputsReady = true');
+assert.ok(rejectEmptyAt >= 0 && rejectEmptyAt < readyAt,
+  'normal output setup must reject an empty output configuration before reporting ready');
+assert.match(normalSetup.slice(rejectEmptyAt, readyAt), /return false;/,
+  'empty normal output setup must fail instead of registering zero controllers');
 
 const factoryFrame = functionBody(main, 'void showFactoryBeaconFrame()', 'void showSafeDiscoveryFrame()');
 assert.match(factoryFrame, /FactoryBeaconOwnershipInputs/);
@@ -99,7 +112,10 @@ const recover = functionBody(main, 'String runtimeRecoverLights(', 'String runti
 assert.match(recover, /if \(factoryBeaconMode\) clearPhysicalLeds\(\)/,
   'factory recovery must black the beacon before recovery owns output');
 const setup = functionBody(main, 'void setup()', 'void loop()');
-const factoryBranch = setup.slice(setup.indexOf('ProvisioningPhase::Factory'), setup.indexOf('} else {', setup.indexOf('ProvisioningPhase::Factory')));
+assert.match(setup, /provisioningUsesFactoryBeacon\(runtimeConfig\.runtimePhase, outputCount\)/,
+  'factory and zero-output recovery boots must use the visible factory beacon path');
+const factoryCondition = setup.indexOf('provisioningUsesFactoryBeacon(runtimeConfig.runtimePhase, outputCount)');
+const factoryBranch = setup.slice(factoryCondition, setup.indexOf('} else {', factoryCondition));
 assert.match(factoryBranch, /runtimeRecoveryAfterRestartPending\(\)/);
 assert.match(factoryBranch, /clearRuntimeRecoveryAfterRestart/,
   'a factory boot must complete recovery intent without starting normal project output');
@@ -113,5 +129,12 @@ assert.doesNotMatch(loop,
   'recovery AP transport alone must never replace a commissioned project with a beacon');
 assert.match(factoryBranch, /factoryBeaconMode\s*=\s*true/,
   'the factory-alive beacon remains restricted to the genuinely blank factory branch');
+
+const outputReady = functionBody(main, 'bool runtimeOutputReady()', 'bool runtimeConfigValid()');
+assert.match(outputReady, /provisioningOutputReady\(ledOutputsReady, outputCount\)/,
+  'public output readiness must require a configured project output');
+const wiringStatus = functionBody(main, 'String runtimeWiringSafetyStatus()', 'bool runtimeActivateWiringCandidate(');
+assert.match(wiringStatus, /doc\["outputsReady"\]\s*=\s*runtimeOutputReady\(\)/,
+  'wiring status must not expose controller-only readiness as project output readiness');
 
 console.log('factory-beacon-safety tests passed');
