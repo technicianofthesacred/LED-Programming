@@ -190,7 +190,7 @@ function BandMeter({ label, value }) {
     <div style={{ flex: 1 }}>
       <div className="mono" style={{ fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-faint)', textAlign: 'center', marginBottom: 3 }}>{label}</div>
       <div style={{ height: 6, borderRadius: 3, background: 'var(--bg-elev)', overflow: 'hidden' }}>
-        <div style={{ height: '100%', width: `${Math.round(Math.min(1, value) * 100)}%`, background: 'var(--accent)', transition: 'width 0.08s linear' }} />
+        <div style={{ height: '100%', width: `${Math.round(Math.min(1, value) * 100)}%`, background: 'var(--accent)' }} />
       </div>
     </div>
   );

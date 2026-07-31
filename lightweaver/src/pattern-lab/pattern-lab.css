@@ -699,8 +699,7 @@
   display: grid;
   gap: 3px;
   padding: 10px 11px;
-  border: 1px solid var(--border-soft);
-  border-left: 3px solid var(--accent);
+  border: 1px solid var(--accent);
   border-radius: var(--r-sm);
   color: var(--text-mid);
   font-size: 10px;
@@ -708,8 +707,8 @@
 }
 
 .plab-export-status strong { color: var(--text-hi); font-size: 11px; }
-.plab-export-status[data-classification="live-on-card"] { border-left-color: var(--ok); }
-.plab-export-status[data-classification="studio-only"] { border-left-color: var(--danger); }
+.plab-export-status[data-classification="live-on-card"] { border-color: var(--ok); }
+.plab-export-status[data-classification="studio-only"] { border-color: var(--danger); }
 
 .plab-export-audio-status {
   margin-top: 8px;
