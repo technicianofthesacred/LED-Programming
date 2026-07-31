@@ -85,13 +85,13 @@ test('factory reset stages SD config and restores it when NVS clear fails', () =
   const runtimeReset = body(main, 'FactoryResetResult runtimeFactoryReset(', 'bool runtimeFinalizeFactoryResetRadio(');
   assert.match(runtimeReset, /SD\.begin\(LW_SD_CS\)/,
     'factory reset must mount SD even when normal boot loaded known-good NVS first');
-  assert.match(runtimeReset, /if \(!sdMounted\)[\s\S]*sd unavailable; remove card or retry[\s\S]*return result/,
-    'an uncertain SD state must fail closed with an actionable error');
+  assert.doesNotMatch(runtimeReset, /if \(!sdMounted\)[\s\S]*return result[\s\S]*prefs\.clear/,
+    'a reset must clear NVS even when the removable card is unavailable');
   assert.match(runtimeReset, /SD\.exists\(LW_FACTORY_RESET_RECOVERY_PATH\)/,
     'factory reset must detect stale recovery files');
-  assert.match(runtimeReset, /if \(staleRecoveryExists && sdConfigExists\)[\s\S]*SD\.remove\(LW_FACTORY_RESET_RECOVERY_PATH\)/,
+  assert.match(runtimeReset, /if \(sdMounted && staleRecoveryExists && sdConfigExists\)[\s\S]*SD\.remove\(LW_FACTORY_RESET_RECOVERY_PATH\)/,
     'a stale recovery file may be removed only when the active config still exists');
-  assert.match(runtimeReset, /else if \(staleRecoveryExists\)[\s\S]*sdConfigStaged\s*=\s*true/,
+  assert.match(runtimeReset, /else if \(sdMounted && staleRecoveryExists\)[\s\S]*sdConfigStaged\s*=\s*true/,
     'a lone recovery file must stay staged so NVS failure can restore it');
   assert.match(runtimeReset, /SD\.rename\(\s*LW_FACTORY_CONFIG_PATH,\s*LW_FACTORY_RESET_RECOVERY_PATH\)/,
     'active SD config must be staged by rename before NVS mutation');
@@ -104,16 +104,12 @@ test('factory reset stages SD config and restores it when NVS clear fails', () =
     'SD staging must complete before NVS is erased');
   assert.ok(runtimeReset.indexOf('SD.begin') < runtimeReset.indexOf('SD.exists'),
     'SD must be mounted before reset decides whether a config exists');
-  const sdUnavailableBranch = runtimeReset.slice(
-    runtimeReset.indexOf('if (!sdMounted)'),
-    runtimeReset.indexOf('bool sdConfigExists'),
-  );
-  assert.doesNotMatch(sdUnavailableBranch, /prefs|Preferences|\.clear\(|ESP\.restart/,
-    'SD mount failure must return before NVS mutation or reboot');
+  assert.match(runtimeReset, /prefs\.clear\(\)[\s\S]*suppressSdProjectAutorunAfterFactoryReset/,
+    'a no-SD reset must suppress later automatic boot from the old removable project');
   const cleanupAfterNvs = runtimeReset.slice(runtimeReset.indexOf('if (!nvsCleared)'));
   assert.match(cleanupAfterNvs, /SD\.remove\(LW_FACTORY_RESET_RECOVERY_PATH\)/,
     'staged SD config is deleted only after irreversible NVS clear');
-  assert.match(cleanupAfterNvs, /recovery backup remains[^"\n]*not auto-loaded/i,
+  assert.match(cleanupAfterNvs, /optional sd cleanup remains[^"\n]*not auto-loaded/i,
     'backup cleanup failure must report actionable non-bootable recovery truth');
 });
 

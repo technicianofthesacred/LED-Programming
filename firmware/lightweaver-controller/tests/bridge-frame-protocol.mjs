@@ -149,26 +149,35 @@ assert.equal(directConnects.length, 1,
   'lwFrameConnect() is invoked from exactly one place — inside the backoff-gated retry helper');
 assert.match(
   script,
-  /if\(!lwFrameWs\|\|lwFrameWs\.readyState>1\)\{lwFrameRetryLater\(\);return\}/,
+  /if\(!lwFrameWs\|\|lwFrameWs\.readyState>1\)\{lwFrameLastResult=\{relayed:false,reason:'relay-not-open'\};lwFrameRetryLater\(\);return lwFrameLastResult;\}/,
   'a flush against a down socket schedules a backoff-gated reconnect instead of connecting directly',
 );
 
 // ── honest frame acks ─────────────────────────────────────────────────────
 assert.match(
   script,
-  /response=\{ok:true,relayed:sent,wsOpen:!!\(lwFrameWs&&lwFrameWs\.readyState===1\)\}/,
-  "the 'frame' reply is {ok, relayed, wsOpen} — wsOpen true iff readyState===1 at reply time (Studio reads wsOpen===false as not-delivered)",
+  /response=\{ok:true,relayed:sent\.relayed,wsOpen:!!\(lwFrameWs&&lwFrameWs\.readyState===1\),reason:sent\.reason\}/,
+  "the 'frame' reply includes an honest relayed flag and typed send-failure reason",
 );
 assert.match(
   script,
-  /lwFrameFlush\(\);return!!\(lwFrameWs&&lwFrameWs\.readyState===1\)/,
-  'lwFrameSend reports whether the frame was handed to an OPEN socket — never an unconditional relayed:true',
+  /try\{lwFrameWs\.send\(JSON\.stringify\(\{seg:\[s\]\}\)\);return lwFrameLastResult=\{relayed:true,reason:''\}\}catch\(_\)\{lwFrameNext=p;lwFrameLastResult=\{relayed:false,reason:'relay-send-failed'\}/,
+  'lwFrameFlush must convert a WebSocket.send throw into an explicit relay-send-failed result',
+);
+assert.match(
+  script,
+  /const lwFrameSend=p=>\{[^}]*return lwFrameFlush\(\)\}/,
+  'lwFrameSend returns the flush result instead of inferring success only from readyState',
 );
 assert.doesNotMatch(
   script,
-  /relayed:true/,
+  /response=\{ok:true,relayed:true/,
   'no hardcoded relayed:true — delivery claims must reflect the socket state',
 );
+assert.match(script, /const lwBridgeError=\(reason,message\)=>Object\.assign\(new Error\(message\),\{reason\}\)/,
+  'bridge errors carry a typed reason while retaining their message');
+assert.match(script, /reason:e&&e\.reason\|\|\(\/\^HTTP /,
+  'all bridge error replies include a reason, classifying bare HTTP failures');
 
 // ── stop stays on the existing control path ───────────────────────────────
 assert.match(

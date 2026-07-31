@@ -263,6 +263,7 @@ String studioBridgeScript() {
               "const lwBridgeReply=(ev,msg)=>{try{ev.source&&ev.source.postMessage(Object.assign({app:'LightweaverCardBridge',version:");
   script += bridgeVersion;
   script += F("},msg),ev.origin)}catch(_){}};"
+              "const lwBridgeError=(reason,message)=>Object.assign(new Error(message),{reason});"
               "if(window.opener&&lwReadyOrigin){try{window.opener.postMessage({app:'LightweaverCardBridge',type:'ready',version:");
   script += bridgeVersion;
   script += F(",href:location.href,host:location.host},lwReadyOrigin)}catch(_){}};"
@@ -289,18 +290,18 @@ String studioBridgeScript() {
                 "lwFrameWs.onerror=()=>{try{lwFrameWs&&lwFrameWs.close()}catch(_){}}"
               "};"
               "const lwFrameFlush=()=>{"
-                "if(!lwFrameNext)return;"
-                "if(!lwFrameWs||lwFrameWs.readyState>1){lwFrameRetryLater();return}" // down: backoff-gated reconnect, never direct
-                "if(lwFrameWs.readyState===0)return;"                       // onopen flushes
-                "if(lwFrameWs.bufferedAmount>8192){lwFrameLater(lwFrameFlush,40);return}" // congested: keep only the latest
+                "if(!lwFrameNext)return lwFrameLastResult;"
+                "if(!lwFrameWs||lwFrameWs.readyState>1){lwFrameLastResult={relayed:false,reason:'relay-not-open'};lwFrameRetryLater();return lwFrameLastResult;}" // down: backoff-gated reconnect, never direct
+                "if(lwFrameWs.readyState===0){lwFrameLastResult={relayed:false,reason:'relay-connecting'};return lwFrameLastResult;}" // onopen flushes
+                "if(lwFrameWs.bufferedAmount>8192){lwFrameLastResult={relayed:false,reason:'relay-congested'};lwFrameLater(lwFrameFlush,40);return lwFrameLastResult;}" // congested: keep only the latest
                 "const p=lwFrameNext;lwFrameNext=null;"
                 "const s={i:p.pixels};if(Number.isInteger(p.seg))s.id=p.seg;"
-                "try{lwFrameWs.send(JSON.stringify({seg:[s]}))}catch(_){}"
+                "try{lwFrameWs.send(JSON.stringify({seg:[s]}));return lwFrameLastResult={relayed:true,reason:''}}catch(_){lwFrameNext=p;lwFrameLastResult={relayed:false,reason:'relay-send-failed'};try{lwFrameWs.close()}catch(_){};lwFrameRetryLater();return lwFrameLastResult}"
               "};"
-              // Returns true iff the frame was handed to an OPEN socket (sent, or
-              // parked in the pending slot of an open-but-congested socket that is
-              // already scheduled to flush).
-              "const lwFrameSend=p=>{if(!p||!Array.isArray(p.pixels))throw new Error('frame needs pixels');lwFrameNext=p;lwFrameFlush();return!!(lwFrameWs&&lwFrameWs.readyState===1)};"
+              "let lwFrameLastResult={relayed:false,reason:'relay-not-open'};"
+              // A reply says relayed only after WebSocket.send returns. Queued frames
+              // retain latest-frame-wins/backoff, but never claim delivery early.
+              "const lwFrameSend=p=>{if(!p||!Array.isArray(p.pixels))throw lwBridgeError('invalid-payload','frame needs pixels');lwFrameNext=p;return lwFrameFlush()};"
               // Stop: drop any undelivered frame and cancel the scheduled reconnect
               // so a stale frame can't land after cancelStream and re-claim the canvas.
               "const lwFrameCancel=()=>{lwFrameNext=null;if(lwFrameRetry){clearTimeout(lwFrameRetry);lwFrameRetry=null}};"
@@ -312,7 +313,7 @@ String studioBridgeScript() {
                   "else if(m.type==='zones'){response=await get('/api/zones')}"
                   "else if(m.type==='firmware-info'){response=await get('/api/firmware-info')}"
                   "else if(m.type==='wifi-handoff-ack'){response=await lwRelayWifiHandoffAck(ev)}"
-                  "else if(m.type==='frame'){const sent=lwFrameSend(m.payload||{});response={ok:true,relayed:sent,wsOpen:!!(lwFrameWs&&lwFrameWs.readyState===1)}}"
+                  "else if(m.type==='frame'){const sent=lwFrameSend(m.payload||{});response={ok:true,relayed:sent.relayed,wsOpen:!!(lwFrameWs&&lwFrameWs.readyState===1),reason:sent.reason}}"
                   "else if(m.type==='control'){const c=m.payload||{};if(c.cancelStream)lwFrameCancel();response=await post('/api/control',c)}"
                   "else if(m.type==='recover-lights'){response=await post('/api/recover-lights',m.payload||{})}"
                   "else if(m.type==='wiring-status'){response=await get('/api/wiring/status')}"
@@ -324,17 +325,17 @@ String studioBridgeScript() {
                   "else if(m.type==='reboot'){"
                     "const r=await fetch('/api/reboot',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});"
                     "response=await r.json().catch(()=>({ok:r.ok}));"
-                    "if(!r.ok||response.ok===false)throw new Error(response.error||('HTTP '+r.status));"
+                    "if(!r.ok||response.ok===false)throw lwBridgeError(!r.ok?'http':'runtime-rejected',response.error||('HTTP '+r.status));"
                   "}"
                   "else if(m.type==='config'){"
                     "const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(m.payload||{})});"
                     "response=await r.json().catch(()=>({ok:r.ok}));"
-                    "if(!r.ok||response.ok===false)throw new Error(response.error||('HTTP '+r.status));"
+                    "if(!r.ok||response.ok===false)throw lwBridgeError(!r.ok?'http':'runtime-rejected',response.error||('HTTP '+r.status));"
                     "const shouldReboot=response.state!=='staged'&&(m.reboot===true||response.requiresReboot===true||(m.reboot==='if-needed'&&response.requiresReboot!==false));"
                     "if(shouldReboot){response.rebooting=true;setTimeout(()=>post('/api/reboot',{}),250)}"
-                  "}else{throw new Error('unknown bridge request')}"
+                  "}else{throw lwBridgeError('invalid-payload','unknown bridge request')}"
                   "lwBridgeReply(ev,{id:m.id,type:m.type,ok:true,response})"
-                "}catch(e){lwBridgeReply(ev,{id:m.id,type:m.type,ok:false,error:e.message||String(e)})}"
+                "}catch(e){lwBridgeReply(ev,{id:m.id,type:m.type,ok:false,reason:e&&e.reason||(/^HTTP /.test(e&&e.message||'')?'http':'runtime-rejected'),error:e.message||String(e)})}"
               "});");
   return script;
 }

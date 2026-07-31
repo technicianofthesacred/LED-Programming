@@ -19,6 +19,7 @@
 #include <Preferences.h>
 #include <esp_task_wdt.h>
 #include <esp_system.h>
+#include <mbedtls/sha256.h>
 
 // Task watchdog timeout. Must exceed the longest blocking call in the loop
 // task — the look-change fade (fadeOutMs + fadeInMs, ~2s default) and SD reads.
@@ -157,8 +158,8 @@ void selectLook(int index);
 bool selectLookInstant(int index);
 bool startLook(uint8_t index);
 void closeSequence();
-bool openSequence(const String& path);
-bool canOpenSequence(const String& path);
+bool openSequence(const LookConfig& look);
+bool canOpenSequence(const LookConfig& look);
 bool isLoadedLookRenderable(const LookConfig& look, bool zoneTargeted);
 bool renderCurrentLook(bool force = false);
 bool renderSequenceFrame(bool force = false);
@@ -772,7 +773,7 @@ bool startLook(uint8_t index) {
   }
 
   if (look.mode == "sequence") {
-    if (!openSequence(look.file)) {
+    if (!openSequence(look)) {
       fail(ERROR_SEQUENCE, "sequence open failed");
       return false;
     }
@@ -810,31 +811,58 @@ bool readSequenceMetadata(File& file, uint32_t& frameCount, uint16_t& fps, uint3
   return true;
 }
 
-bool canOpenSequence(const String& path) {
-  if (path.length() == 0) return false;
-  File candidate = SD.open(path.c_str(), FILE_READ);
+bool sequenceIntegrityMatches(File& file, uint32_t declaredBytes, const String& declaredSha256) {
+  if (declaredBytes == 0 || declaredSha256.length() != 64 || file.size() != declaredBytes) return false;
+  mbedtls_sha256_context context;
+  mbedtls_sha256_init(&context);
+  mbedtls_sha256_starts_ret(&context, 0);
+  file.seek(0);
+  uint8_t buffer[256];
+  while (file.available()) {
+    size_t read = file.read(buffer, sizeof(buffer));
+    if (read == 0) break;
+    mbedtls_sha256_update_ret(&context, buffer, read);
+  }
+  uint8_t digest[32];
+  mbedtls_sha256_finish_ret(&context, digest);
+  mbedtls_sha256_free(&context);
+  const char* hex = "0123456789abcdef";
+  char actual[65] = {};
+  for (uint8_t index = 0; index < 32; index++) {
+    actual[index * 2] = hex[(digest[index] >> 4) & 0x0f];
+    actual[index * 2 + 1] = hex[digest[index] & 0x0f];
+  }
+  file.seek(0);
+  return declaredSha256 == actual;
+}
+
+bool canOpenSequence(const LookConfig& look) {
+  if (look.file.length() == 0) return false;
+  File candidate = SD.open(look.file.c_str(), FILE_READ);
   if (!candidate) return false;
   uint32_t frameCount = 0;
   uint16_t fps = 0;
   uint32_t frameBytes = 0;
-  bool valid = readSequenceMetadata(candidate, frameCount, fps, frameBytes);
+  bool valid = sequenceIntegrityMatches(candidate, look.sequenceBytes, look.sequenceSha256) &&
+      readSequenceMetadata(candidate, frameCount, fps, frameBytes);
   candidate.close();
   return valid;
 }
 
-bool openSequence(const String& path) {
-  if (path.length() == 0) return false;
+bool openSequence(const LookConfig& look) {
+  if (look.file.length() == 0) return false;
 
-  sequenceFile = SD.open(path.c_str(), FILE_READ);
+  sequenceFile = SD.open(look.file.c_str(), FILE_READ);
   if (!sequenceFile) {
     if (Serial) {
       Serial.print("Missing sequence file: ");
-      Serial.println(path);
+      Serial.println(look.file);
     }
     return false;
   }
 
-  if (!readSequenceMetadata(sequenceFile, sequenceFrameCount, sequenceFps, sequenceFrameBytes)) {
+  if (!sequenceIntegrityMatches(sequenceFile, look.sequenceBytes, look.sequenceSha256) ||
+      !readSequenceMetadata(sequenceFile, sequenceFrameCount, sequenceFps, sequenceFrameBytes)) {
     sequenceFile.close();
     return false;
   }
@@ -925,7 +953,7 @@ bool isLoadedLookRenderable(const LookConfig& look, bool zoneTargeted) {
   if (look.mode == "preset") return isSupportedPresetPattern(look.preset);
   if (look.mode == "sequence") {
     if (zoneTargeted) return false;
-    return canOpenSequence(look.file);
+    return canOpenSequence(look);
   }
   return false;
 }
@@ -1787,29 +1815,23 @@ FactoryResetResult runtimeFactoryReset() {
   FactoryResetResult result;
   runtimeMarkRestartPending();
   bool sdMounted = SD.begin(LW_SD_CS);
-  if (!sdMounted) {
-    restartTransitionPending = false;
-    result.message = "sd unavailable; remove card or retry; factory reset not completed";
-    return result;
-  }
-
-  bool sdConfigExists = SD.exists(LW_FACTORY_CONFIG_PATH);
-  bool staleRecoveryExists = SD.exists(LW_FACTORY_RESET_RECOVERY_PATH);
+  bool sdConfigExists = sdMounted && SD.exists(LW_FACTORY_CONFIG_PATH);
+  bool staleRecoveryExists = sdMounted && SD.exists(LW_FACTORY_RESET_RECOVERY_PATH);
   bool sdConfigStaged = false;
-  if (staleRecoveryExists && sdConfigExists) {
+  if (sdMounted && staleRecoveryExists && sdConfigExists) {
     if (!SD.remove(LW_FACTORY_RESET_RECOVERY_PATH)) {
       restartTransitionPending = false;
       result.message = "sd stale reset recovery cleanup failed; remove /lightweaver.reset-recovery.json or retry";
       return result;
     }
-  } else if (staleRecoveryExists) {
+  } else if (sdMounted && staleRecoveryExists) {
     // A power loss may leave the only recoverable project under the inert
     // backup name. Keep it staged so an NVS failure can restore active boot.
     sdConfigStaged = true;
     sdConfigExists = true;
   }
 
-  if (sdConfigExists && !sdConfigStaged) {
+  if (sdMounted && sdConfigExists && !sdConfigStaged) {
     sdConfigStaged = SD.rename(
         LW_FACTORY_CONFIG_PATH, LW_FACTORY_RESET_RECOVERY_PATH);
     if (!sdConfigStaged) {
@@ -1826,8 +1848,8 @@ FactoryResetResult runtimeFactoryReset() {
     prefs.end();
   }
   if (!nvsCleared) {
-    bool sdRestored = !sdConfigStaged || SD.rename(
-        LW_FACTORY_RESET_RECOVERY_PATH, LW_FACTORY_CONFIG_PATH);
+    bool sdRestored = !sdConfigStaged || (sdMounted && SD.rename(
+        LW_FACTORY_RESET_RECOVERY_PATH, LW_FACTORY_CONFIG_PATH));
     restartTransitionPending = false;
     result.message = sdRestored
         ? "nvs erase failed; sd config restored; factory reset not completed"
@@ -1835,21 +1857,34 @@ FactoryResetResult runtimeFactoryReset() {
     return result;
   }
 
-  bool sdConfigRemoved = !sdConfigStaged || SD.remove(LW_FACTORY_RESET_RECOVERY_PATH);
+  if (!sdMounted) {
+    String suppressionMessage;
+    if (!suppressSdProjectAutorunAfterFactoryReset(suppressionMessage)) {
+      restartTransitionPending = false;
+      result.message = String("nvs erased but ") + suppressionMessage +
+          "; factory reset cannot safely complete";
+      return result;
+    }
+  }
+
+  bool sdConfigRemoved = !sdConfigStaged || (sdMounted && SD.remove(LW_FACTORY_RESET_RECOVERY_PATH));
   if (!sdConfigRemoved) {
     restartTransitionPending = false;
-    result.message = "nvs erased; sd recovery backup remains at /lightweaver.reset-recovery.json and is not auto-loaded; remove manually; factory reset incomplete";
+    result.accepted = true;
+    result.pendingVerification = true;
+    result.message = "nvs erased; optional sd cleanup remains at /lightweaver.reset-recovery.json; it is not auto-loaded; remove manually";
     return result;
   }
-  if (!provisioningFactoryResetMayComplete(
-          sdMounted, sdConfigExists, sdConfigRemoved, nvsCleared)) {
+  if (!provisioningFactoryResetMayComplete(nvsCleared, sdConfigRemoved)) {
     restartTransitionPending = false;
     result.message = "factory reset verification failed after storage cleanup";
     return result;
   }
   result.accepted = true;
   result.pendingVerification = true;
-  result.message = "factory storage erased; reboot pending verification";
+  result.message = sdMounted
+      ? "factory storage erased; reboot pending verification"
+      : "nvs erased; sd cleanup unavailable; reboot pending verification";
   return result;
 }
 

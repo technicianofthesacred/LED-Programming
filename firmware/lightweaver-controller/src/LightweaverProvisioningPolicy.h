@@ -144,11 +144,9 @@ constexpr bool factoryBeaconMayOwnOutput(
          !input.recoveryActive;
 }
 
-constexpr bool provisioningFactoryResetMayComplete(bool sdAccessible,
-                                                   bool sdConfigExists,
-                                                   bool sdConfigRemoved,
-                                                   bool nvsCleared) {
-  return sdAccessible && (!sdConfigExists || sdConfigRemoved) && nvsCleared;
+constexpr bool provisioningFactoryResetMayComplete(bool nvsCleared,
+                                                   bool sdCleanupComplete) {
+  return nvsCleared && sdCleanupComplete;
 }
 
 constexpr bool provisioningZoneSelected(size_t zoneIndex,

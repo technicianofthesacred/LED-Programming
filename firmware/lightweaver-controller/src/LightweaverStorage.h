@@ -21,6 +21,7 @@ void applyDefaultRuntimeConfig(RuntimeConfig& config);
 void ensureDefaultZone(RuntimeConfig& config);
 RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config);
 bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& message);
+bool suppressSdProjectAutorunAfterFactoryReset(String& message);
 bool stageRuntimeConfigJson(const String& json, String& activationId, String& message);
 bool activateStagedRuntimeConfig(const String& activationId, String& message);
 bool confirmCandidateRuntimeConfig(const String& activationId, String& message);

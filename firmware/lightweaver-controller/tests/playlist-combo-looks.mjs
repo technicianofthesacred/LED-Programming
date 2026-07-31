@@ -37,7 +37,7 @@ assert.match(resolver, /isSupportedProceduralPattern\(look\.preset\)/, 'procedur
 assert.match(resolver, /look\.mode\s*==\s*"preset"/);
 assert.match(resolver, /isSupportedPresetPattern\(look\.preset\)/, 'preset looks require a preset renderer');
 assert.match(resolver, /look\.mode\s*==\s*"sequence"/);
-assert.match(resolver, /canOpenSequence\(look\.file\)/, 'sequence looks must prove their file is readable before selection');
+assert.match(resolver, /canOpenSequence\(look\)/, 'sequence looks must prove their declared asset is readable before selection');
 assert.match(resolver, /return false;/, 'unsupported loaded-look modes must reject');
 assert.match(main, /uint64_t\s+requiredBytes\s*=\s*uint64_t\(LWSEQ_HEADER_BYTES\)\s*\+\s*uint64_t\(frameCount\)\s*\*\s*frameBytes/);
 assert.match(main, /requiredBytes\s*>\s*file\.size\(\)/, 'sequence preflight must prove all declared frames exist, not only the header');
@@ -79,7 +79,7 @@ const startLookStart = main.indexOf('bool startLook(uint8_t index) {');
 const startLookEnd = main.indexOf('\n}', startLookStart);
 const startLook = main.slice(startLookStart, startLookEnd);
 assert.ok(
-  startLook.indexOf('openSequence(look.file)') < startLook.indexOf('applyLookToRuntimeZones(look)'),
+  startLook.indexOf('openSequence(look)') < startLook.indexOf('applyLookToRuntimeZones(look)'),
   'sequence open must succeed before any runtime-zone mutation',
 );
 

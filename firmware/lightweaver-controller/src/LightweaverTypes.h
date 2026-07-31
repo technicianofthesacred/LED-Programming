@@ -161,6 +161,8 @@ struct LookConfig {
   String label;
   String mode;
   String file;
+  uint32_t sequenceBytes = 0;
+  String sequenceSha256;
   String preset;
   uint16_t fps = 24;
   bool loop = true;

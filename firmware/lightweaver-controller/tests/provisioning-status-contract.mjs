@@ -55,8 +55,8 @@ assert.match(loadSd, /validateRuntimeConfigJsonStrict\(json, config, message, SO
   'strict SD parsing must retain SD-specific runtime defaults and behavior');
 assert.match(loadSd, /config\.source\s*=\s*SOURCE_SD/,
   'strict SD validation must preserve SD source and project identity for diagnosis');
-assert.match(load, /loadSdConfig\([\s\S]*provisioningSdProjectKnownGood\(true, false\)[\s\S]*setRuntimeLoadTruth\(config, result, true, sdKnownGood, false\)/,
-  'an unaccepted SD file may be playable but must not claim known-good readiness');
+assert.match(load, /!sdAutorunSuppressed\s*&&\s*sdMounted\s*&&\s*loadSdConfig\([\s\S]*setRuntimeLoadTruth\(config, result, true, true, false\)/,
+  'an exact-card SD project is authoritative unless a factory-reset suppression marker is present');
 assert.match(policy, /enum class ProvisioningStorageState[\s\S]*Absent[\s\S]*Present[\s\S]*Error/,
   'persisted config access must distinguish absent, present, and storage errors');
 assert.match(storage, /ProvisioningStorageState\s+migrateLegacyKnownGood\s*\(/,

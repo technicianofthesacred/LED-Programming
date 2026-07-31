@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
+import { createHash } from 'node:crypto';
 
 const [packagePath, outputDir] = process.argv.slice(2);
 
@@ -24,8 +25,22 @@ for (const [packageFilePath, fileValue] of Object.entries(packageJson.files)) {
 
   const targetPath = join(outputDir, cleanPath);
   await mkdir(dirname(targetPath), { recursive: true });
-  await writeFile(targetPath, encodeFileValue(fileValue));
+  const bytes = encodeFileValue(fileValue);
+  verifyFileIntegrity(packageFilePath, fileValue, bytes);
+  await writeFile(targetPath, bytes);
   console.log(`Wrote ${relative(outputDir, targetPath)}`);
+}
+
+function verifyFileIntegrity(path, value, bytes) {
+  if (!value || typeof value !== 'object' || value.encoding !== 'base64') return;
+  if (!Number.isSafeInteger(value.bytes) || value.bytes !== bytes.length) {
+    throw new Error(`Invalid declared bytes for ${path}`);
+  }
+  if (typeof value.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(value.sha256)) {
+    throw new Error(`Missing declared sha256 for ${path}`);
+  }
+  const actual = createHash('sha256').update(bytes).digest('hex');
+  if (actual !== value.sha256) throw new Error(`SHA256 mismatch for ${path}`);
 }
 
 console.log(`Standalone package unpacked to ${outputDir}`);
