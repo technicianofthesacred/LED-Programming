@@ -292,7 +292,27 @@ test('desktop Bridge launch persists the project and commissioning flow without 
       } else {
         const wiring = await import('/src/lib/cardWiringSafety.js');
         const status = wiring.normalizeCardWiringStatus({ ok: true, state: 'staged', activationId: 'candidate-real-stale', outputs: [] });
-        const candidate = await wiring.getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => ({ ok: true, state: 'staged', activationId: 'candidate-real-stale', outputs: [], cardId: current.expectedCard.id, firmwareVersion: current.expectedCard.firmwareVersion, buildId: current.expectedCard.buildId, projectRevision: current.project.revision, projectFingerprint: current.project.fingerprint }) });
+        const candidate = await wiring.getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => ({
+          ok: true,
+          state: 'staged',
+          activationId: 'candidate-real-stale',
+          outputs: [],
+          candidateOutputs: [{
+            id: 'out-a',
+            pin: 16,
+            pixels: 1,
+            segments: [{ id: 'pixel-a', count: 1, direction: 'forward' }],
+          }],
+          wiringRevision: 1,
+          wiringDigest: 'd'.repeat(64),
+          colorOrder: 'RGB',
+          maxMilliamps: 100,
+          cardId: current.expectedCard.id,
+          firmwareVersion: current.expectedCard.firmwareVersion,
+          buildId: current.expectedCard.buildId,
+          projectRevision: current.project.revision,
+          projectFingerprint: current.project.fingerprint,
+        }) });
         completed = api.stageCardProjectForPhysicalCheck(current, api.bindCardWiringActivationEvidence(status, candidate));
       }
       await api.writeCardCommissioning(completed, { locks: null });
@@ -438,9 +458,15 @@ test('a staged GPIO restoration stops at the Check lights handoff without legacy
     const flow = await activeCommissioning(page);
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       app: 'Lightweaver', ok: true, state: 'staged', activationId: 'candidate-safe-7', outputs: [{ pin: 18, pixels: 44 }],
+      candidateOutputs: [{
+        id: 'out-a',
+        pin: 18,
+        pixels: 44,
+        segments: [{ id: 'strip-a', count: 44, direction: 'forward' }],
+      }],
       cardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40),
       projectRevision: flow?.project?.revision, projectFingerprint: flow?.project?.fingerprint,
-      wiringRevision: 2, wiringDigest: 'd'.repeat(64), maxMilliamps: 1500,
+      wiringRevision: 2, wiringDigest: 'd'.repeat(64), colorOrder: 'RGB', maxMilliamps: 1500,
     }) });
   });
   await page.addInitScript(() => {
@@ -480,6 +506,18 @@ test('a staged GPIO restoration stops at the Check lights handoff without legacy
   await expect(page.getByText(/test its GPIO wiring before making it permanent/i)).toBeVisible();
   await expect(page.getByRole('button', { name: /Run light check|warm white/i })).toHaveCount(0);
   await expect.poll(async () => (await activeCommissioning(page))?.project?.pendingActivationId).toBe('candidate-safe-7');
+  await expect.poll(async () => (await activeCommissioning(page))?.project?.pendingWiring).toEqual({
+    wiringRevision: 2,
+    wiringDigest: 'd'.repeat(64),
+    colorOrder: 'RGB',
+    maxMilliamps: 1500,
+    outputs: [{
+      id: 'out-a',
+      pin: 18,
+      pixels: 44,
+      segments: [{ id: 'strip-a', count: 44, direction: 'forward' }],
+    }],
+  });
 });
 
 test('wrong-card and recoverable failures retry the existing connection step', async ({ page }) => {

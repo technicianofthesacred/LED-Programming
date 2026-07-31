@@ -11,9 +11,18 @@ const DEFAULT_RUNTIME = buildCardRuntimePackageFromProject({
   standaloneController: DEFAULT_PROJECT.devices.standaloneController,
 }).config;
 
-async function mockConnectedCard(page: any, cardId = 'lw-studio-hardening') {
+async function mockConnectedCard(page: any, cardId = 'lw-studio-hardening', options: any = {}) {
+  let installedConfig: any = DEFAULT_RUNTIME;
   await page.route('**/api/firmware-info', route => route.fulfill({
-    json: { cardId, firmwareVersion: '1.0.0', outputs: DEFAULT_RUNTIME.led.outputs },
+    json: {
+      app: 'Lightweaver',
+      cardId,
+      firmwareVersion: '1.0.0',
+      buildId: 'studio-hardening-build',
+      projectRevision: installedConfig.projectRevision,
+      projectFingerprint: installedConfig.projectFingerprint,
+      outputs: installedConfig.led.outputs,
+    },
   }));
   await page.route('**/api/status', route => route.fulfill({
     json: { ok: true, cardId, firmwareVersion: '1.0.0', led: { pixels: DEFAULT_RUNTIME.led.pixels } },
@@ -21,9 +30,17 @@ async function mockConnectedCard(page: any, cardId = 'lw-studio-hardening') {
   await page.route('**/api/zones', route => route.fulfill({
     json: { ok: true, zones: DEFAULT_RUNTIME.zones },
   }));
-  await page.route('**/api/config', route => route.fulfill({
-    json: { ok: true, requiresReboot: false },
-  }));
+  await page.route('**/api/config', async route => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({ json: installedConfig });
+      return;
+    }
+    installedConfig = JSON.parse(route.request().postData() || '{}');
+    options.onConfigRequest?.();
+    if (options.configGate) await options.configGate();
+    if (options.configDelayMs) await new Promise(resolve => setTimeout(resolve, options.configDelayMs));
+    await route.fulfill({ json: { ok: true, requiresReboot: false } });
+  });
   await page.route('**/api/control', async route => {
     const body = JSON.parse(route.request().postData() || '{}');
     await route.fulfill({ json: { ok: true, cardId, patternId: body.patternId, revision: body.revision } });
@@ -144,24 +161,60 @@ test('pattern preview follows canonical reordered and reversed physical addresse
 });
 
 test('Settings installs the exact requested revision when an edit happens during the write', async ({ page }) => {
-  await mockConnectedCard(page);
-  await page.route('**/api/config', async route => {
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    await route.fulfill({ json: { ok: true, requiresReboot: false } });
+  let configRequested = false;
+  let releaseConfig: (() => void) | null = null;
+  const configGate = new Promise<void>(resolve => { releaseConfig = resolve; });
+  await mockConnectedCard(page, 'lw-studio-hardening', {
+    onConfigRequest: () => { configRequested = true; },
+    configGate: () => configGate,
   });
   await page.getByRole('button', { name: 'Preferences', exact: true }).click();
   const name = page.locator('.set-row', { hasText: 'Project name' }).locator('input');
   await name.fill('Revision one');
   await expect(page.locator('.savechip')).toContainText('Unsaved changes');
   await page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Card settings' }).click();
-  const save = page.locator('.set-row', { hasText: 'Write to card' }).getByRole('button').first();
+  const save = page.locator('.set-row', { hasText: 'Install on card' }).getByRole('button', { name: 'Install on card' });
   await save.click();
-  await expect(save).toBeDisabled();
+  await expect.poll(() => configRequested).toBe(true);
   await page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Preferences' }).click();
   await name.fill('Revision two');
+  releaseConfig?.();
   await page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Card settings' }).click();
-  await expect(page.getByTestId('settings-card-status')).toContainText('Saved on card');
+  await expect(page.getByTestId('settings-card-status')).toContainText('Installed on card');
   await expect(page.locator('.savechip')).toContainText('Unsaved changes');
+});
+
+test('Settings records a current install only after exact card read-back', async ({ page }) => {
+  await mockConnectedCard(page);
+  await page.getByRole('button', { name: 'Preferences', exact: true }).click();
+  const name = page.locator('.set-row', { hasText: 'Project name' }).locator('input');
+  await name.fill('Exact settings install');
+  await page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Card settings' }).click();
+  await page.locator('.set-row', { hasText: 'Install on card' }).getByRole('button', { name: 'Install on card' }).click();
+
+  await expect(page.getByTestId('settings-card-status')).toContainText('Installed on card');
+  await expect(page.locator('.savechip')).toContainText('Installed on card');
+});
+
+test('a stale revision-zero install acknowledgement cannot label a replacement project installed', async ({ page }) => {
+  let configRequested = false;
+  let releaseConfig: (() => void) | null = null;
+  const configGate = new Promise<void>(resolve => { releaseConfig = resolve; });
+  await mockConnectedCard(page, 'lw-studio-hardening', {
+    onConfigRequest: () => { configRequested = true; },
+    configGate: () => configGate,
+  });
+  await page.getByRole('button', { name: 'Preferences', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Card settings' }).click();
+  await page.locator('.set-row', { hasText: 'Install on card' }).getByRole('button', { name: 'Install on card' }).click();
+  await expect.poll(() => configRequested).toBe(true);
+
+  await page.getByRole('button', { name: 'New project' }).click();
+  await expect(page.locator('.savechip')).toContainText('New project');
+  releaseConfig?.();
+
+  await expect(page.getByTestId('settings-card-status')).toContainText('Installed on card');
+  await expect(page.locator('.savechip')).toContainText('New project');
 });
 
 test('Pattern card write is pending, disables conflicts, and exposes retry after failure', async ({ page }) => {
@@ -180,7 +233,6 @@ test('Pattern card write is pending, disables conflicts, and exposes retry after
 
 test('Pattern confirms the exact draft revision installed on the card', async ({ page }) => {
   await mockConnectedCard(page);
-  await page.route('**/api/config', route => route.fulfill({ json: { ok: true, requiresReboot: false } }));
   await page.getByPlaceholder('Search chip patterns').fill('ocean');
   await page.locator('[data-pattern-id="ocean"]').click();
   await expect(page.locator('.savechip')).toContainText('Unsaved changes');
@@ -209,7 +261,6 @@ test('bench chase restores the last Studio-confirmed look after transport failur
   const controls: any[] = [];
   const cardId = 'lw-bench-hardening';
   await mockConnectedCard(page, cardId);
-  await page.route('**/api/config', route => route.fulfill({ json: { ok: true, requiresReboot: false } }));
   await page.route('**/api/control', async route => {
     const body = JSON.parse(route.request().postData() || '{}');
     controls.push(body);
@@ -238,6 +289,7 @@ test('bench chase restores the last Studio-confirmed look after transport failur
     window.WebSocket = FailedSocket as any;
     window.location.hash = 'screen=layout&mode=wire';
   });
+  await page.getByTestId('start-led-check').click();
   const bench = page.getByTestId('wiring-bench-test');
   await expect(bench).toBeVisible();
   await bench.getByRole('button', { name: 'I can see the LED strips' }).click();
@@ -512,6 +564,7 @@ test('replacement guard names both projects and keeps editing until explicitly r
   const projectName = page.locator('.set-row', { hasText: 'Project name' }).locator('input');
   await projectName.fill('Current Mandala');
 
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_autosave_v3'))).not.toBeNull();
   const incoming = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}'));
   incoming.name = 'Incoming Lotus';
   const projectFile = {
@@ -520,7 +573,7 @@ test('replacement guard names both projects and keeps editing until explicitly r
     buffer: Buffer.from(JSON.stringify(incoming)),
   };
 
-  const fileInput = page.locator('input[type="file"]').first();
+  const fileInput = page.locator('.set-file-input');
   await fileInput.setInputFiles(projectFile);
   const dialog = page.getByRole('dialog', { name: 'Replace current project?' });
   await expect(dialog).toContainText('Current Mandala');

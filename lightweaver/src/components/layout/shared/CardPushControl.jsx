@@ -109,6 +109,7 @@ export function CardPushControl({
         attempt = {
           host: cleanHost,
           revision: projectLifecycle.editedRevision,
+          generation: projectLifecycle.generation,
           zoneCount: prepared.config.zones.length,
           pkg: prepared.runtimePackage,
           prepared,
@@ -125,11 +126,17 @@ export function CardPushControl({
         return;
       }
       setPushStatus('Verifying the exact project on the card…');
-      await waitForCardDeploymentVerification(attempt.prepared, {
+      const verification = await waitForCardDeploymentVerification(attempt.prepared, {
         readEvidence: () => readCardProjectEvidence({ host: attempt.host }),
       });
       dispatchAction({ type: 'confirm' });
-      markProjectInstalled(attempt.revision);
+      markProjectInstalled({
+        revision: attempt.revision,
+        generation: attempt.generation,
+        cardId: verification.cardId,
+        projectRevision: attempt.prepared.config.projectRevision,
+        projectFingerprint: attempt.prepared.config.projectFingerprint,
+      });
       markCardLookConfirmed({ ...(standaloneController?.defaultLook || {}), syncZones: true });
       failedAttemptRef.current = null;
       setPushStatus(`Installed revision ${attempt.revision} on card · ${attempt.zoneCount} zone${attempt.zoneCount === 1 ? '' : 's'} at ${cleanHost}`);
@@ -173,11 +180,17 @@ export function CardPushControl({
       if (visible) {
         await confirmCardWiringCandidate(wiringCandidate.activationId, { host: wiringCandidate.attempt.host });
         setPushStatus('Verifying the confirmed wiring on the card…');
-        await waitForCardDeploymentVerification(wiringCandidate.attempt.prepared, {
+        const verification = await waitForCardDeploymentVerification(wiringCandidate.attempt.prepared, {
           readEvidence: () => readCardProjectEvidence({ host: wiringCandidate.attempt.host }),
         });
         dispatchAction({ type: 'confirm' });
-        markProjectInstalled(wiringCandidate.attempt.revision);
+        markProjectInstalled({
+          revision: wiringCandidate.attempt.revision,
+          generation: wiringCandidate.attempt.generation,
+          cardId: verification.cardId,
+          projectRevision: wiringCandidate.attempt.prepared.config.projectRevision,
+          projectFingerprint: wiringCandidate.attempt.prepared.config.projectFingerprint,
+        });
         markCardLookConfirmed({ ...(standaloneController?.defaultLook || {}), syncZones: true });
         setPushStatus(`Wiring confirmed. Revision ${wiringCandidate.attempt.revision} is now the card’s working setup.`);
         setWiringTestState('confirmed');

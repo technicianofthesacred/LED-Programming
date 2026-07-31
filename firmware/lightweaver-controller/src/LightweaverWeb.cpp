@@ -6,6 +6,7 @@
 #include "LightweaverWledRealtime.h"
 #include "LightweaverArtnet.h"
 #include "LightweaverConnectivityPolicy.h"
+#include "LightweaverControlTransaction.h"
 #include "LightweaverRecipe.h"
 #include "LightweaverConnectivityOrchestrator.h"
 #include "LightweaverHardwareContract.h"
@@ -1733,27 +1734,45 @@ void handleControlPost() {
     confirmedRevision = doc["revision"].as<uint32_t>();
   }
   bool patternRequested = hasControlField(doc, "patternId");
-  bool patternApplied = !patternRequested;
   String confirmedPatternId = patternRequested ? controlString(doc, "patternId") : String("");
   if (patternRequested && (confirmedPatternId.length() == 0 || confirmedPatternId.length() > 64)) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"pattern id out of range\"}");
     return;
   }
-  if (patternRequested && !runtimeCanSelectPatternByIdZ(zoneTarget, confirmedPatternId)) {
+
+  bool nextRequested = hasControlField(doc, "next") && controlBool(doc, "next");
+  bool previousRequested = hasControlField(doc, "previous") && controlBool(doc, "previous");
+  uint8_t selectionRequestCount =
+      uint8_t(patternRequested) + uint8_t(nextRequested) + uint8_t(previousRequested);
+  if (selectionRequestCount > 1) {
+    server.send(400, "application/json",
+                "{\"ok\":false,\"error\":\"choose one pattern operation\"}");
+    return;
+  }
+  bool selectionRequested = selectionRequestCount == 1;
+  bool selectionPrepared = !selectionRequested;
+  if (patternRequested) {
+    selectionPrepared =
+        runtimePreparePatternByIdZ(zoneTarget, confirmedPatternId);
+  } else if (nextRequested) {
+    selectionPrepared = runtimePrepareStepPattern(1);
+  } else if (previousRequested) {
+    selectionPrepared = runtimePrepareStepPattern(-1);
+  }
+  if (!selectionPrepared) {
+    runtimeDiscardPreparedPatternSelection();
     JsonDocument rejected;
     rejected["ok"] = false;
     rejected["cardId"] = runtimeCardId();
-    rejected["error"] = "unknown pattern";
+    rejected["error"] = "pattern unavailable";
+    rejected["stateRevision"] = runtimeStateRevision();
     String body;
     serializeJson(rejected, body);
     server.send(422, "application/json", body);
     return;
   }
-
-  bool nextRequested = hasControlField(doc, "next") && controlBool(doc, "next");
-  bool previousRequested = hasControlField(doc, "previous") && controlBool(doc, "previous");
-  bool nextCanChange = nextRequested && runtimeCanStepPattern(1);
-  bool previousCanChange = previousRequested && runtimeCanStepPattern(-1);
+  bool nextCanChange = nextRequested;
+  bool previousCanChange = previousRequested;
   bool cancelStreamRequested =
       hasControlField(doc, "cancelStream") && controlBool(doc, "cancelStream");
   bool cancelStreamEffective = provisioningCancelStreamEffective(
@@ -1779,46 +1798,63 @@ void handleControlPost() {
   scopeInputs.syncStateChanged = syncStateChanged;
   ProvisioningOutputScope operationScope = provisioningOperationScope(scopeInputs);
   if (operationScope == ProvisioningOutputScope::None) {
+    runtimeDiscardPreparedPatternSelection();
     server.send(422, "application/json", "{\"ok\":false,\"error\":\"command affects zero outputs\"}");
     return;
   }
   uint8_t preflightAffectedOutputCount = runtimeAffectedOutputCount(zoneTarget, effectiveSyncZones, operationScope);
   if (!provisioningControlAdvancesRevision(
           true, operationScope, preflightAffectedOutputCount)) {
+    runtimeDiscardPreparedPatternSelection();
     server.send(422, "application/json", "{\"ok\":false,\"error\":\"command affects zero outputs\"}");
     return;
   }
 
-  // Apply sync mode before any empty-zone writes. Otherwise an "all sections"
-  // command sent while the card is in split preview mode updates only zone 0.
-  if (syncZonesRequested) runtimeSetSyncZones(controlBool(doc, "syncZones"));
-  if (colorOrderRequested) runtimeSetLedColorOrder(controlString(doc, "colorOrder"));
-  if (hasControlField(doc, "brightness")) runtimeSetBrightnessZ(zoneTarget, controlFloat(doc, "brightness"));
-  if (hasControlField(doc, "speed")) runtimeSetSpeedZ(zoneTarget, controlFloat(doc, "speed"));
-  if (hasControlField(doc, "hueShift")) runtimeSetHueShiftZ(zoneTarget, controlInt(doc, "hueShift"));
-  if (hasControlField(doc, "blackout")) runtimeSetBlackoutZ(zoneTarget, controlBool(doc, "blackout"));
-  if (nextCanChange) runtimeNextPattern();
-  if (previousCanChange) runtimePreviousPattern();
-  if (patternRequested) {
-    patternApplied = runtimeSelectPatternByIdZ(zoneTarget, confirmedPatternId);
+  uint32_t appliedStateRevision = runtimeStateRevision();
+  bool transactionApplied = applyPreparedControlTransaction(
+      selectionRequested,
+      []() { return runtimeCommitPreparedPatternSelection(); },
+      [&]() {
+        // Apply sync mode before any empty-zone writes. Otherwise an "all
+        // sections" command sent in split preview mode updates only zone 0.
+        if (syncZonesRequested) runtimeSetSyncZones(controlBool(doc, "syncZones"));
+        if (colorOrderRequested) runtimeSetLedColorOrder(controlString(doc, "colorOrder"));
+        if (hasControlField(doc, "brightness")) runtimeSetBrightnessZ(zoneTarget, controlFloat(doc, "brightness"));
+        if (hasControlField(doc, "speed")) runtimeSetSpeedZ(zoneTarget, controlFloat(doc, "speed"));
+        if (hasControlField(doc, "hueShift")) runtimeSetHueShiftZ(zoneTarget, controlInt(doc, "hueShift"));
+        if (hasControlField(doc, "blackout")) runtimeSetBlackoutZ(zoneTarget, controlBool(doc, "blackout"));
+        if (hasControlField(doc, "hue")) runtimeSetCustomHueZ(zoneTarget, uint8_t(controlInt(doc, "hue") & 0xff));
+        if (hasControlField(doc, "saturation")) runtimeSetCustomSaturationZ(zoneTarget, uint8_t(controlInt(doc, "saturation") & 0xff));
+        if (hasControlField(doc, "breathe")) runtimeSetCustomBreatheZ(zoneTarget, controlBool(doc, "breathe"));
+        if (hasControlField(doc, "drift")) runtimeSetCustomDriftZ(zoneTarget, controlBool(doc, "drift"));
+        if (hasControlField(doc, "driftMin") || hasControlField(doc, "driftMax")) {
+          uint8_t lo = hasControlField(doc, "driftMin") ? uint8_t(controlInt(doc, "driftMin") & 0xff) : runtimeGetDriftHueMin();
+          uint8_t hi = hasControlField(doc, "driftMax") ? uint8_t(controlInt(doc, "driftMax") & 0xff) : runtimeGetDriftHueMax();
+          runtimeSetDriftRangeZ(zoneTarget, lo, hi);
+        }
+        if (cancelStreamEffective) runtimeCancelStream();
+      },
+      []() { return runtimeAdvanceStateRevision(); },
+      appliedStateRevision);
+  if (!transactionApplied) {
+    runtimeDiscardPreparedPatternSelection();
+    JsonDocument rejected;
+    rejected["ok"] = false;
+    rejected["cardId"] = runtimeCardId();
+    rejected["error"] = "pattern unavailable";
+    rejected["stateRevision"] = runtimeStateRevision();
+    String body;
+    serializeJson(rejected, body);
+    server.send(422, "application/json", body);
+    return;
   }
-  if (hasControlField(doc, "hue")) runtimeSetCustomHueZ(zoneTarget, uint8_t(controlInt(doc, "hue") & 0xff));
-  if (hasControlField(doc, "saturation")) runtimeSetCustomSaturationZ(zoneTarget, uint8_t(controlInt(doc, "saturation") & 0xff));
-  if (hasControlField(doc, "breathe")) runtimeSetCustomBreatheZ(zoneTarget, controlBool(doc, "breathe"));
-  if (hasControlField(doc, "drift")) runtimeSetCustomDriftZ(zoneTarget, controlBool(doc, "drift"));
-  if (hasControlField(doc, "driftMin") || hasControlField(doc, "driftMax")) {
-    uint8_t lo = hasControlField(doc, "driftMin") ? uint8_t(controlInt(doc, "driftMin") & 0xff) : runtimeGetDriftHueMin();
-    uint8_t hi = hasControlField(doc, "driftMax") ? uint8_t(controlInt(doc, "driftMax") & 0xff) : runtimeGetDriftHueMax();
-    runtimeSetDriftRangeZ(zoneTarget, lo, hi);
-  }
-  if (cancelStreamEffective) runtimeCancelStream();
   // Echo current state back
   uint8_t affectedOutputCount =
       runtimeAffectedOutputCount(zoneTarget, runtimeGetSyncZones(), operationScope);
   JsonDocument out;
-  out["ok"] = !patternRequested || patternApplied;
+  out["ok"] = true;
   out["cardId"] = runtimeCardId();
-  out["stateRevision"] = runtimeAdvanceStateRevision();
+  out["stateRevision"] = appliedStateRevision;
   out["affectedOutputCount"] = affectedOutputCount;
   out["affectedOutputScope"] = operationScope == ProvisioningOutputScope::AllOutputs
       ? "all-active-outputs" : "selected-zones";
@@ -1833,7 +1869,7 @@ void handleControlPost() {
     out["revision"] = confirmedRevision;
     out["confirmedRevision"] = confirmedRevision;
   }
-  if (patternRequested && patternApplied) {
+  if (patternRequested) {
     out["patternId"] = confirmedPatternId;
     JsonObject confirmedLook = out["confirmedLook"].to<JsonObject>();
     confirmedLook["patternId"] = confirmedPatternId;
@@ -1853,7 +1889,7 @@ void handleControlPost() {
   out["driftMax"] = runtimeGetDriftHueMax();
   String body;
   serializeJson(out, body);
-  server.send(!patternRequested || patternApplied ? 200 : 422, "application/json", body);
+  server.send(200, "application/json", body);
 }
 
 void handleRecoverLights() {

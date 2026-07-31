@@ -122,6 +122,16 @@ test('generator and job builder reproduce the committed source, artifact, and in
 
 test('always-on tests watch every production-job and signing input', async () => {
   const workflow = await readFile(resolve(repoRoot, '.github/workflows/test.yml'), 'utf8');
+  assert.match(
+    workflow,
+    /npm ci --prefix \.\.\/led-art-mapper\/app/,
+    'the launch gate builds the Mapper, so CI must install its pinned dependencies',
+  );
+  assert.equal(
+    workflow.match(/- 'led-art-mapper\/\*\*'/g)?.length,
+    2,
+    'Mapper-only pushes and pull requests must both trigger the launch gate',
+  );
   for (const path of [
     'release/job-generators/**',
     'release/job-sources/**',

@@ -2,6 +2,7 @@
 #include "LightweaverRuntimeApi.h"
 #include "LightweaverOutputColorParser.h"
 #include "LightweaverRecipe.h"
+#include "LightweaverLookModePolicy.h"
 #include <new>
 #include <esp_system.h>
 #include <mbedtls/sha256.h>
@@ -694,6 +695,7 @@ bool validateRuntimeConfigJsonStrict(const String& json,
     outputIndex++;
   }
 
+  String configMode = String(doc["mode"] | (source == SOURCE_SD ? "sd-sequence" : "website-flash"));
   JsonArray looks = doc["looks"].as<JsonArray>();
   if (looks.isNull()) looks = doc["patterns"].as<JsonArray>();
   if (looks.isNull() || looks.size() == 0 || looks.size() > LW_MAX_LOOKS) {
@@ -706,7 +708,6 @@ bool validateRuntimeConfigJsonStrict(const String& json,
     JsonObject look = value.as<JsonObject>();
     String id = String(look["id"] | "");
     String preset = String(look["preset"] | id.c_str());
-    String mode = String(look["mode"] | "");
     if (!id.length()) {
       message = "look id missing";
       return false;
@@ -718,18 +719,10 @@ bool validateRuntimeConfigJsonStrict(const String& json,
       }
     }
     lookIds[lookCount++] = id;
-    if (mode == "sequence") {
-      uint32_t bytes = look["bytes"] | 0U;
-      String sha256 = String(look["sha256"] | "");
-      if (bytes == 0 || sha256.length() != 64 || !isLowerHex(sha256)) {
-        message = "sequence look requires declared bytes and sha256";
-        return false;
-      }
-    }
-    (void)preset;
     JsonVariantConst recipeValue = look["nativeRecipe"];
     if (recipeValue.isNull()) recipeValue = look["recipe"];
-    if (!recipeValue.isNull()) {
+    bool hasNativeRecipe = !recipeValue.isNull();
+    if (hasNativeRecipe) {
       if (id.length() > lightweaver::LW_RECIPE_MAX_ID_BYTES ||
           preset.length() > lightweaver::LW_RECIPE_MAX_ID_BYTES) {
         message = "native recipe route id exceeds supported limit";
@@ -741,6 +734,21 @@ bool validateRuntimeConfigJsonStrict(const String& json,
               recipeValue, measureJson(recipeValue), nativeRecipe, recipeError)) {
         message = String(recipeError.path ? recipeError.path : "recipe") + " " +
                   (recipeError.message ? recipeError.message : "is invalid");
+        return false;
+      }
+    }
+    const char* explicitMode = look["mode"] | nullptr;
+    bool explicitModePresent = explicitMode != nullptr;
+    bool requiresSequenceMetadata = effectiveLookRequiresSequenceMetadata(
+        explicitModePresent,
+        explicitModePresent && String(explicitMode) == "sequence",
+        configMode == "sd-sequence",
+        hasNativeRecipe);
+    if (requiresSequenceMetadata) {
+      uint32_t bytes = look["bytes"] | 0U;
+      String sha256 = String(look["sha256"] | "");
+      if (bytes == 0 || sha256.length() != 64 || !isLowerHex(sha256)) {
+        message = "sequence look requires declared bytes and sha256";
         return false;
       }
     }
@@ -1408,19 +1416,22 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
     message = "prior confirmation fence failed";
     return false;
   }
-  bool ok = prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, json) == json.length();
-  if (ok) {
+  bool committed = prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, json) == json.length();
+  bool cleanupOk = true;
+  if (committed) {
     // Keep the old key as a downgrade fallback, but only after the canonical
     // known-good write succeeds.
-    prefs.putString(NVS_LEGACY_CONFIG_KEY, json);
-    writeCandidateState(prefs, WIRING_CANDIDATE_NONE);
-    prefs.remove(NVS_CANDIDATE_CONFIG_KEY);
-    prefs.remove(NVS_CANDIDATE_ID_KEY);
-    ok = !prefs.isKey(NVS_SD_AUTORUN_SUPPRESSED_KEY) ||
-         prefs.remove(NVS_SD_AUTORUN_SUPPRESSED_KEY);
+    cleanupOk = prefs.putString(NVS_LEGACY_CONFIG_KEY, json) == json.length() && cleanupOk;
+    cleanupOk = writeCandidateState(prefs, WIRING_CANDIDATE_NONE) && cleanupOk;
+    cleanupOk = (!prefs.isKey(NVS_CANDIDATE_CONFIG_KEY) ||
+                 prefs.remove(NVS_CANDIDATE_CONFIG_KEY)) && cleanupOk;
+    cleanupOk = (!prefs.isKey(NVS_CANDIDATE_ID_KEY) ||
+                 prefs.remove(NVS_CANDIDATE_ID_KEY)) && cleanupOk;
+    cleanupOk = (!prefs.isKey(NVS_SD_AUTORUN_SUPPRESSED_KEY) ||
+                 prefs.remove(NVS_SD_AUTORUN_SUPPRESSED_KEY)) && cleanupOk;
   }
   prefs.end();
-  if (!ok) {
+  if (!committed) {
     delete parsed;
     message = "nvs write failed";
     return false;
@@ -1441,7 +1452,9 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
   config.knownGoodProject = true;
   config.runtimePhase = ProvisioningPhase::Ready;
   synchronizeNativeRecipes(config);
-  message = "saved to internal flash";
+  message = cleanupOk
+      ? "saved to internal flash"
+      : "saved to internal flash; cleanup warning: legacy recovery metadata may need service";
   return true;
 }
 

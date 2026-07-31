@@ -36,6 +36,10 @@ void runtimeSetCustomSaturationZ(const String& targetId, uint8_t sat);
 void runtimeSetCustomBreatheZ(const String& targetId, bool on);
 void runtimeSetCustomDriftZ(const String& targetId, bool on);
 bool runtimeCanSelectPatternByIdZ(const String& targetId, const String& patternId);
+bool runtimePreparePatternByIdZ(const String& targetId, const String& patternId);
+bool runtimePrepareStepPattern(int8_t direction);
+bool runtimeCommitPreparedPatternSelection();
+void runtimeDiscardPreparedPatternSelection();
 bool runtimeSelectPatternByIdZ(const String& targetId, const String& patternId);
 
 void runtimeSetLedColorOrder(const String& order);

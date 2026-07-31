@@ -307,6 +307,7 @@ const SettingsFieldContext = createContext(null);
 
     const pushDirect = async () => {
       const requestedRevision = projectLifecycle.editedRevision;
+      const requestedGeneration = projectLifecycle.generation;
       dispatchCardWrite({ type: 'start', revision: requestedRevision });
       setStatusKind('');
       setStatus(`Sending to ${cardHostToUrl(cardHost)}...`);
@@ -318,10 +319,17 @@ const SettingsFieldContext = createContext(null);
           throw new Error('The card kept this hardware change staged. Open Test & Install and confirm it on the real LEDs before it can be installed.');
         }
         setStatus('Verifying the exact project on the card…');
-        await waitForCardDeploymentVerification({ ...preparedDeployment, cardId: before.cardId }, {
+        const exactPrepared = { ...preparedDeployment, cardId: before.cardId };
+        const verification = await waitForCardDeploymentVerification(exactPrepared, {
           readEvidence: () => readCardProjectEvidence({ host: cardHost }),
         });
-        markProjectInstalled(requestedRevision);
+        markProjectInstalled({
+          revision: requestedRevision,
+          generation: requestedGeneration,
+          cardId: verification.cardId,
+          projectRevision: exactPrepared.config.projectRevision,
+          projectFingerprint: exactPrepared.config.projectFingerprint,
+        });
         markCardLookConfirmed({ ...defaultLook, syncZones: true });
         dispatchCardWrite({ type: 'confirm' });
         setStatusKind('ok');

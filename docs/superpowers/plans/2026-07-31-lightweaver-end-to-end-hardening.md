@@ -405,3 +405,78 @@ issues are fixed and re-reviewed.
 Software completion does not close AP join, visible-strip, power-cycle,
 microSD-playback, or Wi-Fi recovery checks without the real card.
 
+## Second-pass closure: import, installation truth, and runtime atomicity
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> `superpowers:test-driven-development`. Each workstream must report the
+> failing test observed before implementation and the passing result after it.
+
+### Workstream A: Mapper and Studio import integrity
+
+**Files:**
+
+- Modify: `led-art-mapper/app/src/project-format.js`
+- Modify: `led-art-mapper/app/src/main.js`
+- Modify: `led-art-mapper/app/test/project-format.test.js`
+- Modify: `lightweaver/src/lib/projectModel.js`
+- Create or modify: focused `lightweaver/src/lib/*project*test.js`
+
+- [x] Reject malformed mapper strip entries before confirmation or canvas clear.
+- [x] Reject duplicate Studio strip IDs before replacement.
+- [x] Reject Mapper envelopes in the generic Studio migration path until an
+  explicit conversion path is invoked.
+- [x] Prove malformed input leaves the current canvas untouched and duplicate
+  IDs cannot collapse downstream ID maps.
+
+### Workstream B: Exact installed-state and commissioning evidence
+
+**Files:**
+
+- Modify: `lightweaver/src/lib/projectLifecycle.js`
+- Modify: `lightweaver/src/state/ProjectContext.jsx`
+- Modify: `lightweaver/src/components/card/CardCommissioningPanel.jsx`
+- Modify: focused lifecycle and card-workspace tests
+
+- [x] Persist installed evidence as card ID, project revision, and project
+  fingerprint rather than an unqualified boolean.
+- [x] Restore only a `previously installed` claim after reload until fresh
+  exact-card readback revalidates it.
+- [x] After wiring confirmation, independently read wiring status and compare
+  activation, card/build/project identity, wiring digest/revision, color order,
+  current limit, and outputs before clearing commissioning recovery state.
+- [x] Prove stale, incomplete, and wrong-card readback cannot display completion.
+
+### Workstream C: Firmware validation and playback safety
+
+**Files:**
+
+- Modify: `firmware/lightweaver-controller/src/LightweaverStorage.cpp`
+- Modify: `firmware/lightweaver-controller/src/main.cpp`
+- Modify: `firmware/lightweaver-controller/src/LightweaverWledRealtime.cpp`
+- Modify or create: focused native and source-contract tests
+
+- [x] Validate the effective inherited look mode, not only an explicit
+  `look.mode`, before accepting sequence metadata.
+- [x] Hash a selected sequence once per operation, yield/feed the watchdog while
+  hashing, and reuse the verified open file instead of hashing it repeatedly.
+- [x] Keep canonical NVS commit success distinct from post-commit cleanup
+  warnings so the HTTP response cannot falsely claim the configuration was not
+  saved.
+- [x] Clear or explicitly restore untouched pixels when WLED realtime takes
+  ownership with a partial frame, preventing prior-source leakage.
+
+### Workstream D: Atomic microSD package installation
+
+**Files:**
+
+- Modify: `lightweaver/scripts/unpack-standalone-package.mjs`
+- Modify: `lightweaver/scripts/unpack-standalone-package.test.mjs`
+- Modify: `lightweaver/tests/standalone-package-unpack.mjs` if required
+
+- [x] Validate every package entry before writing any destination file.
+- [x] Stage sequence assets under temporary names and atomically rename them.
+- [x] Publish `/lightweaver.json` last as the commit point.
+- [x] On failure, remove staged files and preserve the prior boot-visible
+  profile.
+- [x] Prove an interrupted extraction cannot expose a profile that references a
+  missing or partial sequence.

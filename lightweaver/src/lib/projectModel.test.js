@@ -74,3 +74,31 @@ test('empty legacy layouts still receive safe physical wiring metadata', () => {
   assert.equal(migrated.layout.patchBoard.dataWireCountNeedsReview, true);
   assert.equal(migrated.layout.wiring.outputs.length, 1);
 });
+
+test('generic Studio migration rejects mapper project payloads instead of inventing a default layout', () => {
+  const foreign = {
+    format: 'lightweaver.mapper-project',
+    version: 3,
+    id: 'mapper-export',
+    name: 'Mapper export',
+    paths: [{ id: 'path-1', d: 'M0 0L10 10' }],
+  };
+
+  assert.equal(migrateProject(foreign), null);
+});
+
+test('current-format imports reject duplicate strip ids before reference maps can collapse them', () => {
+  const saved = createDefaultProject();
+  const first = { ...saved.layout.strips[0], id: 'strip-7', name: 'First' };
+  const second = { ...saved.layout.strips[0], id: 'strip-7', name: 'Second' };
+  saved.layout.strips = [first, second];
+  saved.layout.patchBoard = {
+    ...saved.layout.patchBoard,
+    patches: [
+      { id: 'patch-first', source: { type: 'strip', stripId: 'strip-7' }, count: 10 },
+      { id: 'patch-second', source: { type: 'strip', stripId: 'strip-7' }, count: 20 },
+    ],
+  };
+
+  assert.equal(migrateProject(saved), null);
+});

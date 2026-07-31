@@ -65,6 +65,15 @@ const body = source.slice(start, echoStart);
 const responseEnd = source.indexOf('\n}', echoStart);
 const responseBody = source.slice(echoStart, responseEnd);
 
+assert.match(body, /runtimePreparePatternByIdZ\(zoneTarget, confirmedPatternId\)/,
+  'pattern asset validation must retain the prepared selection before any mutation');
+assert.match(body, /applyPreparedControlTransaction/,
+  'control mutation and revision acknowledgement must use the transactional gate');
+assert.ok(
+  body.indexOf('runtimeCommitPreparedPatternSelection()') < body.indexOf('runtimeSetSyncZones('),
+  'prepared selection must succeed before sync or any unrelated control field mutates',
+);
+
 assert.match(source, /constexpr\s+size_t\s+LW_MAX_CONTROL_BODY_BYTES\s*=\s*4096/, 'control request ceiling must stay small and explicit');
 assert.match(source, /controlRequestBody\[LW_MAX_CONTROL_BODY_BYTES\s*\+\s*1\]/, 'allowed control bodies must use fixed bounded storage');
 const rawStart = source.indexOf('void handleControlRaw(HTTPRaw& raw)');
@@ -114,7 +123,6 @@ for (const marker of [
   'runtimeSetSpeedZ(',
   'runtimeSetHueShiftZ(',
   'runtimeSetBlackoutZ(',
-  'runtimeSelectPatternByIdZ(',
   'runtimeSetCustomHueZ(',
   'runtimeSetCustomSaturationZ(',
   'runtimeSetCustomBreatheZ(',
@@ -135,9 +143,15 @@ assert.ok(
   body.indexOf('revision out of range') < syncIndex,
   'revision validation must happen before any physical control mutation',
 );
-assert.match(body, /patternApplied\s*=\s*runtimeSelectPatternByIdZ/, 'pattern acknowledgement must derive from the real apply result');
-const preflightIndex = body.indexOf('runtimeCanSelectPatternByIdZ(zoneTarget, confirmedPatternId)');
-assert.notEqual(preflightIndex, -1, 'pattern and zone targets must be checked without mutation');
+assert.match(body, /applyPreparedControlTransaction\s*\(/,
+  'control application must use the all-or-nothing transaction policy');
+const preflightIndex = body.indexOf('runtimePreparePatternByIdZ(zoneTarget, confirmedPatternId)');
+assert.notEqual(preflightIndex, -1,
+  'pattern and zone targets must retain their actual prepared selection before mutation');
+const commitIndex = body.indexOf('runtimeCommitPreparedPatternSelection()');
+assert.notEqual(commitIndex, -1, 'the retained selection must be committed');
+assert.ok(commitIndex < syncIndex,
+  'the prepared selection must succeed before unrelated sync or control mutations');
 for (const setter of [
   'runtimeSetSyncZones(',
   'runtimeSetLedColorOrder(',
@@ -145,8 +159,6 @@ for (const setter of [
   'runtimeSetSpeedZ(',
   'runtimeSetHueShiftZ(',
   'runtimeSetBlackoutZ(',
-  'runtimeNextPattern(',
-  'runtimePreviousPattern(',
   'runtimeSetCustomHueZ(',
   'runtimeSetCustomSaturationZ(',
   'runtimeSetCustomBreatheZ(',
@@ -160,8 +172,8 @@ for (const setter of [
 }
 assert.match(
   body,
-  /if\s*\(patternRequested\s*&&\s*!runtimeCanSelectPatternByIdZ\(zoneTarget, confirmedPatternId\)\)[\s\S]*?server\.send\(422[\s\S]*?return;/,
-  'a missing pattern target must return 422 before any physical control mutation',
+  /if\s*\(!selectionPrepared\)[\s\S]*?runtimeDiscardPreparedPatternSelection\(\)[\s\S]*?server\.send\(422[\s\S]*?return;/,
+  'a missing or corrupt prepared pattern must return 422 before any physical control mutation',
 );
 
 for (const proof of [
@@ -175,8 +187,12 @@ for (const proof of [
 ]) {
   assert.ok(responseBody.includes(proof), `control response must include applied-intent proof: ${proof}`);
 }
-assert.match(responseBody, /out\["ok"\]\s*=\s*!patternRequested\s*\|\|\s*patternApplied/, 'failed pattern application must not return ok:true');
-assert.match(responseBody, /server\.send\([^;]*patternApplied[^;]*\?\s*200\s*:\s*422/, 'unapplied pattern intent must return a failing HTTP status');
+assert.match(body, /if\s*\(!transactionApplied\)[\s\S]*?server\.send\(422[\s\S]*?return;/,
+  'a failed prepared selection commit must return before success acknowledgement');
+assert.match(responseBody, /out\["ok"\]\s*=\s*true/,
+  'the success response is emitted only after the transaction has applied');
+assert.match(responseBody, /out\["stateRevision"\]\s*=\s*appliedStateRevision/,
+  'the response must report the revision advanced by the successful transaction');
 assert.match(
   body,
   /runtimeSetBrightnessZ\s*\(\s*zoneTarget\s*,/,

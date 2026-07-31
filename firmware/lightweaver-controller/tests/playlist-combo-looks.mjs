@@ -37,7 +37,10 @@ assert.match(resolver, /isSupportedProceduralPattern\(look\.preset\)/, 'procedur
 assert.match(resolver, /look\.mode\s*==\s*"preset"/);
 assert.match(resolver, /isSupportedPresetPattern\(look\.preset\)/, 'preset looks require a preset renderer');
 assert.match(resolver, /look\.mode\s*==\s*"sequence"/);
-assert.match(resolver, /canOpenSequence\(look\)/, 'sequence looks must prove their declared asset is readable before selection');
+assert.match(resolver, /look\.file\.length\(\)\s*>\s*0[\s\S]*look\.sequenceBytes\s*>\s*0[\s\S]*look\.sequenceSha256\.length\(\)\s*==\s*64/,
+  'sequence looks must have a structurally usable asset declaration before selection');
+assert.match(main, /bool\s+prepareLookForSelection\([\s\S]*prepareSequence\(look, prepared\)/,
+  'sequence selection must open and verify the actual playback file before mutating visible state');
 assert.match(resolver, /return false;/, 'unsupported loaded-look modes must reject');
 assert.match(main, /uint64_t\s+requiredBytes\s*=\s*uint64_t\(LWSEQ_HEADER_BYTES\)\s*\+\s*uint64_t\(frameCount\)\s*\*\s*frameBytes/);
 assert.match(main, /requiredBytes\s*>\s*file\.size\(\)/, 'sequence preflight must prove all declared frames exist, not only the header');
@@ -48,7 +51,8 @@ const instantStart = main.indexOf('bool selectLookInstant(int index) {');
 const instantEnd = main.indexOf('\n}', instantStart);
 const instantSelect = main.slice(instantStart, instantEnd);
 assert.doesNotMatch(instantSelect, /nextIndex\s*==\s*currentLookIndex[\s\S]*return true/, 'reselecting the current look must reapply and render changed zone state');
-assert.match(instantSelect, /startLook\(currentLookIndex\)/, 'current-look reselection must run the real apply path');
+assert.match(instantSelect, /applyPreparedLookInstant\(nextIndex, &prepared\)/,
+  'current-look reselection must commit the real prepared-file apply path');
 
 assert.match(main, /const LookConfig\*\s+findLookByExactId\(/);
 assert.match(main, /const LookConfig\*\s+findLookByPresetAlias\(/);
@@ -75,11 +79,11 @@ assert.ok(
   globalSelect.indexOf('isSupportedCompiledPattern(id)') < globalSelect.indexOf('findLookByPresetAlias(id)'),
   'global compiled renderer ids must win before loaded-look preset aliases',
 );
-const startLookStart = main.indexOf('bool startLook(uint8_t index) {');
+const startLookStart = main.indexOf('bool startLook(uint8_t index, PreparedSequence* prepared) {');
 const startLookEnd = main.indexOf('\n}', startLookStart);
 const startLook = main.slice(startLookStart, startLookEnd);
 assert.ok(
-  startLook.indexOf('openSequence(look)') < startLook.indexOf('applyLookToRuntimeZones(look)'),
+  startLook.indexOf('openSequence(look, prepared)') < startLook.indexOf('applyLookToRuntimeZones(look)'),
   'sequence open must succeed before any runtime-zone mutation',
 );
 

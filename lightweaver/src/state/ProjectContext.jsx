@@ -52,6 +52,7 @@ import {
   markEdited,
   markInstalled,
   markPersisted,
+  replaceProjectLifecycle,
   replaceProjectSafely,
 } from '../lib/projectLifecycle.js';
 
@@ -362,8 +363,8 @@ export function ProjectProvider({ children }) {
   const [projectLifecycle, dispatchProjectLifecycle] = useReducer((state, action) => {
     if (action.type === 'edited') return markEdited(state);
     if (action.type === 'persisted') return markPersisted(state, action.destination);
-    if (action.type === 'installed') return markInstalled(state, action.revision);
-    if (action.type === 'replaced') return createProjectLifecycle();
+    if (action.type === 'installed') return markInstalled(state, action.installation);
+    if (action.type === 'replaced') return replaceProjectLifecycle(state);
     // Startup restore sets the whole lifecycle at once (New project vs
     // Restored from recovery copy vs Saved in browser) — see the boot effect.
     if (action.type === 'boot') return action.lifecycle;
@@ -981,7 +982,7 @@ export function ProjectProvider({ children }) {
   }), [lastSaved, autosaveRestoredFrom, autosaveQuarantine, dismissQuarantine]);
   const markProjectPersisted = useCallback(destination => dispatchProjectLifecycle({ type: 'persisted', destination }), []);
   const markProjectEdited = useCallback(() => dispatchProjectLifecycle({ type: 'edited' }), []);
-  const markProjectInstalled = useCallback(revision => dispatchProjectLifecycle({ type: 'installed', revision }), []);
+  const markProjectInstalled = useCallback(installation => dispatchProjectLifecycle({ type: 'installed', installation }), []);
   const markCardLookConfirmed = useCallback(look => {
     setConfirmedCardLook(look ? JSON.parse(JSON.stringify(look)) : null);
   }, []);

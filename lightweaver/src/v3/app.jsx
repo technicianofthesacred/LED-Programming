@@ -582,6 +582,7 @@ function Shell() {
             strategy: 'clean-recovery',
             projectRecord: record,
             projectRevision: projectLifecycle.editedRevision,
+            projectGeneration: projectLifecycle.generation,
           }));
         }
       },
@@ -591,7 +592,7 @@ function Shell() {
         else window.location.assign(url);
       },
     });
-  }, [markProjectPersisted, projectLifecycle.editedRevision, serializeProject]);
+  }, [markProjectPersisted, projectLifecycle.editedRevision, projectLifecycle.generation, serializeProject]);
   const onDownload = useCallback(async () => {
     const ok = await downloadJsonFile(
       canonicalProjectFileName(projectName),

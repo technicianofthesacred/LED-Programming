@@ -14,6 +14,7 @@ on:
   push:
     paths:
       - 'lightweaver/**'
+      - 'led-art-mapper/**'
       - 'packages/installer-core/**'
       - 'firmware/**'
       - 'release/job-generators/**'
@@ -39,6 +40,7 @@ on:
   pull_request:
     paths:
       - 'lightweaver/**'
+      - 'led-art-mapper/**'
       - 'packages/installer-core/**'
       - 'firmware/**'
       - 'release/job-generators/**'
@@ -93,6 +95,9 @@ jobs:
           # `npm ci` installs exactly what lightweaver/package-lock.json pins,
           # for reproducible builds (vs `npm install`, which can drift the tree).
           npm ci
+          # launch:source also runs the standalone Mapper's tests and Vite
+          # build, so its own lockfile must be installed in a clean runner.
+          npm ci --prefix ../led-art-mapper/app
           # Workaround for npm/cli#4828: npm may skip the platform-specific
           # Rollup native binding on fresh installs, breaking `vite build`.
           node scripts/ensure-rollup-native.mjs

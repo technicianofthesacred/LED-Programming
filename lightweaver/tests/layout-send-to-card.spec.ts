@@ -220,6 +220,7 @@ test('a successful push is pending until acknowledgement and records the exact i
   await expect(banner).toHaveClass(/is-ok/);
   await expect(banner).toContainText(/Installed revision \d+ on card/);
   await expect(banner).toContainText(/zone/i);
+  await expect(page.locator('.savechip')).toContainText('Installed on card');
   expect(card.operations).toContain('config');
   expect(card.savedConfig).not.toBeNull();
 });

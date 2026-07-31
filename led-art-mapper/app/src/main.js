@@ -25,9 +25,15 @@ import { initFlash }                                 from './flash.js';
 import { PATTERNS }                                  from './patterns-library.js';
 import { calculateStripLengthMeters, DEFAULT_LEDS_PER_METER } from './density.js';
 import {
+  MAPPER_MAX_PATTERN_FILE_BYTES,
+  MAPPER_MAX_PROJECT_JSON_BYTES,
+  MAPPER_MAX_SVG_SOURCE_BYTES,
   MAPPER_PROJECT_FORMAT,
   MAPPER_PROJECT_SCHEMA_VERSION,
   describeMapperProject,
+  isMapperTextWithinLimit,
+  preflightMapperProjectGeometry,
+  sanitizeMapperSvgSource,
   validateMapperProject,
 } from './project-format.js';
 
@@ -998,13 +1004,22 @@ async function _handleFileImport(file) {
     showToast(`.${ext} files are not supported. Export your artwork as SVG from Illustrator: File → Export As → SVG.`, 'warn');
     return;
   }
-  const text = await file.text();
-  if (!text.includes('<svg') && !text.includes('<SVG')) {
-    showToast('This file does not appear to be a valid SVG. In Illustrator use File → Export As → SVG (not Save As).', 'warn');
+  if (file.size > MAPPER_MAX_SVG_SOURCE_BYTES) {
+    showToast('SVG file exceeds the 2 MB import limit.', 'warn');
     return;
   }
-  state._svgSource = text;
-  canvasManager.importSVG(text, true);
+  const text = await file.text();
+  if (!isMapperTextWithinLimit(text, MAPPER_MAX_SVG_SOURCE_BYTES)) {
+    showToast('SVG file exceeds the 2 MB import limit.', 'warn');
+    return;
+  }
+  const svgValidation = sanitizeMapperSvgSource(text);
+  if (!svgValidation.ok) {
+    showToast(svgValidation.reason, 'warn');
+    return;
+  }
+  state._svgSource = svgValidation.svgSource;
+  canvasManager.importSVG(svgValidation.svgSource, true);
   // Sync preview renderer coordinate space with the SVG viewBox
   const vb = svgEl.viewBox.baseVal;
   if (vb && vb.width > 0 && vb.height > 0) {
@@ -1184,7 +1199,7 @@ function _buildStripLi(strip, from, to, extraClass) {
 
   // C1: build pattern options
   const patternOpts = state.patterns.map(p =>
-    `<option value="${p.id}"${strip.patternId === p.id ? ' selected' : ''}>${p.name}</option>`
+    `<option value="${_escHtml(p.id)}"${strip.patternId === p.id ? ' selected' : ''}>${_escHtml(p.name)}</option>`
   ).join('');
 
   const li = document.createElement('li');
@@ -1208,7 +1223,7 @@ function _buildStripLi(strip, from, to, extraClass) {
       <button class="strip-vis-btn${visible ? '' : ' hidden-strip'}"
               aria-label="${visible ? 'Hide section' : 'Show section'}"
               title="${visible ? 'Hide section' : 'Show section'}">${visible ? '●' : '○'}</button>
-      <span class="strip-name" title="${strip.name}">${strip.name}</span>
+      <span class="strip-name" title="${_escHtml(strip.name)}">${_escHtml(strip.name)}</span>
       <select class="strip-pattern-select" title="Pattern for this section">
         <option value="">Global</option>
         ${patternOpts}
@@ -1506,14 +1521,14 @@ function renderStripsList() {
 
     // C1: pattern options for group
     const patOpts = state.patterns.map(p =>
-      `<option value="${p.id}"${group.patternId === p.id ? ' selected' : ''}>${p.name}</option>`
+      `<option value="${_escHtml(p.id)}"${group.patternId === p.id ? ' selected' : ''}>${_escHtml(p.name)}</option>`
     ).join('');
 
     groupLi.innerHTML = `
       <input type="color" class="group-color-swatch" value="${group.color || '#06d6a0'}" title="Group colour" />
       <button class="group-collapse-btn" title="Expand/collapse">${group.collapsed ? '▶' : '▼'}</button>
       <button class="group-vis-btn" title="${vis ? 'Hide group' : 'Show group'}">${vis ? '●' : '○'}</button>
-      <span class="group-name">${group.name}</span>
+      <span class="group-name">${_escHtml(group.name)}</span>
       <select class="group-pattern-select" title="Pattern override for group">
         <option value="">—</option>
         ${patOpts}
@@ -1665,7 +1680,7 @@ function _showAssignPanel(group, anchorEl) {
     row.innerHTML = `
       <input type="checkbox" ${checked ? 'checked' : ''} />
       <span class="assign-swatch" style="background:${strip.color}"></span>
-      <span>${strip.name}</span>
+      <span>${_escHtml(strip.name)}</span>
     `;
     row.querySelector('input').addEventListener('change', e => {
       if (/** @type {HTMLInputElement} */ (e.target).checked) {
@@ -1740,8 +1755,8 @@ function renderPatternCards() {
     btn.innerHTML =
       `<div class="pc-preview" style="background:${preview}"></div>` +
       `<div class="pc-body">` +
-        `<div class="pc-name">${p.name}</div>` +
-        `<div class="pc-desc">${p.desc ?? ''}</div>` +
+        `<div class="pc-name">${_escHtml(p.name)}</div>` +
+        `<div class="pc-desc">${_escHtml(p.desc ?? '')}</div>` +
       `</div>`;
 
     btn.addEventListener('click', () => {
@@ -2704,7 +2719,7 @@ function _showStripPopup(strip) {
   const patSel = popup.querySelector('#popup-pattern-select');
   if (patSel) {
     patSel.innerHTML = '<option value="">— none —</option>' +
-      state.patterns.map(p => `<option value="${p.id}"${strip.patternId === p.id ? ' selected' : ''}>${p.name}</option>`).join('');
+      state.patterns.map(p => `<option value="${_escHtml(p.id)}"${strip.patternId === p.id ? ' selected' : ''}>${_escHtml(p.name)}</option>`).join('');
     patSel.onchange = () => {
       strip.patternId = patSel.value || null;
       renderStripsList();
@@ -2925,8 +2940,19 @@ function saveProject() {
 }
 
 async function loadProject(file) {
+  if (file.size > MAPPER_MAX_PROJECT_JSON_BYTES) {
+    showToast(`Project file exceeds the ${Math.round(MAPPER_MAX_PROJECT_JSON_BYTES / 1024 / 1024)} MB import limit.`, 'warn');
+    return;
+  }
   let data;
-  try { data = JSON.parse(await file.text()); }
+  try {
+    const raw = await file.text();
+    if (!isMapperTextWithinLimit(raw, MAPPER_MAX_PROJECT_JSON_BYTES)) {
+      showToast(`Project file exceeds the ${Math.round(MAPPER_MAX_PROJECT_JSON_BYTES / 1024 / 1024)} MB import limit.`, 'warn');
+      return;
+    }
+    data = JSON.parse(raw);
+  }
   catch { showToast('Could not parse project file.', 'warn'); return; }
 
   const validation = validateMapperProject(data);
@@ -2934,6 +2960,13 @@ async function loadProject(file) {
     showToast(validation.reason, 'warn');
     return;
   }
+  data = validation.project;
+  const geometry = preflightMapperProjectGeometry(data);
+  if (!geometry.ok) {
+    showToast(geometry.reason, 'warn');
+    return;
+  }
+  data = geometry.project;
   const legacyNote = validation.legacy ? ' Legacy file: it will be upgraded when saved.' : '';
   const shouldLoad = await showConfirm(
     `Load this LED Mapper project?\n${describeMapperProject(data)}.${legacyNote}\n\nYour current canvas will be replaced.`,
@@ -3086,7 +3119,15 @@ function _lsSave() {
   // Autosave: only custom patterns (library is re-seeded from code on restore).
   const data = _serializeProject({ fullPatterns: false });
   try {
-    localStorage.setItem(_LS_KEY, JSON.stringify(data));
+    const raw = JSON.stringify(data);
+    if (!isMapperTextWithinLimit(raw, MAPPER_MAX_PROJECT_JSON_BYTES)) {
+      if (!_lsQuotaWarned) {
+        _lsQuotaWarned = true;
+        showToast('Autosave exceeds the 5 MB project limit. Use "Save project" after reducing artwork or pattern size.', 'warn');
+      }
+      return;
+    }
+    localStorage.setItem(_LS_KEY, raw);
     _lsQuotaWarned = false; // a successful save re-arms the warning
   } catch (err) {
     // Quota exceeded (or storage disabled) — surface it once instead of silently
@@ -3103,8 +3144,24 @@ function _lsRestore() {
   try {
     const raw = localStorage.getItem(_LS_KEY);
     if (!raw) return;
+    if (!isMapperTextWithinLimit(raw, MAPPER_MAX_PROJECT_JSON_BYTES)) {
+      localStorage.removeItem(_LS_KEY);
+      return;
+    }
     data = JSON.parse(raw);
   } catch { return; }
+
+  const validation = validateMapperProject(data);
+  if (!validation.ok) {
+    localStorage.removeItem(_LS_KEY);
+    return;
+  }
+  const geometry = preflightMapperProjectGeometry(validation.project);
+  if (!geometry.ok) {
+    localStorage.removeItem(_LS_KEY);
+    return;
+  }
+  data = geometry.project;
 
   // Restore SVG artwork first so strip paths can be measured against live SVG elements
   if (data.svgSource) {
@@ -3312,10 +3369,24 @@ function _importPattern() {
   input.onchange = async e => {
     const file = e.target.files[0];
     if (!file) return;
+    if (file.size > MAPPER_MAX_PATTERN_FILE_BYTES) {
+      showToast('Pattern file exceeds the 64 KB import limit.', 'warn');
+      return;
+    }
     try {
-      const data = JSON.parse(await file.text());
-      if (!data.ledPatternVersion || !data.code) throw new Error('Not a pattern file');
-      const p = { id: crypto.randomUUID(), name: data.name || 'Imported', code: data.code };
+      const raw = await file.text();
+      if (!isMapperTextWithinLimit(raw, MAPPER_MAX_PATTERN_FILE_BYTES)) {
+        showToast('Pattern file exceeds the 64 KB import limit.', 'warn');
+        return;
+      }
+      const data = JSON.parse(raw);
+      if (!data.ledPatternVersion || typeof data.code !== 'string' || !data.code) {
+        throw new Error('Not a pattern file');
+      }
+      const importedName = typeof data.name === 'string'
+        ? data.name.normalize('NFC').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 160)
+        : 'Imported';
+      const p = { id: crypto.randomUUID(), name: importedName || 'Imported', code: data.code };
       state.patterns.push(p);
       state.activePatternId = p.id;
       renderPatternSelect();
@@ -4713,7 +4784,7 @@ wrapper.addEventListener('mousemove', e => {
   const threshold = (vb.width * 0.03 / state.canvasZoom) ** 2;
   if (nearest && nearestDist < threshold) {
     const strip = state.strips.find(s => s.id === nearest.stripId);
-    tooltip.innerHTML = `<b>#${nearest.index}</b> · ${strip?.name ?? '?'}<br>x: ${nearest.nx.toFixed(3)}  y: ${nearest.ny.toFixed(3)}`;
+    tooltip.innerHTML = `<b>#${nearest.index}</b> · ${_escHtml(strip?.name ?? '?')}<br>x: ${nearest.nx.toFixed(3)}  y: ${nearest.ny.toFixed(3)}`;
     tooltip.classList.remove('hidden');
     // Prevent tooltip from overflowing right edge of viewport
     const tipX = e.clientX + 14;

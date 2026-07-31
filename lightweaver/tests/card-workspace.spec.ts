@@ -32,7 +32,7 @@ function readyStatus(cardId: string, overrides = {}) {
   };
 }
 
-async function seedCommissioningFlow(page, progress: 'wifi' | 'load-project' | 'test' | 'test-installed') {
+async function seedCommissioningFlow(page, progress: 'wifi' | 'load-project' | 'test' | 'test-installed' | 'test-legacy') {
   await page.evaluate(async requestedProgress => {
     const api = await import('/src/lib/cardCommissioningFlow.js');
     const startedAt = Date.now();
@@ -62,24 +62,41 @@ async function seedCommissioningFlow(page, progress: 'wifi' | 'load-project' | '
       flowId: `flow-card-${requestedProgress}-123456789`,
       now: startedAt,
     }), installed, { now: startedAt + 1 });
-    if (requestedProgress === 'load-project' || requestedProgress === 'test' || requestedProgress === 'test-installed') {
+    if (requestedProgress === 'load-project' || requestedProgress === 'test' || requestedProgress === 'test-installed' || requestedProgress === 'test-legacy') {
       flow = api.acknowledgeCommissionedCard(flow, {
         id: installed.cardId,
         firmwareVersion: installed.firmwareVersion,
         buildId: installed.buildId,
       }, { now: startedAt + 2 }).flow;
     }
-    if (requestedProgress === 'test' || requestedProgress === 'test-installed') {
+    if (requestedProgress === 'test' || requestedProgress === 'test-installed' || requestedProgress === 'test-legacy') {
+      const pendingWiring = {
+        wiringRevision: 9,
+        wiringDigest: 'd'.repeat(64),
+        colorOrder: 'RGB',
+        maxMilliamps: 2400,
+        outputs: [{
+          id: 'out1', pin: 16, pixels: 44,
+          segments: [{ id: 'strip-1', count: 44, direction: 'forward' }],
+        }],
+      };
       flow = {
         ...flow,
         stage: 'check-lights',
         updatedAt: startedAt + 3,
-        project: requestedProgress === 'test'
-          ? { ...flow.project, pendingActivationId: 'test-activation-7' }
+        project: requestedProgress === 'test' || requestedProgress === 'test-legacy'
+          ? { ...flow.project, pendingActivationId: 'test-activation-7', pendingWiring }
           : { ...flow.project, restoredAt: startedAt + 3, restoredFingerprint: flow.project.fingerprint },
       };
     }
     await api.writeCardCommissioning(flow, { locks: null });
+    if (requestedProgress === 'test-legacy') {
+      const registry = JSON.parse(localStorage.getItem(api.CARD_COMMISSIONING_STORAGE_KEY));
+      const saved = registry.flows[flow.flowId].flow;
+      delete saved.project.generation;
+      delete saved.project.pendingWiring;
+      localStorage.setItem(api.CARD_COMMISSIONING_STORAGE_KEY, JSON.stringify(registry));
+    }
   }, progress);
 }
 
@@ -354,10 +371,29 @@ test('Card overview keeps Load project and Test as resumable commissioning steps
   steps = page.getByTestId('card-setup-steps').locator('li');
   await expect(steps.nth(3)).toHaveAttribute('data-step-state', 'complete');
   await expect(steps.nth(4)).toHaveAttribute('data-step-state', 'current');
-  await page.evaluate(() => {
+  await page.evaluate(async () => {
+    const commissioning = await import('/src/lib/cardCommissioningFlow.js');
+    const flow = commissioning.readCardCommissioning();
+    const expected = flow.project.pendingWiring;
     (window as any).__LW_ACTIVATE_COMMISSIONING_WIRING_FOR_TEST__ = async (activationId: string) => ({ state: 'testing', activationId });
     (window as any).__LW_CONFIRM_COMMISSIONING_WIRING_FOR_TEST__ = async (activationId: string) => ({ state: 'known-good', activationId });
     (window as any).__LW_ROLLBACK_COMMISSIONING_WIRING_FOR_TEST__ = async (activationId: string) => ({ state: 'known-good', activationId });
+    (window as any).__LW_READ_FINAL_COMMISSIONING_WIRING_FOR_TEST__ = async () => ({
+      app: 'Lightweaver',
+      ok: true,
+      state: 'known-good',
+      activationId: '',
+      cardId: flow.expectedCard.id,
+      firmwareVersion: flow.expectedCard.firmwareVersion,
+      buildId: flow.expectedCard.buildId,
+      projectRevision: flow.project.revision,
+      projectFingerprint: flow.project.fingerprint,
+      wiringRevision: expected.wiringRevision,
+      wiringDigest: expected.wiringDigest,
+      colorOrder: expected.colorOrder,
+      maxMilliamps: expected.maxMilliamps,
+      outputs: expected.outputs,
+    });
   });
   await page.getByRole('button', { name: 'Test lights', exact: true }).click();
   await expect(page).toHaveURL(/#screen=card&section=install$/);
@@ -403,6 +439,177 @@ test('installed check-lights progress runs a bounded marker test and restores th
   await expect(page.getByText(/working look is restored/i)).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as any).__commissioningMarkerStops)).toBe(1);
   await expect(page.getByRole('button', { name: 'Start bounded marker test', exact: true })).toBeVisible();
+});
+
+test('commissioning requires an independent exact final wiring GET before clearing the flow', async ({ page }) => {
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'test');
+  await connectCommissioningCard(page);
+  await page.evaluate(async () => {
+    const commissioning = await import('/src/lib/cardCommissioningFlow.js');
+    const flow = commissioning.readCardCommissioning();
+    const expected = flow.project.pendingWiring;
+    (window as any).__finalWiringReads = 0;
+    (window as any).__LW_ACTIVATE_COMMISSIONING_WIRING_FOR_TEST__ = async (activationId: string) => ({ state: 'testing', activationId });
+    (window as any).__LW_CONFIRM_COMMISSIONING_WIRING_FOR_TEST__ = async (activationId: string) => ({ state: 'known-good', activationId });
+    (window as any).__LW_READ_FINAL_COMMISSIONING_WIRING_FOR_TEST__ = async () => {
+      (window as any).__finalWiringReads += 1;
+      return {
+        app: 'Lightweaver',
+        ok: true,
+        state: 'known-good',
+        activationId: '',
+        cardId: flow.expectedCard.id,
+        firmwareVersion: flow.expectedCard.firmwareVersion,
+        buildId: flow.expectedCard.buildId,
+        projectRevision: flow.project.revision,
+        projectFingerprint: 'ffffffffffffffff',
+        wiringRevision: expected.wiringRevision,
+        wiringDigest: expected.wiringDigest,
+        colorOrder: expected.colorOrder,
+        maxMilliamps: expected.maxMilliamps,
+        outputs: expected.outputs,
+      };
+    };
+  });
+
+  await page.getByRole('button', { name: 'Test lights', exact: true }).click();
+  await page.getByRole('button', { name: 'Start 90-second light test', exact: true }).click();
+  await page.getByRole('button', { name: 'Yes, every output is correct', exact: true }).click();
+
+  await expect.poll(() => page.evaluate(() => (window as any).__finalWiringReads)).toBe(1);
+  await expect(page.getByRole('alert')).toContainText(/final wiring|project fingerprint|read-back/i);
+  await expect(page.getByText('Light check complete', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Yes, every output is correct', exact: true })).toBeVisible();
+});
+
+test('legacy staged wiring without authoritative identity cannot confirm and remains recoverable', async ({ page }) => {
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'test-legacy');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await connectCommissioningCard(page);
+  await page.evaluate(() => {
+    (window as any).__legacyConfirmCalls = 0;
+    (window as any).__LW_ACTIVATE_COMMISSIONING_WIRING_FOR_TEST__ = async (activationId: string) => ({ state: 'testing', activationId });
+    (window as any).__LW_CONFIRM_COMMISSIONING_WIRING_FOR_TEST__ = async (activationId: string) => {
+      (window as any).__legacyConfirmCalls += 1;
+      return { state: 'known-good', activationId };
+    };
+    (window as any).__LW_ROLLBACK_COMMISSIONING_WIRING_FOR_TEST__ = async (activationId: string) => ({ state: 'known-good', activationId });
+  });
+
+  await page.getByRole('button', { name: 'Test lights', exact: true }).click();
+  await page.getByRole('button', { name: 'Start 90-second light test', exact: true }).click();
+  const confirm = page.getByRole('button', { name: 'Yes, every output is correct', exact: true });
+  await expect(confirm).toBeDisabled();
+  await expect(page.getByRole('alert')).toContainText(/older setup|exact wiring evidence|restore/i);
+  await expect.poll(() => page.evaluate(() => (window as any).__legacyConfirmCalls)).toBe(0);
+
+  await page.getByRole('button', { name: 'No, restore working setup', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).__legacyConfirmCalls)).toBe(0);
+});
+
+test('an exact nonzero commissioning flow resumed after reload marks the restored local revision installed', async ({ page }) => {
+  await page.goto('/#screen=card&section=preferences', { waitUntil: 'domcontentloaded' });
+  const projectName = page.locator('.set-row', { hasText: 'Project name' }).locator('input');
+  await projectName.fill('Reloaded exact commissioning project');
+  await expect.poll(() => page.evaluate(() => {
+    try { return JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null')?.name || ''; }
+    catch { return ''; }
+  })).toBe('Reloaded exact commissioning project');
+  await expect.poll(() => page.evaluate(() => {
+    try { return JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || 'null')?.dirty; }
+    catch { return null; }
+  })).toBe(true);
+
+  await page.evaluate(async () => {
+    const api = await import('/src/lib/cardCommissioningFlow.js');
+    const project = JSON.parse(localStorage.getItem('lw_autosave_v3'));
+    const startedAt = Date.now();
+    const installed = {
+      operation: 'install-current-release',
+      cardId: 'lw-aabbccddeeff',
+      firmwareVersion: '1.2.3',
+      buildId: 'a'.repeat(40),
+    };
+    let flow = api.beginCardCommissioning({
+      source: 'web-serial',
+      operation: installed.operation,
+      projectRecord: { id: 'reloaded-exact-project', updatedAt: startedAt, project },
+      projectRevision: 7,
+      projectGeneration: 5,
+      flowId: 'flow-reloaded-exact-12345',
+      now: startedAt,
+    });
+    flow = api.completeCardInstall(flow, installed, { now: startedAt + 1 });
+    flow = api.acknowledgeCommissionedCard(flow, {
+      id: installed.cardId,
+      firmwareVersion: installed.firmwareVersion,
+      buildId: installed.buildId,
+    }, { now: startedAt + 2 }).flow;
+    flow = {
+      ...flow,
+      stage: 'check-lights',
+      updatedAt: startedAt + 3,
+      project: {
+        ...flow.project,
+        pendingActivationId: 'reloaded-exact-activation',
+        pendingWiring: {
+          wiringRevision: 11,
+          wiringDigest: 'e'.repeat(64),
+          colorOrder: 'GRB',
+          maxMilliamps: 3200,
+          outputs: [{
+            id: 'out1',
+            pin: 16,
+            pixels: 60,
+            segments: [{ id: 'strip-1', count: 60, direction: 'forward' }],
+          }],
+        },
+      },
+    };
+    await api.writeCardCommissioning(flow, { locks: null });
+  });
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.savechip')).toContainText('Restored from recovery copy');
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await connectCommissioningCard(page);
+  await page.evaluate(async () => {
+    const api = await import('/src/lib/cardCommissioningFlow.js');
+    const flow = api.readCardCommissioning();
+    const expected = flow.project.pendingWiring;
+    (window as any).__resumedFinalReads = 0;
+    (window as any).__LW_ACTIVATE_COMMISSIONING_WIRING_FOR_TEST__ = async (activationId: string) => ({ state: 'testing', activationId });
+    (window as any).__LW_CONFIRM_COMMISSIONING_WIRING_FOR_TEST__ = async (activationId: string) => ({ state: 'known-good', activationId });
+    (window as any).__LW_READ_FINAL_COMMISSIONING_WIRING_FOR_TEST__ = async () => {
+      (window as any).__resumedFinalReads += 1;
+      return {
+        app: 'Lightweaver',
+        ok: true,
+        state: 'known-good',
+        activationId: '',
+        cardId: flow.expectedCard.id,
+        firmwareVersion: flow.expectedCard.firmwareVersion,
+        buildId: flow.expectedCard.buildId,
+        projectRevision: flow.project.revision,
+        projectFingerprint: flow.project.fingerprint,
+        wiringRevision: expected.wiringRevision,
+        wiringDigest: expected.wiringDigest,
+        colorOrder: expected.colorOrder,
+        maxMilliamps: expected.maxMilliamps,
+        outputs: expected.outputs,
+      };
+    };
+  });
+
+  await page.getByRole('button', { name: 'Test lights', exact: true }).click();
+  await page.getByRole('button', { name: 'Start 90-second light test', exact: true }).click();
+  await page.getByRole('button', { name: 'Yes, every output is correct', exact: true }).click();
+
+  await expect.poll(() => page.evaluate(() => (window as any).__resumedFinalReads)).toBe(1);
+  await expect(page.locator('.savechip')).toContainText('Installed on card');
 });
 
 test('light-check hardware mutations stay locked after loss until two stable exact status envelopes', async ({ page }) => {

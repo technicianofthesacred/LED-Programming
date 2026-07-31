@@ -20,8 +20,8 @@ const adapterContracts = [
     name: 'WLED realtime UDP',
     path: resolve(import.meta.dirname, '../src/LightweaverWledRealtime.cpp'),
     functionName: 'handleWledRealtime',
-    rawRgb: [/(?<target>\w+)\s*\[\s*(?<pixel>\w+)\s*\]\.r\s*=\s*(?<channels>\w+)\s*\[\s*0\s*\][\s\S]*?\k<target>\s*\[\s*\k<pixel>\s*\]\.g\s*=\s*\k<channels>\s*\[\s*1\s*\][\s\S]*?\k<target>\s*\[\s*\k<pixel>\s*\]\.b\s*=\s*\k<channels>\s*\[\s*2\s*\]/],
-    write: /\b\w+\s*\[[^\]]+\]\.r\s*=/,
+    rawRgb: [/applyWledRealtimeDrgb\s*\(\s*g_leds\s*,\s*g_totalPixels\s*,\s*buf\s*\+\s*2\s*,\s*pixels/],
+    write: /applyWledRealtimeDrgb\s*\(/,
   },
   {
     name: 'WLED WebSocket',

@@ -334,6 +334,7 @@ test('complete playlist sync writes and verifies all card sections', async ({ pa
   ]);
   await expect(page.getByTestId('playlist-zone-fallback-note')).toHaveCount(0);
   await expect(page.getByTestId('playlist-card-status')).toContainText('Playlist installed on card.');
+  await expect(page.locator('.savechip')).toContainText('Installed on card');
 });
 
 test('latest section preview installs dependencies once and wins rapid taps', async ({ page }) => {

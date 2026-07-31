@@ -840,6 +840,7 @@ import { PatternPreview } from './PatternPreview.jsx';
 
     const savePreviewToCard = async () => {
       const requestedRevision = projectLifecycle.editedRevision;
+      const requestedGeneration = projectLifecycle.generation;
       const { nextLook, nextBoard, nextController: draftController } = buildCurrentHardwareState();
       const nextController = promotePatternFirst(draftController, nextLook.patternId);
       const prepared = prepareCardDeployment({
@@ -883,11 +884,19 @@ import { PatternPreview } from './PatternPreview.jsx';
         if (response?.state === 'staged') {
           throw new Error('The card kept this hardware change staged. Open Test & Install and confirm it on the real LEDs before it can be installed.');
         }
-        await waitForCardDeploymentVerification(exactPrepared, {
+        const verification = await waitForCardDeploymentVerification(exactPrepared, {
           readEvidence: () => readCardProjectEvidence({ host: safety.host || cardHost }),
         });
         dispatchCardSave({ type: 'confirm' });
-        if (!testStrip.enabled) markProjectInstalled(requestedRevision);
+        if (!testStrip.enabled) {
+          markProjectInstalled({
+            revision: requestedRevision,
+            generation: requestedGeneration,
+            cardId: verification.cardId,
+            projectRevision: exactPrepared.config.projectRevision,
+            projectFingerprint: exactPrepared.config.projectFingerprint,
+          });
+        }
         markCardLookConfirmed({
           ...nextLook,
           zone: testStrip.enabled ? '' : (selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : ''),

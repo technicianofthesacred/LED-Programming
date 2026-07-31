@@ -440,6 +440,7 @@ function realPatternShape(patternId) {
       if (recoveryPendingRef.current) return;
       const actionGeneration = ++cardActionGeneration.current;
       const installRevision = playlistRevision.current;
+      const projectGeneration = projectLifecycle.generation;
       const installIsCurrent = () => (
         actionGeneration === cardActionGeneration.current &&
         installRevision === playlistRevision.current
@@ -470,11 +471,18 @@ function realPatternShape(patternId) {
         });
         if (!installIsCurrent()) return;
         if (!testStrip.enabled) {
-          await waitForCardDeploymentVerification(
-            { ...runtimeBuild.prepared, cardId: before.cardId },
+          const exactPrepared = { ...runtimeBuild.prepared, cardId: before.cardId };
+          const verification = await waitForCardDeploymentVerification(
+            exactPrepared,
             { readEvidence: () => readCardProjectEvidence({ host }) },
           );
-          markProjectInstalled(projectLifecycle.editedRevision);
+          markProjectInstalled({
+            revision: projectLifecycle.editedRevision,
+            generation: projectGeneration,
+            cardId: verification.cardId,
+            projectRevision: exactPrepared.config.projectRevision,
+            projectFingerprint: exactPrepared.config.projectFingerprint,
+          });
         }
         setPlaylistStatus(makePlaylistPushSuccessState(response));
       } catch (error) {

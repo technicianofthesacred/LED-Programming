@@ -195,10 +195,12 @@ assert.ok(syncSetter !== -1 && finalAffected > syncSetter,
   'reported affected outputs must be recalculated after requested syncZones is applied');
 assert.match(control, /patternAffectsAllOutputs\s*=\s*patternRequested\s*&&[\s\S]*runtimePatternAffectsAllOutputs/,
   'loaded/global pattern scope must come from runtime pattern behavior');
-assert.match(control, /nextCanChange\s*=\s*nextRequested\s*&&\s*runtimeCanStepPattern\(1\)/,
-  'next must be preflighted before it contributes output scope');
-assert.match(control, /previousCanChange\s*=\s*previousRequested\s*&&\s*runtimeCanStepPattern\(-1\)/,
-  'previous must be preflighted before it contributes output scope');
+assert.match(control, /else if\s*\(nextRequested\)[\s\S]*selectionPrepared\s*=\s*runtimePrepareStepPattern\(1\)/,
+  'next must retain a validated selection before it contributes output scope');
+assert.match(control, /else if\s*\(previousRequested\)[\s\S]*selectionPrepared\s*=\s*runtimePrepareStepPattern\(-1\)/,
+  'previous must retain a validated selection before it contributes output scope');
+assert.match(control, /if\s*\(!selectionPrepared\)[\s\S]*server\.send\(422[\s\S]*return;/,
+  'an unavailable next or previous selection must fail before output scope or mutation');
 assert.match(control, /cancelStreamEffective\s*=\s*provisioningCancelStreamEffective\(\s*cancelStreamRequested,\s*runtimeIsStreaming\(\)\)/,
   'cancel stream scope must derive from a native-tested live-stream preflight');
 assert.match(control, /scopeInputs\.globalOutputs\s*=\s*colorOrderRequested[\s\S]*nextCanChange[\s\S]*previousCanChange[\s\S]*patternAffectsAllOutputs/,
@@ -209,10 +211,10 @@ assert.doesNotMatch(control, /scopeInputs\.globalOutputs\s*=[^;]*cancelStreamReq
   'a no-op cancel request must not create all-output scope by presence alone');
 assert.doesNotMatch(control, /scopeInputs\.globalOutputs\s*=\s*[^;]*nextRequested/,
   'a no-op next request must not create all-output scope by presence alone');
-assert.match(control, /if\s*\(nextCanChange\)\s*runtimeNextPattern\(\)/,
-  'a rejected no-op next must not mutate runtime state');
-assert.match(control, /if\s*\(previousCanChange\)\s*runtimePreviousPattern\(\)/,
-  'a rejected no-op previous must not mutate runtime state');
+assert.doesNotMatch(control, /runtimeNextPattern\(\)|runtimePreviousPattern\(\)/,
+  'next and previous must commit the exact retained selection instead of selecting again');
+assert.match(control, /runtimeCommitPreparedPatternSelection\(\)/,
+  'accepted next and previous requests must commit only their retained selection');
 assert.match(control, /scopeInputs\.selectedZones\s*=/,
   'zone-scoped controls must request selected-zone evidence');
 assert.match(control, /scopeInputs\.syncStateChanged\s*=\s*syncStateChanged/,
@@ -225,10 +227,11 @@ assert.match(control, /provisioningControlAdvancesRevision\(\s*true,\s*operation
   'zero-effect rejection and revision admission must use the native-tested effect policy');
 assert.match(control, /if\s*\(cancelStreamEffective\)\s*runtimeCancelStream\(\)/,
   'standalone no-op cancel must not mutate the frame source');
-const zeroEffectReject = control.indexOf('command affects zero outputs');
-assert.ok(zeroEffectReject !== -1 && zeroEffectReject < control.indexOf('runtimeNextPattern()') &&
-    zeroEffectReject < control.indexOf('runtimeAdvanceStateRevision()'),
-  'zero-look and one-look step requests must reject before mutation, revision echo, or card revision advance');
+const unavailableSelectionReject = control.indexOf('pattern unavailable');
+assert.ok(unavailableSelectionReject !== -1 &&
+    unavailableSelectionReject < control.indexOf('runtimeCommitPreparedPatternSelection()') &&
+    unavailableSelectionReject < control.indexOf('runtimeAdvanceStateRevision()'),
+  'zero-look and one-look step requests must reject before selection commit or card revision advance');
 assert.match(control, /runtimeAdvanceStateRevision\s*\([\s\S]*affectedOutputCount[\s\S]*affectedOutputs/,
   'successful control acknowledgement must report card-owned affected outputs and state revision');
 assert.ok(
