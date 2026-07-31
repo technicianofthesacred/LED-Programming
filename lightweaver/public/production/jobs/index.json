@@ -4,10 +4,10 @@
     {
       "jobId": "bench-fixture-44",
       "label": "Bench fixture · 44 LEDs",
-      "digest": "d0d1b345bbca8b2cd3b1b4c91c1a90d0e62d73f0287c1d4b3eb3bcfa0b4f43e0",
-      "artifactSha256": "117ce407b864b17e57175d784677978a118390077a1f91df1774b26bba043187",
+      "digest": "dc4d99aec51b2ee3260acb845a73053eee317ef3dd35e5f7c354e5eb47554847",
+      "artifactSha256": "2ddd924a74ce10131395cd37fe127773da8f10548b7a450065287d0f82526f74",
       "size": 3287,
-      "url": "/production/jobs/d0d1b345bbca8b2cd3b1b4c91c1a90d0e62d73f0287c1d4b3eb3bcfa0b4f43e0.lwjob.json"
+      "url": "/production/jobs/dc4d99aec51b2ee3260acb845a73053eee317ef3dd35e5f7c354e5eb47554847.lwjob.json"
     }
   ]
 }
