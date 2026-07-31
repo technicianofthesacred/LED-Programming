@@ -688,7 +688,7 @@ void handleRoot() {
               "el.onclick=()=>{if(sceneControl.snapshot().state==='pending'||p.id===currentId)return;sceneControl.request(p.id)};"
               "g.appendChild(el)"
             "})};"
-            "const sceneControl=makeConfirmedControl({initial:currentId,description:'change scene',render:value=>{currentId=value;renderPat();showColorPanel(value==='custom-color')},setDisabled:on=>{$('grid').classList.toggle('pending',on);$('grid').setAttribute('aria-busy',String(on))},send:value=>controlPost({patternId:value})});"
+            "const sceneControl=makeConfirmedControl({initial:currentId,description:'change scene',render:value=>{currentId=value;renderPat();showColorPanel(value==='custom-color')},setDisabled:on=>{$('grid').classList.toggle('pending',on);$('grid').setAttribute('aria-busy',String(on))},send:async value=>{const payload=await controlPost({patternId:value,syncZones:true});if(payload.appliedPatternId!==value)throw new Error('Card did not confirm the requested scene.');return payload}});"
             "const brightnessControl=makeConfirmedControl({initial:1,description:'change brightness',render:value=>{const pct=Math.round(value*100);$('b-slider').value=pct;$('b-val').textContent=pct+'%'},setDisabled:on=>{$('b-slider').disabled=on},send:value=>controlPost({brightness:value})});"
             "const blackoutControl=makeConfirmedControl({initial:blackoutOn,description:'change blackout',render:value=>{blackoutOn=value;$('off-btn').classList.toggle('on',value)},setDisabled:on=>{$('off-btn').disabled=on},send:value=>controlPost({blackout:value})});"
             "$('b-slider').onchange=e=>brightnessControl.request(parseInt(e.target.value,10)/100);"
@@ -1055,7 +1055,7 @@ void handleAdvancedRoot() {
               // confirmed pattern on failed/non-ok POST, Retry re-sends.
               "const patternControl=(()=>{let confirmed='',active=0,failed=null;"
                 "const request=async id=>{const req=++active;failed=null;patPending=true;currentId=id;renderGrid();setNow(selectedPattern());"
-                  "try{await post('/api/control',{patternId:id});if(req!==active)return;confirmed=id;patPending=false;renderGrid();patError(null)}"
+                  "try{const r=await post('/api/control',{patternId:id,syncZones:true});if(r.appliedPatternId!==id)throw new Error('Card did not confirm the requested pattern.');if(req!==active)return;confirmed=id;patPending=false;renderGrid();patError(null)}"
                   "catch(e){if(req!==active)return;failed=id;currentId=confirmed;patPending=false;renderGrid();setNow(selectedPattern());patError('Could not change pattern. '+((e&&e.message)||'Try again.'))}};"
                 "const retry=()=>{if(failed===null)return;const id=failed;patError(null);return request(id)};"
                 "const setConfirmed=id=>{active++;confirmed=id;failed=null;currentId=id;patPending=false;patError(null)};"
@@ -1829,11 +1829,20 @@ void handleControlPost() {
   uint32_t appliedStateRevision = runtimeStateRevision();
   bool transactionApplied = applyPreparedControlTransaction(
       selectionRequested,
+      [&]() {
+        // The requested sync state is part of the selection context. A
+        // whole-piece pattern must see it while committing, not only when the
+        // accompanying brightness/blackout fields are applied afterward.
+        if (syncZonesRequested) runtimeSetSyncZones(effectiveSyncZones);
+      },
+      [&]() {
+        // Prepared selections are preflighted, but a sequence can still fail
+        // its final activation check. Restore split/sync state on that path so
+        // the transaction remains all-or-nothing.
+        if (syncZonesRequested) runtimeSetSyncZones(currentSyncZones);
+      },
       []() { return runtimeCommitPreparedPatternSelection(); },
       [&]() {
-        // Apply sync mode before any empty-zone writes. Otherwise an "all
-        // sections" command sent in split preview mode updates only zone 0.
-        if (syncZonesRequested) runtimeSetSyncZones(controlBool(doc, "syncZones"));
         if (colorOrderRequested) runtimeSetLedColorOrder(controlString(doc, "colorOrder"));
         if (hasControlField(doc, "brightness")) runtimeSetBrightnessZ(zoneTarget, controlFloat(doc, "brightness"));
         if (hasControlField(doc, "speed")) runtimeSetSpeedZ(zoneTarget, controlFloat(doc, "speed"));
@@ -1887,6 +1896,10 @@ void handleControlPost() {
   }
   if (patternRequested) {
     out["patternId"] = confirmedPatternId;
+    // Card-owned readback. Unlike patternId (the accepted request), this also
+    // reveals whether the selection represents a global scene or a partial
+    // section edit.
+    out["appliedPatternId"] = runtimeCurrentPatternId();
     JsonObject confirmedLook = out["confirmedLook"].to<JsonObject>();
     confirmedLook["patternId"] = confirmedPatternId;
     confirmedLook["zone"] = zoneTarget;
@@ -2090,8 +2103,16 @@ void handlePatterns() {
   sendCors();
   RuntimeConfig& cfg = *runtimeConfigPtr;
   JsonDocument doc;
-  doc["currentIndex"] = *currentLookIndexPtr;
-  doc["currentId"] = cfg.lookCount ? cfg.looks[*currentLookIndexPtr].id : "";
+  String currentPatternId = runtimeCurrentPatternId();
+  int currentPatternIndex = -1;
+  for (uint8_t i = 0; i < cfg.lookCount; i++) {
+    if (cfg.looks[i].id == currentPatternId) {
+      currentPatternIndex = i;
+      break;
+    }
+  }
+  doc["currentIndex"] = currentPatternIndex;
+  doc["currentId"] = currentPatternId;
   JsonArray arr = doc["patterns"].to<JsonArray>();
   for (uint8_t i = 0; i < cfg.lookCount; i++) {
     JsonObject p = arr.add<JsonObject>();

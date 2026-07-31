@@ -187,7 +187,7 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
       const directions = new Set(actual.segments.map(segment => segment.direction || 'forward'));
       return { ...output, pin: actual.pin, pixels: actual.pixels, segments: actual.segments, direction: directions.size === 1 ? [...directions][0] : 'mixed' };
     });
-    const config = { ...baseline.config, wiringRevision: status.wiringRevision, wiringDigest: status.wiringDigest, led: { ...baseline.config.led, outputs, colorOrder: status.colorOrder, maxMilliamps: status.maxMilliamps } };
+    const config = { ...baseline.config, wiringRevision: status.wiringRevision, wiringDigest: status.wiringDigest, led: { ...baseline.config.led, outputs, type: status.ledType, colorOrder: status.colorOrder, maxMilliamps: status.maxMilliamps } };
     if (await productionWiringDigest(config.led) !== status.wiringDigest) throw new Error('Card wiring digest does not match reconstructed physical wiring.');
     return { snapshot: createProductionKnownGoodFromConfig(job, config), results: {} };
   }
@@ -319,7 +319,7 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
         if (confirmed?.state !== 'known-good' || (confirmed?.activationId && confirmed.activationId !== candidate.activationId)) throw new Error('The card did not confirm this exact candidate.');
         const readback = driver?.readWiringStatus ? await driver.readWiringStatus() : await getCardWiringStatus({ host: lease.host, transport: lease.transport });
         assertLease(lease);
-        if (readback?.state !== 'known-good' || !exactIdentity(readback, job, expectedCardId) || readback.colorOrder !== candidate.config.led.colorOrder
+        if (readback?.state !== 'known-good' || !exactIdentity(readback, job, expectedCardId) || readback.ledType !== candidate.config.led.type || readback.colorOrder !== candidate.config.led.colorOrder
           || readback.maxMilliamps !== candidate.config.led.maxMilliamps || readback.wiringRevision !== candidate.snapshot.wiringRevision
           || readback.wiringDigest !== candidate.snapshot.wiringDigest || !sameOutputs(readback.outputs, candidate.config.led.outputs)) throw new Error('Final card evidence did not match the exact confirmed candidate.');
         const invalidated = productionCorrectionAffectedBoundaryIds(knownGood, candidate.boundaryId, candidate.correction);
@@ -358,7 +358,7 @@ export function ProductionPhysicalTest({ job, runId, cardLink, expectedCardId, p
       const evidence = driver?.readCandidateEvidence ? await driver.readCandidateEvidence(staged.activationId) : await readCardWiringCandidateEvidence(staged.activationId, { host: lease.host, transport: lease.transport });
       assertCandidateOperation();
       assertLease(lease);
-      if (!exactIdentity(evidence, job, expectedCardId) || evidence.activationId !== staged.activationId || evidence.colorOrder !== candidate.config.led.colorOrder
+      if (!exactIdentity(evidence, job, expectedCardId) || evidence.activationId !== staged.activationId || evidence.ledType !== candidate.config.led.type || evidence.colorOrder !== candidate.config.led.colorOrder
         || evidence.maxMilliamps !== candidate.config.led.maxMilliamps || evidence.wiringRevision !== candidate.config.wiringRevision
         || evidence.wiringDigest !== candidate.config.wiringDigest || !sameOutputs(evidence.candidateOutputs, candidate.config.led.outputs)) throw new Error('Staged candidate evidence did not match this exact card, job, boundary, config, current cap, and wiring digest.');
       const testing = driver?.activateCandidate ? await driver.activateCandidate(staged.activationId) : await activateAndWaitForCardWiring(staged.activationId, { host: lease.host, transport: lease.transport });

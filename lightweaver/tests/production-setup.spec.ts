@@ -197,7 +197,7 @@ async function installDriver(page, {
       },
       readCandidateEvidence: async activationId => {
         const candidate = JSON.parse(localStorage.getItem('lw_test_candidate') || '{}');
-        return { app: 'Lightweaver', state: 'staged', activationId, ...evidence, projectFingerprint: candidateEvidenceMismatch ? 'f'.repeat(16) : evidence.projectFingerprint, colorOrder: candidate.config?.led?.colorOrder, maxMilliamps: candidate.config?.led?.maxMilliamps, wiringRevision: candidate.config?.wiringRevision, wiringDigest: candidate.config?.wiringDigest, candidateOutputs: candidate.config?.led?.outputs || [] };
+        return { app: 'Lightweaver', state: 'staged', activationId, ...evidence, projectFingerprint: candidateEvidenceMismatch ? 'f'.repeat(16) : evidence.projectFingerprint, ledType: candidate.config?.led?.type, colorOrder: candidate.config?.led?.colorOrder, maxMilliamps: candidate.config?.led?.maxMilliamps, wiringRevision: candidate.config?.wiringRevision, wiringDigest: candidate.config?.wiringDigest, candidateOutputs: candidate.config?.led?.outputs || [] };
       },
       activateCandidate: async activationId => {
         if (activationFailure) throw new Error('Candidate activation failed');
@@ -231,7 +231,7 @@ async function installDriver(page, {
           projectFingerprint: current?.projectFingerprint || evidence.projectFingerprint,
           productionJobId: current?.productionJobId || evidence.productionJobId,
           productionJobDigest: current?.productionJobDigest || evidence.productionJobDigest,
-          colorOrder: current?.led?.colorOrder, maxMilliamps: current?.led?.maxMilliamps,
+          ledType: current?.led?.type, colorOrder: current?.led?.colorOrder, maxMilliamps: current?.led?.maxMilliamps,
           wiringRevision: current?.wiringRevision, wiringDigest: current?.wiringDigest, outputs: current?.led?.outputs || [],
         };
       },
@@ -1893,7 +1893,7 @@ test('production screen reflows at 200% equivalent width and honors reduced moti
 test('production setup is keyboard operable, restores heading focus, and announces state', async ({ page }) => {
   await installDriver(page);
   await page.goto('/#screen=layout');
-  const entry = page.getByRole('button', { name: 'Card', exact: true });
+  const entry = page.getByRole('button', { name: 'Hardware', exact: true });
   await entry.focus();
   await entry.press('Enter');
   await expect(page).toHaveURL(/#screen=card&section=overview/);

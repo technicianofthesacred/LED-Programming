@@ -32,7 +32,7 @@ import {
   readStoredCardHost,
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
-import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard, readCardProjectEvidence } from '../lib/cardPushClient.js';
+import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard, readCardProjectEvidence, readCardStatusEnvelope } from '../lib/cardPushClient.js';
 import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
 import { pushLiveHardwareToCard } from '../lib/cardLiveControl.js';
 import { downloadJsonFile } from '../lib/downloadFile.js';
@@ -49,6 +49,7 @@ import {
 import { cardActionReducer, createCardActionState } from '../lib/cardAction.js';
 import { canonicalProjectFileName, PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
 import { openLocalCardPage } from '../lib/cardBridge.js';
+import { StripColorOrderCheck } from '../components/layout/wire/StripColorOrderCheck.jsx';
 
 const SettingsFieldContext = createContext(null);
 
@@ -293,10 +294,17 @@ const SettingsFieldContext = createContext(null);
       setStatusKind('');
       setStatus(`Previewing ${colorOrder} color order on ${cardHostToUrl(cardHost)}...`);
       pushLiveHardwareToCard({ colorOrder }, { host: cardHost, timeoutMs: 2000 })
-        .then(response => {
+        .then(async response => {
+          if (response?.ok !== true || !Number.isSafeInteger(response?.stateRevision)) {
+            throw new Error('The card did not return a card-owned hardware acknowledgement.');
+          }
+          const readback = await readCardStatusEnvelope({ host: cardHost, timeoutMs: 2000 });
+          if (!response.cardId || readback?.cardId !== response.cardId || readback?.led?.colorOrder !== colorOrder) {
+            throw new Error('The card hardware readback did not match the requested color order.');
+          }
           if (seq !== liveHardwareSeq.current) return;
           setStatusKind('ok');
-          setStatus(`Color order is live on the card: ${response.colorOrder || colorOrder}. Install on card to keep it after restart.`);
+          setStatus(`Color order ${colorOrder} was acknowledged and read back from the exact card. Check the real red, green, blue, and white appearance; Studio has not marked that visual test passed. Install on card to keep it after restart.`);
         })
         .catch(() => {
           if (seq !== liveHardwareSeq.current) return;
@@ -515,6 +523,8 @@ const SettingsFieldContext = createContext(null);
     const showPreferences = mode === 'all' || mode === 'preferences';
     const showCard = mode === 'all' || mode === 'card';
     const showAdvanced = mode === 'all' || mode === 'advanced';
+    const openColorOrderTest = showCard && typeof window !== 'undefined'
+      && new URLSearchParams(window.location.hash.slice(1)).get('tool') === 'color-order';
 
     const content = (
           <div className={`set${embedded ? ' set-embedded' : ''}`}>
@@ -591,6 +601,12 @@ const SettingsFieldContext = createContext(null);
                   <div className="sec-h"><span className="t">Card &amp; hardware</span></div>
                   <Row label="Runtime mode" hint="What the card plays from on boot"><Seg opts={RUNTIME_LABELS} val={runtimeLabel} set={(o) => updateController({ runtimeMode: RUNTIME_VALUE[o] })} /></Row>
                   <Row label="Color order" hint="This card is calibrated to RGB"><Seg opts={COLOR_ORDER_LABELS} val={colorOrderLabel} set={updateColorOrder} /></Row>
+                  <StripColorOrderCheck
+                    cardHost={cardHost}
+                    controller={standaloneController}
+                    setController={setStandaloneController}
+                    autoStart={openColorOrderTest}
+                  />
                   <Row label="Brightness limit" hint="Max firmware output for sellable pieces"><Range value={brightnessLimit255} set={(v) => updateController({ led: { brightnessLimit: Math.max(0.05, Math.min(1, v / 255)) } })} min={32} max={255} step={1} fmt={(v) => `${v}`} /></Row>
                   <Row label="Layout & outputs" hint="Read-only — Layout owns structure and routing" stack>
                     <div className="set-outputs">

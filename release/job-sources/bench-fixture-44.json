@@ -13,7 +13,7 @@
   "project": {
     "id": "bench-fixture",
     "revision": 1,
-    "fingerprint": "d9388bda15c29a82",
+    "fingerprint": "22b35b359bfa0a4e",
     "restoreSnapshot": {
       "version": 4,
       "id": "bench-fixture",
@@ -110,6 +110,38 @@
               "label": "Aurora",
               "enabled": true,
               "createdAt": 0
+            },
+            {
+              "id": "fire",
+              "type": "pattern",
+              "patternId": "fire",
+              "label": "Fire",
+              "enabled": true,
+              "createdAt": 1
+            },
+            {
+              "id": "ocean",
+              "type": "pattern",
+              "patternId": "ocean",
+              "label": "Ocean",
+              "enabled": true,
+              "createdAt": 2
+            },
+            {
+              "id": "plasma",
+              "type": "pattern",
+              "patternId": "plasma",
+              "label": "Plasma",
+              "enabled": true,
+              "createdAt": 3
+            },
+            {
+              "id": "sparkle",
+              "type": "pattern",
+              "patternId": "sparkle",
+              "label": "Sparkle",
+              "enabled": true,
+              "createdAt": 4
             }
           ]
         }
@@ -128,10 +160,11 @@
         "name": "Bench fixture"
       },
       "projectRevision": 1,
-      "projectFingerprint": "d9388bda15c29a82",
+      "projectFingerprint": "22b35b359bfa0a4e",
       "productionJobId": "bench-fixture-44",
       "productionJobDigest": "0000000000000000000000000000000000000000000000000000000000000000",
       "led": {
+        "type": "WS2815",
         "pixels": 44,
         "outputs": [
           {
@@ -169,7 +202,11 @@
           "rotateDirection": "clockwise-brighter",
           "brightnessStep": 18,
           "patternCycleIds": [
-            "aurora"
+            "aurora",
+            "fire",
+            "ocean",
+            "plasma",
+            "sparkle"
           ]
         },
         "previous": 7,
@@ -183,6 +220,26 @@
           "id": "aurora",
           "label": "Aurora",
           "mode": "procedural"
+        },
+        {
+          "id": "fire",
+          "label": "Fire",
+          "mode": "procedural"
+        },
+        {
+          "id": "ocean",
+          "label": "Ocean",
+          "mode": "procedural"
+        },
+        {
+          "id": "plasma",
+          "label": "Plasma",
+          "mode": "procedural"
+        },
+        {
+          "id": "sparkle",
+          "label": "Sparkle",
+          "mode": "procedural"
         }
       ],
       "looks": [
@@ -191,6 +248,50 @@
           "label": "Aurora",
           "mode": "procedural",
           "preset": "aurora",
+          "fps": 24,
+          "loop": true,
+          "fadeOutMs": 320,
+          "fadeInMs": 420,
+          "brightness": 1
+        },
+        {
+          "id": "fire",
+          "label": "Fire",
+          "mode": "procedural",
+          "preset": "fire",
+          "fps": 24,
+          "loop": true,
+          "fadeOutMs": 320,
+          "fadeInMs": 420,
+          "brightness": 1
+        },
+        {
+          "id": "ocean",
+          "label": "Ocean",
+          "mode": "procedural",
+          "preset": "ocean",
+          "fps": 24,
+          "loop": true,
+          "fadeOutMs": 320,
+          "fadeInMs": 420,
+          "brightness": 1
+        },
+        {
+          "id": "plasma",
+          "label": "Plasma",
+          "mode": "procedural",
+          "preset": "plasma",
+          "fps": 24,
+          "loop": true,
+          "fadeOutMs": 320,
+          "fadeInMs": 420,
+          "brightness": 1
+        },
+        {
+          "id": "sparkle",
+          "label": "Sparkle",
+          "mode": "procedural",
+          "preset": "sparkle",
           "fps": 24,
           "loop": true,
           "fadeOutMs": 320,

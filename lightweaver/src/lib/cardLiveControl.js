@@ -8,7 +8,12 @@ import {
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { getCardPatternRuntimeId } from './cardPatternBank.js';
 import { DEFAULT_CARD_PATTERN_BANK, normalizeCardOutputSettings } from './cardRuntimeContract.js';
-import { CardPushError, pushConfigToCard, requestCardReboot } from './cardPushClient.js';
+import {
+  CardPushError,
+  pushConfigToCard,
+  readCardStatusEnvelope,
+  requestCardReboot,
+} from './cardPushClient.js';
 import { getCardBridgeState, sendCardBridgeRequest } from './cardBridge.js';
 import {
   compareCardIdentity,
@@ -272,6 +277,51 @@ function requireRecoveryAcknowledgement(response) {
     );
   }
   return response;
+}
+
+export function requireBlackoutAcknowledgement(response) {
+  const patternId = String(response?.patternId || response?.confirmedPatternId || '').trim();
+  const appliedPatternId = String(response?.appliedPatternId || '').trim();
+  const hasStateRevision = Number.isInteger(Number(response?.stateRevision))
+    && Number(response.stateRevision) >= 0;
+  const affectedOutputCount = Number(response?.affectedOutputCount);
+  if (
+    response?.ok !== true
+    || patternId !== 'blackout'
+    || appliedPatternId !== 'blackout'
+    || response?.blackout !== true
+    || !hasStateRevision
+    || !Number.isInteger(affectedOutputCount)
+    || affectedOutputCount < 1
+  ) {
+    throw new CardPushError(
+      'blackout-unconfirmed',
+      'The card answered, but did not confirm that blackout was applied to an LED output.',
+    );
+  }
+  return response;
+}
+
+export function requireBlackoutReadback(status, zonesPayload, acknowledgement = {}) {
+  const expectedCardId = String(acknowledgement?.cardId || '').trim();
+  const actualCardId = String(status?.cardId || '').trim();
+  const zones = Array.isArray(zonesPayload?.zones) ? zonesPayload.zones : [];
+  const exactCard = !expectedCardId || compareCardIdentity(
+    { id: expectedCardId },
+    { id: actualCardId },
+  ).ok;
+  const patternReadBack = String(status?.currentPatternId || status?.currentLookId || '').trim() === 'blackout';
+  const outputIsZero = Number(status?.lwOutput?.brightnessByte) === 0;
+  const everyZoneIsBlack = zones.length > 0 && zones.every(zone => (
+    String(zone?.patternId || '').trim() === 'blackout' && zone?.blackout === true
+  ));
+  if (!exactCard || !patternReadBack || !outputIsZero || !everyZoneIsBlack) {
+    throw new CardPushError(
+      'blackout-readback-unconfirmed',
+      'The card accepted blackout, but its fresh state did not confirm zero LED output.',
+    );
+  }
+  return { acknowledgement, status, zones: zonesPayload };
 }
 
 function waitForRecoveryRetry(ms, setTimeoutImpl = setTimeout) {
@@ -953,6 +1003,56 @@ export async function recoverCardLights(look = {}, options = {}) {
     }
     throw normalizePreviewError(host, error);
   }
+}
+
+export async function stopCardLights(options = {}) {
+  const host = options.host || readStoredCardHost();
+  const pushImpl = options.pushImpl || pushLivePreviewToCard;
+  const readStatusImpl = options.readStatusImpl || readCardStatusEnvelope;
+  const readZonesImpl = options.readZonesImpl || readCardZonesFromCard;
+  const acknowledgement = requireBlackoutAcknowledgement(await pushImpl(
+    {
+      patternId: 'blackout',
+      brightness: 0,
+      blackout: true,
+      syncZones: true,
+    },
+    {
+      ...options,
+      host,
+      latestOnly: false,
+    },
+  ));
+
+  const attempts = Math.max(1, Math.min(6, Number(options.blackoutReadbackAttempts) || 4));
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const [status, zones] = await Promise.all([
+        readStatusImpl({
+          host,
+          timeoutMs: Math.min(options.timeoutMs || 3200, 1400),
+          fetchImpl: options.fetchImpl,
+        }),
+        readZonesImpl({
+          host,
+          timeoutMs: Math.min(options.timeoutMs || 3200, 1400),
+        }),
+      ]);
+      return requireBlackoutReadback(status, zones, acknowledgement);
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 < attempts) {
+        await waitForRecoveryRetry(options.blackoutReadbackDelayMs ?? 60, options.setTimeoutImpl);
+      }
+    }
+  }
+  if (lastError instanceof CardPushError) throw lastError;
+  throw new CardPushError(
+    'blackout-readback-unconfirmed',
+    'The card accepted blackout, but its fresh state did not confirm zero LED output.',
+    lastError,
+  );
 }
 
 async function sendSectionPreviewToCard(targets, options = {}) {

@@ -480,6 +480,66 @@ test('the color quiz chains in as the final part of the LED check and sends real
   await expect(page.getByTestId('start-led-check')).toBeVisible();
 });
 
+test('Stop lights confirms the blackout command and fresh zero-output readback', async ({ page }) => {
+  let blackoutApplied = false;
+  const recoveryPatterns: string[] = [];
+  const controlPatterns: string[] = [];
+  await page.addInitScript(cardId => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: cardId }));
+  }, TEST_CARD_ID);
+  await page.route('**/api/firmware-info', route => route.fulfill({ json: {
+    app: 'Lightweaver', cardId: TEST_CARD_ID, firmwareVersion: '1.0.0', buildId: 'b'.repeat(40),
+  } }));
+  await page.route('**/api/status', route => route.fulfill({ json: {
+    app: 'Lightweaver', ok: true, cardId: TEST_CARD_ID, firmwareVersion: '1.0.0', buildId: 'b'.repeat(40),
+    currentPatternId: blackoutApplied ? 'blackout' : 'aurora',
+    lwOutput: { brightnessByte: blackoutApplied ? 0 : 160 },
+  } }));
+  await page.route('**/api/zones', route => route.fulfill({ json: {
+    syncZones: true,
+    zones: [{
+      id: 'strip-1',
+      patternId: blackoutApplied ? 'blackout' : 'aurora',
+      blackout: blackoutApplied,
+    }],
+  } }));
+  await page.route('**/api/recover-lights', async route => {
+    const body = JSON.parse(route.request().postData() || '{}');
+    recoveryPatterns.push(String(body.patternId || ''));
+    await route.fulfill({ json: {
+      ok: true,
+      accepted: true,
+      patternId: body.patternId,
+      diagnostics: { frameSubmitted: true, nonBlackPixels: 44, brightnessByte: 160 },
+    } });
+  });
+  await page.route('**/api/control', async route => {
+    const body = JSON.parse(route.request().postData() || '{}');
+    controlPatterns.push(String(body.patternId || ''));
+    blackoutApplied = body.patternId === 'blackout' && body.blackout === true;
+    await route.fulfill({ json: {
+      ok: true,
+      cardId: TEST_CARD_ID,
+      patternId: body.patternId,
+      appliedPatternId: body.patternId,
+      blackout: blackoutApplied,
+      stateRevision: 19,
+      affectedOutputCount: 1,
+    } });
+  });
+
+  await gotoWire(page);
+  await seedBenchVerified(page);
+  await page.getByTestId('start-led-check').click();
+  const check = page.getByRole('region', { name: 'LED color order' });
+  await expect(check.getByText('Red test is live.')).toBeVisible();
+  await check.getByRole('button', { name: 'Stop lights' }).click();
+
+  await expect(check.getByText('Lights stopped. Start a color again when you are ready.')).toBeVisible();
+  expect(controlPatterns).toContain('blackout');
+  expect(recoveryPatterns).not.toContain('blackout');
+});
+
 test('confirming the color auto-locks verified wiring and a Draw GPIO edit reopens it', async ({ page }) => {
   await installStableCardIdentity(page);
   await page.route('**/api/control', async route => {

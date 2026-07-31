@@ -42,6 +42,7 @@ const CONFIG_KEYS = ['controls', 'led', 'looks', 'mode', 'patterns', 'piece', 'p
 const OUTPUT_KEYS = ['colorOrder', 'direction', 'id', 'label', 'pin', 'pixels'];
 const LED_KEYS = ['brightnessLimit', 'colorOrder', 'maxMilliamps', 'outputs', 'pixels'];
 const OUTPUT_COLOR_KEYS = ['calibration', 'outputGammaEnabled', 'outputGammaValue'];
+const RUNTIME_LED_OPTIONAL_KEYS = ['type', ...OUTPUT_COLOR_KEYS];
 const CALIBRATION_KEYS = ['blue', 'green', 'red'];
 const LED_OUTPUT_KEYS = ['id', 'name', 'pin', 'pixels'];
 const RUNTIME_LED_OUTPUT_KEYS = ['direction', 'id', 'name', 'pin', 'pixels', 'segments'];
@@ -323,7 +324,10 @@ function assertPackageShape(job, { source = false } = {}) {
   if (!Number.isSafeInteger(config.wiringRevision) || config.wiringRevision < 1 || config.wiringRevision > 0xffffffff
     || !/^[a-f0-9]{64}$/.test(config.wiringDigest || '')) throw new Error('Production wiring revision and digest are invalid');
 
-  exactRequiredAndOptionalKeys(config.led, LED_KEYS, OUTPUT_COLOR_KEYS, 'LED configuration');
+  exactRequiredAndOptionalKeys(config.led, LED_KEYS, RUNTIME_LED_OPTIONAL_KEYS, 'LED configuration');
+  if (config.led.type !== undefined && !['WS2812B', 'WS2815'].includes(config.led.type)) {
+    throw new Error('LED configuration type must be WS2812B or WS2815');
+  }
   validateOutputColorSettings(config.led, 'LED configuration');
   if (!Number.isSafeInteger(config.led.maxMilliamps) || config.led.maxMilliamps < MIN_PRODUCTION_MAX_MILLIAMPS
     || config.led.maxMilliamps > MAX_PRODUCTION_MAX_MILLIAMPS) throw new Error('Production LED maxMilliamps current ceiling is invalid');
@@ -359,6 +363,7 @@ function assertPackageShape(job, { source = false } = {}) {
   if (!hasOutputColorSettings(config.led)) {
     for (const key of OUTPUT_COLOR_KEYS) delete rebuiltRuntime.config.led[key];
   }
+  if (!Object.hasOwn(config.led, 'type')) delete rebuiltRuntime.config.led.type;
   if (stableJson(rebuiltRuntime) !== stableJson(job.configuration)) throw new Error('Production job compiled runtime does not exactly match the restore snapshot');
 
   if (!Array.isArray(job.expectedOutputs) || job.expectedOutputs.length !== config.led.outputs.length) {

@@ -217,6 +217,7 @@ void resetConfig(RuntimeConfig& config) {
   config.wiringRevision = 0;
   config.wiringDigest = "";
   config.startupLookId = "";
+  config.ledType = "WS2812B";
   config.ledColorOrder = "";
   config.brightnessLimit = 0.0f;
   resetOutputColor(config.outputColor);
@@ -251,6 +252,7 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
   config.startupLookId = String(doc["startupPatternId"] | doc["startupLook"] | "aurora");
 
   JsonObject led = doc["led"].as<JsonObject>();
+  config.ledType = String(led["type"] | "WS2812B");
   config.ledColorOrder = String(led["colorOrder"] | "RGB");
   config.brightnessLimit = clampUnit(led["brightnessLimit"] | 0.65f);
   config.maxMilliamps = clampMilliamps(led["maxMilliamps"] | LW_DEFAULT_MAX_MILLIAMPS);
@@ -461,7 +463,10 @@ String sha256Hex(const String& value) {
 String calculateWiringDigest(JsonDocument& doc) {
   JsonDocument canonical;
   JsonObject canonicalLed = canonical.to<JsonObject>();
-  canonicalLed["version"] = 1;
+  bool hasLedType = !doc["led"]["type"].isNull();
+  String ledType = String(doc["led"]["type"] | "WS2812B");
+  canonicalLed["version"] = hasLedType ? 2 : 1;
+  if (hasLedType) canonicalLed["type"] = ledType;
   canonicalLed["colorOrder"] = String(doc["led"]["colorOrder"] | "RGB");
   canonicalLed["maxMilliamps"] =
       doc["led"]["maxMilliamps"] | LW_DEFAULT_MAX_MILLIAMPS;
@@ -578,6 +583,12 @@ bool validateRuntimeConfigJsonStrict(const String& json,
   if (productionJobId.length() &&
       (wiringDigest.length() != LW_WIRING_DIGEST_LENGTH || !isLowerHex(wiringDigest))) {
     message = "production wiring digest must be 64 lowercase hex characters";
+    return false;
+  }
+
+  String ledType = String(doc["led"]["type"] | "WS2812B");
+  if (ledType != "WS2812B" && ledType != "WS2815") {
+    message = "led type must be WS2812B or WS2815";
     return false;
   }
 
@@ -1112,6 +1123,7 @@ void applyDefaultRuntimeConfig(RuntimeConfig& config) {
   config.wiringRevision = 0;
   config.wiringDigest = "";
   config.startupLookId = "";
+  config.ledType = "WS2812B";
   config.ledColorOrder = "";
   config.brightnessLimit = 0.0f;
   config.maxMilliamps = LW_FACTORY_BEACON_MAX_MILLIAMPS;
@@ -1671,6 +1683,7 @@ String runtimeWiringSafetyStatusJson() {
         doc["productionJobDigest"] = String(candidateDoc["productionJobDigest"] | "");
         doc["wiringRevision"] = candidateDoc["wiringRevision"] | 0U;
         doc["wiringDigest"] = String(candidateDoc["wiringDigest"] | "");
+        doc["ledType"] = String(candidateDoc["led"]["type"] | "WS2812B");
         doc["colorOrder"] = String(candidateDoc["led"]["colorOrder"] | "");
         doc["maxMilliamps"] = candidateDoc["led"]["maxMilliamps"] | LW_DEFAULT_MAX_MILLIAMPS;
         JsonArray candidateOutputs = doc["candidateOutputs"].to<JsonArray>();
@@ -1706,6 +1719,7 @@ bool runtimeConfigJsonChangesWiring(const String& json, const RuntimeConfig& cur
   changes = parsed->outputCount != current.outputCount;
   changes = changes || parsed->wiringRevision != current.wiringRevision ||
             parsed->wiringDigest != current.wiringDigest ||
+            parsed->ledType != current.ledType ||
             parsed->maxMilliamps != current.maxMilliamps;
   for (uint8_t i = 0; !changes && i < parsed->outputCount; i++) {
     const OutputConfig& next = parsed->outputs[i];
@@ -1851,6 +1865,7 @@ bool saveWifiConfigJson(const String& json, RuntimeConfig& config, String& messa
 }
 
 String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint16_t totalPixels, uint8_t currentLookIndex) {
+  (void)currentLookIndex;  // Retained in the public signature for compatibility.
   JsonDocument doc;
   doc["app"] = "Lightweaver";
   char cardId[16] = {};
@@ -1892,6 +1907,7 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
       doc["recipeCapabilities"].to<JsonObject>(), LW_FIRMWARE_VERSION, LW_BUILD_ID);
   doc["piece"]["name"] = config.pieceName;
   doc["led"]["pixels"] = totalPixels;
+  doc["led"]["type"] = config.ledType;
   doc["led"]["colorOrder"] = config.ledColorOrder;
   doc["led"]["outputGammaEnabled"] = config.outputColor.gammaEnabled;
   doc["led"]["outputGammaValue"] = config.outputColor.gammaValue;
@@ -1904,8 +1920,17 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
       lightweaverLimitedMilliamps(totalPixels, config.maxMilliamps);
   doc["wiringRevision"] = config.wiringRevision;
   doc["wiringDigest"] = config.wiringDigest;
-  doc["currentLookIndex"] = currentLookIndex;
-  doc["currentLookId"] = config.lookCount ? config.looks[currentLookIndex].id : "";
+  String currentPatternId = runtimeCurrentPatternId();
+  int currentPatternIndex = -1;
+  for (uint8_t i = 0; i < config.lookCount; i++) {
+    if (config.looks[i].id == currentPatternId) {
+      currentPatternIndex = i;
+      break;
+    }
+  }
+  doc["currentLookIndex"] = currentPatternIndex;
+  doc["currentLookId"] = currentPatternId;
+  doc["currentPatternId"] = currentPatternId;
   doc["piece"]["hostname"] = config.activeHostname;
   JsonArray outputArray = doc["outputs"].to<JsonArray>();
   for (uint8_t i = 0; i < config.outputCount; i++) {

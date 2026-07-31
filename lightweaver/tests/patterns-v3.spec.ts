@@ -48,6 +48,19 @@ test('v3 patterns mounts the mockup shell with a chip-ready catalog', async ({ p
   await expect(page.locator('.sec-h .m').first()).toContainText(`of ${REAL_PATTERNS.length} chip-ready`);
 });
 
+test('Patterns reports a blocked card-page popup with a recovery action', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.open = () => null;
+  });
+  await gotoFreshPatterns(page);
+
+  await page.getByRole('button', { name: 'Open card page' }).click();
+
+  const alert = page.getByRole('alert').filter({ hasText: 'browser blocked the card window' });
+  await expect(alert).toBeVisible();
+  await expect(alert).toContainText('Allow popups for Studio, then try again.');
+});
+
 test('a duplicate encoder press is resolved before Patterns renders', async ({ page }) => {
   const project = createDefaultProject();
   project.devices.standaloneController.controls.encoder.press = 6;
@@ -89,6 +102,21 @@ test('first load reads warm (Lava Lamp) on a fresh, untitled project', async ({ 
   await expect(page.getByTestId('card-live-preview-label')).toHaveText('Lava Lamp');
   await expect(page.getByTestId('card-startup-label')).toHaveText('Lava Lamp');
   await expect(page.getByTestId('card-live-preview-label')).not.toHaveText('Aurora');
+});
+
+test('card-to-Studio return hydrates the selected pattern and preserves bridge correlation', async ({ page }) => {
+  await page.goto('/?cardBridge=1&cardHost=192.168.18.70&editPattern=fire#screen=patterns', {
+    waitUntil: 'domcontentloaded',
+  });
+
+  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Fire');
+  await expect(page.locator('.pm-cards .pmcard[data-pattern-id="fire"]')).toHaveClass(/\bon\b/);
+  await expect(page.getByRole('textbox', { name: 'Card local page host' })).toHaveValue('192.168.18.70');
+  await expect.poll(() => new URL(page.url()).searchParams.get('editPattern')).toBeNull();
+  const returned = new URL(page.url());
+  expect(returned.searchParams.get('cardBridge')).toBe('1');
+  expect(returned.searchParams.get('cardHost')).toBe('192.168.18.70');
+  expect(new URLSearchParams(returned.hash.slice(1)).get('screen')).toBe('pattern');
 });
 
 test('search filters the browse grid', async ({ page }) => {
@@ -350,6 +378,86 @@ test('production bridge transport sends only the newest selection to the source-
   await page.waitForTimeout(2400);
   await expect(page.getByRole('alert')).toHaveCount(0);
   expect((await page.evaluate(() => (window as any).__bridgeMessages)).filter((entry: any) => entry.message.type === 'control')).toHaveLength(1);
+});
+
+test('latest pattern waits through bridge identity verification instead of being dropped', async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as any).__identityBridgeMessages = [];
+    (window as any).__heldFirmwareInfo = null;
+    const originalOpen = window.open.bind(window);
+    window.open = ((url?: string | URL, name?: string) => {
+      const popup = originalOpen('about:blank', name);
+      (window as any).__identityBridgePopup = popup;
+      if (popup) {
+        Object.defineProperty(popup, 'postMessage', {
+          configurable: true,
+          value(message: any, targetOrigin: string) {
+            (window as any).__identityBridgeMessages.push({ message, targetOrigin });
+            if (message.type === 'firmware-info') {
+              (window as any).__heldFirmwareInfo = { message, targetOrigin };
+              return;
+            }
+            const response = message.type === 'status'
+              ? {
+                  app: 'Lightweaver', provisioningContractVersion: 1,
+                  cardId: 'lw-identity-race', firmwareVersion: '1.0.0', buildId: 'identity-race-build',
+                  bootId: 'identity-race-boot', runtimePhase: 'ready', knownGoodProject: true,
+                  commandReady: true, outputReady: true,
+                }
+              : { ok: true, cardId: 'lw-identity-race', patternId: message.payload?.patternId, revision: message.payload?.revision };
+            queueMicrotask(() => window.dispatchEvent(new MessageEvent('message', {
+              origin: targetOrigin,
+              source: popup,
+              data: { app: 'LightweaverCardBridge', id: message.id, ok: true, version: 1, response },
+            })));
+          },
+        });
+      }
+      return popup;
+    }) as typeof window.open;
+  });
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem('lw_local_chip_default', '1');
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1, id: 'lw-identity-race', firmwareVersion: '1.0.0', buildId: 'identity-race-build',
+    }));
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="fire"]').click();
+  await page.evaluate(() => {
+    const popup = (window as any).__identityBridgePopup;
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: 'http://lightweaver.local',
+      source: popup,
+      data: { app: 'LightweaverCardBridge', type: 'ready', host: 'lightweaver.local', version: 1 },
+    }));
+  });
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__heldFirmwareInfo))).toBe(true);
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
+  await page.evaluate(() => {
+    const popup = (window as any).__identityBridgePopup;
+    const held = (window as any).__heldFirmwareInfo;
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: held.targetOrigin,
+      source: popup,
+      data: {
+        app: 'LightweaverCardBridge', id: held.message.id, ok: true, version: 1,
+        response: { cardId: 'lw-identity-race', firmwareVersion: '1.0.0', buildId: 'identity-race-build' },
+      },
+    }));
+  });
+
+  await expect.poll(() => page.evaluate(() => (
+    (window as any).__identityBridgeMessages
+      .filter((entry: any) => entry.message.type === 'control')
+      .map((entry: any) => entry.message.payload.patternId)
+  ))).toEqual(['plasma']);
+  await expect(page.getByTestId('physical-preview-status')).toHaveText('Applied by Lightweaver runtime');
+  await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
 test('disabling live preview invalidates a pending bridge selection', async ({ page }) => {

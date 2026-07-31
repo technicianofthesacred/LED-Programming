@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { pushLiveHardwareToCard, recoverCardLights } from '../../../lib/cardLiveControl.js';
+import { pushLiveHardwareToCard, recoverCardLights, stopCardLights } from '../../../lib/cardLiveControl.js';
 import { COLOR_ORDERS, normalizeUsbLedColorOrder } from '../../../lib/usbLedColorOrder.js';
 
 const COLOR_TESTS = [
@@ -128,10 +128,7 @@ export function StripColorOrderCheck({ cardHost, controller, setController, auto
     const requestId = ++testRequestRef.current;
     setBusy(true);
     try {
-      await recoverCardLights(
-        { patternId: 'blackout', brightness: 0, syncZones: true },
-        { host: cardHost, timeoutMs: 3200 },
-      );
+      await stopCardLights({ host: cardHost, timeoutMs: 3200 });
       if (testRequestRef.current === requestId) {
         setLiveTestedOrder('');
         setStatus('Lights stopped. Start a color again when you are ready.');

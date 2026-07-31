@@ -6,6 +6,9 @@ const PATTERN_IDS = new Set([
   'test-green',
   'test-blue',
   'test-white',
+  // Internal safety command. It is not presented in the pattern library, but
+  // Stop lights must preserve it instead of normalizing the request to Aurora.
+  'blackout',
 ]);
 
 export const DEFAULT_CARD_VISUAL_LOOK = Object.freeze({

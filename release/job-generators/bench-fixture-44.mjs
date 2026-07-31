@@ -51,6 +51,7 @@ const PIXELS = 44;
 const DATA_PIN = 18;
 const MAX_MILLIAMPS = 1500;
 const JOB_ID = 'bench-fixture-44';
+const BENCH_PATTERN_IDS = ['aurora', 'fire', 'ocean', 'plasma', 'sparkle'];
 
 const standaloneController = {
   outputs: [{ id: 'out1', name: 'Bench strip', pin: DATA_PIN, pixels: PIXELS }],
@@ -65,7 +66,14 @@ const standaloneController = {
   },
   defaultLook: { patternId: 'aurora', brightness: 1, speed: 1, hueShift: 0, customHue: 32, customSaturation: 230, customBreathe: false, customDrift: false },
   looks: [],
-  playlist: [{ id: 'aurora', type: 'pattern', patternId: 'aurora', label: 'Aurora', enabled: true, createdAt: 0 }],
+  playlist: BENCH_PATTERN_IDS.map((patternId, createdAt) => ({
+    id: patternId,
+    type: 'pattern',
+    patternId,
+    label: patternId[0].toUpperCase() + patternId.slice(1),
+    enabled: true,
+    createdAt,
+  })),
 };
 
 const restoreSnapshot = {

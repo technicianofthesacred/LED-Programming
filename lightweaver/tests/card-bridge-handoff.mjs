@@ -656,8 +656,9 @@ await assert.rejects(timeoutAttempt.ready, error => (
   && error.message === "The card page opened but did not answer. Check that this device is on the card's Wi-Fi."
 ));
 
-// openLocalCardPage: every plain "open the card page" click routes through the
-// SAME named window the bridge uses, so at most one auxiliary card tab exists.
+// openLocalCardPage: every visible card-page click routes through the SAME
+// named bridge window and carries the Studio-origin handshake fragment, so at
+// most one auxiliary card tab exists and it can become command-ready.
 assert.equal(typeof openLocalCardPage, 'function');
 assert.equal(CARD_BRIDGE_WINDOW_NAME, 'lightweaver-card-bridge');
 const cardPageHost = '192.168.18.77';
@@ -674,15 +675,19 @@ const firstVisit = openLocalCardPage(cardPageHost);
 assert.equal(firstVisit.ok, true);
 assert.equal(cardPageHarness.opened.length, 1);
 assert.equal(cardPageHarness.opened[0].name, CARD_BRIDGE_WINDOW_NAME, 'plain visits use the named bridge window');
-assert.equal(cardPageHarness.opened[0].url, `http://${cardPageHost}/`);
+const cardPageLaunch = new URL(cardPageHarness.opened[0].url);
+assert.equal(cardPageLaunch.origin, `http://${cardPageHost}`);
+assert.equal(cardPageLaunch.pathname, '/');
+assert.equal(new URLSearchParams(cardPageLaunch.hash.slice(1)).get('studioBridge'), '1');
+assert.equal(new URLSearchParams(cardPageLaunch.hash.slice(1)).get('studioOrigin'), 'https://led.mandalacodes.com');
 const secondVisit = openLocalCardPage(cardPageHost, { path: '/', reason: 'open-card-page' });
 assert.equal(secondVisit.ok, true);
 assert.equal(secondVisit.window, firstVisit.window, 'repeat visits reuse the same named window handle');
 assert.equal(cardPageHarness.opened[1].name, CARD_BRIDGE_WINDOW_NAME);
 assert.equal(cardPageTab.focusCalls, 2, 'the already-open card tab is refocused');
 
-// A plain visit tracks the tab but never grants transport readiness: privileged
-// sends stay identity-locked until the freshly loaded page handshakes again.
+// A launch fragment alone never grants transport readiness: privileged sends
+// stay identity-locked until the freshly loaded page handshakes again.
 assert.equal(getCardBridgeState().open, true);
 assert.equal(getCardBridgeState().verified, false, 'a plain card-page visit is not a verified handshake');
 await assert.rejects(

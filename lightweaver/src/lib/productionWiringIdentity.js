@@ -1,8 +1,10 @@
 const encoder = new TextEncoder();
 
 export function productionWiringProjection(led = {}) {
+  const type = String(led.type || '').trim();
   return {
-    version: 1,
+    version: type ? 2 : 1,
+    ...(type ? { type } : {}),
     colorOrder: String(led.colorOrder || ''),
     maxMilliamps: Number(led.maxMilliamps),
     outputs: (led.outputs || []).map(output => ({

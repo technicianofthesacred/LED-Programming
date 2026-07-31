@@ -80,6 +80,7 @@ LightweaverColorPipeline outputColorPipeline;
 String pieceName = "Lightweaver";
 String runtimeMode = "sequence";
 String startupLookId;
+String ledType = "WS2812B";
 String ledColorOrder = "GRB";
 
 uint8_t outputCount = 0;
@@ -102,6 +103,10 @@ uint16_t measuredOutputFps = 0;
 bool outputDithering = false;
 
 uint8_t currentLookIndex = 0;
+// The selected renderer is not always one of the installed playlist looks.
+// Studio may select a compiled pattern directly, so currentLookIndex alone is
+// not authoritative state for /api/patterns.
+String activePatternId;
 bool blackedOut = false;
 bool ledOutputsReady = false;
 bool wiringProbationActive = false;
@@ -233,7 +238,11 @@ void initializeBootIdentity();
 
 template<uint8_t DATA_PIN>
 bool addLedsForOrder(CRGB* start, uint16_t count) {
-  FastLED.addLeds<WS2812B, DATA_PIN, RGB>(start, count);
+  if (ledType == "WS2815") {
+    FastLED.addLeds<WS2815, DATA_PIN, RGB>(start, count);
+  } else {
+    FastLED.addLeds<WS2812B, DATA_PIN, RGB>(start, count);
+  }
   return true;
 }
 
@@ -450,6 +459,7 @@ void applyRuntimeConfig(const RuntimeConfig& config) {
   pieceName = config.pieceName;
   runtimeMode = config.mode;
   startupLookId = config.startupLookId;
+  ledType = config.ledType;
   ledColorOrder = config.ledColorOrder;
   outputColorPipeline.configure(config.outputColor);
   brightnessLimit = config.brightnessLimit;
@@ -489,6 +499,7 @@ bool loadProfile() {
 
   JsonObject led = doc["led"].as<JsonObject>();
   if (!led.isNull()) {
+    ledType = String(led["type"] | "WS2812B");
     ledColorOrder = String(led["colorOrder"] | "GRB");
     brightnessLimit = clampUnit(led["brightnessLimit"] | 0.45f);
   }
@@ -827,11 +838,14 @@ bool startLook(uint8_t index, PreparedSequence* prepared) {
     }
     applyLookToRuntimeZones(look);
     applySequenceFrameBufferToLeds();
+    activePatternId = look.id;
     return true;
   }
 
   applyLookToRuntimeZones(look);
-  return renderCurrentLook(true);
+  bool rendered = renderCurrentLook(true);
+  if (rendered) activePatternId = look.id;
+  return rendered;
 }
 
 void closeSequence() {
@@ -1372,7 +1386,7 @@ const char* controlEventLabel(ControlEventType event) {
 uint8_t findStartupLook() {
   if (startupLookId.length() == 0) return 0;
   for (uint8_t i = 0; i < lookCount; i++) {
-    if (looks[i].id == startupLookId) return i;
+    if (looks[i].id == startupLookId || looks[i].preset == startupLookId) return i;
   }
   return 0;
 }
@@ -1659,8 +1673,9 @@ bool runtimeSelectPatternById(const String& id) {
     return selectLookInstant(static_cast<int>(look - looks));
   }
   if (isSupportedCompiledPattern(id)) {
-    applyToZones("", [&](ZoneConfig& z) { z.patternId = id; });
-    return true;
+    uint8_t applied = applyToZones("", [&](ZoneConfig& z) { z.patternId = id; });
+    activePatternId = applied == runtimeConfig.zoneCount ? id : String("");
+    return applied > 0;
   }
   look = findLookByPresetAlias(id);
   if (!look) return false;
@@ -1740,10 +1755,14 @@ bool runtimeCommitPreparedPatternSelection() {
           &preparedPatternSelection.sequence);
       break;
     case PreparedPatternSelectionKind::GlobalCompiledPattern:
-      applyToZones("", [&](ZoneConfig& z) {
+      {
+      uint8_t affected = applyToZones("", [&](ZoneConfig& z) {
         z.patternId = preparedPatternSelection.patternId;
       });
-      applied = true;
+      applied = affected > 0;
+      activePatternId = affected == runtimeConfig.zoneCount
+          ? preparedPatternSelection.patternId : String("");
+      }
       break;
     case PreparedPatternSelectionKind::ZonePattern:
       applied = applyToZones(
@@ -1751,6 +1770,10 @@ bool runtimeCommitPreparedPatternSelection() {
           [&](ZoneConfig& z) {
             z.patternId = preparedPatternSelection.patternId;
           }) > 0;
+      activePatternId = String("");
+      if (applied && runtimeConfig.zoneCount == 1) {
+        activePatternId = runtimeConfig.zones[0].patternId;
+      }
       break;
     case PreparedPatternSelectionKind::None:
       break;
@@ -1777,6 +1800,8 @@ bool runtimeSelectPatternByIdZ(const String& targetId, const String& patternId) 
   return runtimePreparePatternByIdZ(targetId, patternId) &&
       runtimeCommitPreparedPatternSelection();
 }
+
+String runtimeCurrentPatternId() { return activePatternId; }
 
 void runtimeTriggerIdentify() {
   identifyActive = true;
@@ -1897,6 +1922,7 @@ String runtimeFirmwareInfo() {
   doc["productionJobDigest"] = runtimeConfig.productionJobDigest;
   doc["wiringRevision"] = runtimeConfig.wiringRevision;
   doc["wiringDigest"] = runtimeConfig.wiringDigest;
+  doc["ledType"] = runtimeConfig.ledType;
   doc["maxMilliamps"] = runtimeConfig.maxMilliamps;
   doc["estimatedFullWhiteMilliamps"] = lightweaverFullWhiteMilliamps(totalPixels);
   doc["limitedFullWhiteMilliamps"] =
@@ -2401,6 +2427,7 @@ String runtimeRecoverLights(const String& patternId, float brightness, bool sync
     zone.driftHueMax = 255;
     zone.blackout = false;
   }
+  activePatternId = id;
 
   PatternModifiers mods;
   mods.speed = 1.0f;

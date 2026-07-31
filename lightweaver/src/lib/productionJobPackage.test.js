@@ -21,9 +21,25 @@ import {
 } from './productionJobPackage.js';
 import { fingerprintCommissioningProject } from './cardCommissioningFlow.js';
 import { buildCardRuntimePackageFromProject } from './cardRuntimeProject.js';
-import { assignProductionWiringIdentity } from './productionWiringIdentity.js';
+import { assignProductionWiringIdentity, productionWiringDigest, productionWiringProjection } from './productionWiringIdentity.js';
 
 const hex = (value, length) => value.repeat(length);
+
+test('wiring identity v2 binds the LED protocol while legacy projections stay v1-compatible', async () => {
+  const physical = { colorOrder: 'GRB', maxMilliamps: 1500, outputs: [{ id: 'out1', pin: 18, pixels: 44, segments: [] }] };
+  assert.equal(productionWiringProjection(physical).version, 1);
+  assert.deepEqual(productionWiringProjection({ ...physical, type: 'WS2815' }), {
+    version: 2,
+    type: 'WS2815',
+    colorOrder: 'GRB',
+    maxMilliamps: 1500,
+    outputs: [{ id: 'out1', pin: 18, pixels: 44, segments: [] }],
+  });
+  assert.notEqual(
+    await productionWiringDigest({ ...physical, type: 'WS2812B' }, webcrypto),
+    await productionWiringDigest({ ...physical, type: 'WS2815' }, webcrypto),
+  );
+});
 
 function source(overrides = {}) {
   const standaloneController = {
@@ -238,6 +254,21 @@ test('production runtime always carries a nonzero aggregate current ceiling with
   await assert.rejects(buildProductionJob(disabled, { cryptoImpl: webcrypto }), /maxMilliamps|current ceiling/i);
 });
 
+test('production runtime carries the selected LED protocol and defaults untyped projects to WS2812B', async () => {
+  const selected = await buildProductionJob(source(), { cryptoImpl: webcrypto });
+  assert.equal(selected.configuration.config.led.type, 'WS2815');
+
+  const fallback = buildCardRuntimePackageFromProject({
+    projectName: 'Legacy pixels',
+    strips: [{ id: 'strip-1', name: 'Legacy pixels', pixelCount: 8 }],
+    standaloneController: {
+      outputs: [{ id: 'out1', name: 'Legacy pixels', pin: 16, pixels: 8 }],
+      led: { colorOrder: 'GRB', brightnessLimit: 0.35 },
+    },
+  });
+  assert.equal(fallback.config.led.type, 'WS2812B');
+});
+
 test('production jobs preserve normalized selected-card output color without changing current safety evidence', async () => {
   const calibrated = source();
   calibrated.project.restoreSnapshot.devices.standaloneController.led = {
@@ -273,6 +304,7 @@ test('production jobs preserve normalized selected-card output color without cha
 
 test('legacy signed-job shape without output color fields remains exact and compatible', async () => {
   const legacy = source();
+  delete legacy.configuration.config.led.type;
   for (const key of ['outputGammaEnabled', 'outputGammaValue', 'calibration']) {
     delete legacy.project.restoreSnapshot.devices.standaloneController.led[key];
     delete legacy.configuration.config.led[key];
@@ -282,6 +314,7 @@ test('legacy signed-job shape without output color fields remains exact and comp
     assert.equal(key in job.project.restoreSnapshot.devices.standaloneController.led, false);
     assert.equal(key in job.configuration.config.led, false);
   }
+  assert.equal('type' in job.configuration.config.led, false);
   const exactBytes = canonicalProductionJobBytes(job);
   const parsed = await parseProductionJobPackage(exactBytes, {
     trust: { kind: 'same-origin-index', expectedDigest: job.digest },
@@ -361,6 +394,7 @@ test('verifies the pinned production-job key against its immutable signed fixtur
   delete job.configuration.config.led.outputGammaEnabled;
   delete job.configuration.config.led.outputGammaValue;
   delete job.configuration.config.led.calibration;
+  delete job.configuration.config.led.type;
   delete job.configuration.config.led.maxMilliamps;
   delete job.configuration.config.wiringRevision;
   delete job.configuration.config.wiringDigest;

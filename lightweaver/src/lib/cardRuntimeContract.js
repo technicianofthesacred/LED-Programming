@@ -102,6 +102,7 @@ export const DEFAULT_CARD_CONTROLS = Object.freeze({
 });
 
 export const DEFAULT_CARD_LED = Object.freeze({
+  type: 'WS2812B',
   pixels: 44,
   outputs: [{ id: 'out1', name: 'Output 1', pin: 16, pixels: 44 }],
   colorOrder: 'RGB',
@@ -340,6 +341,7 @@ function normalizeLed(led = {}) {
     CARD_HARDWARE_CAPABILITIES.maxPixels,
   );
   return {
+    type: led.type === 'WS2815' ? 'WS2815' : DEFAULT_CARD_LED.type,
     pixels,
     outputs: normalizedOutputs,
     colorOrder: normalizeColorOrder(led.colorOrder),

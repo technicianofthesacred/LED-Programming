@@ -110,6 +110,7 @@ export function buildCardRuntimePackageFromProject({
     productionJobDigest,
     mode: 'website-flash',
     led: {
+      type: standaloneController?.led?.type,
       pixels: resolvedPixels,
       colorOrder: standaloneController?.led?.colorOrder,
       brightnessLimit: standaloneController?.led?.brightnessLimit,

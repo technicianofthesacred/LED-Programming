@@ -239,6 +239,7 @@ struct RuntimeConfig {
   uint32_t wiringRevision = 0;
   String wiringDigest;
   String startupLookId = "aurora";
+  String ledType = "WS2812B";
   String ledColorOrder = "RGB";
   float brightnessLimit = 0.65f;
   OutputColorConfig outputColor;

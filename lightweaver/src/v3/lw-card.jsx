@@ -10,20 +10,26 @@ import {
   CARD_COMMISSIONING_CHANGED_EVENT,
   inspectCardCommissioning,
 } from '../lib/cardCommissioningFlow.js';
+import { loadProductionJobFromIndexEntry, loadProductionJobIndex } from '../lib/productionJobPackage.js';
+import { createDefaultProject } from '../lib/projectModel.js';
+import { readCardStatusEnvelope } from '../lib/cardPushClient.js';
+import { recoverCardLights } from '../lib/cardLiveControl.js';
 
 // Section bar labels. `workshop` is deliberately absent: Batch production is a
 // manufacturing surface reached from the overview link, the support tile, or a
 // deep link (#screen=production / #screen=card&section=workshop) — never a tab.
 const SECTION_LABELS = Object.freeze({
-  overview: 'Card',
+  overview: 'Hardware',
   install: 'Install or update',
-  settings: 'Card settings',
+  settings: 'Hardware settings',
   support: 'Advanced & Support',
   preferences: 'Preferences',
 });
 
-function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection }) {
+function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection, replaceProject }) {
   const [commissioningFlow, setCommissioningFlow] = useState(() => inspectCardCommissioning().flow);
+  const [matchingProjectState, setMatchingProjectState] = useState({ status: 'idle', message: '' });
+  const [hardwareActionState, setHardwareActionState] = useState({ status: 'idle', message: '' });
   useEffect(() => {
     const syncCommissioning = () => setCommissioningFlow(inspectCardCommissioning().flow);
     window.addEventListener('storage', syncCommissioning);
@@ -49,6 +55,7 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConn
   const verifiedTransport = Boolean(cardLink?.card?.id && (
     state === 'connected-direct' || state === 'connected-bridge'
   ));
+  const productionJobId = String(cardLink?.card?.productionJobId || '').trim();
   const setupLabels = ['Connect', 'Install firmware', 'WiFi', 'Install on card', 'Test lights'];
   let currentSetupIndex = ready ? 3 : 0;
   if (commissioningFlow?.stage === 'install-safely') currentSetupIndex = 1;
@@ -160,6 +167,85 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConn
   // Connect actions must be visible: prefer the connection center when the
   // shell provides it, and fall back to the background probe otherwise.
   const openConnection = () => (onOpenConnectionCenter ? onOpenConnectionCenter() : onConnectCard?.());
+  const requireExactReadyStatus = (status) => {
+    const expectedCardId = String(cardLink?.card?.id || '').trim();
+    if (!status || status.cardId !== expectedCardId) throw new Error('A different card answered the hardware check. Reconnect the expected card.');
+    if (status.runtimePhase !== 'ready' || status.commandReady !== true || status.outputReady !== true) {
+      throw new Error('The card answered, but its runtime or LED output is not ready. Open support before retrying.');
+    }
+    return status;
+  };
+  const verifyHardware = async () => {
+    if (hardwareActionState.status === 'loading') return;
+    setHardwareActionState({ status: 'loading', message: 'Reading exact card hardware state…' });
+    try {
+      const status = requireExactReadyStatus(await readCardStatusEnvelope({ host: cardLink?.host || cardHost }));
+      const pixels = Number(status.led?.pixels) || Number(cardLink?.card?.pixelCount) || 0;
+      setHardwareActionState({
+        status: 'ok',
+        message: `Hardware readback verified for ${status.cardId}${pixels ? ` · ${pixels} LEDs` : ''}. This confirms card state, not visible light output.`,
+      });
+    } catch (error) {
+      setHardwareActionState({ status: 'error', message: error?.message || 'Hardware readback failed. Reconnect the card and try again.' });
+    }
+  };
+  const recoverLights = async () => {
+    if (hardwareActionState.status === 'loading') return;
+    setHardwareActionState({ status: 'loading', message: 'Sending safe warm-white recovery…' });
+    try {
+      const response = await recoverCardLights(
+        { patternId: 'warm-white', brightness: 0.35, syncZones: true },
+        { host: cardLink?.host || cardHost, timeoutMs: 3200 },
+      );
+      requireExactReadyStatus(await readCardStatusEnvelope({ host: cardLink?.host || cardHost }));
+      setHardwareActionState({
+        status: 'ok',
+        message: `Recovery command ${response?.restarted ? 'survived restart and was' : 'was'} acknowledged with ready-state readback. Check the real LEDs; visible warm white is not confirmed automatically.`,
+      });
+    } catch (error) {
+      setHardwareActionState({ status: 'error', message: error?.message || 'Recovery was not verified. Keep the card powered, reconnect, and retry.' });
+    }
+  };
+  const loadMatchingCardProject = async () => {
+    if (!productionJobId || matchingProjectState.status === 'loading') return;
+    setMatchingProjectState({ status: 'loading', message: 'Verifying the published project for this exact card…' });
+    try {
+      const index = await loadProductionJobIndex();
+      const entry = index.jobs.find(candidate => candidate.jobId === productionJobId);
+      if (!entry) throw new Error(`No published Studio project matches card job ${productionJobId}.`);
+      const job = await loadProductionJobFromIndexEntry(entry);
+      if (job.jobId !== productionJobId) {
+        throw new Error('The verified project identity changed while loading. Nothing was replaced.');
+      }
+      const snapshot = job.project.restoreSnapshot;
+      const defaults = createDefaultProject();
+      const studioProject = {
+        ...defaults,
+        id: snapshot.id,
+        name: snapshot.name,
+        layout: {
+          ...defaults.layout,
+          ...snapshot.layout,
+          starterPending: false,
+        },
+        devices: {
+          ...defaults.devices,
+          ...snapshot.devices,
+        },
+      };
+      const result = await replaceProject(studioProject);
+      if (!result.ok) {
+        setMatchingProjectState({
+          status: result.reason === 'cancelled' ? 'idle' : 'error',
+          message: result.reason === 'cancelled' ? 'The current Studio project was kept.' : 'The matching card project could not be opened.',
+        });
+        return;
+      }
+      window.location.hash = '#screen=pattern';
+    } catch (error) {
+      setMatchingProjectState({ status: 'error', message: error?.message || 'The matching card project could not be loaded.' });
+    }
+  };
   const renderAction = (action, primary = false) => action && (
     <button
       type="button"
@@ -211,6 +297,39 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConn
           </>
         )}
       </div>
+
+      {ready && productionJobId && (
+        <section className="card-support-panel" aria-label="Matching card project">
+          <h2>Matching card project</h2>
+          <p>This card reports <strong>{productionJobId}</strong>. Load the latest verified release of that project before changing patterns so Studio keeps the exact LED count, wiring, protocol, and power limit.</p>
+          <button
+            type="button"
+            className="btn primary"
+            disabled={matchingProjectState.status === 'loading'}
+            onClick={() => void loadMatchingCardProject()}
+          >
+            {matchingProjectState.status === 'loading' ? 'Verifying project…' : 'Load matching card project'}
+          </button>
+          {matchingProjectState.message && (
+            <p role={matchingProjectState.status === 'error' ? 'alert' : 'status'}>{matchingProjectState.message}</p>
+          )}
+        </section>
+      )}
+
+      {ready && (
+        <section className="card-support-panel" aria-label="Hardware checks and recovery">
+          <h2>Checks &amp; recovery</h2>
+          <p>These actions report card acknowledgements and state readback. Studio never marks a visual LED or color test passed without your confirmation.</p>
+          <div className="card-overview-actions">
+            <button type="button" className="btn" disabled={hardwareActionState.status === 'loading'} onClick={() => void verifyHardware()}>Verify hardware</button>
+            <button type="button" className="btn" disabled={hardwareActionState.status === 'loading'} onClick={() => void recoverLights()}>Recover lights</button>
+            <button type="button" className="btn" onClick={() => { window.location.hash = '#screen=card&section=settings&tool=color-order'; }}>Color-order test</button>
+          </div>
+          {hardwareActionState.message && (
+            <p role={hardwareActionState.status === 'error' ? 'alert' : 'status'}>{hardwareActionState.message}</p>
+          )}
+        </section>
+      )}
 
       <p className="card-overview-batch" data-testid="card-batch-link">
         <span style={{ color: 'var(--text-faint)' }}>Making many cards? </span>
@@ -281,7 +400,7 @@ function CardSupport({ initialTool, cardProps, onOpenConnectionCenter, onOpenSec
   );
 }
 
-export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection, route = { section: 'overview', supportTool: '' } }) {
+export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection, replaceProject, route = { section: 'overview', supportTool: '' } }) {
   const headingRef = useRef(null);
   const mountedRef = useRef(false);
 
@@ -312,18 +431,18 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
   else if (route.section === 'workshop') content = <ProductionScreen embedded cardHost={cardHost} cardLink={cardLink} onConnectCard={onConnectCard} />;
   else if (route.section === 'preferences') content = <SettingsScreen embedded mode="preferences" {...cardProps} />;
   else if (route.section === 'support') content = <CardSupport initialTool={route.supportTool} cardProps={cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} />;
-  else content = <CardOverview {...cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} />;
+  else content = <CardOverview {...cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} replaceProject={replaceProject} />;
 
   // Batch production (route.section === 'workshop') renders outside the tab
   // set: its own heading and kicker, no section tab highlighted.
   const workshop = route.section === 'workshop';
   const heading = route.section === 'overview'
-    ? 'Your Lightweaver card'
+    ? 'Your Lightweaver hardware'
     : workshop ? 'Batch production' : SECTION_LABELS[route.section];
   return (
     <div className="screen card-workspace-screen">
       <div className="card-workspace">
-        <nav className="card-section-nav" aria-label="Card sections">
+        <nav className="card-section-nav" aria-label="Hardware sections">
           {Object.entries(SECTION_LABELS).map(([key, label]) => (
             <button
               key={key}
@@ -337,10 +456,10 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
         </nav>
         <main className="card-workspace-body">
           <header className="card-workspace-header">
-            <span className="card-workspace-kicker">{workshop ? 'Manufacturing mode' : 'Lightweaver card'}</span>
+            <span className="card-workspace-kicker">{workshop ? 'Manufacturing mode' : 'Lightweaver hardware'}</span>
             <h1 ref={headingRef} tabIndex={-1}>{heading}</h1>
             {workshop && (
-              <button type="button" className="btn" onClick={() => onOpenSection('overview')}>Back to Card</button>
+              <button type="button" className="btn" onClick={() => onOpenSection('overview')}>Back to Hardware</button>
             )}
           </header>
           {content}

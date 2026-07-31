@@ -101,6 +101,7 @@ function stagedPhysicalIdentity(overrides = {}) {
     }],
     wiringRevision: 9,
     wiringDigest: 'd'.repeat(64),
+    ledType: 'WS2815',
     colorOrder: 'RGB',
     maxMilliamps: 2400,
     ...overrides,
@@ -594,6 +595,7 @@ test('a safety-staged GPIO restore stays in the same flow and is not falsely cal
       productionJobDigest: '',
       wiringRevision: 9,
       wiringDigest: 'd'.repeat(64),
+      ledType: 'WS2815',
       colorOrder: 'GRB',
       maxMilliamps: 2400,
   };
@@ -609,6 +611,7 @@ test('a safety-staged GPIO restore stays in the same flow and is not falsely cal
   assert.deepEqual(staged.project.pendingWiring, {
     wiringRevision: 9,
     wiringDigest: 'd'.repeat(64),
+    ledType: 'WS2815',
     colorOrder: 'GRB',
     maxMilliamps: 2400,
     outputs: candidateResponse.candidateOutputs,

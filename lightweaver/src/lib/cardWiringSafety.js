@@ -102,6 +102,7 @@ export function normalizeCardWiringStatus(response = {}) {
     ...(response.productionJobDigest ? { productionJobDigest: String(response.productionJobDigest).toLowerCase() } : {}),
     ...(response.wiringRevision !== undefined ? { wiringRevision: Number(response.wiringRevision) } : {}),
     ...(response.wiringDigest ? { wiringDigest: String(response.wiringDigest).toLowerCase() } : {}),
+    ...(response.ledType || response.led?.type ? { ledType: String(response.ledType || response.led?.type).toUpperCase() } : {}),
     ...(response.maxMilliamps !== undefined || response.led?.maxMilliamps !== undefined ? { maxMilliamps: Number(response.maxMilliamps ?? response.led.maxMilliamps) } : {}),
     raw: response,
   };
@@ -231,6 +232,9 @@ export async function readCardWiringCandidateEvidence(activationId, options = {}
   if (!Number.isSafeInteger(status.wiringRevision) || status.wiringRevision < 1 || !/^[a-f0-9]{64}$/.test(status.wiringDigest || '')
     || !Number.isSafeInteger(status.maxMilliamps) || status.maxMilliamps < 100 || status.maxMilliamps > 20000) {
     throw wiringError('invalid-response', 'Card candidate status is missing exact wiring and current-limit evidence.', { response: status.raw });
+  }
+  if (!['WS2812B', 'WS2815'].includes(status.ledType)) {
+    throw wiringError('invalid-response', 'Card candidate status is missing its exact supported LED protocol.', { response: status.raw });
   }
   if (status.projectRevision < 0 || status.projectRevision > 0xffffffff ||
       !/^[a-f0-9]{16,64}$/.test(status.projectFingerprint) ||

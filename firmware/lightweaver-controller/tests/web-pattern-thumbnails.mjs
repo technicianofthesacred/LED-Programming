@@ -65,8 +65,8 @@ const patternsHandler = webSource.slice(
   webSource.indexOf('void handlePatterns() {'),
   webSource.indexOf('void handleCaptiveProbe()', webSource.indexOf('void handlePatterns() {')),
 );
-assert.match(patternsHandler, /cfg\.lookCount \? cfg\.looks\[\*currentLookIndexPtr\]\.id : ""/,
-  'a zero-look factory card must report no current project pattern');
+assert.match(patternsHandler, /String currentPatternId = runtimeCurrentPatternId\(\)/,
+  'pattern API must report applied runtime state even when Studio selects outside the installed playlist');
 assert.match(patternsHandler, /for \(uint8_t i = 0; i < cfg\.lookCount; i\+\+\)/,
   'pattern API must serialize only explicitly configured looks');
 
@@ -141,6 +141,11 @@ assert.ok(
 assert.ok(
   advancedRegion.includes("patternControl.setConfirmed(p.currentId||'')"),
   'advanced page load must seed the confirmed pattern through the control (not raw assignment)',
+);
+assert.match(
+  advancedRegion,
+  /const r=await post\('\/api\/control',\{patternId:id,syncZones:true\}\);if\(r\.appliedPatternId!==id\)throw new Error/,
+  'advanced whole-piece pattern taps must broadcast to all sections and require authoritative applied-pattern confirmation',
 );
 assert.match(
   advancedRegion,

@@ -73,6 +73,7 @@ async function seedCommissioningFlow(page, progress: 'wifi' | 'load-project' | '
       const pendingWiring = {
         wiringRevision: 9,
         wiringDigest: 'd'.repeat(64),
+        ledType: 'WS2815',
         colorOrder: 'RGB',
         maxMilliamps: 2400,
         outputs: [{
@@ -390,6 +391,7 @@ test('Card overview keeps Load project and Test as resumable commissioning steps
       projectFingerprint: flow.project.fingerprint,
       wiringRevision: expected.wiringRevision,
       wiringDigest: expected.wiringDigest,
+      ledType: expected.ledType,
       colorOrder: expected.colorOrder,
       maxMilliamps: expected.maxMilliamps,
       outputs: expected.outputs,
@@ -466,6 +468,7 @@ test('commissioning requires an independent exact final wiring GET before cleari
         projectFingerprint: 'ffffffffffffffff',
         wiringRevision: expected.wiringRevision,
         wiringDigest: expected.wiringDigest,
+        ledType: expected.ledType,
         colorOrder: expected.colorOrder,
         maxMilliamps: expected.maxMilliamps,
         outputs: expected.outputs,
@@ -558,6 +561,7 @@ test('an exact nonzero commissioning flow resumed after reload marks the restore
         pendingWiring: {
           wiringRevision: 11,
           wiringDigest: 'e'.repeat(64),
+          ledType: 'WS2815',
           colorOrder: 'GRB',
           maxMilliamps: 3200,
           outputs: [{
@@ -597,6 +601,7 @@ test('an exact nonzero commissioning flow resumed after reload marks the restore
         projectFingerprint: flow.project.fingerprint,
         wiringRevision: expected.wiringRevision,
         wiringDigest: expected.wiringDigest,
+        ledType: expected.ledType,
         colorOrder: expected.colorOrder,
         maxMilliamps: expected.maxMilliamps,
         outputs: expected.outputs,
@@ -662,14 +667,14 @@ test('light-check hardware mutations stay locked after loss until two stable exa
   });
 });
 
-test('Card replaces the setup rail destinations and exposes ordinary section navigation', async ({ page }) => {
+test('Hardware replaces the setup rail destinations and exposes ordinary section navigation', async ({ page }) => {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Card', exact: true }).click();
+  await page.getByRole('button', { name: 'Hardware', exact: true }).click();
 
   await expect(page).toHaveURL(/#screen=card&section=overview$/);
-  const sections = page.getByRole('navigation', { name: 'Card sections' });
+  const sections = page.getByRole('navigation', { name: 'Hardware sections' });
   await expect(sections).toBeVisible();
-  for (const label of ['Install or update', 'Card settings', 'Advanced & Support']) {
+  for (const label of ['Install or update', 'Hardware settings', 'Advanced & Support']) {
     await expect(sections.getByRole('button', { name: label, exact: true })).toBeVisible();
   }
   // Batch production (formerly Workshop setup) is not a section tab.
@@ -683,18 +688,57 @@ test('Card replaces the setup rail destinations and exposes ordinary section nav
   await expect(sections.locator('[aria-haspopup]')).toHaveCount(0);
 });
 
+test('Hardware loads the verified production project that matches the paired card in one action', async ({ page }) => {
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  const index = await page.request.get('/production/jobs/index.json').then(response => response.json());
+  const entry = index.jobs.find((job: any) => job.jobId === 'bench-fixture-44');
+  expect(entry).toBeTruthy();
+  const cardStatus = readyStatus('lw-bench-fixture', {
+    buildId: 'bench-build',
+    productionJobId: entry.jobId,
+    productionJobDigest: '437a0f7b32665112a734d515f7bdd97a3c18fffbf640854b6e76ecc39318e3c3',
+    led: { pixels: 44, type: 'WS2815', colorOrder: 'GRB', maxMilliamps: 1500 },
+    outputs: [{ id: 'out1', pin: 18, pixels: 44 }],
+  });
+  await page.route('http://lightweaver.local/api/status', route => route.fulfill({ json: cardStatus }));
+  await page.evaluate(() => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1, id: 'lw-bench-fixture', firmwareVersion: '1.0.0', buildId: 'bench-build',
+    }));
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
+  await expect(page.getByRole('button', { name: 'Verify hardware' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Recover lights' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Color-order test' })).toBeVisible();
+  await page.getByRole('button', { name: 'Verify hardware' }).click();
+  await expect(page.getByRole('region', { name: 'Hardware checks and recovery' }).getByRole('status')).toContainText('Hardware readback verified');
+  await page.getByRole('button', { name: 'Color-order test' }).click();
+  await expect(page).toHaveURL(/#screen=card&section=settings&tool=color-order$/);
+  for (const color of ['Red', 'Green', 'Blue', 'White']) {
+    await expect(page.getByRole('button', { name: `Send ${color} test` })).toBeVisible();
+  }
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Load matching card project' }).click();
+
+  await expect(page).toHaveURL(/#screen=pattern$/);
+  await expect(page.getByText('44 pixels', { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}').id)).toBe('bench-fixture');
+});
+
 test('Card section navigation wraps without page overflow on a 390px viewport', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
 
-  const sections = page.getByRole('navigation', { name: 'Card sections' });
+  const sections = page.getByRole('navigation', { name: 'Hardware sections' });
   const dimensions = await sections.evaluate(node => ({
     clientWidth: node.clientWidth,
     scrollWidth: node.scrollWidth,
   }));
   expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
 
-  for (const label of ['Card', 'Install or update', 'Card settings', 'Advanced & Support', 'Preferences']) {
+  for (const label of ['Hardware', 'Install or update', 'Hardware settings', 'Advanced & Support', 'Preferences']) {
     const button = sections.getByRole('button', { name: label, exact: true });
     await expect(button).toBeVisible();
     await expect(button).toBeInViewport();
@@ -710,7 +754,7 @@ test('Card section navigation wraps without page overflow on a 390px viewport', 
 test('disconnected Card overview shows the ordered setup path and Connect as primary', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
 
-  await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Your Lightweaver hardware' })).toBeVisible();
   await dispatchCardLink(page, [{ type: 'bridge-lost', reason: 'never-connected', host: 'lightweaver.local' }]);
   await expect(page.getByTestId('card-detected-state')).toContainText(/not detected|not connected/i);
   const steps = page.getByTestId('card-setup-steps').locator('li');
@@ -743,7 +787,7 @@ test('direct discovery never auto-adopts; only the explicit pair action persists
 
 test('connect actions prefer onOpenConnectionCenter and fall back to onConnectCard when absent', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Your Lightweaver hardware' })).toBeVisible();
 
   const calls = await page.evaluate(async () => {
     // Resolve the app's own React instance through the Vite module graph so
@@ -817,7 +861,7 @@ test('connect actions prefer onOpenConnectionCenter and fall back to onConnectCa
 
 test('connected Card overview identifies the card and makes Install on card primary', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Your Lightweaver hardware' })).toBeVisible();
   await dispatchCardLink(page, [{
     type: 'card-verified', via: 'bridge',
     card: { id: 'lw-gallery-card', name: 'Gallery card' },
@@ -845,7 +889,7 @@ test('Card overview distinguishes checking, blank, and ready evidence', async ({
     status: 200, contentType: 'application/json', body: JSON.stringify(status),
   }));
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Your Lightweaver hardware' })).toBeVisible();
   await dispatchCardLink(page, [{
     type: 'direct-status', connected: true, host: 'lightweaver.local',
     card: { id: 'lw-overview-state', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) },
@@ -865,7 +909,7 @@ test('Card overview distinguishes checking, blank, and ready evidence', async ({
 
 test('ready overview offers Batch production as a low-emphasis link, not a setup step', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Your Lightweaver hardware' })).toBeVisible();
   await dispatchCardLink(page, [{
     type: 'card-verified', via: 'bridge',
     card: { id: 'lw-gallery-card', name: 'Gallery card' },
@@ -883,9 +927,9 @@ test('ready overview offers Batch production as a low-emphasis link, not a setup
   await expect(page).toHaveURL(/#screen=card&section=workshop$/);
   await expect(page.getByRole('heading', { name: 'Batch production', level: 1 })).toBeVisible();
   await expect(page.getByText('Manufacturing mode', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Back to Card', exact: true }).click();
+  await page.getByRole('button', { name: 'Back to Hardware', exact: true }).click();
   await expect(page).toHaveURL(/#screen=card&section=overview$/);
-  await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Your Lightweaver hardware' })).toBeVisible();
 });
 
 for (const cardState of [
@@ -947,7 +991,7 @@ for (const cardState of [
 ]) {
   test(`Card overview preserves the ${cardState.name} state and recovery action`, async ({ page }) => {
     await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
-    await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Your Lightweaver hardware' })).toBeVisible();
     if (cardState.name === 'revalidating after restart') {
       await page.route('**/api/status', () => new Promise(() => {}));
     }
@@ -980,8 +1024,8 @@ for (const legacy of [
     await page.goto(`/${legacy.hash}`, { waitUntil: 'domcontentloaded' });
 
     await expect(page).toHaveURL(new RegExp(`${legacy.hash.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
-    await expect(page.locator('.rail-item.active')).toHaveAccessibleName('Card');
-    const sections = page.getByRole('navigation', { name: 'Card sections' });
+    await expect(page.locator('.rail-item.active')).toHaveAccessibleName('Hardware');
+    const sections = page.getByRole('navigation', { name: 'Hardware sections' });
     if (legacy.section) {
       await expect(sections.getByRole('button', { name: legacy.section, exact: true })).toHaveAttribute('aria-current', 'page');
     } else {
@@ -993,10 +1037,10 @@ for (const legacy of [
 
 test('new section navigation emits canonical Card hashes and moves focus to the section heading', async ({ page }) => {
   await page.goto('/#screen=flash', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Card settings' }).click();
+  await page.getByRole('navigation', { name: 'Hardware sections' }).getByRole('button', { name: 'Hardware settings' }).click();
 
   await expect(page).toHaveURL(/#screen=card&section=settings$/);
-  const heading = page.getByRole('heading', { name: 'Card settings', level: 1 });
+  const heading = page.getByRole('heading', { name: 'Hardware settings', level: 1 });
   await expect(heading).toBeFocused();
   expect(await heading.evaluate(element => getComputedStyle(element).outlineStyle)).not.toBe('none');
   expect(await heading.evaluate(element => Number.parseFloat(getComputedStyle(element).outlineWidth))).toBeGreaterThan(0);
@@ -1047,8 +1091,8 @@ test('embedded workshop uses the Card heading as the only h1', async ({ page }) 
   await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
   await expect(page.getByRole('heading', { name: 'Batch production', level: 1 })).toBeVisible();
   await expect(page.getByText('Manufacturing mode', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Back to Card', exact: true })).toBeVisible();
-  await expect(page.getByRole('navigation', { name: 'Card sections' }).locator('[aria-current="page"]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Back to Hardware', exact: true })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Hardware sections' }).locator('[aria-current="page"]')).toHaveCount(0);
   await expect(page.getByRole('heading', { level: 2 }).first()).toBeVisible();
   await expect(page.locator('main')).toHaveCount(1);
   await expect(page.locator('.prod-shell')).toHaveJSProperty('tagName', 'SECTION');
@@ -1092,13 +1136,13 @@ test('an active firmware install keeps rail navigation locked to install', async
   await page.goto('/#screen=card&section=install', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Install Lightweaver' })).toBeVisible();
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('lw-install-active', { detail: { active: true } })));
-  await page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Card settings' }).click();
+  await page.getByRole('navigation', { name: 'Hardware sections' }).getByRole('button', { name: 'Hardware settings' }).click();
   await expect(page).toHaveURL(/#screen=card&section=install$/);
   await expect(page.getByRole('heading', { name: 'Install Lightweaver' })).toBeVisible();
   await page.getByRole('button', { name: 'Layout', exact: true }).click();
 
   await expect(page).toHaveURL(/#screen=card&section=install$/);
-  await expect(page.locator('.rail-item.active')).toHaveAccessibleName('Card');
+  await expect(page.locator('.rail-item.active')).toHaveAccessibleName('Hardware');
   await expect(page.getByRole('heading', { name: 'Install Lightweaver' })).toBeVisible();
 });
 
@@ -1117,7 +1161,7 @@ test('an active firmware install rejects direct hash mutation without changing v
 
 test('an active firmware install rejects browser Back without changing visible content', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Your Lightweaver hardware' })).toBeVisible();
   // Section clicks replace history, so push a real Back entry by mutating the
   // hash directly — the same way an external link or bookmark would.
   await page.evaluate(() => { window.location.hash = 'screen=card&section=install'; });
@@ -1128,7 +1172,7 @@ test('an active firmware install rejects browser Back without changing visible c
 
   await expect(page).toHaveURL(/#screen=card&section=install$/);
   await expect(page.getByRole('heading', { name: 'Install Lightweaver' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Your Lightweaver hardware' })).toHaveCount(0);
 });
 
 test('the browser deployment check verifies the served signed release and never overstates it', async ({ page }) => {

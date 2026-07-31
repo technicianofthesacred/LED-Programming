@@ -41,6 +41,7 @@ bool runtimePrepareStepPattern(int8_t direction);
 bool runtimeCommitPreparedPatternSelection();
 void runtimeDiscardPreparedPatternSelection();
 bool runtimeSelectPatternByIdZ(const String& targetId, const String& patternId);
+String runtimeCurrentPatternId();
 
 void runtimeSetLedColorOrder(const String& order);
 bool runtimeCanSetLedColorOrder(const String& order);

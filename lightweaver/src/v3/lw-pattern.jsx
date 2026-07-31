@@ -43,6 +43,7 @@ import {
 import {
   cardHostToUrl,
   discoverCardStatus,
+  isLocalCardHost,
   normalizeCardHost,
   readStoredCardHost,
   writeStoredCardHost,
@@ -372,6 +373,7 @@ import { PatternPreview } from './PatternPreview.jsx';
     const livePreviewSeq = useRef(0);
     const browsePreviewSeq = useRef(0);
     const savedComboSeq = useRef(0);
+    const cardReturnConsumed = useRef(false);
     const latestPreviewIntent = useRef(null);
     const draftProjectSnapshotRef = useRef(project => project);
 
@@ -640,6 +642,60 @@ import { PatternPreview } from './PatternPreview.jsx';
       setSelectedTargetId(ALL_SECTIONS_TARGET_ID);
     }, [invalidatePendingPreview, projectRevision]);
 
+    useEffect(() => {
+      if (cardReturnConsumed.current || typeof window === 'undefined') return;
+      const params = new URLSearchParams(window.location.search);
+      const requestedPatternId = String(params.get('editPattern') || '').trim().toLowerCase();
+      const requestedLookId = String(params.get('editLook') || '').trim().toLowerCase();
+      if (!requestedPatternId && !requestedLookId) return;
+      cardReturnConsumed.current = true;
+
+      const returnedHost = params.get('cardHost') || '';
+      if (isLocalCardHost(returnedHost)) {
+        const normalizedHost = normalizeCardHost(returnedHost);
+        writeStoredCardHost(normalizedHost);
+        setCardHost(normalizedHost);
+      }
+
+      if (requestedPatternId && getCardPatternById(requestedPatternId)) {
+        setSelectedTargetId(ALL_SECTIONS_TARGET_ID);
+        setDraftLooks({
+          [ALL_SECTIONS_TARGET_ID]: normalizeSectionVisualLook({
+            ...savedGlobalLook,
+            patternId: requestedPatternId,
+          }),
+        });
+        setStatusKind('ok');
+        setStatus(`Opened ${getCardPatternById(requestedPatternId)?.label || requestedPatternId} from the card. Adjust it here, then install when ready.`);
+      } else if (requestedLookId) {
+        const returnedLook = savedLooks.find(savedLook => String(savedLook.id || '').toLowerCase() === requestedLookId);
+        if (returnedLook) {
+          setPatchBoard(applySavedLookToPatchBoard({ patchBoard: board, strips, savedLook: returnedLook }));
+          setStandaloneController(previous => ({
+            ...(previous || {}),
+            defaultLook: returnedLook.defaultLook,
+            activeLookId: returnedLook.id,
+            looks: savedLooks,
+          }));
+          setSelectedTargetId(ALL_SECTIONS_TARGET_ID);
+          setDraftLooks({});
+          setStatusKind('ok');
+          setStatus(`Opened ${returnedLook.label || returnedLook.id} from the card. Adjust it here, then install when ready.`);
+        } else {
+          setStatusKind('err');
+          setStatus('That saved card look is not in this Studio project. Open the matching project, then return from the card again.');
+        }
+      } else {
+        setStatusKind('err');
+        setStatus('That card pattern is not supported by this Studio build. Update Studio or choose another card pattern.');
+      }
+
+      params.delete('editPattern');
+      params.delete('editLook');
+      const search = params.toString();
+      window.history.replaceState(null, '', `${window.location.pathname}${search ? `?${search}` : ''}${window.location.hash}`);
+    }, [board, savedGlobalLook, savedLooks, setPatchBoard, setStandaloneController, strips]);
+
     const updatePreviewLook = (patch, { push = true } = {}) => {
       if (!selectedTarget) return null;
       const nextLook = normalizeSectionVisualLook({ ...look, ...patch });
@@ -674,7 +730,10 @@ import { PatternPreview } from './PatternPreview.jsx';
       };
       const bridgeOpen = hasCardBridge();
       const bridgeState = getCardBridgeState();
-      if (bridgeOpen && bridgeState.verified && normalizeCardHost(bridgeState.host) === normalizeCardHost(cardHost)) {
+      if (
+        bridgeOpen && bridgeState.verified && bridgeState.identityVerified && bridgeState.runtimeCommandReady &&
+        normalizeCardHost(bridgeState.host) === normalizeCardHost(cardHost)
+      ) {
         scheduleVerifiedBridgePreview();
         return;
       }
@@ -815,13 +874,21 @@ import { PatternPreview } from './PatternPreview.jsx';
       setStatusKind('err');
       setStatus(message);
     };
+    const reportCardPageOpenResult = (result) => {
+      if (result?.ok) return true;
+      setStatusKind('err');
+      setStatus(result?.reason === 'popup-blocked'
+        ? 'The browser blocked the card window. Allow popups for Studio, then try again.'
+        : 'The card address is not a valid local Lightweaver address. Check it, then try again.');
+      return false;
+    };
     const openCardInstaller = () => {
       if (!handoffUrl) return;
       const url = new URL(handoffUrl);
-      openLocalCardPage(cardHost, {
+      reportCardPageOpenResult(openLocalCardPage(cardHost, {
         path: `${url.pathname}${url.search}${url.hash}`,
         reason: 'card-installer',
-      });
+      }));
     };
 
     const checkCardLayoutWriteSafety = async (runtimePackageForCard, actionLabel = 'saving') => {
@@ -1173,7 +1240,7 @@ import { PatternPreview } from './PatternPreview.jsx';
     };
 
     const openCardPage = () => {
-      if (typeof window !== 'undefined') openLocalCardPage(cardHost);
+      if (typeof window !== 'undefined') reportCardPageOpenResult(openLocalCardPage(cardHost));
     };
 
     // ── color/geometry mapping for the mockup sliders ───────────────────

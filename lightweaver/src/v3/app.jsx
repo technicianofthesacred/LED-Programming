@@ -46,7 +46,7 @@ const STUDIO_SCREENS = [
   { id: 'pattern-lab', label: 'Pattern Lab', Component: PatternLabScreen },
   { id: 'playlist', label: 'Playlist', Component: PlaylistScreen },
   { id: 'show', label: 'Show', Component: ShowScreen },
-  { id: 'card', label: 'Card', Component: CardScreen },
+  { id: 'card', label: 'Hardware', Component: CardScreen },
 ];
 const SCREEN_KEYS = STUDIO_SCREENS.map(screen => screen.id);
 const SCREEN_BY_ID = Object.fromEntries(STUDIO_SCREENS.map(screen => [screen.id, screen.Component]));
@@ -639,7 +639,7 @@ function Shell() {
       <ScreenErrorBoundary key={view} onBeforeReload={flushProjectAutosave} onRecover={() => navigateStudio('layout')}>
         <Suspense fallback={<div className="screen route-loading" role="status" aria-live="polite">Loading Studio screen…</div>}>
           {Screen ? <>
-            <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} cardLink={cardLink} onConnectCard={onConnectCard} onOpenConnectionCenter={openConnectionCenter} go={navigateStudio} onOpenSection={openCardSection} route={cardRoute} />
+            <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} cardLink={cardLink} onConnectCard={onConnectCard} onOpenConnectionCenter={openConnectionCenter} go={navigateStudio} onOpenSection={openCardSection} replaceProject={replaceProject} route={cardRoute} />
             <ScreenReady />
           </> : null}
         </Suspense>

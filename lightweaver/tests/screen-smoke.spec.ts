@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 // Every primary Studio destination must retain the shared shell controls.
-const SCREENS = ['Patterns', 'Pattern Lab', 'Playlist', 'Layout', 'Show', 'Card'];
+const SCREENS = ['Patterns', 'Pattern Lab', 'Playlist', 'Layout', 'Show', 'Hardware'];
 
 test.beforeEach(async ({ page }) => {
   await page.route('http://lightweaver.local/**', route => route.abort());
@@ -644,11 +644,37 @@ test('settings screen prioritizes card setup and keeps raw config advanced', asy
   // "Designer config" JSON is hidden by default and revealed with its own
   // Show/Hide JSON button — the old always-visible "Advanced" click target
   // and .lw-chip-settings-json class are gone.
-  await page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Advanced & Support' }).click();
+  await page.getByRole('navigation', { name: 'Hardware sections' }).getByRole('button', { name: 'Advanced & Support' }).click();
   await page.getByRole('button', { name: 'Designer JSON' }).click();
   await expect(page.locator('.set-json')).toHaveCount(0);
   await page.getByRole('button', { name: 'Show JSON' }).click();
   await expect(page.locator('.set-json')).toBeVisible();
+});
+
+test('Hardware color-order test reports success only after exact state readback', async ({ page }) => {
+  const cardId = 'lw-color-readback';
+  let colorOrder = 'RGB';
+  await page.route('**/api/firmware-info', route => route.fulfill({ json: {
+    app: 'Lightweaver', cardId, firmwareVersion: '1.0.0', buildId: 'color-readback-build',
+  } }));
+  await page.route('**/api/status', route => route.fulfill({ json: {
+    app: 'Lightweaver', cardId, firmwareVersion: '1.0.0', buildId: 'color-readback-build',
+    runtimePhase: 'ready', commandReady: true, outputReady: true,
+    led: { pixels: 44, colorOrder },
+  } }));
+  await page.route('**/api/control', async route => {
+    const body = JSON.parse(route.request().postData() || '{}');
+    colorOrder = body.colorOrder;
+    await route.fulfill({ json: { ok: true, cardId, colorOrder, stateRevision: 12 } });
+  });
+  await page.goto('/#screen=card&section=settings', { waitUntil: 'domcontentloaded' });
+  await page.evaluate((id) => localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id })), cardId);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.locator('.set-row', { hasText: 'Color order' }).getByRole('button', { name: 'GRB', exact: true }).click();
+
+  await expect(page.getByTestId('settings-card-status')).toContainText('read back from the exact card');
+  expect(colorOrder).toBe('GRB');
 });
 
 test('settings rows stack readable labels above controls at 390px without overflow', async ({ page }) => {

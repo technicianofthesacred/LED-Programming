@@ -36,7 +36,7 @@ async function mockConnectedCard(page: any, cardId = 'lw-studio-hardening', opti
       return;
     }
     installedConfig = JSON.parse(route.request().postData() || '{}');
-    options.onConfigRequest?.();
+    options.onConfigRequest?.(structuredClone(installedConfig));
     if (options.configGate) await options.configGate();
     if (options.configDelayMs) await new Promise(resolve => setTimeout(resolve, options.configDelayMs));
     await route.fulfill({ json: { ok: true, requiresReboot: false } });
@@ -74,7 +74,7 @@ async function seedBrowserProjectLibrary(page: any) {
 }
 
 // The old standalone Settings and Installer rail entries were consolidated
-// into the Card workspace (Settings → Card > Preferences, Installer → Card >
+// into the Hardware workspace (Settings → Hardware > Preferences, Installer → Hardware >
 // Advanced & Support > GPIO & install guide). The legacy hash screens still
 // deep-link to the consolidated sections, so these navigation shims keep the
 // original assertions unchanged.
@@ -172,14 +172,14 @@ test('Settings installs the exact requested revision when an edit happens during
   const name = page.locator('.set-row', { hasText: 'Project name' }).locator('input');
   await name.fill('Revision one');
   await expect(page.locator('.savechip')).toContainText('Unsaved changes');
-  await page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Card settings' }).click();
+  await page.getByRole('navigation', { name: 'Hardware sections' }).getByRole('button', { name: 'Hardware settings' }).click();
   const save = page.locator('.set-row', { hasText: 'Install on card' }).getByRole('button', { name: 'Install on card' });
   await save.click();
   await expect.poll(() => configRequested).toBe(true);
-  await page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Preferences' }).click();
+  await page.getByRole('navigation', { name: 'Hardware sections' }).getByRole('button', { name: 'Preferences' }).click();
   await name.fill('Revision two');
   releaseConfig?.();
-  await page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Card settings' }).click();
+  await page.getByRole('navigation', { name: 'Hardware sections' }).getByRole('button', { name: 'Hardware settings' }).click();
   await expect(page.getByTestId('settings-card-status')).toContainText('Installed on card');
   await expect(page.locator('.savechip')).toContainText('Unsaved changes');
 });
@@ -189,7 +189,7 @@ test('Settings records a current install only after exact card read-back', async
   await page.getByRole('button', { name: 'Preferences', exact: true }).click();
   const name = page.locator('.set-row', { hasText: 'Project name' }).locator('input');
   await name.fill('Exact settings install');
-  await page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Card settings' }).click();
+  await page.getByRole('navigation', { name: 'Hardware sections' }).getByRole('button', { name: 'Hardware settings' }).click();
   await page.locator('.set-row', { hasText: 'Install on card' }).getByRole('button', { name: 'Install on card' }).click();
 
   await expect(page.getByTestId('settings-card-status')).toContainText('Installed on card');
@@ -205,7 +205,7 @@ test('a stale revision-zero install acknowledgement cannot label a replacement p
     configGate: () => configGate,
   });
   await page.getByRole('button', { name: 'Preferences', exact: true }).click();
-  await page.getByRole('navigation', { name: 'Card sections' }).getByRole('button', { name: 'Card settings' }).click();
+  await page.getByRole('navigation', { name: 'Hardware sections' }).getByRole('button', { name: 'Hardware settings' }).click();
   await page.locator('.set-row', { hasText: 'Install on card' }).getByRole('button', { name: 'Install on card' }).click();
   await expect.poll(() => configRequested).toBe(true);
 
@@ -232,12 +232,21 @@ test('Pattern card write is pending, disables conflicts, and exposes retry after
 });
 
 test('Pattern confirms the exact draft revision installed on the card', async ({ page }) => {
-  await mockConnectedCard(page);
+  let installedConfig: any = null;
+  await mockConnectedCard(page, 'lw-studio-hardening', {
+    onConfigRequest: (config: any) => { installedConfig = config; },
+  });
   await page.getByPlaceholder('Search chip patterns').fill('ocean');
   await page.locator('[data-pattern-id="ocean"]').click();
   await expect(page.locator('.savechip')).toContainText('Unsaved changes');
   await page.getByTitle('Install the current look on the card').click();
   await expect(page.locator('.savechip')).toContainText('Installed on card');
+  expect(installedConfig?.startupPatternId).toBe('ocean');
+  // The storage compactor omits a redundant preset when it equals the look id;
+  // firmware restores that as the same exact Ocean preset.
+  expect(installedConfig?.looks?.[0]).toMatchObject({ id: 'ocean' });
+  expect(installedConfig?.looks?.[0]?.preset ?? installedConfig?.looks?.[0]?.id).toBe('ocean');
+  expect(installedConfig?.zones?.[0]?.patternId).toBe('ocean');
 });
 
 test('Pattern acknowledgement does not install an unrelated edit made while pending', async ({ page }) => {
@@ -414,7 +423,7 @@ test('reduced motion disables status and preview animation names', async ({ page
 });
 
 test('installer signoff persists and exposes a ready state', async ({ page }) => {
-  await page.locator('.rail-item', { hasText: 'Card' }).click();
+  await page.locator('.rail-item', { hasText: 'Hardware' }).click();
   await page.getByRole('button', { name: 'Advanced & Support' }).click();
   await page.getByRole('button', { name: 'GPIO & install guide' }).click();
   const checks = page.locator('.inst-signoff input[type="checkbox"]');
@@ -489,8 +498,8 @@ test('Settings controls expose stable accessible names', async ({ page }) => {
   await expect(page.getByRole('group', { name: 'Theme' })).toBeVisible();
   await expect(page.getByRole('button', { name: /Remove palette color 1/i })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Add palette color' })).toBeVisible();
-  // The designer config JSON now lives in Card > Advanced & Support > Designer JSON.
-  await page.locator('.rail-item', { hasText: 'Card' }).click();
+  // The designer config JSON now lives in Hardware > Advanced & Support > Designer JSON.
+  await page.locator('.rail-item', { hasText: 'Hardware' }).click();
   await page.getByRole('button', { name: 'Advanced & Support' }).click();
   await page.getByRole('button', { name: 'Designer JSON' }).click();
   await page.getByRole('button', { name: 'Show JSON' }).click();
@@ -644,7 +653,7 @@ test('replacement dialog traps keyboard focus and restores its trigger', async (
 });
 
 test('flash erase requires a final confirmation before starting', async ({ page }) => {
-  await page.locator('.rail-item', { hasText: 'Card' }).click();
+  await page.locator('.rail-item', { hasText: 'Hardware' }).click();
   await page.getByRole('button', { name: 'Advanced & Support' }).click();
   await page.getByRole('button', { name: 'Technician firmware & logs' }).click();
   await page.getByRole('checkbox', { name: /Wipes the chip first/i }).check();

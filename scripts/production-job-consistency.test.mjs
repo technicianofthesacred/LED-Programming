@@ -31,6 +31,9 @@ function fixtureFacts(job) {
     brightnessLimit: job.configuration.config.led.brightnessLimit,
     maxMilliamps: job.configuration.config.led.maxMilliamps,
     startupPatternId: job.configuration.config.startupPatternId,
+    patternIds: job.configuration.config.patterns.map(pattern => pattern.id),
+    lookIds: job.configuration.config.looks.map(look => look.id),
+    cycleIds: job.configuration.config.controls.encoder.patternCycleIds,
   };
 }
 
@@ -48,6 +51,9 @@ const expectedFixture = {
   brightnessLimit: 0.35,
   maxMilliamps: 1500,
   startupPatternId: 'aurora',
+  patternIds: ['aurora', 'fire', 'ocean', 'plasma', 'sparkle'],
+  lookIds: ['aurora', 'fire', 'ocean', 'plasma', 'sparkle'],
+  cycleIds: ['aurora', 'fire', 'ocean', 'plasma', 'sparkle'],
 };
 
 test('canonical bench source cannot drift from the physical GPIO 18 fixture', async () => {
@@ -62,6 +68,13 @@ test('canonical bench generator names GPIO 18 as its only data-pin source', asyn
   assert.match(generator, /const MAX_MILLIAMPS = 1500;/);
   assert.doesNotMatch(generator, /pin:\s*16\b/);
   assert.equal((generator.match(/pin:\s*DATA_PIN/g) || []).length, 3);
+});
+
+test('production schema accepts only optional supported runtime LED protocols', async () => {
+  const schema = await readJson('release/production-job.schema.json');
+  const runtimeLed = schema.properties.configuration.properties.config.properties.led;
+  assert.deepEqual(runtimeLed.properties.type.enum, ['WS2812B', 'WS2815']);
+  assert.equal(runtimeLed.required.includes('type'), false, 'legacy production jobs may omit the LED protocol');
 });
 
 test('published bench artifact and index match the canonical source', async () => {

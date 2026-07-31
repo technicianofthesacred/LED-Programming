@@ -125,6 +125,7 @@ export function assertCommissioningFinalWiringStatus({
     || status.wiringDigest !== expectedWiring.wiringDigest) {
     fail('wiring revision or digest changed');
   }
+  if (status.ledType !== expectedWiring.ledType) fail('LED protocol changed');
   if (status.colorOrder !== expectedWiring.colorOrder) fail('LED color order changed');
   if (status.maxMilliamps !== expectedWiring.maxMilliamps) fail('aggregate current limit changed');
   if (JSON.stringify(finalOutputs(status.outputs)) !== JSON.stringify(finalOutputs(expectedWiring.outputs))) {

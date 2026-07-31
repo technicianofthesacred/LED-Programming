@@ -263,6 +263,17 @@ function trackNavigatedBridgeWindow(source, { host, origin, persistHost = true }
   dispatchBridgeChange();
 }
 
+function reuseActiveBridgeWindow(host, origin) {
+  if (!bridgeWindow || !bridgeConnected || bridgeTargetClosed()) return null;
+  if (normalizeCardHost(bridgeHost) !== normalizeCardHost(host) || bridgeOrigin !== origin) return null;
+  try {
+    bridgeWindow.focus?.();
+  } catch {
+    /* Browser focus permission is best-effort. */
+  }
+  return bridgeWindow;
+}
+
 function sameHandoffCorrelation(left, right) {
   return Boolean(left && right)
     && left.host === right.host
@@ -708,27 +719,30 @@ export function openCardBridge(rawHost = '', {
   const host = normalizeCardHost(rawHost || readStoredCardHost());
   const origin = cardHostToUrl(host);
   const bridgeUrl = buildCardBridgeLaunchUrl(host, studioUrl);
-  revokeBridgeForNavigation({ host, origin });
   const opened = win.open(bridgeUrl, CARD_BRIDGE_WINDOW_NAME);
-  if (opened) {
-    trackNavigatedBridgeWindow(opened, { host, origin });
-  }
+  if (!opened) return reuseActiveBridgeWindow(host, origin);
+  // window.open runs synchronously inside the user gesture. Revoke only after
+  // it returns a real target: a blocked popup did not navigate anything and
+  // must not destroy the already-working parent/opener bridge.
+  revokeBridgeForNavigation({ host, origin });
+  trackNavigatedBridgeWindow(opened, { host, origin });
   return opened;
 }
 
 // Opens the card's own page (visitor UI, settings, playlist views) in the SAME
-// named auxiliary tab that openCardBridge uses, so a plain "open the card page"
+// named auxiliary tab that openCardBridge uses, so an "open the card page"
 // click reuses the one card tab instead of minting a new unnamed tab that races
-// the tracked bridge window. Returns { ok: true, window } on success, or
+// the tracked bridge window. The bridge launch fragment does not change the
+// visible card UI; it gives that page the exact Studio origin required for its
+// ready handshake and subsequent local commands. Returns { ok: true, window }
+// on success, or
 // { ok: false, reason: 'invalid-host' | 'popup-blocked' } so callers can show
 // the existing visible popup-blocked copy.
 //
-// Safety: navigating the shared named tab reloads whatever page it held, so any
-// previous bridge handshake is void. This routes through the same
-// setBridgeState acquisition path as openCardBridge with ready:false — the
-// bridge fails closed (privileged sends stay identity-locked) until the card
-// page performs a fresh verified ready/response handshake. `reason` is a
-// caller-side diagnostic label only; it never reaches the card URL.
+// Safety: a successful navigation revokes the prior lifecycle before control
+// returns. A blocked popup navigates nothing, so it preserves an already-live
+// same-card parent/opener bridge instead of silently disconnecting Studio.
+// `reason` is a caller-side diagnostic label only; it never reaches the URL.
 export function openLocalCardPage(rawHost = '', { path = '/', reason = 'open-card-page' } = {}) {
   void reason;
   const win = browserWindow();
@@ -744,11 +758,19 @@ export function openLocalCardPage(rawHost = '', { path = '/', reason = 'open-car
   // A crafted path ('//evil.example/') must not steer the named card tab to a
   // non-card origin.
   if (url.origin !== origin) return { ok: false, reason: 'invalid-host' };
+  const fragment = new URLSearchParams(url.hash.slice(1));
+  fragment.set('studioBridge', '1');
+  const studioOrigin = currentStudioOrigin();
+  if (studioOrigin) fragment.set('studioOrigin', studioOrigin);
+  url.hash = fragment.toString();
   if (!win?.open) return { ok: false, reason: 'popup-blocked' };
   attachCardBridgeListener();
-  revokeBridgeForNavigation({ host, origin });
   const opened = win.open(url.href, CARD_BRIDGE_WINDOW_NAME);
-  if (!opened) return { ok: false, reason: 'popup-blocked' };
+  if (!opened) {
+    const active = reuseActiveBridgeWindow(host, origin);
+    return active ? { ok: true, window: active } : { ok: false, reason: 'popup-blocked' };
+  }
+  revokeBridgeForNavigation({ host, origin });
   // Same bookkeeping as openCardBridge: adopt the (possibly reused) named
   // window and drop any prior handshake so identity must re-verify.
   trackNavigatedBridgeWindow(opened, { host, origin });

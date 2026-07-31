@@ -3,7 +3,9 @@ import test from 'node:test';
 
 import {
   CARD_BRIDGE_WINDOW_NAME,
+  bootstrapCardBridgeFromOpener,
   getCardBridgeState,
+  openCardBridge,
   openLocalCardPage,
   retargetCardBridge,
   sendCardBridgeRequest,
@@ -83,6 +85,58 @@ test('a blocked popup reports popup-blocked so callers can show the visible copy
   assert.equal(opened[0].name, CARD_BRIDGE_WINDOW_NAME);
 });
 
+test('an ordinary card-page click opens the visible page in bridge mode for the current Studio origin', () => {
+  const tab = fakeCardTab();
+  const { win, opened } = stubWindow({ openResult: tab });
+  win.location.href = 'https://led.mandalacodes.com/#screen=patterns';
+  win.location.origin = 'https://led.mandalacodes.com';
+
+  assert.equal(openLocalCardPage('192.168.50.30').ok, true);
+  const url = new URL(opened[0].url);
+  assert.equal(url.origin, 'http://192.168.50.30');
+  assert.equal(url.pathname, '/');
+  const fragment = new URLSearchParams(url.hash.slice(1));
+  assert.equal(fragment.get('studioBridge'), '1');
+  assert.equal(fragment.get('studioOrigin'), 'https://led.mandalacodes.com');
+});
+
+test('bridge launch parameters preserve an existing card-installer payload', () => {
+  const tab = fakeCardTab();
+  const { win, opened } = stubWindow({ openResult: tab });
+  win.location.href = 'https://led.mandalacodes.com/#screen=patterns';
+  win.location.origin = 'https://led.mandalacodes.com';
+
+  assert.equal(openLocalCardPage('192.168.50.32', {
+    path: '/#lwconfig=YWJj&reboot=1',
+    reason: 'card-installer',
+  }).ok, true);
+  const fragment = new URLSearchParams(new URL(opened[0].url).hash.slice(1));
+  assert.equal(fragment.get('lwconfig'), 'YWJj');
+  assert.equal(fragment.get('reboot'), '1');
+  assert.equal(fragment.get('studioBridge'), '1');
+  assert.equal(fragment.get('studioOrigin'), 'https://led.mandalacodes.com');
+});
+
+test('a blocked repeat click reuses the tracked card window without revoking its lifecycle', () => {
+  const tab = fakeCardTab();
+  const { win } = stubWindow({ openResult: null });
+  win.location.search = '?cardBridge=1&cardHost=192.168.50.31';
+  win.parent = tab;
+  assert.equal(bootstrapCardBridgeFromOpener(), true);
+  const lifecycle = getCardBridgeState().lifecycle;
+
+  const repeated = openLocalCardPage('192.168.50.31');
+  assert.equal(repeated.ok, true);
+  assert.equal(repeated.window, tab);
+  assert.equal(getCardBridgeState().lifecycle, lifecycle);
+  assert.equal(tab.focusCalls, 1);
+
+  assert.equal(openCardBridge('192.168.50.31'), tab,
+    'pattern-click acquisition reuses the same surviving bridge target');
+  assert.equal(getCardBridgeState().lifecycle, lifecycle);
+  assert.equal(tab.focusCalls, 2);
+});
+
 test('repeat visits reuse the one named card tab, same handle, and focus it', () => {
   const tab = fakeCardTab();
   const { opened } = stubWindow({ openResult: tab });
@@ -91,20 +145,20 @@ test('repeat visits reuse the one named card tab, same handle, and focus it', ()
   assert.equal(first.ok, true);
   assert.equal(first.window, tab);
   assert.equal(opened.length, 1);
-  assert.deepEqual(opened[0], { url: 'http://192.168.50.4/', name: CARD_BRIDGE_WINDOW_NAME });
+  assert.deepEqual(opened[0], { url: 'http://192.168.50.4/#studioBridge=1', name: CARD_BRIDGE_WINDOW_NAME });
   const firstLifecycle = getCardBridgeState().lifecycle;
 
   const second = openLocalCardPage('192.168.50.4', { path: '/settings', reason: 'open-card-page' });
   assert.equal(second.ok, true);
   assert.equal(second.window, first.window, 'the same named window handle is reused');
   assert.equal(opened.length, 2);
-  assert.deepEqual(opened[1], { url: 'http://192.168.50.4/settings', name: CARD_BRIDGE_WINDOW_NAME });
+  assert.deepEqual(opened[1], { url: 'http://192.168.50.4/settings#studioBridge=1', name: CARD_BRIDGE_WINDOW_NAME });
   assert.equal(tab.focusCalls, 2, 'an already-open tab is focused');
   assert.ok(getCardBridgeState().lifecycle > firstLifecycle,
     'same-window same-host navigation starts a new revoked lifecycle');
 });
 
-test('a plain card-page visit never grants bridge verification or command authority', async () => {
+test('a newly opened card page never grants command authority before its handshake', async () => {
   const tab = fakeCardTab();
   stubWindow({ openResult: tab });
 
@@ -112,13 +166,13 @@ test('a plain card-page visit never grants bridge verification or command author
   const state = getCardBridgeState();
   assert.equal(state.open, true, 'the named tab is tracked');
   assert.equal(state.host, '192.168.50.5');
-  assert.equal(state.verified, false, 'no handshake means no transport readiness');
+  assert.equal(state.verified, false, 'the launch fragment alone is not transport readiness');
   assert.equal(state.identityVerified, false);
 
   await assert.rejects(
     sendCardBridgeRequest('control', { patternId: 'fire' }, { host: '192.168.50.5', timeoutMs: 25 }),
     error => error?.reason === 'identity-missing',
-    'privileged sends stay locked until a fresh verified handshake',
+    'privileged sends stay locked until the new page performs its verified handshake',
   );
   assert.equal(tab.postMessageCalls, 0, 'no privileged message reaches the plain card page');
 });
@@ -128,7 +182,7 @@ test('an empty host falls back to the stored local card host', () => {
   const { opened, values } = stubWindow({ openResult: tab });
   values.set('lw_chip_card_host', '192.168.50.6');
   assert.equal(openLocalCardPage().ok, true);
-  assert.deepEqual(opened[0], { url: 'http://192.168.50.6/', name: CARD_BRIDGE_WINDOW_NAME });
+  assert.deepEqual(opened[0], { url: 'http://192.168.50.6/#studioBridge=1', name: CARD_BRIDGE_WINDOW_NAME });
 });
 
 const handoffCorrelation = Object.freeze({

@@ -77,10 +77,12 @@ function canonicalPhysicalOutputs(value) {
 function candidateWiringIdentity(readback = {}) {
   const wiringRevision = Number(readback.wiringRevision);
   const wiringDigest = text(readback.wiringDigest, 64).toLowerCase();
+  const ledType = text(readback.ledType, 16).toUpperCase();
   const colorOrder = text(readback.colorOrder, 8).toUpperCase();
   const maxMilliamps = Number(readback.maxMilliamps);
   if (!Number.isSafeInteger(wiringRevision) || wiringRevision < 1
     || !/^[a-f0-9]{64}$/.test(wiringDigest)
+    || !/^(WS2812B|WS2815)$/.test(ledType)
     || !/^(RGB|RBG|GRB|GBR|BRG|BGR)$/.test(colorOrder)
     || !Number.isSafeInteger(maxMilliamps) || maxMilliamps < 100 || maxMilliamps > 20000) {
     throw new Error('The wiring candidate is missing its exact wiring, color, or current-limit identity');
@@ -88,6 +90,7 @@ function candidateWiringIdentity(readback = {}) {
   return {
     wiringRevision,
     wiringDigest,
+    ledType,
     colorOrder,
     maxMilliamps,
     outputs: canonicalPhysicalOutputs(readback.candidateOutputs || readback.outputs),

@@ -59,7 +59,7 @@ test('Settings renders an oversized project and reports exact capacity on save',
 
   await gotoSavedProject(page, project, 'settings');
 
-  await expect(page.getByRole('heading', { name: 'Card settings', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Hardware settings', level: 1 })).toBeVisible();
   await page.getByRole('button', { name: 'Install on card', exact: true }).click();
   await expect(page.getByTestId('settings-card-status')).toHaveText(
     /Card configuration is \d+ bytes, exceeding the 3968-byte flash storage limit\./,

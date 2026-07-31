@@ -69,10 +69,6 @@ assert.match(body, /runtimePreparePatternByIdZ\(zoneTarget, confirmedPatternId\)
   'pattern asset validation must retain the prepared selection before any mutation');
 assert.match(body, /applyPreparedControlTransaction/,
   'control mutation and revision acknowledgement must use the transactional gate');
-assert.ok(
-  body.indexOf('runtimeCommitPreparedPatternSelection()') < body.indexOf('runtimeSetSyncZones('),
-  'prepared selection must succeed before sync or any unrelated control field mutates',
-);
 
 assert.match(source, /constexpr\s+size_t\s+LW_MAX_CONTROL_BODY_BYTES\s*=\s*4096/, 'control request ceiling must stay small and explicit');
 assert.match(source, /controlRequestBody\[LW_MAX_CONTROL_BODY_BYTES\s*\+\s*1\]/, 'allowed control bodies must use fixed bounded storage');
@@ -115,7 +111,7 @@ assert.match(parserGuard, /AddBuildMiddleware/, 'guard must replace only the Par
 assert.match(parserGuard, /hashlib\.sha256/, 'framework drift must fail closed before patch injection');
 assert.match(platformio, /-DLW_WEB_CONTROL_MAX_BODY_BYTES=4096/);
 
-const syncIndex = body.indexOf('runtimeSetSyncZones(controlBool(doc, "syncZones"))');
+const syncIndex = body.indexOf('runtimeSetSyncZones(effectiveSyncZones)');
 assert.notEqual(syncIndex, -1, 'handleControlPost should apply syncZones when present');
 
 for (const marker of [
@@ -150,8 +146,13 @@ assert.notEqual(preflightIndex, -1,
   'pattern and zone targets must retain their actual prepared selection before mutation');
 const commitIndex = body.indexOf('runtimeCommitPreparedPatternSelection()');
 assert.notEqual(commitIndex, -1, 'the retained selection must be committed');
-assert.ok(commitIndex < syncIndex,
-  'the prepared selection must succeed before unrelated sync or control mutations');
+assert.ok(syncIndex < commitIndex,
+  'the requested sync state must govern the prepared selection when a split card receives a whole-piece command');
+assert.match(
+  body,
+  /runtimeSetSyncZones\(effectiveSyncZones\)[\s\S]*runtimeSetSyncZones\(currentSyncZones\)[\s\S]*runtimeCommitPreparedPatternSelection\(\)/,
+  'selection-context sync must be rolled back if the prepared scene cannot commit',
+);
 for (const setter of [
   'runtimeSetSyncZones(',
   'runtimeSetLedColorOrder(',

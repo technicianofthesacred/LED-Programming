@@ -5,10 +5,13 @@ import {
   buildLivePreviewControlPayload,
   pushLiveHardwareToCard,
   pushLivePreviewToCard,
+  requireBlackoutAcknowledgement,
+  requireBlackoutReadback,
   requireLivePreviewAcknowledgement,
   recoverCardLights,
   repairMirroredLedOutputOnCard,
   resetLiveOutputOnCard,
+  stopCardLights,
   pushSectionPreviewToCard,
   readCardZonesFromCard,
 } from '../src/lib/cardLiveControl.js';
@@ -347,6 +350,75 @@ assert.deepEqual(JSON.parse(recoveryRequests[0].options.body), {
   syncZones: true,
 });
 
+const blackoutAcknowledgement = {
+  ok: true,
+  cardId: 'lw-blackout-test',
+  patternId: 'blackout',
+  appliedPatternId: 'blackout',
+  blackout: true,
+  stateRevision: 17,
+  affectedOutputCount: 1,
+};
+assert.equal(requireBlackoutAcknowledgement(blackoutAcknowledgement).blackout, true);
+assert.throws(
+  () => requireBlackoutAcknowledgement({ ...blackoutAcknowledgement, appliedPatternId: 'aurora' }),
+  error => error?.reason === 'blackout-unconfirmed',
+  'a transport success must not pass when the card applied a different pattern',
+);
+assert.equal(requireBlackoutReadback(
+  {
+    cardId: 'lw-blackout-test',
+    currentPatternId: 'blackout',
+    lwOutput: { brightnessByte: 0 },
+  },
+  { zones: [{ id: 'strip-1', patternId: 'blackout', blackout: true }] },
+  blackoutAcknowledgement,
+).status.lwOutput.brightnessByte, 0);
+assert.throws(
+  () => requireBlackoutReadback(
+    {
+      cardId: 'lw-blackout-test',
+      currentPatternId: 'blackout',
+      lwOutput: { brightnessByte: 1 },
+    },
+    { zones: [{ id: 'strip-1', patternId: 'blackout', blackout: true }] },
+    blackoutAcknowledgement,
+  ),
+  error => error?.reason === 'blackout-readback-unconfirmed',
+  'blackout must not report success while fresh output diagnostics remain non-zero',
+);
+
+let blackoutReadbacks = 0;
+const stopped = await stopCardLights({
+  host: '192.168.18.70',
+  blackoutReadbackAttempts: 2,
+  blackoutReadbackDelayMs: 0,
+  setTimeoutImpl: callback => { callback(); return 0; },
+  pushImpl: async (look, options) => {
+    assert.deepEqual(look, {
+      patternId: 'blackout',
+      brightness: 0,
+      blackout: true,
+      syncZones: true,
+    });
+    assert.equal(options.latestOnly, false);
+    return blackoutAcknowledgement;
+  },
+  readStatusImpl: async () => {
+    blackoutReadbacks++;
+    return {
+      cardId: 'lw-blackout-test',
+      currentPatternId: 'blackout',
+      lwOutput: { brightnessByte: blackoutReadbacks === 1 ? 20 : 0 },
+    };
+  },
+  readZonesImpl: async () => ({
+    zones: [{ id: 'strip-1', patternId: 'blackout', blackout: true }],
+  }),
+});
+assert.equal(blackoutReadbacks, 2, 'stop waits for fresh zero-output diagnostics instead of trusting the POST alone');
+assert.equal(stopped.status.lwOutput.brightnessByte, 0);
+
 const hardRecoveryOrder = [];
 globalThis.fetch = async (url) => {
   if (String(url).endsWith('/api/wiring/status')) {
@@ -394,6 +466,28 @@ await assert.rejects(
   ),
   error => error?.reason === 'recovery-unconfirmed',
   'a transport-level 200 without frame diagnostics must not be presented as recovered lights',
+);
+
+globalThis.fetch = async url => {
+  if (String(url).endsWith('/api/wiring/status')) {
+    return { ok: true, json: async () => ({ ok: true, state: 'known-good', currentOutputs: [] }) };
+  }
+  return {
+    ok: true,
+    json: async () => ({
+      ok: true,
+      accepted: true,
+      diagnostics: { frameSubmitted: true, nonBlackPixels: 0, brightnessByte: 0 },
+    }),
+  };
+};
+await assert.rejects(
+  recoverCardLights(
+    { patternId: 'warm-white', brightness: 1, syncZones: true },
+    { host: '192.168.18.70', autoDiscover: false, reclaimFrameStreams: async () => {} },
+  ),
+  error => error?.reason === 'recovery-unconfirmed',
+  'blackout-specific validation must not weaken the visible recovery requirement',
 );
 
 const repairPackage = buildMirroredLedRepairPackage({

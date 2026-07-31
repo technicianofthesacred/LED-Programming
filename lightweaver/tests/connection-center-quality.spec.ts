@@ -305,6 +305,7 @@ test('desktop Bridge launch persists the project and commissioning flow without 
           }],
           wiringRevision: 1,
           wiringDigest: 'd'.repeat(64),
+          ledType: 'WS2815',
           colorOrder: 'RGB',
           maxMilliamps: 100,
           cardId: current.expectedCard.id,
@@ -466,7 +467,7 @@ test('a staged GPIO restoration stops at the Check lights handoff without legacy
       }],
       cardId: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40),
       projectRevision: flow?.project?.revision, projectFingerprint: flow?.project?.fingerprint,
-      wiringRevision: 2, wiringDigest: 'd'.repeat(64), colorOrder: 'RGB', maxMilliamps: 1500,
+      wiringRevision: 2, wiringDigest: 'd'.repeat(64), ledType: 'WS2815', colorOrder: 'RGB', maxMilliamps: 1500,
     }) });
   });
   await page.addInitScript(() => {
@@ -509,6 +510,7 @@ test('a staged GPIO restoration stops at the Check lights handoff without legacy
   await expect.poll(async () => (await activeCommissioning(page))?.project?.pendingWiring).toEqual({
     wiringRevision: 2,
     wiringDigest: 'd'.repeat(64),
+    ledType: 'WS2815',
     colorOrder: 'RGB',
     maxMilliamps: 1500,
     outputs: [{
