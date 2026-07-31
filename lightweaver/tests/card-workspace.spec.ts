@@ -344,7 +344,7 @@ test('Card overview keeps Load project and Test as resumable commissioning steps
   await expect(steps.nth(2)).toHaveAttribute('data-step-state', 'complete');
   await expect(steps.nth(3)).toHaveAttribute('data-step-state', 'current');
   await expect(steps.nth(4)).toHaveAttribute('data-step-state', 'upcoming');
-  await page.getByRole('button', { name: 'Save project to card', exact: true }).click();
+  await page.getByRole('button', { name: 'Install project on card', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeVisible();
 
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
@@ -508,7 +508,7 @@ test('disconnected Card overview shows the ordered setup path and Connect as pri
   await expect(page.getByTestId('card-detected-state')).toContainText(/not detected|not connected/i);
   const steps = page.getByTestId('card-setup-steps').locator('li');
   await expect(steps).toHaveCount(5);
-  await expect(steps.locator('.card-setup-label')).toHaveText(['Connect', 'Install firmware', 'WiFi', 'Save to card', 'Test lights']);
+  await expect(steps.locator('.card-setup-label')).toHaveText(['Connect', 'Install firmware', 'WiFi', 'Install on card', 'Test lights']);
   await expect(page.getByRole('button', { name: 'Connect card', exact: true })).toHaveClass(/primary/);
 
   const batch = page.getByTestId('card-batch-link');
@@ -608,7 +608,7 @@ test('connect actions prefer onOpenConnectionCenter and fall back to onConnectCa
   expect(calls.fallbackProbe).toBe(1);
 });
 
-test('connected Card overview identifies the card and makes Save to card primary', async ({ page }) => {
+test('connected Card overview identifies the card and makes Install on card primary', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Your Lightweaver card' })).toBeVisible();
   await dispatchCardLink(page, [{
@@ -620,7 +620,7 @@ test('connected Card overview identifies the card and makes Save to card primary
   await expect(page.getByTestId('card-detected-state')).toContainText('Gallery card');
   await expect(page.getByTestId('card-detected-state')).toContainText(/connected/i);
   await expect(page.getByTestId('card-detected-state')).not.toContainText(/has not changed|nothing changed/i);
-  await expect(page.getByRole('button', { name: 'Save to card', exact: true })).toHaveClass(/primary/);
+  await expect(page.getByRole('button', { name: 'Install on card', exact: true })).toHaveClass(/primary/);
   await expect(page.getByRole('button', { name: 'Verify in workshop', exact: true })).toHaveCount(0);
 });
 
@@ -664,7 +664,7 @@ test('ready overview offers Batch production as a low-emphasis link, not a setup
     card: { id: 'lw-gallery-card', name: 'Gallery card' },
     readiness: readyStatus('lw-gallery-card'),
   }]);
-  await expect(page.getByRole('button', { name: 'Save to card', exact: true })).toHaveClass(/primary/);
+  await expect(page.getByRole('button', { name: 'Install on card', exact: true })).toHaveClass(/primary/);
   await expect(page.getByRole('button', { name: 'Verify in workshop', exact: true })).toHaveCount(0);
 
   await expect(page.getByTestId('card-setup-steps')).not.toContainText('Batch production');

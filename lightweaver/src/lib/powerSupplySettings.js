@@ -23,12 +23,17 @@ export function readPowerSupplySettings(controller) {
 }
 
 export function withPowerSupplySettings(controller, { psuAmps, milliampsPerPixel }) {
+  const maxMilliamps = Math.max(100, Math.min(20000, Math.round(positiveOrDefault(
+    psuAmps,
+    DEFAULT_CONTROLLER_POWER.psuAmps,
+  ) * 1000 * 0.8)));
   return {
     ...controller,
     led: {
       ...(controller?.led || {}),
       psuAmps,
       milliampsPerPixel,
+      maxMilliamps,
     },
   };
 }

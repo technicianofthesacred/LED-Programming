@@ -3,10 +3,10 @@ import { pushLiveHardwareToCard, recoverCardLights } from '../../../lib/cardLive
 import { COLOR_ORDERS, normalizeUsbLedColorOrder } from '../../../lib/usbLedColorOrder.js';
 
 const COLOR_TESTS = [
-  { id: 'r', label: 'Red', short: 'R', patternId: 'test-red', brightness: 1 },
-  { id: 'g', label: 'Green', short: 'G', patternId: 'test-green', brightness: 1 },
-  { id: 'b', label: 'Blue', short: 'B', patternId: 'test-blue', brightness: 1 },
-  { id: 'w', label: 'White', short: 'W', patternId: 'test-white', brightness: 0.55 },
+  { id: 'r', label: 'Red', short: 'R', patternId: 'test-red', brightness: 0.35 },
+  { id: 'g', label: 'Green', short: 'G', patternId: 'test-green', brightness: 0.35 },
+  { id: 'b', label: 'Blue', short: 'B', patternId: 'test-blue', brightness: 0.35 },
+  { id: 'w', label: 'White', short: 'W', patternId: 'test-white', brightness: 0.2 },
 ];
 
 export function StripColorOrderCheck({ cardHost, controller, setController, autoStart = false }) {
@@ -124,6 +124,28 @@ export function StripColorOrderCheck({ cardHost, controller, setController, auto
       void tryNextOrder();
     }
   };
+  const stopLights = async () => {
+    const requestId = ++testRequestRef.current;
+    setBusy(true);
+    try {
+      await recoverCardLights(
+        { patternId: 'blackout', brightness: 0, syncZones: true },
+        { host: cardHost, timeoutMs: 3200 },
+      );
+      if (testRequestRef.current === requestId) {
+        setLiveTestedOrder('');
+        setStatus('Lights stopped. Start a color again when you are ready.');
+        setStatusKind('ok');
+      }
+    } catch (error) {
+      if (testRequestRef.current === requestId) {
+        setStatus(error?.message || 'The card did not confirm that the lights stopped.');
+        setStatusKind('err');
+      }
+    } finally {
+      if (testRequestRef.current === requestId) setBusy(false);
+    }
+  };
 
   const activeTest = COLOR_TESTS.find(item => item.id === activeTestId) || COLOR_TESTS[0];
   const answers = activeTestId === 'w'
@@ -155,6 +177,8 @@ export function StripColorOrderCheck({ cardHost, controller, setController, auto
               ? 'The saved order already matches the real LEDs. Tap the color you see to double-check.'
               : 'The whole strip just lit up. Tap the color you actually see.'}
           </p>
+          <p className="lwb-detail" role="note">Light test warning: colors will change at a reduced, power-limited brightness.</p>
+          <button type="button" className="btn" disabled={busy} onClick={stopLights}>Stop lights</button>
           <div className="lwb-quiz-answers" role="group" aria-label="What color do you see?" style={{ gridTemplateColumns: `repeat(${answers.length}, 1fr)` }}>
             {answers.map(test => (
               <button

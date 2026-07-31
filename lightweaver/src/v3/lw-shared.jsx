@@ -146,7 +146,7 @@ import React from 'react';
   // recommended next action. Experienced users can ignore it entirely.
   const JOURNEY_STEPS = [
     'Connect card', 'Design layout', 'Create looks', 'Arrange playlist',
-    'Save to card & verify', 'Save / export',
+    'Install on card & verify', 'Save / export',
   ];
   function JourneyHint({ step, nextLabel, onNext }) {
     const label = JOURNEY_STEPS[step] || '';

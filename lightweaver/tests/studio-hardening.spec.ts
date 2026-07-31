@@ -170,11 +170,11 @@ test('Pattern card write is pending, disables conflicts, and exposes retry after
     await new Promise(resolve => setTimeout(resolve, 1500));
     await route.fulfill({ status: 503, json: { ok: false } });
   });
-  const save = page.getByTitle('Save the current look to the card');
+  const save = page.getByTitle('Install the current look on the card');
   await save.click();
   await expect(save).toBeDisabled();
   await expect(page.getByRole('button', { name: /Card tools/ })).toBeDisabled();
-  await expect(save).toHaveText(/Retry save/);
+  await expect(save).toHaveText(/Retry install/);
   await expect(page.getByRole('alert')).toContainText(/could not|not on the lights/i);
 });
 
@@ -184,7 +184,7 @@ test('Pattern confirms the exact draft revision installed on the card', async ({
   await page.getByPlaceholder('Search chip patterns').fill('ocean');
   await page.locator('[data-pattern-id="ocean"]').click();
   await expect(page.locator('.savechip')).toContainText('Unsaved changes');
-  await page.getByTitle('Save the current look to the card').click();
+  await page.getByTitle('Install the current look on the card').click();
   await expect(page.locator('.savechip')).toContainText('Installed on card');
 });
 
@@ -197,7 +197,7 @@ test('Pattern acknowledgement does not install an unrelated edit made while pend
   await page.getByPlaceholder('Search chip patterns').fill('ocean');
   await page.locator('[data-pattern-id="ocean"]').click();
   const acknowledged = page.waitForResponse(response => response.url().endsWith('/api/config'));
-  await page.getByTitle('Save the current look to the card').click();
+  await page.getByTitle('Install the current look on the card').click();
   await page.evaluate(() => { window.location.hash = 'screen=settings'; });
   const name = page.locator('.set-row', { hasText: 'Project name' }).locator('input');
   await name.fill('Edited during card write');
@@ -218,7 +218,7 @@ test('bench chase restores the last Studio-confirmed look after transport failur
 
   await page.getByPlaceholder('Search chip patterns').fill('ocean');
   await page.locator('[data-pattern-id="ocean"]').click();
-  await page.getByTitle('Save the current look to the card').click();
+  await page.getByTitle('Install the current look on the card').click();
   await expect(page.locator('.savechip')).toContainText('Installed on card');
   await expect.poll(() => controls.length).toBeGreaterThan(0);
   controls.length = 0;
@@ -408,7 +408,7 @@ test('installer invalidates signoff when the installed revision changes', async 
   await mockConnectedCard(page, 'lw-signoff-installed');
   await markInstallerReady(page);
   await page.locator('.rail-item', { hasText: 'Patterns' }).click();
-  await page.getByTitle('Save the current look to the card').click();
+  await page.getByTitle('Install the current look on the card').click();
   await expect(page.locator('.savechip')).toContainText('Installed on card');
   await openInstallerGuide(page);
   await expect(page.locator('.inst-signoff input[type="checkbox"]:checked')).toHaveCount(0);

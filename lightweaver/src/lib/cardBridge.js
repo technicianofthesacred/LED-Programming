@@ -1211,7 +1211,7 @@ export function getCardBridgeVersion() {
 
 export function acquireCardBridgeFromGesture(rawHost = '', {
   studioUrl = '',
-  timeoutMs = 2500,
+  timeoutMs = 10000,
 } = {}) {
   const win = browserWindow();
   const host = normalizeCardHost(rawHost || readStoredCardHost());

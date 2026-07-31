@@ -10,8 +10,9 @@ import { useProject } from '../state/ProjectContext.jsx';
 import { REAL_PATTERN_BY_ID, adaptPattern, adaptSavedLook } from './v3-data.js';
 import { getCardPatternById } from '../lib/cardPatternBank.js';
 import { DEFAULT_CARD_PATTERN_BANK } from '../lib/cardRuntimeContract.js';
-import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
-import { cardStorageJson } from '../lib/cardPushClient.js';
+import { cardStorageJson, readCardProjectEvidence } from '../lib/cardPushClient.js';
+import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
+import { prepareCardDeployment, waitForCardDeploymentVerification } from '../lib/cardDeployment.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
 import { normalizeSavedLooks } from '../lib/sectionLookModel.js';
 import { normalizeCardVisualLook } from '../lib/cardVisualLook.js';
@@ -104,6 +105,8 @@ function realPatternShape(patternId) {
       standaloneController,
       setStandaloneController,
       markCardLookConfirmed,
+      markProjectInstalled,
+      projectLifecycle,
     } = useProject();
 
     const [host, setHost] = useState(readStoredCardHost);
@@ -139,14 +142,21 @@ function realPatternShape(patternId) {
     const runtimeBuild = useMemo(() => {
       try {
         return {
-          runtimePackage: buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: board, standaloneController }),
+          prepared: prepareCardDeployment({
+            projectId,
+            projectName,
+            projectRevision: projectLifecycle.editedRevision,
+            strips,
+            patchBoard: board,
+            standaloneController,
+          }),
           error: null,
         };
       } catch (error) {
         return { runtimePackage: null, error };
       }
-    }, [projectId, projectName, strips, board, standaloneController]);
-    const runtimePackage = runtimeBuild.runtimePackage;
+    }, [projectId, projectName, projectLifecycle.editedRevision, strips, board, standaloneController]);
+    const runtimePackage = runtimeBuild.prepared?.runtimePackage || null;
     const hardwareConfigurationIssue = runtimeBuild.error
       ? String(runtimeBuild.error.message || runtimeBuild.error).replace('is already owned by an LED output or another control', 'is already used by an LED output or another control')
       : '';
@@ -450,6 +460,8 @@ function realPatternShape(patternId) {
         packageForCard = testStrip.enabled
           ? applyTestStripToRuntimePackage(validRuntimePackage, testStrip.length)
           : validRuntimePackage;
+        prepareCardStoragePayload(packageForCard);
+        const before = await readCardProjectEvidence({ host });
         const response = await syncRuntimePackageToCard({
           host,
           runtimePackage: packageForCard,
@@ -457,6 +469,13 @@ function realPatternShape(patternId) {
           allowProjectChange: testStrip.enabled ? true : allowProjectChange,
         });
         if (!installIsCurrent()) return;
+        if (!testStrip.enabled) {
+          await waitForCardDeploymentVerification(
+            { ...runtimeBuild.prepared, cardId: before.cardId },
+            { readEvidence: () => readCardProjectEvidence({ host }) },
+          );
+          markProjectInstalled(projectLifecycle.editedRevision);
+        }
         setPlaylistStatus(makePlaylistPushSuccessState(response));
       } catch (error) {
         if (!installIsCurrent()) return;
@@ -489,6 +508,14 @@ function realPatternShape(patternId) {
       }
     };
     const openCard = () => openLocalCardPage(host);
+    const openCardInstaller = () => {
+      if (!handoffUrl) return;
+      const url = new URL(handoffUrl);
+      openLocalCardPage(host, {
+        path: `${url.pathname}${url.search}${url.hash}`,
+        reason: 'card-installer',
+      });
+    };
     // "Adjust" on the wiring-mismatch banner: jump straight to Layout → Size,
     // where the per-strip LED counts live, so the user can change the number
     // instead of accepting the card's current wiring. Deep-linked via the hash
@@ -600,17 +627,17 @@ function realPatternShape(patternId) {
               <div className="pm-title">
                 <h1>Playlist</h1>
                 <p>The order the dial press cycles through on the card. The first look starts on boot.</p>
-                <JourneyHint step={3} nextLabel="Save to card & verify" onNext={() => go?.('card')} />
+                <JourneyHint step={3} nextLabel="Install on card & verify" onNext={() => go?.('card')} />
               </div>
               <div className="pm-actions">
                 <button className="btn" disabled={recoveryPending} onClick={resetLiveOutput}>{I.refresh}Reset live</button>
                 <button
                   className="btn primary"
                   disabled={!connected || playlistSyncing || recoveryPending || Boolean(hardwareConfigurationIssue)}
-                  title={!connected ? 'Connect the card to save this playlist onto it' : undefined}
+                  title={!connected ? 'Connect the card to install this playlist' : undefined}
                   onClick={() => loadPlaylistToCard()}
                 >
-                  {I.bolt}{playlistSyncing ? 'Saving…' : 'Save playlist to card'}
+                  {I.bolt}{playlistSyncing ? 'Sending…' : 'Install playlist on card'}
                 </button>
                 <div className="pm-menu">
                   <button className="btn" disabled={Boolean(hardwareConfigurationIssue)} onClick={copyConfig}>{I.copy}Copy chip config</button>
@@ -664,7 +691,7 @@ function realPatternShape(patternId) {
                   }
                   {!playlistStatus.physicalPreview && <button className="btn" onClick={openCard}>{I.open}Open card page</button>}
                   {handoffUrl &&
-                    <a className="btn primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">Open card installer</a>
+                    <button type="button" className="btn primary" onClick={openCardInstaller}>Open card installer</button>
                   }
                 </div>
               </div>

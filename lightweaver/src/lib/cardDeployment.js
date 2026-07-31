@@ -1,0 +1,182 @@
+import { buildCardRuntimePackageFromProject } from './cardRuntimeProject.js';
+
+export function prepareCardDeployment(project = {}, cardEvidence = {}) {
+  const needsFingerprint = Number.isSafeInteger(project.projectRevision) && project.projectRevision >= 0 && !project.projectFingerprint;
+  const baseline = needsFingerprint
+    ? buildCardRuntimePackageFromProject({ ...project, projectRevision: undefined, projectFingerprint: undefined })
+    : null;
+  const runtimePackage = buildCardRuntimePackageFromProject(needsFingerprint
+    ? { ...project, projectFingerprint: semanticFingerprint(baseline.config) }
+    : project);
+  const config = runtimePackage.config;
+  return Object.freeze({
+    runtimePackage,
+    config,
+    fingerprint: semanticFingerprint(config),
+    cardId: String(cardEvidence.cardId || '').trim(),
+    revision: Number(config.projectRevision || project.projectRevision || 0),
+    previousConfig: cardEvidence.previousConfig || null,
+    changes: classifyCardChanges(cardEvidence.previousConfig, config),
+  });
+}
+
+export function classifyCardChanges(previousConfig, nextConfig) {
+  if (!previousConfig) return { kind: 'hardware', requiresPhysicalTest: true, groups: ['Wiring'] };
+  const previous = hardwareFacts(previousConfig);
+  const next = hardwareFacts(nextConfig);
+  const groups = [];
+  if (stableJson(previous.outputs) !== stableJson(next.outputs)) groups.push('Wiring');
+  if (stableJson(previous.power) !== stableJson(next.power)) groups.push('Power');
+  if (stableJson(previous.color) !== stableJson(next.color)) groups.push('Calibration');
+  return groups.length
+    ? { kind: 'hardware', requiresPhysicalTest: true, groups }
+    : { kind: 'visual', requiresPhysicalTest: false, groups: ['Playback'] };
+}
+
+export function cardStatusAsConfig(status = {}) {
+  const led = status.led || {};
+  return {
+    led: {
+      outputs: (status.outputs || []).map((output, index) => {
+        const segments = Array.isArray(output.segments) ? output.segments : [];
+        const directions = new Set(segments.map(segment => segment.direction || 'forward'));
+        return {
+          id: output.id || `out${index + 1}`,
+          pin: Number(output.pin ?? output.gpio),
+          pixels: Number(output.pixels ?? output.count),
+          direction: directions.size > 1 ? 'mixed' : [...directions][0] || 'forward',
+          segments,
+        };
+      }),
+      maxMilliamps: Number(led.maxMilliamps),
+      colorOrder: led.colorOrder,
+      outputGammaEnabled: led.outputGammaEnabled,
+      outputGammaValue: led.outputGammaValue,
+      calibration: led.calibration,
+    },
+  };
+}
+
+export async function runCardDeployment(prepared, transport = {}, callbacks = {}) {
+  const state = value => callbacks.onState?.(value);
+  state('Sending');
+  let response;
+  if (prepared.changes.requiresPhysicalTest) {
+    response = await transport.stage?.(prepared.runtimePackage);
+    if (!response?.activationId) return { installed: false, reason: 'stage-failed' };
+    await transport.startTest?.(response.activationId);
+    state('Test lights');
+    const confirmed = await callbacks.confirmHardware?.(response);
+    if (!confirmed) {
+      await transport.rollback?.(response.activationId);
+      state('Restored previous setup');
+      return { installed: false, reason: 'rolled-back' };
+    }
+    await transport.confirm?.(response.activationId);
+  } else {
+    response = await transport.install?.(prepared.runtimePackage);
+    if (!response?.ok || response.delivered === false) return { installed: false, reason: 'send-failed' };
+  }
+  state('Verifying card');
+  const readBack = await transport.readBack?.();
+  const verification = verifyCardDeployment(prepared, readBack);
+  if (!verification.ok) {
+    callbacks.onVerificationFailed?.(verification);
+    return { installed: false, reason: verification.reason };
+  }
+  callbacks.onInstalled?.(verification);
+  state('Installed');
+  return { installed: true, verification };
+}
+
+export function verifyCardDeployment(prepared, readBack = {}) {
+  if (!readBack || readBack.cardId !== prepared.cardId) return { ok: false, reason: 'card-mismatch' };
+  if (readBack.config && semanticFingerprint(readBack.config) !== prepared.fingerprint) return { ok: false, reason: 'read-back-mismatch' };
+  if (!readBack.config && (
+    readBack.projectRevision !== prepared.config.projectRevision ||
+    readBack.projectFingerprint !== prepared.config.projectFingerprint
+  )) return { ok: false, reason: 'read-back-mismatch' };
+  return { ok: true, cardId: prepared.cardId, fingerprint: prepared.fingerprint };
+}
+
+export async function waitForCardDeploymentVerification(prepared, {
+  readEvidence,
+  attempts = 20,
+  intervalMs = 600,
+  sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
+} = {}) {
+  if (!prepared?.cardId) throw new Error('Exact card identity is required before installation.');
+  if (typeof readEvidence !== 'function') throw new Error('Card read-back is required after installation.');
+  let last = { ok: false, reason: 'read-back-missing' };
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) await sleep(intervalMs);
+    try {
+      const evidence = await readEvidence();
+      last = verifyCardDeployment(prepared, evidence);
+      if (last.ok) return last;
+      if (last.reason === 'card-mismatch') {
+        throw new Error(`Wrong card answered during verification. Expected ${prepared.cardId}.`);
+      }
+    } catch (error) {
+      if (/Wrong card answered/.test(error?.message || '')) throw error;
+      last = { ok: false, reason: error?.reason || 'read-back-missing', error };
+    }
+  }
+  const error = new Error('The card did not verify the exact installed project. Studio still shows the previous installed state.');
+  error.reason = last.reason;
+  throw error;
+}
+
+function hardwareFacts(config = {}) {
+  const led = config.led || {};
+  return {
+    outputs: (led.outputs || []).map(output => {
+      const segments = Array.isArray(output.segments) ? output.segments : [];
+      const directions = new Set(segments.map(segment => segment.direction || 'forward'));
+      const direction = directions.size > 1
+        ? 'mixed'
+        : output.direction || [...directions][0] || 'forward';
+      return {
+        pin: output.pin,
+        pixels: output.pixels,
+        direction,
+        // Boundaries between same-direction runs do not alter electrical
+        // output. Preserve the split only when direction changes physically.
+        segments: direction === 'mixed'
+          ? segments.map(segment => ({ count: segment.count, direction: segment.direction || 'forward' }))
+          : [],
+      };
+    }),
+    power: { maxMilliamps: led.maxMilliamps },
+    color: {
+      colorOrder: led.colorOrder,
+      outputGammaEnabled: led.outputGammaEnabled,
+      outputGammaValue: led.outputGammaValue,
+      calibration: led.calibration,
+    },
+  };
+}
+
+function semanticFingerprint(value) {
+  const text = stableJson(value);
+  return [0x811c9dc5, 0x01000193, 0x9e3779b9, 0x85ebca6b]
+    .map(seed => fnv1a(text, seed).toString(16).padStart(8, '0'))
+    .join('').repeat(2);
+}
+
+function fnv1a(text, seed) {
+  let hash = seed >>> 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}

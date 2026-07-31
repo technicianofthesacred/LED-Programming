@@ -39,7 +39,12 @@ export function buildCardRuntimePackageFromProject({
   const totalPixels = compiled?.totalPixels ?? totalPhysicalAddresses(patchBoard, strips);
   const configuredOutputs = standaloneController?.outputs || [];
   const configuredOutputPixels = totalStandalonePixels(configuredOutputs);
-  const explicitOutputLayout = configuredOutputPixels > 0 && configuredOutputs.length >= DEFAULT_STANDALONE_OUTPUTS.length;
+  // A freshly-created project carries the one-pixel controller default even
+  // after artwork has been added. Treat output topology as intentional only
+  // when it accounts for the actual project; otherwise derive it from strips.
+  const explicitOutputLayout = configuredOutputPixels > 0
+    && configuredOutputs.length > 0
+    && (!totalPixels || configuredOutputPixels === totalPixels);
   const resolvedPixels = compiled
     ? compiled.totalPixels
     : explicitOutputLayout
@@ -156,7 +161,7 @@ function resolveCardOutputs({ strips = [], configuredOutputs = [], resolvedPixel
   const pixels = Math.max(1, Math.floor(Number(resolvedPixels) || DEFAULT_CARD_LED.pixels));
 
   if (normalizedConfigured.length > 0 && configuredPixelTotal === pixels) {
-    return normalizedConfigured;
+    return retainOutputTopology(normalizedConfigured, configuredOutputs);
   }
 
   const configuredPins = (configuredOutputs || []).map(output => ({ ...output, pixels: 0 }));
@@ -175,6 +180,23 @@ function resolveCardOutputs({ strips = [], configuredOutputs = [], resolvedPixel
     direction: firstOutput.direction || 'forward',
     segments: firstOutput.segments || [{ id: 'out1-full', count: pixels, direction: firstOutput.direction || 'forward' }],
   }];
+}
+
+function retainOutputTopology(outputs, configuredOutputs) {
+  return outputs.map((output, index) => {
+    const source = configuredOutputs.find(candidate => candidate?.id === output.id) || configuredOutputs[index] || {};
+    return {
+      ...output,
+      direction: source.direction || 'forward',
+      segments: Array.isArray(source.segments) && source.segments.length
+        ? source.segments.map((segment, segmentIndex) => ({
+            id: segment.id || `${output.id}-segment-${segmentIndex + 1}`,
+            count: segment.count,
+            direction: segment.direction || 'forward',
+          }))
+        : [{ id: `${output.id}-full`, count: output.pixels, direction: source.direction || 'forward' }],
+    };
+  });
 }
 
 function resolvePackagePatterns(standaloneController = {}, requestedPatternIds = []) {

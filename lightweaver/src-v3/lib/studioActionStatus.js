@@ -9,8 +9,8 @@ export function makePlaylistPushSuccessState(response = {}) {
   return {
     kind: 'ok',
     message: response?.rebooting
-      ? 'Playlist saved to the card. The card is rebooting so the new startup playlist can take over.'
-      : 'Playlist saved to the card.',
+      ? 'Playlist installed on card. The card is restarting to use it.'
+      : 'Playlist installed on card.',
     handoffUrl: '',
   };
 }

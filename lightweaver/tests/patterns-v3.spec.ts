@@ -60,7 +60,7 @@ test('a duplicate encoder press is resolved before Patterns renders', async ({ p
 
   await expect(page.locator('.pm')).toBeVisible();
   await expect(page.getByTestId('hardware-configuration-warning')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Save to card' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Install on card' })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Card tools' })).toBeEnabled();
 });
 

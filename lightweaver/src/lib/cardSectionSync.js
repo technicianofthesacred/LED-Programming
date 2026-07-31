@@ -90,6 +90,12 @@ export async function syncRuntimePackageToCard({
     allowLayoutChange,
     allowProjectChange,
   });
+  if (response?.state === 'staged') {
+    throw new CardPushError(
+      'wiring-test-required',
+      'The card kept this wiring change staged and did not install it. Open Test & Install, run the physical light check, and confirm the wiring there.',
+    );
+  }
   let verifiedZones = null;
   if (requiredZoneIds.length) {
     verifiedZones = await waitForCardZones({

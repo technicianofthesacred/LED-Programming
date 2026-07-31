@@ -49,7 +49,7 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConn
   const verifiedTransport = Boolean(cardLink?.card?.id && (
     state === 'connected-direct' || state === 'connected-bridge'
   ));
-  const setupLabels = ['Connect', 'Install firmware', 'WiFi', 'Save to card', 'Test lights'];
+  const setupLabels = ['Connect', 'Install firmware', 'WiFi', 'Install on card', 'Test lights'];
   let currentSetupIndex = ready ? 3 : 0;
   if (commissioningFlow?.stage === 'install-safely') currentSetupIndex = 1;
   else if (commissioningFlow?.stage === 'set-up-card') {
@@ -63,7 +63,7 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConn
     if (['setup-required', 'setup-joined'].includes(commissioningFlow.networkState)) {
       commissioningAction = { label: 'Continue WiFi setup', section: 'install' };
     } else if (commissioningFlow.cardAcknowledgedAt) {
-      commissioningAction = { label: 'Save project to card', section: 'install' };
+      commissioningAction = { label: 'Install project on card', section: 'install' };
     } else {
       commissioningAction = { label: 'Reconnect installed card', section: 'install' };
     }
@@ -127,7 +127,7 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConn
     presentation = {
       tone: 'connected',
       message: `${identity || 'A Lightweaver card'} is connected and ready for light check.`,
-      primary: { label: 'Save to card', section: 'settings' },
+      primary: { label: 'Install on card', section: 'settings' },
     };
   } else if (verifiedTransport) {
     presentation = {

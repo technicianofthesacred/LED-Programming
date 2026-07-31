@@ -59,6 +59,8 @@ async function mockLocalCard(page: any, options: any = {}) {
           firmwareVersion,
           buildId,
           ok: true,
+          projectRevision: card.savedConfig?.projectRevision ?? 0,
+          projectFingerprint: card.savedConfig?.projectFingerprint ?? '',
           pixels: 44,
           outputs: [
             { id: 'out1', pin: 16, pixels: 27 },
@@ -322,7 +324,7 @@ test('complete playlist sync writes and verifies all card sections', async ({ pa
   await expect(page.getByTestId('card-link-status')).toContainText(/connected|direct/i, { timeout: 5000 });
 
   card.operations.length = 0;
-  await page.getByRole('button', { name: 'Save playlist to card' }).click();
+  await page.getByRole('button', { name: 'Install playlist on card' }).click();
   await expect.poll(() => card.savedConfig).not.toBeNull();
   await expect.poll(() => card.operations).toEqual(['config', 'zones']);
 

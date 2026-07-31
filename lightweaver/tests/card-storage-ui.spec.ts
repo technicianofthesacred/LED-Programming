@@ -45,26 +45,31 @@ async function gotoSavedProject(page, project, screen) {
   await page.addInitScript((savedProject) => {
     localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
   }, project);
-  await page.goto(`/#screen=${screen}`, { waitUntil: 'domcontentloaded' });
+  const route = screen === 'settings'
+    ? '/#screen=card&section=settings'
+    : `/#screen=${screen}`;
+  await page.goto(route, { waitUntil: 'domcontentloaded' });
 }
 
 test('Settings renders an oversized project and reports exact capacity on save', async ({ page }) => {
   const project = makeOversizedProject();
-  const capacityError: any = capacityErrorForProject(project);
+  capacityErrorForProject(project);
   const requests: string[] = [];
   page.on('request', request => requests.push(request.url()));
 
   await gotoSavedProject(page, project, 'settings');
 
-  await expect(page.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
-  await page.getByRole('button', { name: 'Save to card', exact: true }).click();
-  await expect(page.getByTestId('settings-card-status')).toHaveText(capacityError.message);
+  await expect(page.getByRole('heading', { name: 'Card settings', level: 1 })).toBeVisible();
+  await page.getByRole('button', { name: 'Install on card', exact: true }).click();
+  await expect(page.getByTestId('settings-card-status')).toHaveText(
+    /Card configuration is \d+ bytes, exceeding the 3968-byte flash storage limit\./,
+  );
   expect(requests.filter(url => url.includes('/api/config') || url.includes('/api/firmware-info'))).toHaveLength(0);
 });
 
-test('Patterns Save to card preserves exact capacity feedback', async ({ page }) => {
+test('Patterns Install on card preserves exact capacity feedback', async ({ page }) => {
   const project = makeOversizedProject();
-  const capacityError: any = capacityErrorForProject(project);
+  capacityErrorForProject(project);
   await page.route('**/api/status', async route => {
     await route.fulfill({
       status: 200,
@@ -75,6 +80,8 @@ test('Patterns Save to card preserves exact capacity feedback', async ({ page })
 
   await gotoSavedProject(page, project, 'patterns');
 
-  await page.getByRole('button', { name: 'Save to card', exact: true }).click();
-  await expect(page.getByText(capacityError.message, { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Install on card', exact: true }).click();
+  await expect(page.getByText(
+    /Card configuration is \d+ bytes, exceeding the 3968-byte flash storage limit\./,
+  )).toBeVisible();
 });

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useProject } from '../../../state/ProjectContext.jsx';
-import { download, toWLEDLedmap } from '../../../lib/export.js';
 import { normalizePatchBoard } from '../../../lib/patchBoard.js';
 import { CARD_HARDWARE_CAPABILITIES } from '../../../lib/cardRuntimeContract.js';
 import { CardPushControl } from '../shared/CardPushControl.jsx';
@@ -116,10 +115,6 @@ export function WireModePanel({ state, connected, cardHost }) {
     draft.runs.forEach(run => { run.verified = false; });
   }, { changeKind: null });
 
-  const exportLedmap = () => {
-    download(toWLEDLedmap(compiledWiring.pixels), 'ledmap.json', 'application/json');
-  };
-
   // Canvas overlay tool for the specialist split workflow.
   const toggleSplitTool = () => {
     setDrawMode(false);
@@ -182,7 +177,14 @@ export function WireModePanel({ state, connected, cardHost }) {
   }, { changeKind: 'route' });
   const installController = useMemo(() => ({
     ...standaloneController,
-    outputs: compiledWiring.outputs.map(output => ({ id: output.id, name: output.name, pin: output.pin, pixels: output.count })),
+    outputs: compiledWiring.outputs.map(output => ({
+      id: output.id,
+      name: output.name,
+      pin: output.pin,
+      pixels: output.count,
+      direction: output.direction,
+      segments: output.segments,
+    })),
   }), [standaloneController, compiledWiring.outputs]);
   const boardAssignments = activeBoardGpios(wiring.outputs, standaloneController?.controls);
   const unavailablePinsFor = owner => boardAssignments.filter(item => item.owner !== owner).map(item => item.pin);
@@ -413,7 +415,6 @@ export function WireModePanel({ state, connected, cardHost }) {
           <WireDiscovery outputs={wiring.outputs} cardHost={cardHost} disabled={wiring.locked} onPinConfirmed={changeOutputPin}/>
           {compiledWiring.sendReady && <button className="btn lw-open-assembly" onClick={() => setShowAssembly(value => !value)}>{showAssembly ? 'Hide assembly map' : 'Open assembly map'}</button>}
           {showAssembly && compiledWiring.sendReady && <WiringAssemblyMap wiring={wiring} compiled={compiledWiring} strips={strips} physicalScale={Number(pxPerMm) > 0 ? { pxPerMm: Number(pxPerMm) } : null} onClose={() => setShowAssembly(false)}/>}
-          <button className="btn btn-ghost" data-testid="layout-export-ledmap" title="Secondary export for a separate WLED setup" onClick={exportLedmap}>Download WLED map</button>
           {mutationError && <p className="lw-wiring-error" role="alert">{mutationError}</p>}
           <details className="lww-custom-mapping">
             <summary>Custom mapping</summary>

@@ -2,22 +2,34 @@ import { useReducer, useRef, useState } from 'react';
 import { useProject } from '../../../state/ProjectContext.jsx';
 import { cardActionReducer, createCardActionState } from '../../../lib/cardAction.js';
 import {
-  makeCardRuntimePackage,
-  patchBoardToZones,
-} from '../../../lib/cardRuntimeContract.js';
-import { chainAddressCount } from '../../../lib/patchBoard.js';
-import {
   getCardHostname,
   setCardHostname,
   pushConfigToCard,
+  readCardProjectEvidence,
+  readCardStatusEnvelope,
   buildCardConfigHandoffUrl,
   CardPushError,
 } from '../../../lib/cardPushClient.js';
+import {
+  prepareCardDeployment,
+  cardStatusAsConfig,
+  waitForCardDeploymentVerification,
+} from '../../../lib/cardDeployment.js';
 import {
   activateAndWaitForCardWiring,
   confirmCardWiringCandidate,
   rollbackCardWiringCandidate,
 } from '../../../lib/cardWiringSafety.js';
+import { openLocalCardPage } from '../../../lib/cardBridge.js';
+import { readPersistedCardIdentity } from '../../../lib/cardIdentity.js';
+import { prepareCardStoragePayload } from '../../../lib/cardStoragePayload.js';
+
+const LOCAL_BRIDGE_RECOVERY_REASONS = new Set([
+  'mixed-content',
+  'bridge-missing',
+  'bridge-timeout',
+  'bridge-post-failed',
+]);
 
 // Send-to-card control (Wire mode, Phase 2 step 9 / plan Phase 3). Extracted
 // from PatchBoardScreen.pushToCard + its push* state. The `connected` prop
@@ -53,27 +65,57 @@ export function CardPushControl({
     const cleanHost = retryAttempt?.host || pushHost.trim().toLowerCase() || 'lightweaver.local';
     setCardHostname(cleanHost);
     setPushHost(getCardHostname());
-    const attempt = retryAttempt || (() => {
-      const zones = patchBoardToZones(board, strips);
-      const outputs = (standaloneController?.outputs || []).map((o, i) => ({ id: o.id || `out${i + 1}`, name: o.name || `Output ${i + 1}`, pin: o.pin, pixels: o.pixels }));
-      const totalPixels = chainAddressCount(board, strips);
-      return {
-        host: cleanHost,
-        revision: projectLifecycle.editedRevision,
-        zoneCount: zones.length,
-        pkg: makeCardRuntimePackage({
-          projectId, projectName, mode: 'website-flash',
-          led: { pixels: totalPixels || undefined, colorOrder: standaloneController?.led?.colorOrder, brightnessLimit: standaloneController?.led?.brightnessLimit, outputs: outputs.length ? outputs : undefined },
-          controls: standaloneController?.controls, zones, syncZones: zones.length <= 1,
-        }),
-      };
-    })();
+    let attempt = retryAttempt;
     setWiringTestState('idle');
     setWiringCandidate(null);
-    dispatchAction({ type: 'start', revision: attempt.revision });
-    setPushStatus(`Pushing revision ${attempt.revision} to ${cleanHost}...`);
     setPushFallbackJson(''); setPushFallbackPackage(null);
     try {
+      if (!attempt) {
+        const project = {
+          projectId,
+          projectName,
+          projectRevision: projectLifecycle.editedRevision,
+          strips,
+          patchBoard: board,
+          standaloneController,
+        };
+        prepareCardStoragePayload(prepareCardDeployment(project).runtimePackage);
+        let before;
+        let status;
+        try {
+          [before, status] = await Promise.all([
+            readCardProjectEvidence({ host: cleanHost }),
+            readCardStatusEnvelope({ host: cleanHost }),
+          ]);
+          if (status.cardId && status.cardId !== before.cardId) {
+            throw new CardPushError('wrong-card', 'Card identity changed during install preflight. Nothing was sent.');
+          }
+        } catch (preflightError) {
+          if (!LOCAL_BRIDGE_RECOVERY_REASONS.has(preflightError?.reason)) throw preflightError;
+          const rememberedCard = readPersistedCardIdentity();
+          if (!rememberedCard?.id) {
+            throw new CardPushError('identity-missing', 'Pair this Lightweaver card before creating an installer handoff.');
+          }
+          // A hosted HTTPS Studio cannot independently read local HTTP state
+          // without its card tab. Build a bounded handoff for the exact paired
+          // card, but do not mark it installed until later read-back succeeds.
+          before = { cardId: rememberedCard.id };
+          status = {};
+        }
+        const prepared = prepareCardDeployment(project, {
+          cardId: before.cardId,
+          previousConfig: cardStatusAsConfig(status),
+        });
+        attempt = {
+          host: cleanHost,
+          revision: projectLifecycle.editedRevision,
+          zoneCount: prepared.config.zones.length,
+          pkg: prepared.runtimePackage,
+          prepared,
+        };
+      }
+      dispatchAction({ type: 'start', revision: attempt.revision });
+      setPushStatus(`Sending revision ${attempt.revision} to ${cleanHost}...`);
       const response = await pushConfigToCard(attempt.pkg, { host: attempt.host, allowLayoutChange: true });
       if (response?.state === 'staged' && response.activationId) {
         setWiringCandidate({ activationId: response.activationId, attempt });
@@ -82,16 +124,20 @@ export function CardPushControl({
         setPushStatus('New wiring is ready to test. Your current working setup is still safe.');
         return;
       }
+      setPushStatus('Verifying the exact project on the card…');
+      await waitForCardDeploymentVerification(attempt.prepared, {
+        readEvidence: () => readCardProjectEvidence({ host: attempt.host }),
+      });
       dispatchAction({ type: 'confirm' });
       markProjectInstalled(attempt.revision);
       markCardLookConfirmed({ ...(standaloneController?.defaultLook || {}), syncZones: true });
       failedAttemptRef.current = null;
-      setPushStatus(`Saved revision ${attempt.revision} to card · ${attempt.zoneCount} zone${attempt.zoneCount === 1 ? '' : 's'} at ${cleanHost}`);
+      setPushStatus(`Installed revision ${attempt.revision} on card · ${attempt.zoneCount} zone${attempt.zoneCount === 1 ? '' : 's'} at ${cleanHost}`);
     } catch (err) {
       failedAttemptRef.current = attempt;
       const message = err instanceof CardPushError ? err.message : `Push failed: ${err.message || err}`;
       dispatchAction({ type: 'fail', error: message });
-      if (err instanceof CardPushError && err.reason === 'mixed-content') {
+      if (attempt?.pkg && LOCAL_BRIDGE_RECOVERY_REASONS.has(err?.reason)) {
         setPushStatus('Browser blocked the request. Use the JSON below: connect to the card and paste at its onboard page.');
         setPushFallbackJson(JSON.stringify(attempt.pkg.config, null, 2));
         setPushFallbackPackage(attempt.pkg);
@@ -126,6 +172,10 @@ export function CardPushControl({
     try {
       if (visible) {
         await confirmCardWiringCandidate(wiringCandidate.activationId, { host: wiringCandidate.attempt.host });
+        setPushStatus('Verifying the confirmed wiring on the card…');
+        await waitForCardDeploymentVerification(wiringCandidate.attempt.prepared, {
+          readEvidence: () => readCardProjectEvidence({ host: wiringCandidate.attempt.host }),
+        });
         dispatchAction({ type: 'confirm' });
         markProjectInstalled(wiringCandidate.attempt.revision);
         markCardLookConfirmed({ ...(standaloneController?.defaultLook || {}), syncZones: true });
@@ -147,6 +197,14 @@ export function CardPushControl({
 
   const pushing = action.status === 'pending' && wiringTestState === 'idle';
   const wiringTransactionActive = Boolean(wiringCandidate);
+  const openInstaller = () => {
+    const host = failedAttemptRef.current?.host || getCardHostname();
+    const url = new URL(buildCardConfigHandoffUrl(host, pushFallbackPackage));
+    openLocalCardPage(host, {
+      path: `${url.pathname}${url.search}${url.hash}`,
+      reason: 'card-installer',
+    });
+  };
 
   return (
     <div className="la-card-push">
@@ -156,10 +214,10 @@ export function CardPushControl({
           data-testid="layout-send-to-card"
           disabled={disabled || pushing || wiringTransactionActive}
           onClick={() => pushToCard()}
-          title={connected ? `Save zones to ${pushHost}` : `Card link idle — try ${pushHost} anyway (discovery + fallback)`}
+          title={connected ? `Install this project on ${pushHost}` : `Card link idle — try ${pushHost} anyway (discovery + fallback)`}
         >
           <span className={`la-card-push-dot${connected ? ' on' : ' off'}`}/>
-          <span className="la-card-push-label">{pushing ? `Saving to ${pushHost}…` : 'Save to card'}<small>{connected ? 'Card connected' : 'Card not connected'}</small></span>
+          <span className="la-card-push-label">{pushing ? `Sending to ${pushHost}…` : 'Install on card'}<small>{connected ? 'Ready to install' : 'Connect the card first'}</small></span>
         </button>
         {children}
       </div>
@@ -172,7 +230,7 @@ export function CardPushControl({
             <div className="lw-wire-recovery" role="group" aria-label="Mixed-content recovery">
               <textarea readOnly value={pushFallbackJson} onClick={e => e.target.select()} className="la-card-push-fallback"/>
               <button className="btn" onClick={() => navigator.clipboard?.writeText(pushFallbackJson)}>Copy payload</button>
-              <button className="btn" onClick={() => window.open(buildCardConfigHandoffUrl(failedAttemptRef.current?.host || getCardHostname(), pushFallbackPackage), '_blank', 'noopener')}>Open installer</button>
+              <button className="btn" onClick={openInstaller}>Open installer</button>
             </div>
           )}
           {action.status === 'failed' && <button className="btn" onClick={() => pushToCard(failedAttemptRef.current)}>Retry</button>}
@@ -183,7 +241,7 @@ export function CardPushControl({
           <strong>{wiringTestState === 'testing' ? 'Do you see the expected lights?' : 'Test the new wiring'}</strong>
           <p>{wiringTestState === 'testing' ? 'Check every connected output. Confirm only when the real LEDs match the blue first pixel and red final pixel test.' : 'The current working wiring remains stored until this test succeeds.'}</p>
           {wiringTestState === 'staged' || wiringTestState === 'failed' ? (
-            <div><button className="btn primary" onClick={startWiringTest}>Start 90-second test</button><button className="btn" onClick={() => finishWiringTest(false)}>Cancel change</button></div>
+            <div><button className="btn primary" onClick={startWiringTest}>Start light test</button><button className="btn" onClick={() => finishWiringTest(false)}>Cancel change</button></div>
           ) : wiringTestState === 'testing' ? (
             <div><button className="btn primary" onClick={() => finishWiringTest(true)}>Yes, everything lights correctly</button><button className="btn" onClick={() => finishWiringTest(false)}>No, restore working setup</button></div>
           ) : <p>Working…</p>}
