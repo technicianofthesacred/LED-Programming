@@ -219,20 +219,38 @@ return hsv(n + time * 0.2, 0.8, n);
 Export tab → ↓ WLED ledmap.json
 ```
 
-Upload to your ESP32-S3 via **WLED web UI → Config → LED Preferences → 2D setup → Custom ledmap**. The file maps each LED index to its 2D position. WLED uses this to correctly apply 2D effects to your freeform layout.
+This is an external export for a separate controller running stock WLED. Upload
+it through **WLED web UI → Config → LED Preferences → 2D setup → Custom
+ledmap**. It is not part of the active Lightweaver card install.
 
 Format produced:
 ```json
 {
-  "n": 120,
-  "map": [
-    [0.00, 0.50],
-    [0.02, 0.48],
-    ...
-  ]
+  "width": 16,
+  "height": 9,
+  "map": [0, 1, -1, 2]
 }
 ```
-Index in the array = LED index. Value = [x, y] normalised position.
+
+Each logical grid cell contains the physical LED index. Empty cells are `-1`.
+
+### External coordinate map
+
+```
+Export tab → ↓ coords.json
+```
+
+This artifact contains normalized coordinate pairs in physical draw order:
+
+```json
+{
+  "n": 120,
+  "map": [[0.00, 0.50], [0.02, 0.48]]
+}
+```
+
+Use it with Pixelblaze-style or custom coordinate consumers. It is not a stock
+WLED ledmap and current Lightweaver card firmware does not import it.
 
 **Normalize coords (checked by default)** — maps your bounding box to 0–1. Leave checked unless you have a specific reason to use raw canvas pixels.
 
@@ -264,7 +282,8 @@ Raw index, x, y — one row per LED. Import into any tool that accepts tabular c
 
 ## Saving and loading projects
 
-**Save** — downloads `led-project.json` containing all strip paths, pixel counts, names, colours, and all pattern code. Does not save the reference background SVG.
+**Save** — downloads `led-project.json` containing all strip paths, pixel
+counts, names, colours, pattern code, and the imported reference background SVG.
 
 **Load** — restores strips and patterns from a saved JSON file. The canvas re-renders all strips from the saved path data.
 
@@ -272,9 +291,10 @@ The project file does not include computed pixel positions — those are re-deri
 
 ---
 
-## Hardware connection
+## External WLED connection
 
-This app produces a `ledmap.json` you upload to WLED. It doesn't talk to the hardware directly.
+The mapper can preview against a separate WLED controller and produces a stock
+WLED `ledmap.json`. This is not the current Lightweaver card runtime.
 
 ```
 Physical installation
@@ -309,4 +329,7 @@ Cloned into `reference-repos/` for reference:
 | `PixelblazePatterns/` | Community pattern library — all patterns use `time`, `x`, `y` directly, paste into this app's editor |
 | `WLED-Ledmap-Generator/` | `XYmapper.js` — how WLED's matrix ledmap format works (rectangular grid, not freeform) |
 
-**Note on WLED ledmap formats:** The WLED-Ledmap-Generator uses a rectangular matrix format (`width`, `height`, flat index array) designed for serpentine LED panels. This app uses the freeform format (`[[x,y],...]`) which is what WLED MoonModules uses for custom 2D layouts. Both are valid WLED formats; they serve different use cases.
+**Note on WLED ledmap formats:** Stock WLED uses a rectangular logical grid with
+`width`, `height`, and a flat physical-index array. Coordinate-pair maps belong
+to separate Pixelblaze-style or custom consumers and must not be uploaded as a
+stock WLED ledmap.

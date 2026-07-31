@@ -43,11 +43,20 @@ The customer does not choose a firmware file, flash address, baud rate, or arbit
 
 Studio preview and physical playback are separate:
 
-- **Previewing in Studio** means only the browser preview changed.
-- **Sending to Lightweaver** means the newest intent is pending.
-- **Playing on Lightweaver** appears only after the expected card acknowledges the applied preview.
+- **Saved in Studio** means the browser project is safely stored.
+- **Installed on card** appears only after the expected card independently reads
+  the same project back.
 
-Rapid changes use one latest-only queue. A superseded response cannot move the physical selection backward. If acknowledgement fails, Studio keeps the prior confirmed physical state and says exactly:
+**Test & Install** is the one complete installation experience. **Update card**
+actions in Patterns, Playlist, Layout, and Card open that same experience rather
+than performing independent installs.
+
+Playback-only changes use a short verified update. Output pins, pixel counts,
+segment boundaries, direction, color order, calibration, and current-limit
+changes require the safe physical test. Rapid changes use one latest-only queue.
+A superseded response cannot move the physical selection backward. If
+acknowledgement or read-back fails, Studio keeps the prior confirmed physical
+state and says exactly:
 
 > The Studio preview changed, but the physical lights did not. Reconnect and retry.
 
@@ -76,11 +85,18 @@ An optional microSD card can provide larger recorded sequences:
 /sequences/*.lwseq
 ```
 
-Boot priority is:
+Boot priority is deterministic:
 
-1. valid microSD package;
-2. valid internal-flash configuration;
-3. compiled factory defaults.
+1. a valid, exact-card microSD project, accepted as command-ready;
+2. the last known-good internal-flash project;
+3. factory recovery.
+
+The card mounts microSD before choosing the project and keeps it available for
+sequence playback. Sequence length and digest must match the exported package.
+
+Factory reset clears internal configuration even when no microSD card is
+present. If a card is present, sequence cleanup is best-effort and reported
+separately.
 
 ### Future live host
 

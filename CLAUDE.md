@@ -1,16 +1,16 @@
 ---
 name: lightweaver
 status: active
-stack: [ESP32-S3, WLED, Raspberry Pi 5, Art-Net/Madrix, React, Vite]
-deploy: public Studio at led.mandalacodes.com; local card/WLED/Pi command path
+stack: [ESP32-S3, Lightweaver firmware, React, Vite]
+deploy: public Studio at led.mandalacodes.com; local Lightweaver card command path
 family: installation
-last_reviewed: 2026-07-18
+last_reviewed: 2026-07-31
 ---
 
 # Lightweaver — branded LED installation controller
 
 ## What this is
-Custom LED lighting control platform for laser-cut art installations. **Project name: Lightweaver.** Lighting software: Madrix (Art-Net output). Target: a web interface accessible from phone or browser.
+Custom LED lighting control platform for laser-cut art installations. **Project name: Lightweaver.** The active product uses Lightweaver firmware on an ESP32-S3 card, with Studio accessible from phone or browser.
 
 ## Current plan — ESP32-only (Pi deferred)
 As of 2026-06 the runtime is **ESP32-S3 only**. The card runs the Lightweaver firmware and **serves its own branded scene-selector page (this is the visitor UI)** plus the WLED-compat JSON/WS API at `lightweaver.local` / `192.168.4.1`. The public Studio at `led.mandalacodes.com` is the design/export surface and reaches the card directly on the LAN / via the card-page postMessage bridge. **There is no Raspberry Pi in the runtime path.** A Pi integration is planned for *later* — `lightweaver/server/` (the WLED proxy), `visitor-ui/`, and `docs/pi-hosted-deployment.md` are **kept for that future** but are **not part of the current plan**; don't treat them as the live runtime or invest in them unless the Pi work is explicitly resumed.
@@ -18,15 +18,15 @@ As of 2026-06 the runtime is **ESP32-S3 only**. The card runs the Lightweaver fi
 ## Current contents
 - `research.md` — hardware options (ESP32-S3, WLED firmware, Madrix integration), Art-Net/E1.31 protocols, control architecture, color management
 - `branded-installation-ui.md` — visitor-facing branded UI design spec (captive portal, scene selector)
-- `led-art-mapper/` — Vite app for designing LED strip paths over artwork SVGs; exports `ledmap.json` for WLED
-- `lightweaver/` — React Studio/control app, Pi proxy server, controller package export, and runtime contract tests
+- `led-art-mapper/` — Vite app for designing LED strip paths over artwork SVGs and exporting external geometry formats
+- `lightweaver/` — React Studio/control app, controller package export, runtime contract tests, and deferred Pi proxy
 - `firmware/lightweaver-controller/` — standalone ESP32-S3 Lightweaver card firmware for local playback
 - `docs/deployment-checklist.md` — bench-to-gallery checklist, including code/runtime launch gate
 
 ## Key decisions from research
-- **WLED firmware** recommended for quick start (100+ effects, REST/JSON API, Art-Net support)
-- **Architecture options**: standalone ESP32-S3 card for local playback; WLED on ESP32-S3 with Pi-hosted UI; Madrix sends Art-Net for advanced/live installations
-- **Public UI split**: `led.mandalacodes.com` is the public Studio/setup/support surface. Actual LED commands stay local through the card page, WLED UI, Pi proxy, or another local bridge.
+- **Active runtime**: standalone ESP32-S3 Lightweaver card for local playback.
+- **Deferred options**: WLED, Raspberry Pi hosting, and Madrix/Art-Net remain research and future integration lanes.
+- **Public UI split**: `led.mandalacodes.com` is the public Studio/setup/support surface. Actual LED commands stay local through the card page or its verified local bridge.
 - **Launch gate**: before deployment, run `npm run launch:check` from `lightweaver/`, then complete the hardware and site smoke tests in `docs/deployment-checklist.md`.
 
 ## Project name
@@ -37,24 +37,24 @@ As of 2026-06 the runtime is **ESP32-S3 only**. The card runs the Lightweaver fi
 - **Canonical public Lightweaver UI URL**: `led.mandalacodes.com`.
 - **LED repo GitHub**: `git@github-tech:technicianofthesacred/LED-Programming.git`.
 - **Mandala Codes repo GitHub**: `git@github-tech:technicianofthesacred/mandalacodes.git`.
-- **Deployment split**: the Lightweaver browser UI lives at `led.mandalacodes.com`. Keep the actual WLED command path local, WLED-served, Pi-proxied, or locally bridged unless a local bridge is present, because public HTTPS pages cannot reliably command local HTTP WLED controllers from every phone/browser.
+- **Deployment split**: the Lightweaver browser UI lives at `led.mandalacodes.com`. The active command path stays local through the Lightweaver card page or verified local bridge.
 
 ## Architectural decisions
-- `led-art-mapper/` is the **canonical design tool** (vanilla JS Vite app): pattern editor, LED layout over artwork SVGs, `ledmap.json` export. All zone definitions originate here.
-- `lightweaver/` (React) provides **reusable building blocks** — WLED WebSocket hook, ESP32 Web Serial flasher. To be repurposed / borrowed-from for the visitor UI rather than shipped as-is.
+- `led-art-mapper/` is the standalone geometry tool. Its WLED and coordinate artifacts are external exports, not the active card runtime contract.
+- `lightweaver/` (React) is the public Studio, installer, design, commissioning, and control surface.
 - `visitor-ui/` is a **future Pi-hosted** branded React UI (captive-portal scene selector per `branded-installation-ui.md`). **Not in the current ESP-only plan** — the firmware card page is today's visitor UI. Retained for a future Pi integration; visitor-facing polish goes into the firmware page for now.
 - **Tests** live under `/e2e/` using `@playwright/test`. **Diagnostic scripts** are archived in `/scripts/debug/`.
 
 ## Tools already built
-- `led-art-mapper/` — design tool: draw LED strip paths over artwork, set pixel counts, write live patterns (JS), export `ledmap.json` / FastLED header / CSV
+- `led-art-mapper/` — design tool: draw LED strip paths over artwork, set pixel counts, write live patterns (JS), and export WLED/FastLED/CSV geometry for external consumers
 
 ## Next steps
 - [x] Tooling: led-art-mapper design tool, lightweaver React building blocks, visitor-ui scaffold
 - [x] Operational docs: `docs/deployment-checklist.md`, `docs/hardware-setup.md`, `docs/segments.md`
 - [x] Launch gate: `npm run launch:check` in `lightweaver/` runs core runtime contract tests and production build
-- [x] Flash WLED 0.15.4 onto ESP32-S3 N16R8 (`WLED 0.15.4 ESP32-S3 16MB.bin` in repo root) — flashed and verified on bench 2026-05-24 (see docs/roadmap.md)
-- [ ] Configure Art-Net output from Madrix; verify WLED reception
-- [ ] Define WLED segments matching laser-cut zones; fill in `docs/segments.md`
+- [ ] Complete current signed Lightweaver firmware acceptance on the physical ESP32-S3 card
+- [ ] Complete project read-back, visible-strip, power-cycle, offline, microSD, and Wi-Fi recovery checks
+- [ ] _(deferred)_ Configure WLED/Madrix and Art-Net only when that future lane is explicitly resumed
 - [ ] _(deferred — future Pi integration, not current plan)_ Build out `visitor-ui/` against the WLED JSON API and deploy to the Pi
 
 ## Where to look for…
