@@ -703,14 +703,6 @@ bool addLedsForPin(uint8_t pin, CRGB* start, uint16_t count) {
       return addLedsForOrder<18>(start, count);
     case 21:
       return addLedsForOrder<21>(start, count);
-    case 38:
-      return addLedsForOrder<38>(start, count);
-    case 39:
-      return addLedsForOrder<39>(start, count);
-    case 40:
-      return addLedsForOrder<40>(start, count);
-    case 48:
-      return addLedsForOrder<48>(start, count);
     default:
       return false;
   }

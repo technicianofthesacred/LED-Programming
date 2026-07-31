@@ -1,8 +1,9 @@
 import { CARD_PATTERN_BANK } from './cardPatternBank.js';
+import { CARD_HARDWARE_CONTRACT } from './cardHardwareContract.js';
 import { chainPixelOffsets, chainRowIds } from './patchBoard.js';
 
 export const CARD_RUNTIME_MODES = ['factory-flash', 'website-flash', 'sd-sequence', 'live-host'];
-export const CARD_RUNTIME_MAX_ZONES = 10;
+export const CARD_RUNTIME_MAX_ZONES = CARD_HARDWARE_CONTRACT.maxZones;
 export const CARD_PROJECT_FINGERPRINT_MAX_LENGTH = 64;
 export const CARD_PRODUCTION_JOB_ID_MAX_LENGTH = 96;
 export const CARD_PRODUCTION_JOB_DIGEST_LENGTH = 64;
@@ -11,11 +12,11 @@ export const MIN_PRODUCTION_MAX_MILLIAMPS = 100;
 export const MAX_PRODUCTION_MAX_MILLIAMPS = 20000;
 
 export const CARD_HARDWARE_CAPABILITIES = Object.freeze({
-  maxPixels: 1024,
-  maxOutputs: 4,
-  supportedOutputPins: Object.freeze([16, 17, 18, 21, 38, 39, 40, 48]),
-  maxZones: 10,
-  maxRangesPerZone: 4,
+  maxPixels: CARD_HARDWARE_CONTRACT.maxPixels,
+  maxOutputs: CARD_HARDWARE_CONTRACT.maxOutputs,
+  supportedOutputPins: CARD_HARDWARE_CONTRACT.outputPins,
+  maxZones: CARD_HARDWARE_CONTRACT.maxZones,
+  maxRangesPerZone: CARD_HARDWARE_CONTRACT.maxRangesPerZone,
   assertSupported(config = {}) {
     const led = config.led || config;
     const outputs = Array.isArray(led.outputs) ? led.outputs.filter(output => Number(output?.pixels ?? output?.pixelCount ?? 0) > 0) : [];
@@ -213,7 +214,7 @@ function normalizeZones(zones, totalPixels) {
       customBreathe: Boolean(z.customBreathe),
       customDrift: Boolean(z.customDrift),
       ranges: Array.isArray(z.ranges) && z.ranges.length
-        ? z.ranges.slice(0, 4).map(r => ({
+        ? z.ranges.slice(0, CARD_HARDWARE_CONTRACT.maxRangesPerZone).map(r => ({
             start: clampInt(r.start, 0, 0, Math.max(0, totalPixels - 1)),
             count: clampInt(r.count, 0, 0, totalPixels),
           })).filter(r => r.count > 0)
@@ -317,11 +318,11 @@ function normalizeLed(led = {}) {
     ? configuredOutputs
     : [{ ...DEFAULT_CARD_LED.outputs[0], pixels: requestedPixels }];
   const normalizedOutputs = outputs
-    .slice(0, 4)
+    .slice(0, CARD_HARDWARE_CONTRACT.maxOutputs)
     .map((output, index) => ({
       id: sanitizeId(output.id || `out${index + 1}`),
       name: String(output.name || `Output ${index + 1}`),
-      pin: clampInt(output.pin, [16, 17, 18, 21][index] || 16, 0, 48),
+      pin: clampInt(output.pin, CARD_HARDWARE_CONTRACT.outputPins[index] || CARD_HARDWARE_CONTRACT.outputPins[0], 0, 48),
       pixels: clampInt(output.pixels ?? output.pixelCount, requestedPixels, 1, CARD_HARDWARE_CAPABILITIES.maxPixels),
       direction: ['reverse', 'mixed'].includes(output.direction) ? output.direction : 'forward',
       segments: Array.isArray(output.segments) && output.segments.length

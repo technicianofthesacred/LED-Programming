@@ -8,6 +8,7 @@
 #include "LightweaverConnectivityPolicy.h"
 #include "LightweaverRecipe.h"
 #include "LightweaverConnectivityOrchestrator.h"
+#include "LightweaverHardwareContract.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
@@ -26,6 +27,12 @@ uint8_t* currentLookIndexPtr = nullptr;
 #ifndef LW_WEB_WIFI_ACK_MAX_BODY_BYTES
 #error "LW_WEB_WIFI_ACK_MAX_BODY_BYTES must be configured with the WebServer parser guard"
 #endif
+#ifndef LW_WEB_CONFIG_MAX_BODY_BYTES
+#error "LW_WEB_CONFIG_MAX_BODY_BYTES must be configured with the WebServer parser guard"
+#endif
+#ifndef LW_WEB_CANDIDATE_MAX_BODY_BYTES
+#error "LW_WEB_CANDIDATE_MAX_BODY_BYTES must be configured with the WebServer parser guard"
+#endif
 
 constexpr size_t LW_MAX_CONTROL_BODY_BYTES = 4096;
 uint8_t controlRequestBody[LW_MAX_CONTROL_BODY_BYTES + 1] = {};
@@ -36,6 +43,13 @@ constexpr size_t LW_MAX_RUNTIME_REQUEST_BODY_BYTES = 3968;
 constexpr size_t LW_CANDIDATE_ENVELOPE_BYTES = 14;
 constexpr size_t LW_MAX_CANDIDATE_REQUEST_BODY_BYTES =
   LW_MAX_RUNTIME_REQUEST_BODY_BYTES + LW_CANDIDATE_ENVELOPE_BYTES;
+static_assert(LW_MAX_RUNTIME_REQUEST_BODY_BYTES == LW_CARD_HARDWARE_CONFIG_CAPACITY_BYTES,
+              "runtime request capacity must match the generated hardware contract");
+static_assert(LW_WEB_CONFIG_MAX_BODY_BYTES == LW_CARD_HARDWARE_CONFIG_CAPACITY_BYTES,
+              "parser request capacity must match the generated hardware contract");
+static_assert(LW_WEB_CANDIDATE_MAX_BODY_BYTES ==
+                  LW_CARD_HARDWARE_CONFIG_CAPACITY_BYTES + LW_CANDIDATE_ENVELOPE_BYTES,
+              "candidate parser capacity must match the generated hardware contract");
 uint8_t runtimeRequestBody[LW_MAX_CANDIDATE_REQUEST_BODY_BYTES + 1] = {};
 size_t runtimeRequestBodyLength = 0;
 size_t runtimeRequestExpectedLength = 0;

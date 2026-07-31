@@ -1,0 +1,11 @@
+{
+  "contractVersion": 1,
+  "outputPins": [16, 17, 18, 21],
+  "limits": {
+    "maxOutputs": 4,
+    "maxPixels": 1024,
+    "maxZones": 10,
+    "maxRangesPerZone": 4,
+    "configCapacityBytes": 3968
+  }
+}
