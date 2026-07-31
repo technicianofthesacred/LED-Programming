@@ -54,4 +54,32 @@ export function getAllPixels(strips) {
   return strips.flatMap(s => s.pixels);
 }
 
+/**
+ * Build a physical RGB frame whose address space never changes when a section
+ * is hidden. Unspecified LEDs remain black.
+ *
+ * @param {number} pixelCount
+ * @param {{ index: number }[]} [visiblePixels]
+ * @param {(pixel: object, visibleIndex: number) => {r:number,g:number,b:number}} [colorForPixel]
+ */
+export function createPhysicalFrame(pixelCount, visiblePixels = [], colorForPixel = () => ({ r: 0, g: 0, b: 0 })) {
+  const frame = new Uint8Array(Math.max(0, pixelCount) * 3);
+  visiblePixels.forEach((pixel, visibleIndex) => {
+    const physicalIndex = Number(pixel?.index);
+    if (!Number.isInteger(physicalIndex) || physicalIndex < 0 || physicalIndex >= pixelCount) return;
+    const color = colorForPixel(pixel, visibleIndex) || {};
+    const offset = physicalIndex * 3;
+    frame[offset] = clampByte(color.r);
+    frame[offset + 1] = clampByte(color.g);
+    frame[offset + 2] = clampByte(color.b);
+  });
+  return frame;
+}
+
+function clampByte(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.max(0, Math.min(255, Math.round(numeric)));
+}
+
 if (import.meta.hot) import.meta.hot.accept();

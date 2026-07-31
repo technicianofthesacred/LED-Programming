@@ -10,11 +10,10 @@
  *     Upload via WLED web UI → Config → LED Preferences → 2D matrix → Custom
  *     ledmap (or place /ledmap.json on the controller filesystem).
  *
- *  2. Coordinate map (Lightweaver / Pixelblaze) — a normalized coordinate map:
+ *  2. Coordinate map (external tools / Pixelblaze) — a normalized coordinate map:
  *       { "n": <totalLEDs>, "map": [[x,y], [x,y], ...] }
  *     One [x,y] pair per physical LED in draw order. This is NOT a valid stock
- *     WLED ledmap; it is consumed by Lightweaver firmware / Pixelblaze-style
- *     coordinate mappers.
+ *     WLED ledmap; it is consumed by Pixelblaze-style coordinate mappers.
  *
  * Coordinates are in draw order (strip 0 pixel 0, strip 0 pixel 1, ... strip 1 pixel 0, ...)
  */
@@ -25,7 +24,7 @@
  */
 
 /**
- * Coordinate map (Lightweaver / Pixelblaze): normalized [x,y] pairs in draw order.
+ * Coordinate map: normalized [x,y] pairs in draw order.
  *
  * @param {Pixel[]} pixels
  * @param {ExportOpts} opts
@@ -47,11 +46,10 @@ export function toCoordinateMap(pixels, opts = {}) {
     const ys = coords.map(c => c[1]);
     const minX = Math.min(...xs), maxX = Math.max(...xs);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
-    const rangeX = maxX - minX || 1; // avoid /0 for collinear vertical/horizontal strips
-    const rangeY = maxY - minY || 1;
+    const range = Math.max(maxX - minX, maxY - minY) || 1;
     coords = coords.map(([x, y]) => [
-      (x - minX) / rangeX,
-      (y - minY) / rangeY,
+      (x - minX) / range,
+      (y - minY) / range,
     ]);
   }
 
@@ -99,19 +97,28 @@ export function toWLEDIndexMap(pixels, opts = {}) {
   const ys = sorted.map(p => p.y);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const minY = Math.min(...ys), maxY = Math.max(...ys);
-  const rangeX = (maxX - minX) || 1;
-  const rangeY = (maxY - minY) || 1;
+  const rawRangeX = maxX - minX;
+  const rawRangeY = maxY - minY;
+  const rangeX = rawRangeX || 1;
+  const rangeY = rawRangeY || 1;
 
-  // Choose grid size from aspect ratio. Fit the larger dimension to ~64 cells
-  // by default; derive the shorter side from the aspect ratio.
-  const TARGET = Math.max(2, opts.targetCells || 64);
+  // Keep the virtual matrix proportional but compact. Two cells per physical
+  // LED leaves room to resolve collisions without creating thousands of gaps.
+  const desiredTotal = Math.min(4096, Math.max(n, n * 2));
   let W, H;
-  if (rangeX >= rangeY) {
-    W = TARGET;
-    H = Math.max(1, Math.round(TARGET * (rangeY / rangeX)));
+  if (n === 1) {
+    W = 1;
+    H = 1;
+  } else if (rawRangeY === 0) {
+    W = desiredTotal;
+    H = 1;
+  } else if (rawRangeX === 0) {
+    W = 1;
+    H = desiredTotal;
   } else {
-    H = TARGET;
-    W = Math.max(1, Math.round(TARGET * (rangeX / rangeY)));
+    const aspect = rawRangeX / rawRangeY;
+    H = Math.max(1, Math.round(Math.sqrt(desiredTotal / aspect)));
+    W = Math.max(1, Math.round(desiredTotal / H));
   }
 
   // Guarantee enough cells to hold every LED (handles dense strips on a

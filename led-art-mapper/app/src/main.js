@@ -17,13 +17,19 @@ import { javascript }                                from '@codemirror/lang-java
 import { oneDark }                                   from '@codemirror/theme-one-dark';
 
 import { CanvasManager }                             from './canvas.js';
-import { samplePath, assignIndices }                 from './mapper.js';
+import { samplePath, assignIndices, createPhysicalFrame } from './mapper.js';
 import { compile, evalPixel, _evalErrorState }       from './patterns.js';
 import { PreviewRenderer }                           from './preview.js';
 import { toWLEDIndexMap, toCoordinateMap, toFastLED, toCSV, download } from './export.js';
 import { initFlash }                                 from './flash.js';
 import { PATTERNS }                                  from './patterns-library.js';
 import { calculateStripLengthMeters, DEFAULT_LEDS_PER_METER } from './density.js';
+import {
+  MAPPER_PROJECT_FORMAT,
+  MAPPER_PROJECT_SCHEMA_VERSION,
+  describeMapperProject,
+  validateMapperProject,
+} from './project-format.js';
 
 const _LIBRARY_IDS = new Set(PATTERNS.map(p => p.id));
 
@@ -2266,6 +2272,10 @@ function _tick(ts) {
 
   if (state.compiledFns.size && state.normalisedPixels.length) {
     const pixelCount = state.normalisedPixels.length;
+    const physicalPixelCount = state.strips.reduce(
+      (total, strip) => total + Math.max(0, Number(strip.pixelCount) || 0),
+      0,
+    );
     const stripTimes = state.stripTimes;
 
     // B1: build palette as {r,g,b} 0-1 objects once per frame
@@ -2296,7 +2306,7 @@ function _tick(ts) {
     const beatSin    = (Math.sin(beat * Math.PI * 2) + 1) * 0.5;
 
     // C2: capture last frame
-    const lastFrame = new Uint8Array(pixelCount * 3);
+    const lastFrame = createPhysicalFrame(physicalPixelCount);
 
     // Feature 7: build gamma LUT once per frame (not per pixel)
     const gammaLut = state.gammaEnabled ? _buildGammaLut(state.gammaValue) : null;
@@ -2345,9 +2355,10 @@ function _tick(ts) {
       // Feature 7: gamma correction
       if (gammaLut) { r = gammaLut[r]; g = gammaLut[g]; b = gammaLut[b]; }
 
-      lastFrame[i * 3]     = r;
-      lastFrame[i * 3 + 1] = g;
-      lastFrame[i * 3 + 2] = b;
+      const physicalOffset = pxData.index * 3;
+      lastFrame[physicalOffset]     = r;
+      lastFrame[physicalOffset + 1] = g;
+      lastFrame[physicalOffset + 2] = b;
 
       return { r, g, b };
     };
@@ -2874,6 +2885,8 @@ function _getTooltip() {
 function _serializeProject({ fullPatterns = true } = {}) {
   _saveEditorToPattern();
   const data = {
+    format:            MAPPER_PROJECT_FORMAT,
+    schemaVersion:     MAPPER_PROJECT_SCHEMA_VERSION,
     version:           3,
     svgSource:         state._svgSource ?? null,
     strips:            state.strips.map(({ pixels: _px, ...s }) => s),
@@ -2915,6 +2928,17 @@ async function loadProject(file) {
   let data;
   try { data = JSON.parse(await file.text()); }
   catch { showToast('Could not parse project file.', 'warn'); return; }
+
+  const validation = validateMapperProject(data);
+  if (!validation.ok) {
+    showToast(validation.reason, 'warn');
+    return;
+  }
+  const legacyNote = validation.legacy ? ' Legacy file: it will be upgraded when saved.' : '';
+  const shouldLoad = await showConfirm(
+    `Load this LED Mapper project?\n${describeMapperProject(data)}.${legacyNote}\n\nYour current canvas will be replaced.`,
+  );
+  if (!shouldLoad) return;
 
   canvasManager.clearCanvas();
   state.strips = [];
@@ -4396,7 +4420,7 @@ document.getElementById('btn-export-wled').addEventListener('click', () => {
 document.getElementById('btn-export-coords')?.addEventListener('click', () => {
   const pixels = _allWorldPixels();
   if (!pixels.length) { showToast('No sections defined.', 'warn'); return; }
-  // Normalized [x,y] coordinate map for Lightweaver / Pixelblaze.
+  // Normalized [x,y] coordinate map for external coordinate-aware tools.
   download(toCoordinateMap(pixels, _exportOpts()), 'coords.json');
 });
 document.getElementById('btn-export-fastled').addEventListener('click', () => {
