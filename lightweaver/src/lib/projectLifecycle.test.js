@@ -10,8 +10,19 @@ import {
   markInstalled,
   markPersisted,
   markRestored,
+  replaceProjectLifecycle,
   replaceProjectSafely,
 } from './projectLifecycle.js';
+
+function exactInstallation(revision) {
+  return {
+    revision,
+    generation: 0,
+    cardId: 'lw-aabbccddeeff',
+    projectRevision: 7,
+    projectFingerprint: 'a1b2c3d4e5f60708',
+  };
+}
 
 test('edits are distinct from browser, file, card, and recovery persistence', () => {
   let state = createProjectLifecycle();
@@ -28,7 +39,7 @@ test('edits are distinct from browser, file, card, and recovery persistence', ()
   state = markPersisted(state, 'file');
   assert.equal(lifecycleLabel(state), 'File downloaded');
 
-  state = markInstalled(state);
+  state = markInstalled(state, exactInstallation(state.editedRevision));
   assert.equal(lifecycleLabel(state), 'Installed on card');
   state = markEdited(state);
   assert.equal(lifecycleLabel(state), 'Unsaved changes');
@@ -66,27 +77,37 @@ test('saving a restored project without edits releases the guard', () => {
 
 test('lifecycle record captures dirty/persisted/installed truthfully', () => {
   assert.deepEqual(lifecycleRecordFromState(createProjectLifecycle()), {
-    version: 1, dirty: false, persistedDestination: null, installed: false,
+    version: 2, dirty: false, persistedDestination: null, installation: null,
   });
 
   const dirty = markEdited(createProjectLifecycle());
   assert.deepEqual(lifecycleRecordFromState(dirty), {
-    version: 1, dirty: true, persistedDestination: null, installed: false,
+    version: 2, dirty: true, persistedDestination: null, installation: null,
   });
 
   const saved = markPersisted(dirty, 'browser');
   assert.deepEqual(lifecycleRecordFromState(saved), {
-    version: 1, dirty: false, persistedDestination: 'browser', installed: false,
+    version: 2, dirty: false, persistedDestination: 'browser', installation: null,
   });
 
   const staleSave = markEdited(saved);
   assert.deepEqual(lifecycleRecordFromState(staleSave), {
-    version: 1, dirty: true, persistedDestination: null, installed: false,
+    version: 2, dirty: true, persistedDestination: null, installation: null,
   });
 
-  const installed = markInstalled(markPersisted(staleSave, 'file'));
+  const installed = markInstalled(
+    markPersisted(staleSave, 'file'),
+    exactInstallation(staleSave.editedRevision),
+  );
   assert.deepEqual(lifecycleRecordFromState(installed), {
-    version: 1, dirty: false, persistedDestination: 'file', installed: true,
+    version: 2,
+    dirty: false,
+    persistedDestination: 'file',
+    installation: {
+      cardId: 'lw-aabbccddeeff',
+      projectRevision: 7,
+      projectFingerprint: 'a1b2c3d4e5f60708',
+    },
   });
 
   const restoredUnsaved = markRestored(createProjectLifecycle());
@@ -101,11 +122,11 @@ test('boot lifecycle from a record: saved states survive reload, dirty ones rest
   assert.equal(lifecycleLabel(savedBoot), 'Saved in browser');
   assert.equal(hasUnsavedChanges(savedBoot), false);
 
-  // Installed + saved keeps the stronger label.
+  // A legacy installed flag is retained only as unverified history.
   const installedBoot = lifecycleForRestoredProject({
     version: 1, dirty: false, persistedDestination: 'file', installed: true,
   });
-  assert.equal(lifecycleLabel(installedBoot), 'Installed on card');
+  assert.equal(lifecycleLabel(installedBoot), 'Previously installed');
   assert.equal(hasUnsavedChanges(installedBoot), false);
 
   // Dirty before reload → restored-unsaved (guarded) after.
@@ -130,6 +151,99 @@ test('boot lifecycle from a record: saved states survive reload, dirty ones rest
   assert.equal(hasUnsavedChanges(untouched), false);
 });
 
+test('installed lifecycle records bind exact card and project identity but reload as unverified', () => {
+  const installation = {
+    revision: 0,
+    generation: 0,
+    cardId: 'lw-aabbccddeeff',
+    projectRevision: 7,
+    projectFingerprint: 'a1b2c3d4e5f60708',
+  };
+  const installed = markInstalled(createProjectLifecycle(), installation);
+  assert.equal(lifecycleLabel(installed), 'Installed on card');
+  assert.deepEqual(lifecycleRecordFromState(installed), {
+    version: 2,
+    dirty: false,
+    persistedDestination: null,
+    installation: {
+      cardId: installation.cardId,
+      projectRevision: installation.projectRevision,
+      projectFingerprint: installation.projectFingerprint,
+    },
+  });
+
+  const restored = lifecycleForRestoredProject(lifecycleRecordFromState(installed));
+  assert.equal(lifecycleLabel(restored), 'Previously installed');
+  assert.deepEqual(restored.installation, {
+    cardId: installation.cardId,
+    projectRevision: installation.projectRevision,
+    projectFingerprint: installation.projectFingerprint,
+    verified: false,
+  });
+
+  const reverified = markInstalled(restored, installation);
+  assert.equal(lifecycleLabel(reverified), 'Installed on card');
+});
+
+test('legacy installed records remain compatible without claiming a current verified install', () => {
+  const restored = lifecycleForRestoredProject({
+    version: 1,
+    dirty: false,
+    persistedDestination: 'file',
+    installed: true,
+  });
+
+  assert.equal(lifecycleLabel(restored), 'Previously installed');
+  assert.equal(restored.installation.verified, false);
+  assert.equal(hasUnsavedChanges(restored), false);
+});
+
+test('replacement generation rejects missing and stale async install acknowledgements even when revisions collide', () => {
+  const original = createProjectLifecycle();
+  const replaced = replaceProjectLifecycle(original);
+  assert.equal(original.editedRevision, 0);
+  assert.equal(replaced.editedRevision, 0);
+  assert.equal(replaced.generation, original.generation + 1);
+
+  const missingGeneration = markInstalled(replaced, {
+    ...exactInstallation(0),
+    generation: undefined,
+  });
+  assert.deepEqual(missingGeneration, replaced);
+
+  const staleGeneration = markInstalled(replaced, {
+    ...exactInstallation(0),
+    generation: original.generation,
+  });
+  assert.deepEqual(staleGeneration, replaced);
+
+  const currentGeneration = markInstalled(replaced, {
+    ...exactInstallation(0),
+    generation: replaced.generation,
+  });
+  assert.equal(lifecycleLabel(currentGeneration), 'Installed on card');
+});
+
+test('dirty installed lifecycle records retain unverified install history and the recovery guard', () => {
+  const edited = markEdited(createProjectLifecycle());
+  const installed = markInstalled(edited, {
+    ...exactInstallation(edited.editedRevision),
+    generation: edited.generation,
+  });
+  const record = lifecycleRecordFromState(installed);
+  assert.equal(record.dirty, true);
+  assert.deepEqual(record.installation, {
+    cardId: 'lw-aabbccddeeff',
+    projectRevision: 7,
+    projectFingerprint: 'a1b2c3d4e5f60708',
+  });
+
+  const restored = lifecycleForRestoredProject(record);
+  assert.equal(lifecycleLabel(restored), 'Previously installed');
+  assert.equal(restored.installation.verified, false);
+  assert.equal(hasUnsavedChanges(restored), true);
+});
+
 test('failed validation leaves the project and undo history untouched', async () => {
   const current = { name: 'Current' };
   const history = ['edit'];
@@ -150,14 +264,15 @@ test('card acknowledgement installs the requested revision, not a newer edit', (
   let state = markEdited(createProjectLifecycle());
   const requestedRevision = state.editedRevision;
   state = markEdited(state);
-  state = markInstalled(state, requestedRevision);
+  state = markInstalled(state, exactInstallation(requestedRevision));
   assert.equal(state.installedRevision, 1);
   assert.equal(state.editedRevision, 2);
   assert.equal(lifecycleLabel(state), 'Unsaved changes');
 });
 
 test('installing the current revision does not count as saving the project', () => {
-  const installedOnly = markInstalled(markEdited(createProjectLifecycle()));
+  const edited = markEdited(createProjectLifecycle());
+  const installedOnly = markInstalled(edited, exactInstallation(edited.editedRevision));
   assert.equal(hasUnsavedChanges(installedOnly), true);
   assert.equal(lifecycleLabel(installedOnly), 'Installed on card');
 });

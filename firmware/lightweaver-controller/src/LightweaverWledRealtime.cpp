@@ -5,6 +5,7 @@
 
 #include "LightweaverFrameSource.h"
 #include "LightweaverConnectivityPolicy.h"
+#include "LightweaverWledRealtimePolicy.h"
 
 // WLED realtime UDP listens on port 21324 by default.
 static constexpr uint16_t WLED_REALTIME_PORT = 21324;
@@ -151,16 +152,19 @@ void handleWledRealtime() {
     int pixels = payload / 3;
     if (pixels > g_totalPixels) pixels = g_totalPixels;
 
+    // Capture ownership before claim: a partial frame is only a subset update
+    // when this same source already owns the canvas. On a new epoch the tail
+    // must be black, never stale pixels from Art-Net or internal playback.
+    FrameSource sourceBeforeClaim = frameSourceActive();
+    bool sourceWasStreaming = frameSourceIsStreaming();
     // Skip this frame if a different live source (e.g. Art-Net) owns the canvas.
     if (!frameSourceClaim(FRAME_WLED_REALTIME)) continue;
 
-    const uint8_t* p = buf + 2;
-    for (int i = 0; i < pixels; i++) {
-      g_leds[i].r = p[0];
-      g_leds[i].g = p[1];
-      g_leds[i].b = p[2];
-      p += 3;
-    }
+    applyWledRealtimeDrgb(
+        g_leds, g_totalPixels, buf + 2, pixels,
+        wledRealtimeShouldClearTail(
+            uint8_t(sourceBeforeClaim), uint8_t(FRAME_WLED_REALTIME),
+            sourceWasStreaming));
 
     frameSourceMarkExternal(FRAME_WLED_REALTIME);
   }

@@ -404,7 +404,16 @@ export function createCardFrameStream({
       // flight. Its acknowledgement must not revive or mark this stream
       // healthy after it has yielded.
       if (!active || yielded || (ownership && !ownership.isOwner())) return;
-      if (result && result.wsOpen === false) {
+      if (result?.dropped === true) {
+        droppedFrames += 1;
+        const error = new Error('The newest frame was dropped because the card connection is congested.');
+        error.reason = result.reason || 'transport-congested';
+        noteFailure(error);
+      } else if (result && (result.ok === false || result.relayed === false || result.delivered === false)) {
+        const error = new Error(result.error || 'The card page did not relay the frame to the LEDs.');
+        error.reason = result.reason || (result.wsOpen === false ? 'relay-socket-closed' : 'relay-send-failed');
+        noteFailure(error);
+      } else if (result && result.wsOpen === false) {
         // F1 contract: the relay accepted the postMessage but its socket to
         // the card was closed — the frame did NOT reach the LEDs.
         const error = new Error('The card page could not reach the card (its socket to the card is closed).');

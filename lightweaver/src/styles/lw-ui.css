@@ -263,7 +263,7 @@
 
 @media (prefers-reduced-motion: no-preference) {
   .lwui-meter-fill {
-    transition: width 0.25s ease, background-color 0.2s ease;
+    transition: background-color 0.2s ease;
   }
 }
 

@@ -23,7 +23,7 @@ import {
   normalizeSavedLooks,
   normalizeSectionVisualLook,
 } from '../lib/sectionLookModel.js';
-import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
+import { prepareCardDeployment, waitForCardDeploymentVerification } from '../lib/cardDeployment.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
 import { DEFAULT_CIRCLE_SECTION_COUNT } from '../lib/defaultCircleLayout.js';
 import {
@@ -32,7 +32,8 @@ import {
   readStoredCardHost,
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
-import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard } from '../lib/cardPushClient.js';
+import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard, readCardProjectEvidence } from '../lib/cardPushClient.js';
+import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
 import { pushLiveHardwareToCard } from '../lib/cardLiveControl.js';
 import { downloadJsonFile } from '../lib/downloadFile.js';
 import {
@@ -200,10 +201,18 @@ const SettingsFieldContext = createContext(null);
     // ── Derived card / hardware data (mirrors the old ChipScreen) ──────
     const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
     const zones = useMemo(() => patchBoardToZones(board, strips), [board, strips]);
-    const runtimePackage = useMemo(
-      () => buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: board, standaloneController }),
-      [projectId, projectName, strips, board, standaloneController],
+    const preparedDeployment = useMemo(
+      () => prepareCardDeployment({
+        projectId,
+        projectName,
+        projectRevision: projectLifecycle.editedRevision,
+        strips,
+        patchBoard: board,
+        standaloneController,
+      }),
+      [projectId, projectName, projectLifecycle.editedRevision, strips, board, standaloneController],
     );
+    const runtimePackage = preparedDeployment.runtimePackage;
     const config = runtimePackage.config;
     const configJson = useMemo(() => JSON.stringify(config, null, 2), [config]);
     const safeProjectName = (projectName || 'lightweaver-piece').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
@@ -287,7 +296,7 @@ const SettingsFieldContext = createContext(null);
         .then(response => {
           if (seq !== liveHardwareSeq.current) return;
           setStatusKind('ok');
-          setStatus(`Color order is live on the card: ${response.colorOrder || colorOrder}. Save to card to keep it after restart.`);
+          setStatus(`Color order is live on the card: ${response.colorOrder || colorOrder}. Install on card to keep it after restart.`);
         })
         .catch(() => {
           if (seq !== liveHardwareSeq.current) return;
@@ -298,18 +307,35 @@ const SettingsFieldContext = createContext(null);
 
     const pushDirect = async () => {
       const requestedRevision = projectLifecycle.editedRevision;
+      const requestedGeneration = projectLifecycle.generation;
       dispatchCardWrite({ type: 'start', revision: requestedRevision });
       setStatusKind('');
       setStatus(`Sending to ${cardHostToUrl(cardHost)}...`);
       try {
+        prepareCardStoragePayload(runtimePackage);
+        const before = await readCardProjectEvidence({ host: cardHost });
         const response = await pushConfigToCard(runtimePackage, { host: cardHost, timeoutMs: 6000, reboot: 'if-needed', allowLayoutChange: true });
-        markProjectInstalled(requestedRevision);
+        if (response?.state === 'staged') {
+          throw new Error('The card kept this hardware change staged. Open Test & Install and confirm it on the real LEDs before it can be installed.');
+        }
+        setStatus('Verifying the exact project on the card…');
+        const exactPrepared = { ...preparedDeployment, cardId: before.cardId };
+        const verification = await waitForCardDeploymentVerification(exactPrepared, {
+          readEvidence: () => readCardProjectEvidence({ host: cardHost }),
+        });
+        markProjectInstalled({
+          revision: requestedRevision,
+          generation: requestedGeneration,
+          cardId: verification.cardId,
+          projectRevision: exactPrepared.config.projectRevision,
+          projectFingerprint: exactPrepared.config.projectFingerprint,
+        });
         markCardLookConfirmed({ ...defaultLook, syncZones: true });
         dispatchCardWrite({ type: 'confirm' });
         setStatusKind('ok');
         setStatus(response.rebooting
-          ? 'Saved on card. Rebooting now so the LED output layout takes effect.'
-          : 'Saved on card.');
+          ? 'Installed on card. Rebooting now so the LED output layout takes effect.'
+          : 'Installed on card.');
       } catch (error) {
         dispatchCardWrite({ type: 'fail', error: error?.message });
         setStatusKind('err');
@@ -502,9 +528,9 @@ const SettingsFieldContext = createContext(null);
                   <Row label="Card address" hint="The card's name on your WiFi">
                     <FieldInput className="pm-input" value={cardHost} onChange={(e) => persistHost(e.target.value)} spellCheck={false} autoCapitalize="off" autoCorrect="off" placeholder="lightweaver.local" />
                   </Row>
-                  <Row label="Write to card" hint="Save this setup onto the chip" stack>
+                  <Row label="Install on card" hint="Install and verify this setup on the chip" stack>
                     <div className="set-actions">
-                      {directPushAvailable && <button className="btn" onClick={pushDirect} disabled={cardWrite.conflictsDisabled}>{cardWrite.status === 'pending' ? 'Saving…' : cardWrite.status === 'failed' ? 'Retry save' : 'Save to card'}</button>}
+                      {directPushAvailable && <button className="btn" onClick={pushDirect} disabled={cardWrite.conflictsDisabled}>{cardWrite.status === 'pending' ? 'Sending…' : cardWrite.status === 'failed' ? 'Retry install' : 'Install on card'}</button>}
                       {!directPushAvailable && <button className="btn" onClick={openCardInstaller}>{I.open}Open card installer</button>}
                       <button className="btn ghost-sm" onClick={copyConfig}>{I.copy}Copy settings</button>
                       <button className="btn ghost-sm" onClick={() => { const result = openLocalCardPage(cardHost); if (!result.ok && result.reason === 'popup-blocked') { setStatusKind('err'); setStatus('The browser blocked the card window. Allow popups for Studio, then try again.'); } }}>{I.open}Open card page</button>

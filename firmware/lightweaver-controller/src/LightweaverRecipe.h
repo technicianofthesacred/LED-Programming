@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "LightweaverHardwareContract.h"
+
 namespace lightweaver {
 
 constexpr uint8_t LW_RECIPE_SCHEMA_VERSION = 1;
@@ -13,6 +15,8 @@ constexpr uint8_t LW_RECIPE_MAX_TRANSFORMS = 4;
 constexpr uint8_t LW_RECIPE_MAX_MODULATORS = 2;
 constexpr uint8_t LW_RECIPE_MAX_ID_BYTES = 64;
 constexpr size_t LW_RECIPE_MAX_CONFIG_BYTES = 3968;
+static_assert(LW_RECIPE_MAX_CONFIG_BYTES == LW_CARD_HARDWARE_CONFIG_CAPACITY_BYTES,
+              "recipe capacity must match the generated hardware contract");
 constexpr uint32_t LW_RECIPE_MAX_OPERATIONS_PER_FRAME = 250000;
 constexpr uint16_t LW_RECIPE_MAX_STATE_BYTES = 2048;
 constexpr uint8_t LW_RECIPE_REGISTRY_SIZE = 32;

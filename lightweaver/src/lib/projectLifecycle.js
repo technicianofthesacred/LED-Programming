@@ -1,8 +1,12 @@
 export function createProjectLifecycle(initial = {}) {
   return {
+    generation: Number.isSafeInteger(initial.generation) && initial.generation >= 0
+      ? initial.generation
+      : 0,
     editedRevision: initial.editedRevision ?? 0,
     persistence: initial.persistence ?? null,
     installedRevision: initial.installedRevision ?? null,
+    installation: initial.installation ?? null,
     // True when this project was restored from the autosave recovery copy at
     // boot and has not been replaced since. A restored-but-never-saved project
     // is NOT dirty (nothing changed since the copy), but it still guards
@@ -21,7 +25,40 @@ export function markPersisted(state, destination, revision = state.editedRevisio
 }
 
 export function markInstalled(state, revision = state.editedRevision) {
-  return { ...state, installedRevision: revision };
+  const source = revision && typeof revision === 'object'
+    ? revision
+    : { revision };
+  if (!Number.isSafeInteger(source.generation) || source.generation !== state.generation) {
+    return state;
+  }
+  const installedRevision = Number.isSafeInteger(source.revision)
+    ? source.revision
+    : state.editedRevision;
+  const cardId = String(source.cardId || '').trim();
+  const projectRevision = Number(source.projectRevision);
+  const projectFingerprint = String(source.projectFingerprint || '').trim().toLowerCase();
+  const exactIdentity = Boolean(
+    cardId
+    && Number.isSafeInteger(projectRevision)
+    && projectRevision >= 0
+    && /^[a-f0-9]{16,64}$/.test(projectFingerprint),
+  );
+  return {
+    ...state,
+    installedRevision,
+    installation: {
+      cardId,
+      projectRevision: Number.isSafeInteger(projectRevision) ? projectRevision : null,
+      projectFingerprint,
+      verified: source.verified === false ? false : exactIdentity,
+    },
+  };
+}
+
+export function replaceProjectLifecycle(state) {
+  const generation = state.generation + 1;
+  if (!Number.isSafeInteger(generation)) throw new Error('Project lifecycle generation overflow');
+  return createProjectLifecycle({ generation });
 }
 
 export function markRestored(state) {
@@ -30,7 +67,8 @@ export function markRestored(state) {
 
 export function lifecycleLabel(state) {
   const revision = state.editedRevision;
-  if (state.installedRevision === revision) return 'Installed on card';
+  if (state.installedRevision === revision && state.installation?.verified === true) return 'Installed on card';
+  if (state.installedRevision === revision && state.installation) return 'Previously installed';
   if (state.persistence?.revision === revision) {
     if (state.persistence.destination === 'browser') return 'Saved in browser';
     if (state.persistence.destination === 'file') return 'File downloaded';
@@ -55,17 +93,26 @@ export function hasUnsavedChanges(state) {
 // instead of always claiming "Unsaved changes". Revisions are intentionally
 // NOT persisted — after a reload the restored content IS revision 0.
 
-export const PROJECT_LIFECYCLE_RECORD_VERSION = 1;
+export const PROJECT_LIFECYCLE_RECORD_VERSION = 2;
 
 export function lifecycleRecordFromState(state) {
   const persisted = state.persistence?.revision === state.editedRevision
     ? state.persistence.destination
     : null;
+  const currentInstallation = state.installedRevision === state.editedRevision && state.installation
+    ? {
+        cardId: String(state.installation.cardId || ''),
+        projectRevision: Number.isSafeInteger(state.installation.projectRevision)
+          ? state.installation.projectRevision
+          : null,
+        projectFingerprint: String(state.installation.projectFingerprint || ''),
+      }
+    : null;
   return {
     version: PROJECT_LIFECYCLE_RECORD_VERSION,
     dirty: hasUnsavedChanges(state),
     persistedDestination: persisted === 'browser' || persisted === 'file' ? persisted : null,
-    installed: state.installedRevision !== null && state.installedRevision === state.editedRevision,
+    installation: currentInstallation,
   };
 }
 
@@ -73,15 +120,39 @@ export function lifecycleRecordFromState(state) {
 // trustworthy record (or with a dirty one) the restore is "restored, unsaved":
 // clean label, but still guarded against silent discard.
 export function lifecycleForRestoredProject(record = null) {
-  if (record && record.version === PROJECT_LIFECYCLE_RECORD_VERSION && record.dirty !== true) {
-    if (record.persistedDestination === 'browser' || record.persistedDestination === 'file') {
-      let state = markPersisted(markRestored(createProjectLifecycle()), record.persistedDestination);
-      if (record.installed === true) state = markInstalled(state);
-      return state;
+  if (record && record.version === PROJECT_LIFECYCLE_RECORD_VERSION) {
+    let state = record.dirty === true
+      ? markRestored(createProjectLifecycle())
+      : createProjectLifecycle();
+    if (record.dirty !== true && (record.persistedDestination === 'browser' || record.persistedDestination === 'file')) {
+      state = markPersisted(markRestored(state), record.persistedDestination);
     }
+    if (record.installation && typeof record.installation === 'object') {
+      state = markInstalled(state, {
+        ...record.installation,
+        revision: state.editedRevision,
+        generation: state.generation,
+        verified: false,
+      });
+    }
+    if (record.dirty === true || state.persistence || state.installation) return state;
     // Clean with nothing persisted anywhere ⇒ the autosave held an untouched
     // new project. Reloading an untouched app stays "New project" (no guard).
-    return createProjectLifecycle();
+    return state;
+  }
+  if (record?.version === 1 && record.dirty !== true) {
+    let state = createProjectLifecycle();
+    if (record.persistedDestination === 'browser' || record.persistedDestination === 'file') {
+      state = markPersisted(markRestored(state), record.persistedDestination);
+    }
+    if (record.installed === true) {
+      state = markInstalled(state, {
+        revision: state.editedRevision,
+        generation: state.generation,
+        verified: false,
+      });
+    }
+    return state;
   }
   return markRestored(createProjectLifecycle());
 }

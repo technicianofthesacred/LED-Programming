@@ -5,6 +5,7 @@ import { pushConfigToCard, readCardProjectEvidence, readCardStatusEnvelope } fro
 import {
   activateAndWaitForCardWiring,
   confirmCardWiringCandidate,
+  getCardWiringStatus,
   readCardWiringCandidateEvidence,
   rollbackCardWiringCandidate,
 } from '../../lib/cardWiringSafety.js';
@@ -43,6 +44,7 @@ import {
   claimCardRestoration,
   clearCardCommissioning,
   completeCardInstall,
+  commissioningFlowMatchesProject,
   confirmCardSetupNetworkJoined,
   markCardProjectRestored,
   preflightCardCommissioningMutation,
@@ -79,6 +81,56 @@ function runtimePackageFromSnapshot(snapshot = {}, identity = {}) {
     wiring: snapshot.layout?.wiring || null,
     standaloneController: snapshot.devices?.standaloneController || {},
   });
+}
+
+function finalOutputs(outputs = []) {
+  return outputs.map(output => ({
+    id: String(output?.id || ''),
+    pin: Number(output?.pin),
+    pixels: Number(output?.pixels),
+    segments: (output?.segments || []).map(segment => ({
+      id: String(segment?.id || ''),
+      count: Number(segment?.count),
+      direction: String(segment?.direction || 'forward'),
+    })),
+  }));
+}
+
+export function assertCommissioningFinalWiringStatus({
+  activationId,
+  confirmation,
+  status,
+  flow,
+  expectedWiring,
+} = {}) {
+  const fail = detail => {
+    throw new Error(`Final wiring read-back did not match the confirmed Studio project: ${detail}`);
+  };
+  if (!activationId || confirmation?.state !== 'known-good' || confirmation?.activationId !== activationId) {
+    fail('the confirm response did not belong to the active wiring transaction');
+  }
+  if (status?.app !== 'Lightweaver' || status?.state !== 'known-good' || status?.activationId) {
+    fail('the independent GET did not return a final known-good Lightweaver status');
+  }
+  if (status.cardId !== flow?.expectedCard?.id
+    || status.firmwareVersion !== flow?.expectedCard?.firmwareVersion
+    || status.buildId !== flow?.expectedCard?.buildId) {
+    fail('card or firmware identity changed');
+  }
+  if (status.projectRevision !== flow?.project?.revision
+    || status.projectFingerprint !== flow?.project?.fingerprint) {
+    fail('project revision or project fingerprint changed');
+  }
+  if (!expectedWiring || status.wiringRevision !== expectedWiring.wiringRevision
+    || status.wiringDigest !== expectedWiring.wiringDigest) {
+    fail('wiring revision or digest changed');
+  }
+  if (status.colorOrder !== expectedWiring.colorOrder) fail('LED color order changed');
+  if (status.maxMilliamps !== expectedWiring.maxMilliamps) fail('aggregate current limit changed');
+  if (JSON.stringify(finalOutputs(status.outputs)) !== JSON.stringify(finalOutputs(expectedWiring.outputs))) {
+    fail('physical outputs changed');
+  }
+  return true;
 }
 
 function commissioningMarkerFrame(snapshot = {}) {
@@ -138,7 +190,29 @@ export function CardCommissioningPanel({
   readProjectEvidence = readCardProjectEvidence,
   readCandidateEvidence = readCardWiringCandidateEvidence,
 }) {
-  const { markProjectInstalled } = useProject();
+  const { projectLifecycle, serializeProject, markProjectInstalled } = useProject();
+  const projectAuthorityRef = useRef(null);
+  projectAuthorityRef.current = {
+    generation: projectLifecycle.generation,
+    revision: projectLifecycle.editedRevision,
+    restored: projectLifecycle.restored,
+    serializeProject,
+  };
+  const markCommissioningProjectInstalled = (sourceFlow, installation, requestedGeneration) => {
+    const current = projectAuthorityRef.current;
+    if (current.generation !== requestedGeneration || !commissioningFlowMatchesProject(sourceFlow, {
+      project: current.serializeProject(),
+      revision: current.revision,
+      generation: current.generation,
+      restored: current.restored,
+    })) return false;
+    markProjectInstalled({
+      ...installation,
+      revision: current.revision,
+      generation: requestedGeneration,
+    });
+    return true;
+  };
   const [initialState] = useState(() => inspectCardCommissioning());
   const [flow, setFlow] = useState(initialState.flow);
   const [restoreState, setRestoreState] = useState('idle');
@@ -156,6 +230,10 @@ export function CardCommissioningPanel({
     : initialState.error === 'invalid-lease'
       ? 'A saved card restore claim was invalid or stale and has been cleared. Verify the same card, then retry.'
     : '');
+  const hasAuthoritativePendingWiring = Boolean(
+    flow?.project?.pendingWiring
+    && flow.project.wiringEvidenceState !== 'legacy-inconclusive',
+  );
 
   useEffect(() => {
     const sync = () => {
@@ -445,6 +523,7 @@ export function CardCommissioningPanel({
   if (!flow) return <div className="card-commissioning" aria-live="polite"><CardCommissioningSteps stage="connect-card" />{failure && <p className="card-connection-failure" role="alert">{failure}</p>}</div>;
 
   const restore = async () => {
+    const requestedGeneration = projectLifecycle.generation;
     if (restoreState === 'working' || !flow.cardAcknowledgedAt) return;
     if (!restorePreflight.ok) {
       setFailure('Checking card. Reconnect the exact installed card before restoring the saved project.');
@@ -486,7 +565,11 @@ export function CardCommissioningPanel({
           const next = markCardProjectRestored(flow, evidence);
           adoptCommissionedCardBridgeIdentity(flow.flowId);
           await writeCardCommissioning(next);
-          markProjectInstalled(flow.project.revision);
+          markCommissioningProjectInstalled(flow, {
+            cardId: flow.expectedCard.id,
+            projectRevision: flow.project.revision,
+            projectFingerprint: flow.project.fingerprint,
+          }, requestedGeneration);
           setFlow(next);
           setRestoreState('complete');
           return;
@@ -554,7 +637,11 @@ export function CardCommissioningPanel({
       const next = markCardProjectRestored(flow, evidence);
       adoptCommissionedCardBridgeIdentity(flow.flowId);
       await writeCardCommissioning(next);
-      markProjectInstalled(flow.project.revision);
+      markCommissioningProjectInstalled(flow, {
+        cardId: flow.expectedCard.id,
+        projectRevision: flow.project.revision,
+        projectFingerprint: flow.project.fingerprint,
+      }, requestedGeneration);
       setFlow(next);
       setRestoreState('complete');
     } catch (error) {
@@ -711,8 +798,13 @@ export function CardCommissioningPanel({
   };
 
   const finishLightCheck = async visible => {
+    const requestedGeneration = projectLifecycle.generation;
     const activationId = flow.project.pendingActivationId;
     if (lightCheckState !== 'testing') return;
+    if (visible && activationId && !hasAuthoritativePendingWiring) {
+      setFailure('This older setup lacks exact wiring evidence. Restore the working setup, then send and test the project again.');
+      return;
+    }
     setFailure('');
     setLightCheckNotice('');
     setLightCheckState(visible ? 'confirming' : 'restoring');
@@ -741,9 +833,26 @@ export function CardCommissioningPanel({
           : confirmCardWiringCandidate;
         mutationAuthority.assertAuthority();
         const status = await confirm(activationId, { host: mutationAuthority.host });
-        if (status?.state !== 'known-good' || (status?.activationId && status.activationId !== activationId)) {
-          throw new Error('The card did not confirm the exact temporary wiring.');
-        }
+        const readFinalStatus = typeof window.__LW_READ_FINAL_COMMISSIONING_WIRING_FOR_TEST__ === 'function'
+          ? window.__LW_READ_FINAL_COMMISSIONING_WIRING_FOR_TEST__
+          : getCardWiringStatus;
+        const finalStatus = await readFinalStatus({
+          host: mutationAuthority.host,
+          transport: link.transport,
+          timeoutMs: 3000,
+        });
+        assertCommissioningFinalWiringStatus({
+          activationId,
+          confirmation: status,
+          status: finalStatus,
+          flow,
+          expectedWiring: flow.project.pendingWiring,
+        });
+        markCommissioningProjectInstalled(flow, {
+          cardId: finalStatus.cardId,
+          projectRevision: finalStatus.projectRevision,
+          projectFingerprint: finalStatus.projectFingerprint,
+        }, requestedGeneration);
         await clearCardCommissioning({ flowId: flow.flowId });
         setLightCheckState('complete');
       } else {
@@ -837,8 +946,11 @@ export function CardCommissioningPanel({
               {lightCheckState === 'testing' ? (
                 <>
                   <p>Check every connected output. Do you see a <strong>blue first pixel and red final pixel</strong>, with the expected LEDs between them?</p>
+                  {!hasAuthoritativePendingWiring && (
+                    <p role="alert">This older setup lacks exact wiring evidence, so Studio cannot make it permanent. Restore the working setup, then send and test the project again.</p>
+                  )}
                   <div className="card-connection-actions">
-                    <button type="button" className="btn primary" disabled={!lightCheckPreflight.ok} onClick={() => finishLightCheck(true)}>Yes, every output is correct</button>
+                    <button type="button" className="btn primary" disabled={!lightCheckPreflight.ok || !hasAuthoritativePendingWiring} onClick={() => finishLightCheck(true)}>Yes, every output is correct</button>
                     <button type="button" className="btn" disabled={!lightCheckPreflight.ok} onClick={() => finishLightCheck(false)}>No, restore working setup</button>
                   </div>
                 </>

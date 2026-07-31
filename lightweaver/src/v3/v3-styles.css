@@ -896,7 +896,7 @@ input[type=number]::-webkit-outer-spin-button {
 .prod-card-id { max-width: 50%; color: var(--ok); font-family: var(--font-mono); font-size: 10.5px; }
 .prod-status { margin-bottom: 13px; color: var(--text-mid); line-height: 1.55; }
 .prod-progress { height: 6px; overflow: hidden; border-radius: 6px; background: var(--bg-elev); }
-.prod-progress span { display: block; height: 100%; background: var(--accent); transition: width .15s linear; }
+.prod-progress span { display: block; height: 100%; background: var(--accent); }
 .prod-output-list { display: grid; gap: 7px; }
 .prod-output-list label { display: flex; align-items: center; gap: 9px; padding: 9px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); background: var(--bg-elev); }
 .prod-output-list label span { display: grid; min-width: 0; }

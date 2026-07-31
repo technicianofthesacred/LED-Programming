@@ -399,11 +399,15 @@ function makeSequenceResult({ normalizedRecipe, verified, controller, id }) {
     controls: controller?.controls,
     led: controller?.led,
     looks: [asset.look],
+    cardId: controller?.cardId,
   });
   profile.runtimeMode = 'sd-sequence';
+  profile.looks[0].bytes = verified.bytes.byteLength;
+  profile.looks[0].sha256 = verified.manifest.lwseqSha256;
   const sequenceFile = {
     encoding: 'base64',
     bytes: verified.bytes.byteLength,
+    sha256: verified.manifest.lwseqSha256,
     data: bytesToBase64(verified.bytes),
   };
   const packageValue = {

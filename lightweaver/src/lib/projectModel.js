@@ -37,6 +37,7 @@ import {
 } from './cardPlaylist.js';
 
 export const PROJECT_VERSION = 3;
+const FOREIGN_PROJECT_FORMATS = new Set(['lightweaver.mapper-project']);
 
 export function createProjectId() {
   const random = Math.random().toString(36).slice(2, 10);
@@ -342,6 +343,18 @@ function alignChainToStripOrder(project) {
 
 export function migrateProject(data) {
   if (!data || typeof data !== 'object') return null;
+  if (FOREIGN_PROJECT_FORMATS.has(String(data.format || ''))) return null;
+  const candidateStrips = data.version === PROJECT_VERSION
+    ? data.layout?.strips
+    : (data.version === 1 || data.version === 2) ? data.strips : null;
+  if (Array.isArray(candidateStrips)) {
+    const ids = new Set();
+    for (const strip of candidateStrips) {
+      const id = String(strip?.id || '');
+      if (!id || ids.has(id)) return null;
+      ids.add(id);
+    }
+  }
   const base = createDefaultProject();
 
   if (data.version === PROJECT_VERSION) {

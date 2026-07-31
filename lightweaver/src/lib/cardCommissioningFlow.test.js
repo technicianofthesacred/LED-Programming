@@ -13,6 +13,7 @@ import {
   bindCardWiringActivationEvidence,
   beginCardLightCheckMutation,
   cardIdFromEspMac,
+  commissioningFlowMatchesProject,
   completeCardInstall,
   markCardProjectRestored,
   confirmCardSetupNetworkJoined,
@@ -90,6 +91,22 @@ function acceptedBridgeResult(flow, overrides = {}) {
   };
 }
 
+function stagedPhysicalIdentity(overrides = {}) {
+  return {
+    candidateOutputs: [{
+      id: 'out-a',
+      pin: 16,
+      pixels: 88,
+      segments: [{ id: 'outer', count: 88, direction: 'forward' }],
+    }],
+    wiringRevision: 9,
+    wiringDigest: 'd'.repeat(64),
+    colorOrder: 'RGB',
+    maxMilliamps: 2400,
+    ...overrides,
+  };
+}
+
 test('uses one exact four-stage commissioning vocabulary', () => {
   assert.deepEqual(CARD_COMMISSIONING_STAGES, [
     'connect-card',
@@ -114,6 +131,7 @@ test('captures an immutable acknowledged project revision before installation', 
     strategy: 'clean-recovery',
     projectRecord: mutableRecord,
     projectRevision: 7,
+    projectGeneration: 4,
     flowId: 'flow-1234567890abcdef',
     now: 1770000000100,
   });
@@ -121,10 +139,62 @@ test('captures an immutable acknowledged project revision before installation', 
   mutableRecord.project.layout.strips[0].pixelCount = 999;
   assert.equal(flow.stage, 'install-safely');
   assert.equal(flow.project.revision, 7);
+  assert.equal(flow.project.generation, 4);
   assert.equal(flow.project.recordId, 'project-record-7');
   assert.equal(flow.project.snapshot.layout.strips[0].pixelCount, 88);
   assert.match(flow.project.fingerprint, /^[a-f0-9]{16}$/);
   assert.equal(flow.project.restoredAt, null);
+});
+
+test('a commissioning flow only authorizes the exact project generation and snapshot that started it', () => {
+  const flow = beginCardCommissioning({
+    source: 'web-serial',
+    operation: 'install-current-release',
+    projectRecord,
+    projectRevision: 7,
+    projectGeneration: 3,
+    flowId: 'flow-project-authority-123',
+    now: 1770000000100,
+  });
+
+  assert.equal(commissioningFlowMatchesProject(flow, {
+    project: projectRecord.project,
+    revision: 7,
+    generation: 3,
+  }), true);
+  assert.equal(commissioningFlowMatchesProject(flow, {
+    project: projectRecord.project,
+    revision: 7,
+    generation: 4,
+  }), false);
+  assert.equal(commissioningFlowMatchesProject(flow, {
+    project: {
+      ...projectRecord.project,
+      name: 'A replacement with the same revision',
+    },
+    revision: 7,
+    generation: 3,
+  }), false);
+  assert.equal(commissioningFlowMatchesProject(flow, {
+    project: projectRecord.project,
+    revision: 8,
+    generation: 3,
+  }), false);
+  assert.equal(commissioningFlowMatchesProject(flow, {
+    project: projectRecord.project,
+    revision: 0,
+    generation: 0,
+    restored: true,
+  }), true);
+  assert.equal(commissioningFlowMatchesProject(flow, {
+    project: {
+      ...projectRecord.project,
+      name: 'A different restored project',
+    },
+    revision: 0,
+    generation: 0,
+    restored: true,
+  }), false);
 });
 
 test('does not call browser persistence card restoration', () => {
@@ -482,7 +552,7 @@ test('canonical and staged production restoration reject the wrong exact job ide
   const wrongFirmwareEvidence = adaptCardRestorationReadback({ method: 'GET', endpoint: '/api/firmware-info', response: { cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: acknowledged.project.fingerprint, productionJobId, productionJobDigest: 'c'.repeat(64) } });
   assert.throws(() => markCardProjectRestored(acknowledged, wrongFirmwareEvidence), /job identity/i);
   const status = normalizeCardWiringStatus({ ok: true, state: 'staged', activationId: 'candidate-prod-7', outputs: [] });
-  const candidate = await getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => ({ ok: true, state: 'staged', activationId: 'candidate-prod-7', outputs: [], cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: acknowledged.project.fingerprint, productionJobId, productionJobDigest: 'c'.repeat(64) }) });
+  const candidate = await getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => ({ ok: true, state: 'staged', activationId: 'candidate-prod-7', outputs: [], ...stagedPhysicalIdentity(), cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: acknowledged.project.fingerprint, productionJobId, productionJobDigest: 'c'.repeat(64) }) });
   const stagedEvidence = bindCardWiringActivationEvidence(status, candidate);
   assert.throws(() => stageCardProjectForPhysicalCheck(acknowledged, stagedEvidence), /job identity/i);
 });
@@ -494,7 +564,7 @@ test('a production flow cannot be relabeled in memory to bypass canonical or sta
   const wrongReadback = adaptCardRestorationReadback({ method: 'GET', endpoint: '/api/firmware-info', response: { cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: relabeled.project.fingerprint, productionJobId, productionJobDigest: 'c'.repeat(64) } });
   assert.throws(() => markCardProjectRestored(relabeled, wrongReadback), /production|invalid/i);
   const status = normalizeCardWiringStatus({ ok: true, state: 'staged', activationId: 'candidate-tamper-7', outputs: [] });
-  const candidate = await getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => ({ ok: true, state: 'staged', activationId: 'candidate-tamper-7', outputs: [], cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: relabeled.project.fingerprint, productionJobId, productionJobDigest: 'c'.repeat(64) }) });
+  const candidate = await getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => ({ ok: true, state: 'staged', activationId: 'candidate-tamper-7', outputs: [], ...stagedPhysicalIdentity(), cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: relabeled.project.fingerprint, productionJobId, productionJobDigest: 'c'.repeat(64) }) });
   assert.throws(() => stageCardProjectForPhysicalCheck(relabeled, bindCardWiringActivationEvidence(status, candidate)), /production|invalid/i);
 });
 
@@ -515,12 +585,17 @@ test('a safety-staged GPIO restore stays in the same flow and is not falsely cal
   });
   const candidateResponse = {
       ok: true, state: 'staged', activationId: status.activationId, outputs: status.outputs,
+      candidateOutputs: [{ id: 'out1', pin: 18, pixels: 88, segments: [{ id: 'gallery', count: 88, direction: 'forward' }] }],
       cardId: installed.cardId,
       firmwareVersion: installed.firmwareVersion,
       buildId: installed.buildId,
       projectRevision: acknowledged.project.revision,
       projectFingerprint: acknowledged.project.fingerprint,
       productionJobDigest: '',
+      wiringRevision: 9,
+      wiringDigest: 'd'.repeat(64),
+      colorOrder: 'GRB',
+      maxMilliamps: 2400,
   };
   const readback = await getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => candidateResponse });
   const staleReadback = await getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => ({ ...candidateResponse, buildId: 'b'.repeat(40), projectRevision: acknowledged.project.revision - 1 }) });
@@ -531,11 +606,19 @@ test('a safety-staged GPIO restore stays in the same flow and is not falsely cal
   assert.equal(staged.stage, 'check-lights');
   assert.equal(staged.project.restoredAt, null);
   assert.equal(staged.project.pendingActivationId, 'wiring-activation-7');
+  assert.deepEqual(staged.project.pendingWiring, {
+    wiringRevision: 9,
+    wiringDigest: 'd'.repeat(64),
+    colorOrder: 'GRB',
+    maxMilliamps: 2400,
+    outputs: candidateResponse.candidateOutputs,
+  });
 
   const rolledBack = returnCardProjectToSetupAfterLightCheck(staged, { now: 50 });
   assert.equal(rolledBack.stage, 'set-up-card');
   assert.equal(rolledBack.cardAcknowledgedAt, acknowledged.cardAcknowledgedAt);
   assert.equal(rolledBack.project.pendingActivationId, '');
+  assert.equal(rolledBack.project.pendingWiring, null);
   assert.equal(rolledBack.project.restoredAt, null);
 });
 
@@ -572,6 +655,66 @@ test('progress survives refresh, new tabs, Wi-Fi switching, and recoverable disc
   assert.doesNotMatch(raw, /password|credential|nonce|serialPath|firmwareUrl/i);
   assert.doesNotMatch(raw, /never-copy-this/i);
   assert.deepEqual(readCardCommissioning({ storage }), resumable);
+});
+
+test('older saved staged flows migrate to generation zero and remain recoverable but wiring-inconclusive', async () => {
+  const storage = memoryStorage();
+  const ready = acknowledgeCommissionedCard(completeCardInstall(beginCardCommissioning({
+    source: 'web-serial',
+    operation: installed.operation,
+    projectRecord,
+    projectRevision: 7,
+    flowId: 'flow-legacy-staged-12345',
+    now: 10,
+  }), installed, { now: 20 }), {
+    id: installed.cardId,
+    firmwareVersion: installed.firmwareVersion,
+    buildId: installed.buildId,
+  }, { now: 30 }).flow;
+  const status = normalizeCardWiringStatus({
+    ok: true,
+    state: 'staged',
+    activationId: 'legacy-activation-7',
+    outputs: [],
+  });
+  const readback = await getCardWiringStatus({
+    transport: 'bridge',
+    bridgeRequestImpl: async () => ({
+      ok: true,
+      state: 'staged',
+      activationId: status.activationId,
+      outputs: [],
+      ...stagedPhysicalIdentity(),
+      cardId: installed.cardId,
+      firmwareVersion: installed.firmwareVersion,
+      buildId: installed.buildId,
+      projectRevision: 7,
+      projectFingerprint: ready.project.fingerprint,
+    }),
+  });
+  const staged = stageCardProjectForPhysicalCheck(
+    ready,
+    bindCardWiringActivationEvidence(status, readback),
+    { now: 40 },
+  );
+  await writeCardCommissioning(staged, { storage, locks: null });
+
+  const registry = JSON.parse(storage.getItem(CARD_COMMISSIONING_STORAGE_KEY));
+  const legacyFlow = registry.flows[staged.flowId].flow;
+  delete legacyFlow.project.generation;
+  delete legacyFlow.project.pendingWiring;
+  storage.setItem(CARD_COMMISSIONING_STORAGE_KEY, JSON.stringify(registry));
+
+  const restored = readCardCommissioning({ storage });
+  assert.equal(restored.project.generation, 0);
+  assert.equal(restored.project.pendingWiring, null);
+  assert.equal(restored.project.wiringEvidenceState, 'legacy-inconclusive');
+  assert.equal(inspectCardCommissioning({ storage }).error, '');
+
+  const recoverable = returnCardProjectToSetupAfterLightCheck(restored, { now: 50 });
+  assert.equal(recoverable.stage, 'set-up-card');
+  assert.equal(recoverable.project.pendingActivationId, '');
+  assert.equal(recoverable.project.pendingWiring, null);
 });
 
 test('corrupt or fingerprint-mismatched persisted state fails closed', () => {
@@ -635,7 +778,7 @@ test('authoritative canonical and staged completion invalidate stale claims and 
       completed = markCardProjectRestored(authoritative, evidence);
     } else {
       const status = normalizeCardWiringStatus({ ok: true, state: 'staged', activationId: 'candidate-stale-7', outputs: [] });
-      const candidate = await getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => ({ ok: true, state: 'staged', activationId: 'candidate-stale-7', outputs: [], cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: authoritative.project.fingerprint }) });
+      const candidate = await getCardWiringStatus({ transport: 'bridge', bridgeRequestImpl: async () => ({ ok: true, state: 'staged', activationId: 'candidate-stale-7', outputs: [], ...stagedPhysicalIdentity(), cardId: installed.cardId, firmwareVersion: installed.firmwareVersion, buildId: installed.buildId, projectRevision: 7, projectFingerprint: authoritative.project.fingerprint }) });
       completed = stageCardProjectForPhysicalCheck(authoritative, bindCardWiringActivationEvidence(status, candidate));
     }
     await writeCardCommissioning(completed, { storage, sessionStorage, locks: null });

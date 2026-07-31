@@ -6,11 +6,11 @@ import path from 'node:path';
 const TEST_CARD_ID = 'lw-layout-tests';
 const TEST_BUILD_ID = 'a'.repeat(40);
 
-// Test & Install finish line: Save to card, with WLED export kept under
-// Advanced installation tools. Reuses the `mockLocalCard` route pattern
+// Test & Install finish line: one card installation path. Reuses the
+// `mockLocalCard` route pattern
 // from workflow.spec.ts. The default project boots the two-circle hardware
 // layout (strips already present), so Wire mode has a chain + a real config to
-// push and export without importing an SVG.
+// push without importing an SVG.
 
 async function mockLocalCard(page: any, options: any = {}) {
   const card = {
@@ -25,7 +25,27 @@ async function mockLocalCard(page: any, options: any = {}) {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
     if (pathname === '/api/status') {
-      await route.fulfill({ json: { app: 'Lightweaver', ok: true, cardId: TEST_CARD_ID, firmwareVersion: '1.0.0', buildId: TEST_BUILD_ID, led: { pixels: 44 }, wifi: { ip: 'lightweaver.local' } } });
+      const outputs = card.savedConfig?.led?.outputs || options.currentOutputs || [{ id: 'out1', pin: 16, pixels: 44 }];
+      await route.fulfill({ json: {
+        app: 'Lightweaver',
+        ok: true,
+        cardId: TEST_CARD_ID,
+        firmwareVersion: '1.0.0',
+        buildId: TEST_BUILD_ID,
+        led: card.savedConfig?.led || {
+          pixels: 44,
+          maxMilliamps: 1500,
+          colorOrder: 'RGB',
+          outputGammaEnabled: false,
+          outputGammaValue: 2.2,
+          calibration: { red: 1, green: 1, blue: 1 },
+        },
+        outputs: outputs.map((output: any) => ({
+          ...output,
+          segments: output.segments || [{ id: `${output.id || 'out1'}-full`, count: output.pixels, direction: output.direction || 'forward' }],
+        })),
+        wifi: { ip: 'lightweaver.local' },
+      } });
       return;
     }
     if (pathname === '/api/firmware-info') {
@@ -38,6 +58,8 @@ async function mockLocalCard(page: any, options: any = {}) {
           buildId: TEST_BUILD_ID,
           pixels: 44,
           outputs: options.currentOutputs || [{ id: 'out1', pin: 16, pixels: 44 }],
+          projectRevision: card.savedConfig?.projectRevision ?? 0,
+          projectFingerprint: card.savedConfig?.projectFingerprint ?? '',
         },
       });
       return;
@@ -176,10 +198,10 @@ test('unverified wiring exposes no install control and makes no request', async 
   await gotoWire(page);
 
   // The install surface only exists after the LED check verifies the wiring.
-  // The specialist WLED export exists in the DOM but stays behind Advanced.
+  // No install control or alternate export path is available yet.
   await expect(page.getByTestId('layout-send-to-card')).toHaveCount(0);
   await expect(page.getByTestId('advanced-installation-tools')).toHaveJSProperty('open', false);
-  await expect(page.getByTestId('layout-export-ledmap')).not.toBeVisible();
+  await expect(page.getByTestId('layout-export-ledmap')).toHaveCount(0);
   await expect(page.getByTestId('start-led-check')).toBeVisible();
   expect(card.operations).toEqual([]);
 });
@@ -191,13 +213,14 @@ test('a successful push is pending until acknowledgement and records the exact i
 
   await page.getByTestId('layout-send-to-card').click();
   await expect(page.getByTestId('layout-send-to-card')).toBeDisabled();
-  await expect(page.getByTestId('layout-send-to-card')).toContainText(/Saving/);
+  await expect(page.getByTestId('layout-send-to-card')).toContainText(/Sending/);
 
   const banner = page.locator('.la-card-push-banner');
   await expect(banner).toBeVisible({ timeout: 10000 });
   await expect(banner).toHaveClass(/is-ok/);
-  await expect(banner).toContainText(/Saved revision \d+ to card/);
+  await expect(banner).toContainText(/Installed revision \d+ on card/);
   await expect(banner).toContainText(/zone/i);
+  await expect(page.locator('.savechip')).toContainText('Installed on card');
   expect(card.operations).toContain('config');
   expect(card.savedConfig).not.toBeNull();
 });
@@ -214,7 +237,7 @@ test('candidate test locks conflicting saves, recovers an ambiguous activation, 
       outer.pixels = outer.pixels.slice(0, 26).map((pixel: any, index: number) => ({ ...pixel, index }));
       outerRun.source.to = 25;
       outerRun.seamLed = Math.min(Number(outerRun.seamLed) || 25, 25);
-      project.layout.wiring.outputs[0].pin = 38;
+      project.layout.wiring.outputs[0].pin = 17;
     },
   });
 
@@ -223,10 +246,10 @@ test('candidate test locks conflicting saves, recovers an ambiguous activation, 
   await expect(page.getByTestId('layout-send-to-card')).toBeDisabled();
   expect(card.candidateConfig.led.pixels).toBe(43);
   expect(card.candidateConfig.led.outputs).toEqual([
-    expect.objectContaining({ pin: 38, pixels: 43 }),
+    expect.objectContaining({ pin: 17, pixels: 43 }),
   ]);
 
-  await page.getByRole('button', { name: 'Start 90-second test' }).click();
+  await page.getByRole('button', { name: 'Start light test' }).click();
   await expect(page.getByText('Do you see the expected lights?')).toBeVisible();
   expect(card.operations).toContain('status');
   await expect(page.getByTestId('layout-send-to-card')).toBeDisabled();
@@ -248,7 +271,7 @@ test('a failed push retains the acknowledged installed revision and Retry instal
   await page.getByTestId('layout-send-to-card').click();
   const banner = page.locator('.la-card-push-banner');
   await expect(banner).toHaveClass(/is-ok/);
-  const installed = (await banner.textContent())?.match(/Saved revision (\d+)/)?.[1];
+  const installed = (await banner.textContent())?.match(/Installed revision (\d+)/)?.[1];
   expect(installed).toBeTruthy();
 
   options.failConfig = true;
@@ -262,37 +285,8 @@ test('a failed push retains the acknowledged installed revision and Retry instal
   options.failConfig = false;
   await banner.getByRole('button', { name: 'Retry' }).click();
   await expect(banner).toHaveClass(/is-ok/);
-  await expect(banner).toContainText(`Saved revision ${installed} to card`);
+  await expect(banner).toContainText(`Installed revision ${installed} on card`);
   expect(card.attemptedConfigs.at(-1)).toEqual(failedPayload);
-});
-
-test('Download WLED map exports a valid { n, map } file', async ({ page }) => {
-  await mockLocalCard(page);
-  await gotoWire(page, { verified: true });
-
-  const send = page.getByTestId('layout-send-to-card');
-  await expect(send).toContainText('Save to card');
-  await expect(send.locator('.la-card-push-dot')).toHaveCount(1);
-  const advanced = page.getByTestId('advanced-installation-tools');
-  await advanced.locator('summary').first().click();
-  await expect(page.getByTestId('layout-export-ledmap')).toHaveText('Download WLED map');
-  await expect(page.getByTestId('layout-export-ledmap')).toHaveAttribute('title', 'Secondary export for a separate WLED setup');
-
-  const downloadPromise = page.waitForEvent('download');
-  await page.getByTestId('layout-export-ledmap').click();
-  const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe('ledmap.json');
-
-  const stream = await download.createReadStream();
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) chunks.push(chunk as Buffer);
-  const json = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-
-  expect(typeof json.n).toBe('number');
-  expect(json.n).toBeGreaterThan(0);
-  expect(Array.isArray(json.map)).toBe(true);
-  expect(json.map.length).toBe(json.n);
-  expect(json.map[0]).toHaveLength(2);
 });
 
 test('mixed-content recovery copies JSON, opens the installer, and retries the same bounded attempt', async ({ page }) => {
@@ -315,8 +309,7 @@ test('mixed-content recovery copies JSON, opens the installer, and retries the s
 
   await recovery.getByRole('button', { name: 'Open installer' }).click();
   const opened = await page.evaluate(() => (window as any).__openedInstaller);
-  expect(opened.target).toBe('_blank');
-  expect(opened.features).toBe('noopener');
+  expect(opened.target).toBe('lightweaver-card-bridge');
   const handoff = new URL(opened.url);
   expect(handoff.origin).toBe('http://lightweaver.local');
   expect(new URLSearchParams(handoff.hash.slice(1)).get('lwconfig')).toBeTruthy();

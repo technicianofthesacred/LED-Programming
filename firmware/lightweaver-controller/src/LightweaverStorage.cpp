@@ -2,6 +2,7 @@
 #include "LightweaverRuntimeApi.h"
 #include "LightweaverOutputColorParser.h"
 #include "LightweaverRecipe.h"
+#include "LightweaverLookModePolicy.h"
 #include <new>
 #include <esp_system.h>
 #include <mbedtls/sha256.h>
@@ -34,6 +35,7 @@ constexpr const char* NVS_DISCOVERY_ACTIVE_KEY = "discoveryActive";
 constexpr const char* NVS_DISCOVERY_BATCH_KEY = "discoveryBatch";
 constexpr const char* NVS_RECOVERY_PENDING_KEY = "recoveryPending";
 constexpr const char* NVS_WIFI_KEY = "wifi";
+constexpr const char* NVS_SD_AUTORUN_SUPPRESSED_KEY = "sdAutorunOff";
 constexpr size_t NVS_STRING_LIMIT = 3968;
 
 uint16_t clampPixels(int value) {
@@ -143,6 +145,8 @@ void resetLook(LookConfig& look) {
   look.label = "";
   look.mode = "";
   look.file = "";
+  look.sequenceBytes = 0;
+  look.sequenceSha256 = "";
   look.preset = "";
   look.fps = 24;
   look.loop = true;
@@ -171,7 +175,10 @@ void synchronizeNativeRecipes(const RuntimeConfig& config) {
 void resetWifi(WifiConfig& wifi) {
   wifi.ssid = "";
   wifi.password = "";
-  wifi.hostname = "lightweaver";
+  char hostname[20] = {};
+  snprintf(hostname, sizeof(hostname), "lightweaver-%04llx",
+           static_cast<unsigned long long>(ESP.getEfuseMac() & 0xFFFFULL));
+  wifi.hostname = hostname;
 }
 
 void resetZone(ZoneConfig& zone) {
@@ -315,6 +322,8 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
     look.label = String(lookJson["label"] | look.id.c_str());
     look.mode = String(lookJson["mode"] | (config.mode == "sd-sequence" ? "sequence" : "procedural"));
     look.file = String(lookJson["file"] | "");
+    look.sequenceBytes = lookJson["bytes"] | 0U;
+    look.sequenceSha256 = String(lookJson["sha256"] | "");
     look.preset = String(lookJson["preset"] | look.id.c_str());
     look.fps = lookJson["fps"] | 24;
     look.loop = lookJson["loop"] | true;
@@ -686,6 +695,7 @@ bool validateRuntimeConfigJsonStrict(const String& json,
     outputIndex++;
   }
 
+  String configMode = String(doc["mode"] | (source == SOURCE_SD ? "sd-sequence" : "website-flash"));
   JsonArray looks = doc["looks"].as<JsonArray>();
   if (looks.isNull()) looks = doc["patterns"].as<JsonArray>();
   if (looks.isNull() || looks.size() == 0 || looks.size() > LW_MAX_LOOKS) {
@@ -709,10 +719,10 @@ bool validateRuntimeConfigJsonStrict(const String& json,
       }
     }
     lookIds[lookCount++] = id;
-    (void)preset;
     JsonVariantConst recipeValue = look["nativeRecipe"];
     if (recipeValue.isNull()) recipeValue = look["recipe"];
-    if (!recipeValue.isNull()) {
+    bool hasNativeRecipe = !recipeValue.isNull();
+    if (hasNativeRecipe) {
       if (id.length() > lightweaver::LW_RECIPE_MAX_ID_BYTES ||
           preset.length() > lightweaver::LW_RECIPE_MAX_ID_BYTES) {
         message = "native recipe route id exceeds supported limit";
@@ -724,6 +734,21 @@ bool validateRuntimeConfigJsonStrict(const String& json,
               recipeValue, measureJson(recipeValue), nativeRecipe, recipeError)) {
         message = String(recipeError.path ? recipeError.path : "recipe") + " " +
                   (recipeError.message ? recipeError.message : "is invalid");
+        return false;
+      }
+    }
+    const char* explicitMode = look["mode"] | nullptr;
+    bool explicitModePresent = explicitMode != nullptr;
+    bool requiresSequenceMetadata = effectiveLookRequiresSequenceMetadata(
+        explicitModePresent,
+        explicitModePresent && String(explicitMode) == "sequence",
+        configMode == "sd-sequence",
+        hasNativeRecipe);
+    if (requiresSequenceMetadata) {
+      uint32_t bytes = look["bytes"] | 0U;
+      String sha256 = String(look["sha256"] | "");
+      if (bytes == 0 || sha256.length() != 64 || !isLowerHex(sha256)) {
+        message = "sequence look requires declared bytes and sha256";
         return false;
       }
     }
@@ -796,11 +821,19 @@ bool validateRuntimeConfigJsonStrict(const String& json,
   return loadJsonString(json, parsed, source, message);
 }
 
-bool loadSdConfig(RuntimeConfig& config, String& message) {
+bool mountRuntimeSd(String& message) {
   if (!SD.begin(LW_SD_CS)) {
     message = "sd unavailable";
     return false;
   }
+  return true;
+}
+
+bool loadSdConfig(RuntimeConfig& config, String& message, bool& mounted) {
+  if (!mounted) {
+    mounted = mountRuntimeSd(message);
+  }
+  if (!mounted) return false;
   File profileFile = SD.open("/lightweaver.json", FILE_READ);
   if (!profileFile) {
     message = "sd missing /lightweaver.json";
@@ -808,6 +841,18 @@ bool loadSdConfig(RuntimeConfig& config, String& message) {
   }
   String json = profileFile.readString();
   profileFile.close();
+  JsonDocument profile;
+  if (deserializeJson(profile, json)) {
+    message = "sd profile parse failed";
+    return false;
+  }
+  char cardId[16] = {};
+  snprintf(cardId, sizeof(cardId), "lw-%012llx",
+           static_cast<unsigned long long>(ESP.getEfuseMac() & 0xFFFFFFFFFFFFULL));
+  if (String(profile["cardId"] | "") != cardId) {
+    message = "sd project is not bound to this card";
+    return false;
+  }
   bool valid = validateRuntimeConfigJsonStrict(json, config, message, SOURCE_SD);
   if (valid) config.source = SOURCE_SD;
   return valid;
@@ -1108,6 +1153,9 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
   } recipeSync{config};
   String message;
   RuntimeLoadResult result;
+  // Mount once at boot, before choosing a persisted source. Never unmount it:
+  // an accepted sequence profile must keep its assets available for playback.
+  bool sdMounted = mountRuntimeSd(message);
 
   // Upgrade in place: copy the legacy config before consulting candidate
   // state. The legacy key is intentionally retained as a downgrade fallback.
@@ -1124,6 +1172,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
   }
 
   WiringCandidateState state = WIRING_CANDIDATE_NONE;
+  bool sdAutorunSuppressed = false;
   {
     Preferences prefs;
     if (!prefs.begin(NVS_NAMESPACE, true)) {
@@ -1137,6 +1186,19 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
       return result;
     }
     state = readCandidateState(prefs);
+    if (prefs.isKey(NVS_SD_AUTORUN_SUPPRESSED_KEY) &&
+        prefs.getType(NVS_SD_AUTORUN_SUPPRESSED_KEY) != PT_U8) {
+      prefs.end();
+      applyDefaultRuntimeConfig(config);
+      ensureDefaultZone(config);
+      result.ok = true;
+      result.safeMode = true;
+      result.source = SOURCE_DEFAULTS;
+      setRuntimeLoadTruth(config, result, false, false, true);
+      result.message = "sd autorun suppression state is invalid; safe defaults loaded";
+      return result;
+    }
+    sdAutorunSuppressed = prefs.getBool(NVS_SD_AUTORUN_SUPPRESSED_KEY, false);
     if (!validateCandidateMetadataForBoot(prefs, state, message)) {
       prefs.end();
       applyDefaultRuntimeConfig(config);
@@ -1236,6 +1298,18 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
     }
   }
 
+  // A removable project is authoritative only when it declares this exact
+  // card. Candidate transactions above remain intentionally higher priority.
+  if (!sdAutorunSuppressed && sdMounted && loadSdConfig(config, message, sdMounted)) {
+    overlayNvsWifi(config);
+    ensureDefaultZone(config);
+    result.ok = true;
+    result.source = SOURCE_SD;
+    setRuntimeLoadTruth(config, result, true, true, false);
+    result.message = "exact-card SD project loaded";
+    return result;
+  }
+
   bool knownGoodValid = false;
   ProvisioningStorageState knownGoodState = loadNvsConfigKeyStrict(
       NVS_KNOWN_GOOD_CONFIG_KEY, config, knownGoodValid, message);
@@ -1284,16 +1358,6 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
     return result;
   }
 
-  if (loadSdConfig(config, message)) {
-    overlayNvsWifi(config);
-    ensureDefaultZone(config);
-    result.ok = true;
-    result.source = SOURCE_SD;
-    bool sdKnownGood = provisioningSdProjectKnownGood(true, false);
-    setRuntimeLoadTruth(config, result, true, sdKnownGood, false);
-    result.message = "strict SD project loaded without persisted identity acceptance";
-    return result;
-  }
   applyDefaultRuntimeConfig(config);
   overlayNvsWifi(config);
   ensureDefaultZone(config);
@@ -1352,17 +1416,22 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
     message = "prior confirmation fence failed";
     return false;
   }
-  bool ok = prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, json) == json.length();
-  if (ok) {
+  bool committed = prefs.putString(NVS_KNOWN_GOOD_CONFIG_KEY, json) == json.length();
+  bool cleanupOk = true;
+  if (committed) {
     // Keep the old key as a downgrade fallback, but only after the canonical
     // known-good write succeeds.
-    prefs.putString(NVS_LEGACY_CONFIG_KEY, json);
-    writeCandidateState(prefs, WIRING_CANDIDATE_NONE);
-    prefs.remove(NVS_CANDIDATE_CONFIG_KEY);
-    prefs.remove(NVS_CANDIDATE_ID_KEY);
+    cleanupOk = prefs.putString(NVS_LEGACY_CONFIG_KEY, json) == json.length() && cleanupOk;
+    cleanupOk = writeCandidateState(prefs, WIRING_CANDIDATE_NONE) && cleanupOk;
+    cleanupOk = (!prefs.isKey(NVS_CANDIDATE_CONFIG_KEY) ||
+                 prefs.remove(NVS_CANDIDATE_CONFIG_KEY)) && cleanupOk;
+    cleanupOk = (!prefs.isKey(NVS_CANDIDATE_ID_KEY) ||
+                 prefs.remove(NVS_CANDIDATE_ID_KEY)) && cleanupOk;
+    cleanupOk = (!prefs.isKey(NVS_SD_AUTORUN_SUPPRESSED_KEY) ||
+                 prefs.remove(NVS_SD_AUTORUN_SUPPRESSED_KEY)) && cleanupOk;
   }
   prefs.end();
-  if (!ok) {
+  if (!committed) {
     delete parsed;
     message = "nvs write failed";
     return false;
@@ -1383,8 +1452,24 @@ bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& me
   config.knownGoodProject = true;
   config.runtimePhase = ProvisioningPhase::Ready;
   synchronizeNativeRecipes(config);
-  message = "saved to internal flash";
+  message = cleanupOk
+      ? "saved to internal flash"
+      : "saved to internal flash; cleanup warning: legacy recovery metadata may need service";
   return true;
+}
+
+bool suppressSdProjectAutorunAfterFactoryReset(String& message) {
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    message = "nvs reset marker open failed";
+    return false;
+  }
+  bool suppressed = prefs.putBool(NVS_SD_AUTORUN_SUPPRESSED_KEY, true) > 0;
+  prefs.end();
+  message = suppressed
+      ? "sd project autorun suppressed until the next installed project"
+      : "nvs reset marker write failed";
+  return suppressed;
 }
 
 bool stageRuntimeConfigJson(const String& json, String& activationId, String& message) {
@@ -1493,7 +1578,9 @@ bool confirmCandidateRuntimeConfig(const String& activationId, String& message) 
   promoted = confirmed && writeCandidateState(prefs, WIRING_CANDIDATE_NONE);
   if (promoted) {
     prefs.putString(NVS_LEGACY_CONFIG_KEY, candidate);
-    finalizeCommittedPromotion(prefs);
+    bool suppressionCleared = !prefs.isKey(NVS_SD_AUTORUN_SUPPRESSED_KEY) ||
+                              prefs.remove(NVS_SD_AUTORUN_SUPPRESSED_KEY);
+    promoted = suppressionCleared && finalizeCommittedPromotion(prefs);
   } else {
     restorePreviousKnownGood(prefs);
     prefs.remove(NVS_CONFIRMED_ID_KEY);

@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { canPushDirectlyToCard } from '../../../lib/cardConnection.js';
 import { cardBridgeFeatureGap, openCardBridge } from '../../../lib/cardBridge.js';
-import { pushLivePreviewToCard } from '../../../lib/cardLiveControl.js';
+import { pushLivePreviewToCard, recoverCardLights } from '../../../lib/cardLiveControl.js';
 import {
   buildWiringChaseFrame,
   buildWiringChaseSteps,
@@ -146,6 +146,19 @@ export function WiringBenchTest({
     // With no step rail to land on, deferring exits the check flow entirely.
     onDefer?.();
   };
+  const stopLights = async () => {
+    const session = sessionRef.current;
+    sessionRef.current = null;
+    await session?.stop().catch(() => {});
+    await recoverCardLights(
+      { patternId: 'blackout', brightness: 0, syncZones: true },
+      { host: cardHost, timeoutMs: 3200 },
+    ).catch(() => {});
+    highWaterPixelsRef.current = compiled.totalPixels;
+    setAcknowledged(false);
+    dispatch({ type: 'cancel' });
+    onDefer?.();
+  };
   const correctDirection = () => {
     if (activeStep?.kind !== 'run') return;
     skipNextCompiledSyncRef.current = true;
@@ -198,6 +211,7 @@ export function WiringBenchTest({
           <>
             <h4 className="lwb-question">Stand where you can see the LED strips</h4>
             <p className="lwb-hint">The card lights the first LED blue and the last LED red on each strip. You’ll confirm what you see at each step.</p>
+            <p className="lwb-detail" role="note">Light test warning: LEDs will change color. Testing uses a dim, power-limited frame.</p>
             <LedIllustration />
             {!compiled.ok && <p className="lwb-note" role="status">Fix the LED output mapping errors before starting the check.</p>}
             <button
@@ -268,6 +282,7 @@ export function WiringBenchTest({
       <h4 className="lwb-question">{question}</h4>
       <LedIllustration variant={illusVariant} />
       <p className="lwb-hint">{hint}</p>
+      <button type="button" className="btn lwb-btn-compact" onClick={stopLights}>Stop lights</button>
       {state.delivery === 'idle' && <p className="lwb-sending" role="status">Lighting up the LEDs…</p>}
       {state.delivery === 'failed' && (
         <UiCard

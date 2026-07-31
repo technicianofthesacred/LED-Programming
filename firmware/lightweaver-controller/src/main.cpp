@@ -13,12 +13,14 @@
 #include "LightweaverRuntimeApi.h"
 #include "LightweaverFrameSource.h"
 #include "LightweaverOutputPolicy.h"
+#include "LightweaverSequenceActivationPolicy.h"
 #include "LightweaverWledRealtime.h"
 #include "LightweaverArtnet.h"
 #include "LightweaverWledWebSocket.h"
 #include <Preferences.h>
 #include <esp_task_wdt.h>
 #include <esp_system.h>
+#include <mbedtls/sha256.h>
 
 // Task watchdog timeout. Must exceed the longest blocking call in the loop
 // task — the look-change fade (fadeOutMs + fadeInMs, ~2s default) and SD reads.
@@ -61,6 +63,8 @@ constexpr const char* LW_FACTORY_RESET_RECOVERY_PATH = "/lightweaver.reset-recov
 CRGB leds[LW_MAX_PIXELS];
 CRGB physicalLeds[LW_MAX_PIXELS];
 uint8_t frameBuffer[LW_MAX_PIXELS * 3];
+uint8_t preparedSequenceFrameBuffer[LW_MAX_PIXELS * 3];
+uint32_t preparedSequenceFrameGeneration = 0;
 
 constexpr uint8_t LW_DISCOVERY_STEP_COUNT = LW_APPROVED_OUTPUT_GPIO_COUNT;
 constexpr uint16_t LW_DISCOVERY_PIXELS_PER_OUTPUT = LW_FACTORY_BEACON_PIXEL_LIMIT;
@@ -114,6 +118,33 @@ String bootId;
 uint32_t cardStateRevision = 0;
 ErrorCode errorCode = ERROR_NONE;
 
+struct PreparedSequence {
+  File file;
+  uint32_t frameCount = 0;
+  uint16_t fps = 0;
+  uint32_t frameBytes = 0;
+  uint32_t stagedFrameGeneration = 0;
+  size_t stagedFrameBytes = 0;
+  bool ready = false;
+};
+
+enum class PreparedPatternSelectionKind : uint8_t {
+  None,
+  GlobalLook,
+  GlobalCompiledPattern,
+  ZonePattern,
+};
+
+struct PreparedPatternSelection {
+  PreparedPatternSelectionKind kind = PreparedPatternSelectionKind::None;
+  uint8_t lookIndex = 0;
+  String targetId;
+  String patternId;
+  PreparedSequence sequence;
+};
+
+PreparedPatternSelection preparedPatternSelection;
+
 File sequenceFile;
 bool sequenceOpen = false;
 uint32_t sequenceFrameCount = 0;
@@ -155,13 +186,18 @@ bool addLedsForPin(uint8_t pin, CRGB* start, uint16_t count);
 void handleControlEvent(ControlEventType event);
 void selectLook(int index);
 bool selectLookInstant(int index);
-bool startLook(uint8_t index);
+bool applyPreparedLookInstant(uint8_t index, PreparedSequence* prepared);
+bool startLook(uint8_t index, PreparedSequence* prepared = nullptr);
 void closeSequence();
-bool openSequence(const String& path);
-bool canOpenSequence(const String& path);
+void clearPreparedPatternSelection(bool closePreparedFile = true);
+bool prepareSequence(const LookConfig& look, PreparedSequence& prepared);
+bool prepareLookForSelection(const LookConfig& look, bool zoneTargeted, PreparedSequence& prepared);
+bool isPreparedSequenceReady(const PreparedSequence& prepared);
+bool openSequence(const LookConfig& look, PreparedSequence* prepared = nullptr);
 bool isLoadedLookRenderable(const LookConfig& look, bool zoneTargeted);
 bool renderCurrentLook(bool force = false);
 bool renderSequenceFrame(bool force = false);
+void applySequenceFrameBufferToLeds();
 bool renderProceduralFrame(const String& preset);
 bool renderPresetFrame(const String& preset);
 bool isRecoveryPresetPattern(const String& id);
@@ -703,14 +739,6 @@ bool addLedsForPin(uint8_t pin, CRGB* start, uint16_t count) {
       return addLedsForOrder<18>(start, count);
     case 21:
       return addLedsForOrder<21>(start, count);
-    case 38:
-      return addLedsForOrder<38>(start, count);
-    case 39:
-      return addLedsForOrder<39>(start, count);
-    case 40:
-      return addLedsForOrder<40>(start, count);
-    case 48:
-      return addLedsForOrder<48>(start, count);
     default:
       return false;
   }
@@ -745,31 +773,40 @@ void selectLook(int index) {
   if (lookCount == 0) return;
   uint8_t nextIndex = ((index % lookCount) + lookCount) % lookCount;
   if (nextIndex == currentLookIndex && !blackedOut) return;
-  if (!isLoadedLookRenderable(looks[nextIndex], false)) return;
+  PreparedSequence prepared;
+  if (!prepareLookForSelection(looks[nextIndex], false, prepared)) return;
 
   fadeTo(0.0f, looks[currentLookIndex].fadeOutMs);
   closeSequence();
   currentLookIndex = nextIndex;
   blackedOut = false;
-  if (!startLook(currentLookIndex)) return;
+  if (!startLook(currentLookIndex, &prepared)) return;
   fadeTo(1.0f, looks[currentLookIndex].fadeInMs);
 }
 
 bool selectLookInstant(int index) {
   if (lookCount == 0) return false;
   uint8_t nextIndex = ((index % lookCount) + lookCount) % lookCount;
-  if (!isLoadedLookRenderable(looks[nextIndex], false)) return false;
+  PreparedSequence prepared;
+  if (!prepareLookForSelection(looks[nextIndex], false, prepared)) return false;
+  return applyPreparedLookInstant(nextIndex, &prepared);
+}
 
+bool applyPreparedLookInstant(uint8_t nextIndex, PreparedSequence* prepared) {
+  if (looks[nextIndex].mode == "sequence" &&
+      (prepared == nullptr || !isPreparedSequenceReady(*prepared))) {
+    return false;
+  }
   closeSequence();
   currentLookIndex = nextIndex;
   blackedOut = false;
   fadeScale = 1.0f;
-  if (!startLook(currentLookIndex)) return false;
+  if (!startLook(currentLookIndex, prepared)) return false;
   showLeds();
   return true;
 }
 
-bool startLook(uint8_t index) {
+bool startLook(uint8_t index, PreparedSequence* prepared) {
   LookConfig& look = looks[index];
   if (Serial) {
     Serial.print("Starting look: ");
@@ -780,12 +817,13 @@ bool startLook(uint8_t index) {
   }
 
   if (look.mode == "sequence") {
-    if (!openSequence(look.file)) {
+    if (!openSequence(look, prepared)) {
       fail(ERROR_SEQUENCE, "sequence open failed");
       return false;
     }
     applyLookToRuntimeZones(look);
-    return renderSequenceFrame(true);
+    applySequenceFrameBufferToLeds();
+    return true;
   }
 
   applyLookToRuntimeZones(look);
@@ -818,38 +856,98 @@ bool readSequenceMetadata(File& file, uint32_t& frameCount, uint16_t& fps, uint3
   return true;
 }
 
-bool canOpenSequence(const String& path) {
-  if (path.length() == 0) return false;
-  File candidate = SD.open(path.c_str(), FILE_READ);
-  if (!candidate) return false;
-  uint32_t frameCount = 0;
-  uint16_t fps = 0;
-  uint32_t frameBytes = 0;
-  bool valid = readSequenceMetadata(candidate, frameCount, fps, frameBytes);
-  candidate.close();
-  return valid;
+bool sequenceIntegrityMatches(File& file, uint32_t declaredBytes, const String& declaredSha256) {
+  if (declaredBytes == 0 || declaredSha256.length() != 64 || file.size() != declaredBytes) return false;
+  mbedtls_sha256_context context;
+  mbedtls_sha256_init(&context);
+  mbedtls_sha256_starts_ret(&context, 0);
+  file.seek(0);
+  uint8_t buffer[256];
+  size_t bytesSinceWatchdogService = 0;
+  while (file.available()) {
+    size_t read = file.read(buffer, sizeof(buffer));
+    if (read == 0) break;
+    mbedtls_sha256_update_ret(&context, buffer, read);
+    bytesSinceWatchdogService += read;
+    if (bytesSinceWatchdogService >= 4096) {
+      esp_task_wdt_reset();
+      yield();
+      bytesSinceWatchdogService = 0;
+    }
+  }
+  uint8_t digest[32];
+  mbedtls_sha256_finish_ret(&context, digest);
+  mbedtls_sha256_free(&context);
+  const char* hex = "0123456789abcdef";
+  char actual[65] = {};
+  for (uint8_t index = 0; index < 32; index++) {
+    actual[index * 2] = hex[(digest[index] >> 4) & 0x0f];
+    actual[index * 2 + 1] = hex[digest[index] & 0x0f];
+  }
+  file.seek(0);
+  return declaredSha256 == actual;
 }
 
-bool openSequence(const String& path) {
-  if (path.length() == 0) return false;
+bool prepareSequence(const LookConfig& look, PreparedSequence& prepared) {
+  if (look.file.length() == 0) return false;
+  prepared.file = SD.open(look.file.c_str(), FILE_READ);
+  if (!prepared.file) return false;
+  bool valid = sequenceIntegrityMatches(prepared.file, look.sequenceBytes, look.sequenceSha256) &&
+      readSequenceMetadata(prepared.file, prepared.frameCount, prepared.fps, prepared.frameBytes);
+  if (!valid) {
+    prepared.file.close();
+    return false;
+  }
+  preparedSequenceFrameGeneration++;
+  if (preparedSequenceFrameGeneration == 0) preparedSequenceFrameGeneration++;
+  size_t stagedFrameBytes =
+      prepared.file.read(preparedSequenceFrameBuffer, prepared.frameBytes);
+  if (stagedFrameBytes != prepared.frameBytes) {
+    prepared.file.close();
+    return false;
+  }
+  prepared.stagedFrameGeneration = preparedSequenceFrameGeneration;
+  prepared.stagedFrameBytes = stagedFrameBytes;
+  prepared.ready = true;
+  return true;
+}
 
-  sequenceFile = SD.open(path.c_str(), FILE_READ);
-  if (!sequenceFile) {
+bool prepareLookForSelection(const LookConfig& look, bool zoneTargeted, PreparedSequence& prepared) {
+  if (!isLoadedLookRenderable(look, zoneTargeted)) return false;
+  return look.mode != "sequence" || prepareSequence(look, prepared);
+}
+
+bool isPreparedSequenceReady(const PreparedSequence& prepared) {
+  return preparedSequenceActivationReady(
+      prepared.ready,
+      prepared.stagedFrameGeneration,
+      preparedSequenceFrameGeneration,
+      prepared.frameBytes,
+      prepared.stagedFrameBytes);
+}
+
+bool openSequence(const LookConfig& look, PreparedSequence* prepared) {
+  PreparedSequence openedHere;
+  PreparedSequence* verified = prepared ? prepared : &openedHere;
+  if (!isPreparedSequenceReady(*verified) &&
+      (prepared != nullptr || !prepareSequence(look, *verified))) {
     if (Serial) {
-      Serial.print("Missing sequence file: ");
-      Serial.println(path);
+      Serial.print("Missing or invalid sequence file: ");
+      Serial.println(look.file);
     }
     return false;
   }
 
-  if (!readSequenceMetadata(sequenceFile, sequenceFrameCount, sequenceFps, sequenceFrameBytes)) {
-    sequenceFile.close();
-    return false;
-  }
+  sequenceFile = verified->file;
+  sequenceFrameCount = verified->frameCount;
+  sequenceFps = verified->fps;
+  sequenceFrameBytes = verified->frameBytes;
+  memcpy(frameBuffer, preparedSequenceFrameBuffer, sequenceFrameBytes);
+  verified->ready = false;
 
   sequenceOpen = true;
-  sequenceFrameIndex = 0;
-  nextSequenceFrameAt = 0;
+  sequenceFrameIndex = 1;
+  nextSequenceFrameAt = millis() + (1000 / sequenceFps);
   return true;
 }
 
@@ -933,7 +1031,8 @@ bool isLoadedLookRenderable(const LookConfig& look, bool zoneTargeted) {
   if (look.mode == "preset") return isSupportedPresetPattern(look.preset);
   if (look.mode == "sequence") {
     if (zoneTargeted) return false;
-    return canOpenSequence(look.file);
+    return look.file.length() > 0 && look.sequenceBytes > 0 &&
+        look.sequenceSha256.length() == 64;
   }
   return false;
 }
@@ -1040,16 +1139,20 @@ bool renderSequenceFrame(bool force) {
     }
   }
 
+  applySequenceFrameBufferToLeds();
+
+  sequenceFrameIndex++;
+  nextSequenceFrameAt = now + (1000 / sequenceFps);
+  return true;
+}
+
+void applySequenceFrameBufferToLeds() {
   uint32_t cursor = 0;
   for (uint16_t i = 0; i < totalPixels; i++) {
     leds[i].r = frameBuffer[cursor++];
     leds[i].g = frameBuffer[cursor++];
     leds[i].b = frameBuffer[cursor++];
   }
-
-  sequenceFrameIndex++;
-  nextSequenceFrameAt = now + (1000 / sequenceFps);
-  return true;
 }
 
 bool renderProceduralFrame(const String& preset) {
@@ -1515,6 +1618,29 @@ bool runtimeCanStepPattern(int8_t direction) {
   return isLoadedLookRenderable(looks[targetIndex], false);
 }
 
+void clearPreparedPatternSelection(bool closePreparedFile) {
+  if (closePreparedFile && preparedPatternSelection.sequence.file) {
+    preparedPatternSelection.sequence.file.close();
+  }
+  preparedPatternSelection = PreparedPatternSelection();
+}
+
+bool runtimePrepareStepPattern(int8_t direction) {
+  clearPreparedPatternSelection();
+  if (!provisioningLookStepChangesSelection(lookCount, currentLookIndex, direction)) return false;
+  uint8_t targetIndex = direction > 0
+      ? (currentLookIndex + 1) % lookCount
+      : (currentLookIndex + lookCount - 1) % lookCount;
+  if (!prepareLookForSelection(
+          looks[targetIndex], false, preparedPatternSelection.sequence)) {
+    clearPreparedPatternSelection();
+    return false;
+  }
+  preparedPatternSelection.kind = PreparedPatternSelectionKind::GlobalLook;
+  preparedPatternSelection.lookIndex = targetIndex;
+  return true;
+}
+
 void runtimeNextPattern() {
   selectLook(currentLookIndex + 1);
 }
@@ -1526,7 +1652,6 @@ void runtimePreviousPattern() {
 bool runtimeSelectPatternById(const String& id) {
   const LookConfig* look = findLookByExactId(id);
   if (look) {
-    if (!isLoadedLookRenderable(*look, false)) return false;
     return selectLookInstant(static_cast<int>(look - looks));
   }
   if (isSupportedCompiledPattern(id)) {
@@ -1534,7 +1659,7 @@ bool runtimeSelectPatternById(const String& id) {
     return true;
   }
   look = findLookByPresetAlias(id);
-  if (!look || !isLoadedLookRenderable(*look, false)) return false;
+  if (!look) return false;
   return selectLookInstant(static_cast<int>(look - looks));
 }
 
@@ -1562,6 +1687,78 @@ bool runtimeCanSelectPatternByIdZ(const String& targetId, const String& patternI
   return false;
 }
 
+bool runtimePreparePatternByIdZ(const String& targetId, const String& patternId) {
+  clearPreparedPatternSelection();
+  if (!runtimeCanSelectPatternByIdZ(targetId, patternId)) return false;
+
+  preparedPatternSelection.targetId = targetId;
+  preparedPatternSelection.patternId = patternId;
+  if (targetId.length() > 0) {
+    preparedPatternSelection.kind = PreparedPatternSelectionKind::ZonePattern;
+    return true;
+  }
+
+  const LookConfig* look = findLookByExactId(patternId);
+  if (look) {
+    if (!prepareLookForSelection(
+            *look, false, preparedPatternSelection.sequence)) {
+      clearPreparedPatternSelection();
+      return false;
+    }
+    preparedPatternSelection.kind = PreparedPatternSelectionKind::GlobalLook;
+    preparedPatternSelection.lookIndex = static_cast<uint8_t>(look - looks);
+    return true;
+  }
+
+  if (isSupportedCompiledPattern(patternId)) {
+    preparedPatternSelection.kind =
+        PreparedPatternSelectionKind::GlobalCompiledPattern;
+    return true;
+  }
+
+  look = findLookByPresetAlias(patternId);
+  if (!look ||
+      !prepareLookForSelection(*look, false, preparedPatternSelection.sequence)) {
+    clearPreparedPatternSelection();
+    return false;
+  }
+  preparedPatternSelection.kind = PreparedPatternSelectionKind::GlobalLook;
+  preparedPatternSelection.lookIndex = static_cast<uint8_t>(look - looks);
+  return true;
+}
+
+bool runtimeCommitPreparedPatternSelection() {
+  bool applied = false;
+  switch (preparedPatternSelection.kind) {
+    case PreparedPatternSelectionKind::GlobalLook:
+      applied = applyPreparedLookInstant(
+          preparedPatternSelection.lookIndex,
+          &preparedPatternSelection.sequence);
+      break;
+    case PreparedPatternSelectionKind::GlobalCompiledPattern:
+      applyToZones("", [&](ZoneConfig& z) {
+        z.patternId = preparedPatternSelection.patternId;
+      });
+      applied = true;
+      break;
+    case PreparedPatternSelectionKind::ZonePattern:
+      applied = applyToZones(
+          preparedPatternSelection.targetId,
+          [&](ZoneConfig& z) {
+            z.patternId = preparedPatternSelection.patternId;
+          }) > 0;
+      break;
+    case PreparedPatternSelectionKind::None:
+      break;
+  }
+  clearPreparedPatternSelection(!applied);
+  return applied;
+}
+
+void runtimeDiscardPreparedPatternSelection() {
+  clearPreparedPatternSelection();
+}
+
 bool runtimePatternAffectsAllOutputs(const String& targetId, const String& patternId) {
   if (targetId.length() > 0) return false;
   const LookConfig* look = findLookByExactId(patternId);
@@ -1573,10 +1770,8 @@ bool runtimePatternAffectsAllOutputs(const String& targetId, const String& patte
 
 // Zone-targeted pattern selection. Used by the per-zone designer flow.
 bool runtimeSelectPatternByIdZ(const String& targetId, const String& patternId) {
-  if (!runtimeCanSelectPatternByIdZ(targetId, patternId)) return false;
-  if (targetId.length() == 0) return runtimeSelectPatternById(patternId);
-  uint8_t touched = applyToZones(targetId, [&](ZoneConfig& z) { z.patternId = patternId; });
-  return touched > 0;
+  return runtimePreparePatternByIdZ(targetId, patternId) &&
+      runtimeCommitPreparedPatternSelection();
 }
 
 void runtimeTriggerIdentify() {
@@ -1795,29 +1990,23 @@ FactoryResetResult runtimeFactoryReset() {
   FactoryResetResult result;
   runtimeMarkRestartPending();
   bool sdMounted = SD.begin(LW_SD_CS);
-  if (!sdMounted) {
-    restartTransitionPending = false;
-    result.message = "sd unavailable; remove card or retry; factory reset not completed";
-    return result;
-  }
-
-  bool sdConfigExists = SD.exists(LW_FACTORY_CONFIG_PATH);
-  bool staleRecoveryExists = SD.exists(LW_FACTORY_RESET_RECOVERY_PATH);
+  bool sdConfigExists = sdMounted && SD.exists(LW_FACTORY_CONFIG_PATH);
+  bool staleRecoveryExists = sdMounted && SD.exists(LW_FACTORY_RESET_RECOVERY_PATH);
   bool sdConfigStaged = false;
-  if (staleRecoveryExists && sdConfigExists) {
+  if (sdMounted && staleRecoveryExists && sdConfigExists) {
     if (!SD.remove(LW_FACTORY_RESET_RECOVERY_PATH)) {
       restartTransitionPending = false;
       result.message = "sd stale reset recovery cleanup failed; remove /lightweaver.reset-recovery.json or retry";
       return result;
     }
-  } else if (staleRecoveryExists) {
+  } else if (sdMounted && staleRecoveryExists) {
     // A power loss may leave the only recoverable project under the inert
     // backup name. Keep it staged so an NVS failure can restore active boot.
     sdConfigStaged = true;
     sdConfigExists = true;
   }
 
-  if (sdConfigExists && !sdConfigStaged) {
+  if (sdMounted && sdConfigExists && !sdConfigStaged) {
     sdConfigStaged = SD.rename(
         LW_FACTORY_CONFIG_PATH, LW_FACTORY_RESET_RECOVERY_PATH);
     if (!sdConfigStaged) {
@@ -1834,8 +2023,8 @@ FactoryResetResult runtimeFactoryReset() {
     prefs.end();
   }
   if (!nvsCleared) {
-    bool sdRestored = !sdConfigStaged || SD.rename(
-        LW_FACTORY_RESET_RECOVERY_PATH, LW_FACTORY_CONFIG_PATH);
+    bool sdRestored = !sdConfigStaged || (sdMounted && SD.rename(
+        LW_FACTORY_RESET_RECOVERY_PATH, LW_FACTORY_CONFIG_PATH));
     restartTransitionPending = false;
     result.message = sdRestored
         ? "nvs erase failed; sd config restored; factory reset not completed"
@@ -1843,21 +2032,34 @@ FactoryResetResult runtimeFactoryReset() {
     return result;
   }
 
-  bool sdConfigRemoved = !sdConfigStaged || SD.remove(LW_FACTORY_RESET_RECOVERY_PATH);
+  if (!sdMounted) {
+    String suppressionMessage;
+    if (!suppressSdProjectAutorunAfterFactoryReset(suppressionMessage)) {
+      restartTransitionPending = false;
+      result.message = String("nvs erased but ") + suppressionMessage +
+          "; factory reset cannot safely complete";
+      return result;
+    }
+  }
+
+  bool sdConfigRemoved = !sdConfigStaged || (sdMounted && SD.remove(LW_FACTORY_RESET_RECOVERY_PATH));
   if (!sdConfigRemoved) {
     restartTransitionPending = false;
-    result.message = "nvs erased; sd recovery backup remains at /lightweaver.reset-recovery.json and is not auto-loaded; remove manually; factory reset incomplete";
+    result.accepted = true;
+    result.pendingVerification = true;
+    result.message = "nvs erased; optional sd cleanup remains at /lightweaver.reset-recovery.json; it is not auto-loaded; remove manually";
     return result;
   }
-  if (!provisioningFactoryResetMayComplete(
-          sdMounted, sdConfigExists, sdConfigRemoved, nvsCleared)) {
+  if (!provisioningFactoryResetMayComplete(nvsCleared, sdConfigRemoved)) {
     restartTransitionPending = false;
     result.message = "factory reset verification failed after storage cleanup";
     return result;
   }
   result.accepted = true;
   result.pendingVerification = true;
-  result.message = "factory storage erased; reboot pending verification";
+  result.message = sdMounted
+      ? "factory storage erased; reboot pending verification"
+      : "nvs erased; sd cleanup unavailable; reboot pending verification";
   return result;
 }
 

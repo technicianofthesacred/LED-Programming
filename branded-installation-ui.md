@@ -1,4 +1,10 @@
-# Branded Installation UI — ESP32 + WLED
+# Branded Installation UI — historical WLED exploration
+
+> **Superseded:** This document records the earlier stock-WLED and Raspberry Pi
+> options. It is not the shipping Lightweaver runtime or its setup procedure.
+> The current product uses the standalone ESP32-S3 firmware and its onboard
+> visitor UI. Use `docs/lightweaver-customer-runtime.md` for the runtime model
+> and `docs/deployment-checklist.md` for installation.
 
 **Use case:** Art pieces in the field. Visitors connect to the ESP32's WiFi hotspot and get a simple branded page to switch LED patterns. No internet required. Everything served from the device.
 

@@ -23,6 +23,8 @@ namespace lw_wled {
 
 namespace {
 
+constexpr size_t LW_WLED_STATE_MAX_BODY_BYTES = 4096;
+
 WebServer* serverPtr = nullptr;
 
 // Same allowlisted-origin policy as the Lightweaver API (see
@@ -216,17 +218,15 @@ void handleJsonGet() {
   // JsonDocument that might overflow the default stack budget.
   String state = buildStateJson();
   String info = buildInfoJson();
+  JsonDocument effectsDoc;
+  JsonArray effects = effectsDoc.to<JsonArray>();
+  for (uint8_t i = 0; i < lookCount; i++) effects.add(looks[i].label);
+  String effectsJson;
+  serializeJson(effects, effectsJson);
   String out = "{";
   out += "\"state\":" + state + ",";
   out += "\"info\":" + info + ",";
-  out += "\"effects\":[";
-  for (uint8_t i = 0; i < lookCount; i++) {
-    if (i) out += ",";
-    out += "\"";
-    out += looks[i].label;
-    out += "\"";
-  }
-  out += "],";
+  out += "\"effects\":" + effectsJson + ",";
   out += "\"palettes\":[\"Default\",\"Warm\",\"Cool\",\"Rainbow\",\"Ocean\",\"Forest\"]";
   out += "}";
   serverPtr->send(200, "application/json", out);
@@ -259,12 +259,21 @@ bool hexToRgb(const char* s, uint8_t& r, uint8_t& g, uint8_t& b) {
 // native runtime API.
 void handleStatePost() {
   sendCors();
+  if (serverPtr->clientContentLength() > LW_WLED_STATE_MAX_BODY_BYTES) {
+    serverPtr->send(413, "application/json", "{\"success\":false,\"error\":\"state request too large\"}");
+    return;
+  }
   if (!serverPtr->hasArg("plain")) {
     serverPtr->send(400, "application/json", "{\"success\":false,\"error\":\"missing body\"}");
     return;
   }
+  String body = serverPtr->arg("plain");
+  if (body.length() > LW_WLED_STATE_MAX_BODY_BYTES) {
+    serverPtr->send(413, "application/json", "{\"success\":false,\"error\":\"state request too large\"}");
+    return;
+  }
   JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, serverPtr->arg("plain"));
+  DeserializationError err = deserializeJson(doc, body);
   if (err) {
     serverPtr->send(400, "application/json", String("{\"success\":false,\"error\":\"") + err.c_str() + "\"}");
     return;
@@ -273,6 +282,14 @@ void handleStatePost() {
   bool framePushed = false;
   JsonArray segs = doc["seg"].as<JsonArray>();
   if (!segs.isNull()) {
+    // Segment on/fx would need a complete zone transaction model. Reject the
+    // entire body before changing global state or writing any live pixels.
+    for (JsonObject s : segs) {
+      if (!s["on"].isNull() || !s["fx"].isNull()) {
+        serverPtr->send(400, "application/json", "{\"success\":false,\"error\":\"unsupported per-segment on/fx control\"}");
+        return;
+      }
+    }
     for (JsonObject s : segs) {
       // Raw pixel array — the live frame stream path.
       JsonArray pixels = s["i"].as<JsonArray>();
@@ -310,13 +327,6 @@ void handleStatePost() {
           }
         }
         if (frameWritten) frameSourceMarkExternal(FRAME_WLED_REALTIME);
-      }
-      // fx (pattern select) per segment
-      if (!s["fx"].isNull()) {
-        int fx = s["fx"].as<int>();
-        if (fx >= 0 && fx < lookCount) {
-          runtimeSelectPatternById(looks[fx].id);
-        }
       }
       // Per-segment brightness — apply to the matching zone if id resolves.
       // Skip only when THIS segment carried a frame (framePushed is

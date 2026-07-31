@@ -36,7 +36,7 @@ return hsv(fract(index / 60 + t * 0.2), 1, 1);
 | File | Use |
 |---|---|
 | `ledmap.json` | **Stock WLED ledmap** — `{ "width", "height", "map": [...] }` index map (value = physical LED index per grid cell, `-1` = gap). Upload via WLED web UI → Config → LED Preferences → 2D matrix → Custom ledmap (or place at `/ledmap.json` on the controller). |
-| `coords.json` | **Coordinate map (Lightweaver / Pixelblaze)** — `{ "n", "map": [[x,y], ...] }` normalized [x,y] pairs in draw order. This is *not* a stock WLED ledmap. |
+| `coords.json` | **External coordinate map** for Pixelblaze-style or custom consumers: `{ "n", "map": [[x,y], ...] }` normalized `[x,y]` pairs in draw order. This is not a stock WLED ledmap and is not imported by current Lightweaver card firmware. |
 | `ledmap.h` | FastLED — `#include` in your Arduino sketch |
 | `ledmap.csv` | Raw coordinates for any other tool |
 
@@ -45,11 +45,15 @@ dimension fit to ~64 cells, other side derived from aspect ratio), fills empty
 cells with `-1`, and resolves any cell collisions by nudging the LED to the
 nearest free cell so no pixel is dropped.
 
-## Hardware target
+## External WLED target
 
 - ESP32-S3 N16R8 + WS2815 12V addressable LEDs
 - WLED MoonModules firmware
 - Typical pitch: 16.6 mm (60 LED/m) or 33.3 mm (30 LED/m)
+
+This is an optional external export lane. Current Lightweaver cards run signed
+Lightweaver firmware and are installed from Studio at
+`led.mandalacodes.com`.
 
 ## File map
 

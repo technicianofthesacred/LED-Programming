@@ -549,6 +549,7 @@ import { openInChrome } from '../lib/openInChrome.js';
           strategy: 'clean-recovery',
           projectRecord: record,
           projectRevision: projectLifecycle.editedRevision,
+          projectGeneration: projectLifecycle.generation,
           installTarget: {
             id: cardState.hardware.cardId,
             firmwareVersion: releaseState.release.manifest.firmwareVersion,

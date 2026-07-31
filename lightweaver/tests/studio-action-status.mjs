@@ -39,7 +39,7 @@ assert.deepEqual(makePlaylistPushSuccessState({ rebooting: true }), {
   message: 'Playlist installed on card. The card is restarting to use it.',
   handoffUrl: '',
 });
-assert.equal(makePlaylistPushSuccessStateV3().message, 'Playlist saved to the card.');
+assert.equal(makePlaylistPushSuccessStateV3().message, 'Playlist installed on card.');
 
 const handoffBuilder = (host) => `http://${host}/#lwconfig=abc&reboot=1`;
 const bridgeTimeout = new Error('Timed out waiting for the card bridge.');

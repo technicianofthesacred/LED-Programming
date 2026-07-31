@@ -6,6 +6,7 @@
 
 #include "LightweaverOutputColorConfig.h"
 #include "LightweaverRecipe.h"
+#include "LightweaverHardwareContract.h"
 #include "LightweaverProvisioningPolicy.h"
 #include "LightweaverConnectivityPolicy.h"
 
@@ -19,6 +20,14 @@ constexpr uint8_t LW_MAX_LOOKS = 32;
 constexpr uint8_t LW_MAX_PATTERN_IDS = 32;
 constexpr uint8_t LW_MAX_ZONES = 10;
 constexpr uint8_t LW_MAX_RANGES_PER_ZONE = 4;
+static_assert(LW_MAX_PIXELS == LW_CARD_HARDWARE_MAX_PIXELS,
+              "pixel capacity must match the generated hardware contract");
+static_assert(LW_MAX_OUTPUTS == LW_CARD_HARDWARE_MAX_OUTPUTS,
+              "output capacity must match the generated hardware contract");
+static_assert(LW_MAX_ZONES == LW_CARD_HARDWARE_MAX_ZONES,
+              "zone capacity must match the generated hardware contract");
+static_assert(LW_MAX_RANGES_PER_ZONE == LW_CARD_HARDWARE_MAX_RANGES_PER_ZONE,
+              "zone range capacity must match the generated hardware contract");
 constexpr uint8_t LW_MAX_ARTNET_UNIVERSES = 8;
 constexpr size_t LW_PROJECT_FINGERPRINT_MAX_LENGTH = 64;
 constexpr size_t LW_PRODUCTION_JOB_ID_MAX_LENGTH = 96;
@@ -152,6 +161,8 @@ struct LookConfig {
   String label;
   String mode;
   String file;
+  uint32_t sequenceBytes = 0;
+  String sequenceSha256;
   String preset;
   uint16_t fps = 24;
   bool loop = true;

@@ -377,6 +377,39 @@ assert.equal(clampFrameFps('nope'), 18, 'garbage fps falls back to the default')
 // ── health callback: rejections count, and stop() works from inside it ────
 {
   const clock = makeClock();
+  let reply = { ok: true, dropped: true };
+  const transport = {
+    kind: 'fake',
+    async sendFrame() { return reply; },
+    async sendCancel() {},
+    close() {},
+  };
+  const stream = createCardFrameStream({
+    transport,
+    setIntervalImpl: clock.setIntervalImpl,
+    clearIntervalImpl: clock.clearIntervalImpl,
+    now: clock.now,
+  });
+  stream.start();
+  stream.push(FRAME(1));
+  await clock.advance(60);
+  let stats = stream.getStats();
+  assert.equal(stats.sentFrames, 0, 'a congestion drop is not counted as delivered');
+  assert.equal(stats.undeliveredFrames, 1, 'a congestion drop is counted as undelivered');
+  assert.equal(stats.lastError?.reason, 'transport-congested');
+
+  reply = { ok: true, relayed: false, wsOpen: true, reason: 'relay-send-failed' };
+  stream.push(FRAME(2));
+  await clock.advance(60);
+  stats = stream.getStats();
+  assert.equal(stats.sentFrames, 0, 'a relay send exception is not counted as delivered');
+  assert.equal(stats.lastError?.reason, 'relay-send-failed');
+  await stream.stop();
+}
+
+// ── health callback: rejections count, and stop() works from inside it ────
+{
+  const clock = makeClock();
   let failing = false;
   const record = { cancels: 0 };
   const stops = [];

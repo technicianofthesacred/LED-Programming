@@ -55,6 +55,9 @@ assert.match(preflight, /findLookByPresetAlias\(patternId\)/, 'non-compiled glob
 assert.match(preflight, /isLoadedLookRenderable\(\*look,\s*zoneTargeted\)/, 'loaded looks must prove the requested target is renderable');
 assert.match(preflight, /isSupportedCompiledPattern\(patternId\)/, 'known compiled patterns must remain accepted');
 const select = runtime.slice(runtime.indexOf('bool runtimeSelectPatternById(const String& id)'), preflightStart);
-assert.match(select, /if\s*\(!look\s*\|\|\s*!isLoadedLookRenderable\(\*look,\s*false\)\)\s*return false;/, 'unknown global pattern ids must be rejected before state changes');
+assert.match(select, /if\s*\(!look\)\s*return false;/,
+  'unknown global pattern ids must be rejected before state changes');
+assert.match(select, /selectLookInstant\(/,
+  'loaded global looks must delegate renderability and concrete-file preparation to selection');
 
 console.log('pattern-color-modifiers ok');

@@ -505,7 +505,7 @@ test('confirming the color auto-locks verified wiring and a Draw GPIO edit reope
   await expect(page.getByRole('button', { name: 'Lock wiring' })).toHaveCount(0);
   await expect(page.getByTestId('layout-send-to-card')).toBeEnabled();
   await openAdvanced(page);
-  await expect(page.getByTestId('layout-export-ledmap')).toHaveClass(/btn-ghost/);
+  await expect(page.getByTestId('layout-export-ledmap')).toHaveCount(0);
   const confirmedProject = await saveProject(page);
   expect(confirmedProject.layout.wiring.locked).toBe(true);
   expect(confirmedProject.layout.wiring.verified).toBe(true);

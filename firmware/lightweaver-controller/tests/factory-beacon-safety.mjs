@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const policy = readFileSync(resolve(root, 'src/LightweaverProvisioningPolicy.h'), 'utf8');
+const hardware = readFileSync(resolve(root, 'src/LightweaverHardwareContract.h'), 'utf8');
 const storage = readFileSync(resolve(root, 'src/LightweaverStorage.cpp'), 'utf8');
 const main = readFileSync(resolve(root, 'src/main.cpp'), 'utf8');
 const web = readFileSync(resolve(root, 'src/LightweaverWeb.cpp'), 'utf8');
@@ -39,7 +40,9 @@ assert.match(defaults, /config\.ledColorOrder\s*=\s*""/);
 assert.doesNotMatch(defaults, /pin\s*=\s*16|pixels\s*=\s*44|"aurora"|"RGB"/,
   'compiled defaults must not masquerade as the historical GPIO16/44/RGB/Aurora project');
 
-assert.match(policy, /LW_APPROVED_OUTPUT_GPIOS\[\]\s*=\s*\{16, 17, 18, 21\}/);
+assert.match(policy, /LW_APPROVED_OUTPUT_GPIOS[\s\S]*LW_CARD_HARDWARE_OUTPUT_GPIOS/,
+  'provisioning must consume the generated hardware contract');
+assert.match(hardware, /LW_CARD_HARDWARE_OUTPUT_GPIOS\[\]\s*=\s*\{16, 17, 18, 21\}/);
 assert.match(policy, /LW_FACTORY_BEACON_PIXEL_LIMIT\s*=\s*8/);
 assert.match(policy, /LW_FACTORY_BEACON_BRIGHTNESS_LIMIT\s*=\s*(?:1[0-9]|2[0-4])/);
 assert.match(policy, /LW_FACTORY_BEACON_MAX_MILLIAMPS\s*=\s*100/);

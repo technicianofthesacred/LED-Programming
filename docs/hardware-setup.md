@@ -1,158 +1,103 @@
-# Lightweaver — Hardware Setup
+# Lightweaver hardware setup
 
-Action items for the human. These are the steps an agent cannot run from the keyboard alone — they involve a USB cable, a power supply, and eyes on the strip.
+This is the current ESP32-S3 card setup path. It requires a computer with a
+supported USB browser, a data-capable USB cable, the final LED power supply, and
+eyes on the physical strip.
 
----
+Do not install WLED on a current Lightweaver card. WLED, Raspberry Pi hosting,
+and Madrix commissioning are deferred lanes documented separately in
+[`deferred-wled-hardware-setup.md`](deferred-wled-hardware-setup.md).
 
-## 1. Flash WLED 0.15.4 onto the ESP32-S3 N16R8
+## 1. Prepare the bench
 
-The firmware binary is in the repo root: `WLED 0.15.4 ESP32-S3 16MB.bin`.
+1. Disconnect LED power before changing wiring.
+2. Connect the ESP32-S3 card to the computer with a data-capable USB cable.
+3. Wire LED data only to a production-supported output: GPIO 16, 17, 18, or 21.
+4. Connect controller ground and LED power-supply ground.
+5. Power the LEDs from their final supply, not from USB.
+6. Start with the Studio brightness limit at a safe bench level.
 
-ESP32-S3 expects:
-- **Bootloader offset:** `0x0`
-- **Partition table offset:** `0x8000`
-- **OTA boot data offset:** `0xe000`
-- **WLED app offset:** `0x10000`
-- **Baud:** 921600 for upload, 115200 for serial monitor
+## 2. Install signed Lightweaver firmware
 
-The repo binary is the official WLED `WLED_0.15.4_ESP32-S3_16MB_opi.bin` app image, not a merged factory image. Do not flash it by itself at `0x0`; that produces a boot loop.
+1. Open [led.mandalacodes.com](https://led.mandalacodes.com) in a supported
+   desktop browser.
+2. Open **Card**, then **Install or update**.
+3. Connect the exact ESP32-S3 card when the browser asks.
+4. Let Studio inspect the target and signed release.
+5. Confirm the destructive erase only after Studio shows the expected card.
+6. Keep the USB cable connected until write verification and application restart
+   complete.
 
-### Option A — esptool.py four-part install (recommended for first-time)
+The normal installer chooses the image, flash layout, baud rate, and offsets.
+Do not select a local binary or flash the public factory image manually unless
+the supported installer has failed and the deployment checklist explicitly
+directs technician recovery.
 
-1. Plug the ESP32-S3 into the host machine via USB-C.
-2. Hold **BOOT**, tap **RESET**, release **BOOT** to enter download mode.
-3. Run the command below, changing the port if needed.
+## 3. Join the card setup network
 
-```bash
-python3 -m pip install esptool
+After the card restarts:
 
-mkdir -p /tmp/lightweaver-wled-flash
-curl -L -o /tmp/lightweaver-wled-flash/bootloader_esp32s3_opi.bin \
-  https://wled-install.github.io/suppl_dir/bootloader_esp32s3_opi.bin
-curl -L -o /tmp/lightweaver-wled-flash/partitions_16MB.bin \
-  https://wled-install.github.io/suppl_dir/partitions_16MB.bin
-curl -L -o /tmp/lightweaver-wled-flash/boot_app0_v2022.bin \
-  https://wled-install.github.io/suppl_dir/boot_app0_v2022.bin
+1. Join the card network named `Lightweaver-XXXX`.
+2. Return to Studio and continue the same setup.
+3. Enter gallery or studio Wi-Fi credentials only on the card-owned page.
+4. Wait for Studio to verify the same card on the local network.
 
-python3 -m esptool \
-  --chip esp32s3 \
-  --port /dev/cu.usbmodem142101 \
-  --baud 921600 \
-  --before default_reset \
-  --after hard_reset \
-  write_flash \
-  --erase-all \
-  --verify \
-  --flash_mode keep \
-  --flash_freq keep \
-  --flash_size keep \
-  -z \
-  0x0 /tmp/lightweaver-wled-flash/bootloader_esp32s3_opi.bin \
-  0x8000 /tmp/lightweaver-wled-flash/partitions_16MB.bin \
-  0xe000 /tmp/lightweaver-wled-flash/boot_app0_v2022.bin \
-  0x10000 "WLED 0.15.4 ESP32-S3 16MB.bin"
-```
+The normal customer path does not require typing `192.168.4.1`,
+`lightweaver.local`, or a numeric LAN address. Manual local addresses belong
+under **Connection help** after automatic discovery fails.
 
-On macOS the port is typically `/dev/cu.usbmodem*`. On Windows it's `COM<n>`.
+## 4. Load the project
 
-### Option B — Lightweaver / led-art-mapper Web Serial flasher (app updates only)
+Open **Test & Install**. Before any hardware change, review:
 
-Use the in-browser flasher only after the bootloader, partition table, and OTA boot data are already installed. For the official WLED release `.bin`, use address `0x10000` and leave **Erase all flash first** unchecked.
+- **Card:** the paired Lightweaver identity.
+- **Wiring:** output pins, physical pixel counts, direction, and color order.
+- **Power:** the selected supply and deployed current limit.
+- **Playback:** startup look, saved looks, and playlist.
 
----
+Studio keeps **Saved in Studio** separate from **Installed on card**. A send is
+not an installation until the exact card independently reads the project back.
 
-## 2. Verify WLED comes up
+## 5. Test the physical lights
 
-1. Wait ~10 seconds after flashing for first boot.
-2. On a phone or laptop, look for a WiFi network named `WLED-AP`. Default password is `wled1234`.
-3. Connect, then browse to `http://4.3.2.1`.
-4. In the WLED UI, open **Info**. Record:
-   - **Version:** must read `0.15.4`.
-   - **Free heap:** healthy values are >100 kB at idle. Sub-30 kB means a problem.
-   - **Uptime:** should increase as you reload Info.
+Hardware changes enter the safe test path. Playback-only changes use the shorter
+verified update.
 
-If the controller joins the studio LAN instead of staying in AP mode, run:
+1. Read the photosensitivity warning before starting chase, flash, or color
+   tests.
+2. Keep **Stop lights** available throughout the test.
+3. Confirm the first physical pixel.
+4. Confirm the proposed final pixel and that the next pixel stays dark.
+5. Confirm direction using position and motion, not color alone.
+6. Confirm red, green, and blue in sequence and select the correct color order.
+7. Confirm each output boundary before moving to the next output.
 
-```bash
-cd lightweaver
-npm run doctor:wled -- --scan
-```
+Until confirmation, the previous working setup remains stored. If the physical
+result is wrong, restore it and return to **Wire**. Do not approve a candidate
+because Studio sent it successfully.
 
-The doctor lists USB serial evidence, probes likely WLED addresses, ranks discovered controllers, and prints the recommended `WLED_HOST=<ip>` value for the Lightweaver Pi server. To send a low-brightness bench pattern during verification:
+## 6. Verify offline playback
 
-```bash
-npm run doctor:wled -- --host 192.168.18.66 --test blue
-```
+Studio must finish with **Installed and verified** on the named card. Then:
 
-Current bench controller, verified May 24, 2026:
+1. Play the first scene and confirm visible output.
+2. Disconnect Studio and confirm local controls still work.
+3. Power the card and LEDs off.
+4. Power them back on and confirm the same startup look, brightness limit,
+   wiring, and playlist.
+5. Disconnect the gallery network and confirm offline playback continues.
+6. Restore the network and confirm Studio reconnects to the same card.
 
-- **IP:** `192.168.18.66`
-- **MAC:** `aca704e2ece0`
-- **Firmware:** `0.15.4`, release `ESP32-S3_16MB_opi`
-- **Flash/PSRAM:** 16MB flash, 8MB PSRAM
+For microSD projects, also confirm the declared sequence loads, plays through,
+and fails safely when the card is removed or corrupted.
 
----
+## 7. Record the acceptance result
 
-## 3. Commission the controller in Lightweaver
+Complete the pass record required by
+[`new-card-checklist.md`](new-card-checklist.md). Record the stable card ID,
+firmware build, project fingerprint, output boundaries, color order, power
+limit, power-cycle result, offline result, and Wi-Fi recovery result.
 
-Open **Devices** in Lightweaver and use the controller commissioning workflow:
-
-1. **Find & Connect** discovers WLED through the Pi service, mDNS, or a fallback scan.
-2. **Save from WLED** creates a controller profile keyed by MAC address.
-3. Fill in **LED Basics**:
-   - **LED type:** WS2815 for the current 12V strip plan.
-   - **Pixels:** total physical pixel count.
-   - **GPIO:** data pin, commonly GPIO 16 unless wiring says otherwise.
-   - **Color order:** start with GRB.
-   - **Max brightness:** start at 180 or lower until the power budget is confirmed.
-4. Use **Color test** buttons, then confirm color once red, green, blue, and white behave as expected.
-5. Use **Pixel test** buttons:
-   - **First** should light physical pixel 1.
-   - **Last** should light the far end.
-   - **Every 10** confirms count and rough spacing.
-6. Fill in **Power Safety**:
-   - Voltage, PSU amps, estimated mA per pixel.
-   - Confirm common ground and level shifter status.
-7. Click **Save WLED snapshot** to store the current `/json` dump in the project profile.
-8. Copy the **Install Report** before taking the controller off the bench.
-
-The **Known-good state** button returns WLED to a low-brightness amber solid. Use it whenever Art-Net, live streaming, or an effect leaves the strip in an unknown state.
-
----
-
-## 4. Configure LED type and length directly in WLED
-
-1. WLED UI > **Config** > **LED Preferences**.
-2. **LED type:** WS2815 (or WS281x — WS2815 uses the same protocol).
-3. **Length:** total physical pixel count of the strip for this piece.
-4. **Data pin:** the GPIO the strip's data line is wired to (commonly GPIO 16 on the N16R8 dev boards — confirm against your wiring).
-5. **Color order:** GRB to start; adjust if a red-only test shows the wrong colour.
-6. Save, then in the main UI set brightness to ~64 and apply the **Solid** effect with a pure red. The whole strip should glow red. Try green and blue. If any colour is wrong, fix the colour order.
-7. Try the **Chase** or **Running** effect to confirm pixel ordering and direction match the physical strip.
-
----
-
-## 5. Test Art-Net from Madrix
-
-Minimal Madrix patch to verify Art-Net reception:
-
-1. In Madrix, open **Device Manager > DMX Devices**.
-2. Add an **Art-Net** device. Set the IP to the WLED's IP, **universe 0**, transmission **Unicast**.
-3. Patch a single tile (170 RGB pixels) onto universe 0.
-4. Add a static colour effect (e.g. solid blue at 50% brightness).
-5. In WLED: **Sync Interfaces** > enable **Art-Net (DMX)**, set start universe 0, start channel 0, reboot.
-6. Start Madrix output. The strip should immediately show the Madrix colour. Stop output — strip returns to the WLED-side effect after the timeout.
-
-If the strip does not respond: confirm the WLED IP is reachable (`ping`), check Madrix is unicasting (not broadcasting to a different subnet), and confirm WiFi sleep is disabled in WLED.
-
----
-
-## 6. Capture and record (per device)
-
-For every controller deployed, write the following down somewhere durable (a markdown file per device, or a spreadsheet):
-
-- **WLED MAC address** — UI > Info > MAC. Used for DHCP reservations and unique SSID suffixes.
-- **IP after AP→STA join** — once joined to the gallery / Pi network, record the assigned IP.
-- **Segment configuration JSON dump** — `curl http://<wled-ip>/json > device-<mac>.json`. This snapshots segments, presets, and all settings for disaster recovery.
-
-These three values plus the firmware version are the minimum needed to reproduce a device's runtime state from scratch.
+The card is not ready to ship until the physical observations in
+[`deployment-checklist.md`](deployment-checklist.md) are complete. Automated
+tests and firmware acknowledgements cannot replace them.

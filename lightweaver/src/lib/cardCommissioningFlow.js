@@ -46,6 +46,54 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function canonicalPhysicalOutputs(value) {
+  if (!Array.isArray(value) || value.length < 1) {
+    throw new Error('The wiring candidate is missing its exact physical outputs');
+  }
+  return value.map((output, outputIndex) => {
+    const id = text(output?.id, 64);
+    const pin = Number(output?.pin);
+    const pixels = Number(output?.pixels);
+    if (!id || !Number.isSafeInteger(pin) || pin < 0 || pin > 48
+      || !Number.isSafeInteger(pixels) || pixels < 1) {
+      throw new Error(`The wiring candidate output ${outputIndex + 1} is invalid`);
+    }
+    const segments = Array.isArray(output?.segments)
+      ? output.segments.map((segment, segmentIndex) => {
+          const segmentId = text(segment?.id, 64);
+          const count = Number(segment?.count);
+          const direction = text(segment?.direction || 'forward', 16);
+          if (!segmentId || !Number.isSafeInteger(count) || count < 1
+            || !['forward', 'reverse'].includes(direction)) {
+            throw new Error(`The wiring candidate segment ${segmentIndex + 1} is invalid`);
+          }
+          return { id: segmentId, count, direction };
+        })
+      : [];
+    return { id, pin, pixels, segments };
+  });
+}
+
+function candidateWiringIdentity(readback = {}) {
+  const wiringRevision = Number(readback.wiringRevision);
+  const wiringDigest = text(readback.wiringDigest, 64).toLowerCase();
+  const colorOrder = text(readback.colorOrder, 8).toUpperCase();
+  const maxMilliamps = Number(readback.maxMilliamps);
+  if (!Number.isSafeInteger(wiringRevision) || wiringRevision < 1
+    || !/^[a-f0-9]{64}$/.test(wiringDigest)
+    || !/^(RGB|RBG|GRB|GBR|BRG|BGR)$/.test(colorOrder)
+    || !Number.isSafeInteger(maxMilliamps) || maxMilliamps < 100 || maxMilliamps > 20000) {
+    throw new Error('The wiring candidate is missing its exact wiring, color, or current-limit identity');
+  }
+  return {
+    wiringRevision,
+    wiringDigest,
+    colorOrder,
+    maxMilliamps,
+    outputs: canonicalPhysicalOutputs(readback.candidateOutputs || readback.outputs),
+  };
+}
+
 function cardRestoreSnapshot(project = {}) {
   return clone({
     version: project.version,
@@ -60,6 +108,20 @@ function cardRestoreSnapshot(project = {}) {
       standaloneController: project.devices?.standaloneController || {},
     },
   });
+}
+
+function migratePersistedFlow(value) {
+  const flow = clone(value);
+  if (!flow?.project || typeof flow.project !== 'object') return flow;
+  const legacyGeneration = flow.project.generation === undefined;
+  if (legacyGeneration) flow.project.generation = 0;
+  if (flow.project.pendingWiring === undefined) {
+    flow.project.pendingWiring = null;
+    if (legacyGeneration && text(flow.project.pendingActivationId, 128)) {
+      flow.project.wiringEvidenceState = 'legacy-inconclusive';
+    }
+  }
+  return flow;
 }
 
 function defaultStorage() {
@@ -109,6 +171,7 @@ export function beginCardCommissioning({
   routineUpdate = false,
   projectRecord,
   projectRevision,
+  projectGeneration = 0,
   installTarget = null,
   productionJobId = '',
   productionJobDigest = '',
@@ -119,6 +182,9 @@ export function beginCardCommissioning({
   if (!SOURCES.has(source)) throw new Error('A supported commissioning source is required');
   if (!OPERATIONS.has(operation)) throw new Error('A supported card operation is required');
   if (!validProjectRecord(projectRecord)) throw new Error('Save the Studio project before changing card firmware');
+  if (!Number.isSafeInteger(projectGeneration) || projectGeneration < 0) {
+    throw new Error('A valid Studio project generation is required');
+  }
   const normalizedJobDigest = text(productionJobDigest, 64).toLowerCase();
   const normalizedJobId = text(productionJobId, 96);
   if ((normalizedJobId || normalizedJobDigest) && flowType !== 'production-job') throw new Error('Production job identity requires the production-job flow type');
@@ -151,6 +217,7 @@ export function beginCardCommissioning({
       recordId: text(projectRecord.id, 128),
       recordUpdatedAt: Number(projectRecord.updatedAt) || Number(now),
       revision: Math.max(0, Number(projectRevision) || 0),
+      generation: projectGeneration,
       fingerprint: fingerprintCommissioningProject(snapshot),
       productionJobId: normalizedJobId,
       productionJobDigest: normalizedJobDigest,
@@ -159,8 +226,28 @@ export function beginCardCommissioning({
       restoredAt: null,
       restoredFingerprint: '',
       pendingActivationId: '',
+      pendingWiring: null,
+      wiringEvidenceState: '',
     },
   };
+}
+
+export function commissioningFlowMatchesProject(flow, {
+  project,
+  revision,
+  generation,
+  restored = false,
+} = {}) {
+  try {
+    requireFlow(flow);
+    if (!project || typeof project !== 'object') return false;
+    if (!Number.isSafeInteger(revision) || !Number.isSafeInteger(generation)) return false;
+    if (flow.project.fingerprint !== fingerprintCommissioningProject(cardRestoreSnapshot(project))) return false;
+    if (restored === true) return true;
+    return flow.project.revision === revision && flow.project.generation === generation;
+  } catch {
+    return false;
+  }
 }
 
 export function completeCardInstall(flow, result = {}, { now = Date.now() } = {}) {
@@ -339,6 +426,7 @@ export function bindCardWiringActivationEvidence(status = {}, readback = {}) {
     projectFingerprint: readback.projectFingerprint,
     productionJobId: readback.productionJobId,
     productionJobDigest: readback.productionJobDigest,
+    pendingWiring: Object.freeze(candidateWiringIdentity(readback)),
   });
   CARD_WIRING_ACTIVATION_EVIDENCE.add(evidence);
   return evidence;
@@ -393,7 +481,12 @@ export function stageCardProjectForPhysicalCheck(flow, acknowledgement = {}, { n
     ...clone(flow),
     stage: 'check-lights',
     updatedAt: Math.max(Number(now), Number(flow.updatedAt)),
-    project: { ...clone(flow.project), pendingActivationId: activationId },
+    project: {
+      ...clone(flow.project),
+      pendingActivationId: activationId,
+      pendingWiring: clone(acknowledgement.pendingWiring),
+      wiringEvidenceState: '',
+    },
   };
 }
 
@@ -411,6 +504,8 @@ export function returnCardProjectToSetupAfterLightCheck(flow, { now = Date.now()
       restoredAt: null,
       restoredFingerprint: '',
       pendingActivationId: '',
+      pendingWiring: null,
+      wiringEvidenceState: '',
     },
   };
 }
@@ -434,6 +529,7 @@ function requireFlow(flow) {
     || (flow.acceptedResultId !== undefined && flow.acceptedResultId !== '' && !/^[A-Za-z0-9_-]{16,96}$/.test(flow.acceptedResultId))
     || !flow.project || !text(flow.project.recordId, 128)
     || !Number.isSafeInteger(flow.project.revision) || flow.project.revision < 0
+    || !Number.isSafeInteger(flow.project.generation) || flow.project.generation < 0
     || !/^[a-f0-9]{16}$/.test(flow.project.fingerprint || '')) {
     throw new Error('Invalid card commissioning progress');
   }
@@ -443,6 +539,27 @@ function requireFlow(flow) {
     && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/.test(flow.project.productionJobId)) throw new Error('Invalid card commissioning production job');
   if (!flow.project?.snapshot || fingerprintCommissioningProject(flow.project.snapshot) !== flow.project.fingerprint) {
     throw new Error('The saved commissioning project revision is invalid');
+  }
+  if (text(flow.project.pendingActivationId, 128)) {
+    if (flow.project.pendingWiring === null
+      && flow.project.wiringEvidenceState === 'legacy-inconclusive') {
+      // Older staged flows did not retain an authoritative wiring identity.
+      // They may still roll back/retry, but cannot pass final confirmation.
+    } else {
+      const expected = candidateWiringIdentity(flow.project.pendingWiring || {});
+      if (stableJson(expected) !== stableJson(flow.project.pendingWiring)) {
+        throw new Error('The saved commissioning wiring identity is invalid');
+      }
+    }
+  } else if (flow.project.pendingWiring !== undefined && flow.project.pendingWiring !== null) {
+    throw new Error('The saved commissioning wiring identity has no active transaction');
+  }
+  if (flow.project.wiringEvidenceState !== undefined
+    && flow.project.wiringEvidenceState !== ''
+    && !(text(flow.project.pendingActivationId, 128)
+      && flow.project.pendingWiring === null
+      && flow.project.wiringEvidenceState === 'legacy-inconclusive')) {
+    throw new Error('The saved commissioning wiring evidence state is invalid');
   }
   if (flow.stage !== 'install-safely') {
     const expected = flow.expectedCard || {};
@@ -477,13 +594,14 @@ function parseRegistry(storage, now = Date.now()) {
     for (const [flowId, entry] of Object.entries(parsed.flows)) {
       if (!entry?.flow || !Number.isSafeInteger(entry.expiresAt) || entry.expiresAt <= now || entry.expiresAt > now + FLOW_TTL_MS
         || flowId !== entry.flow.flowId) continue;
-      requireFlow(entry.flow);
+      const flow = migratePersistedFlow(entry.flow);
+      requireFlow(flow);
       let restoreLease = null;
       if (entry.restoreLease) {
         const lease = entry.restoreLease;
-        const valid = lease && lease.flowId === flowId && lease.cardId === entry.flow.expectedCard?.id
-          && lease.projectFingerprint === entry.flow.project.fingerprint && /^[A-Za-z0-9_-]{16,96}$/.test(lease.id || '')
-          && Number.isSafeInteger(lease.flowGeneration) && lease.flowGeneration === (entry.flow.registryGeneration ?? 0)
+        const valid = lease && lease.flowId === flowId && lease.cardId === flow.expectedCard?.id
+          && lease.projectFingerprint === flow.project.fingerprint && /^[A-Za-z0-9_-]{16,96}$/.test(lease.id || '')
+          && Number.isSafeInteger(lease.flowGeneration) && lease.flowGeneration === (flow.registryGeneration ?? 0)
           && ['claimed', 'mutating'].includes(lease.state) && Number.isSafeInteger(lease.expiresAt)
           && lease.expiresAt > now && lease.expiresAt <= now + RESTORE_LEASE_MS
           && (lease.state !== 'mutating' || /^[A-Za-z0-9_-]{16,96}$/.test(lease.fencingToken || ''));
@@ -493,16 +611,16 @@ function parseRegistry(storage, now = Date.now()) {
       let restoreAttempt = null;
       if (entry.restoreAttempt) {
         const attempt = entry.restoreAttempt;
-        const valid = attempt.flowId === flowId && attempt.cardId === entry.flow.expectedCard?.id
-          && attempt.projectFingerprint === entry.flow.project.fingerprint
-          && Number.isSafeInteger(attempt.flowGeneration) && attempt.flowGeneration === (entry.flow.registryGeneration ?? 0)
+        const valid = attempt.flowId === flowId && attempt.cardId === flow.expectedCard?.id
+          && attempt.projectFingerprint === flow.project.fingerprint
+          && Number.isSafeInteger(attempt.flowGeneration) && attempt.flowGeneration === (flow.registryGeneration ?? 0)
           && /^[A-Za-z0-9_-]{16,96}$/.test(attempt.id || '') && /^[A-Za-z0-9_-]{16,96}$/.test(attempt.fencingToken || '')
-          && attempt.phase === 'post-started' && Number.isSafeInteger(attempt.startedAt) && attempt.startedAt >= entry.flow.createdAt
+          && attempt.phase === 'post-started' && Number.isSafeInteger(attempt.startedAt) && attempt.startedAt >= flow.createdAt
           && (attempt.activationId === '' || /^[A-Za-z0-9_-]{1,128}$/.test(attempt.activationId || ''));
         if (!valid) throw new Error('invalid restore attempt');
         restoreAttempt = attempt;
       }
-      flows[flowId] = { flow: entry.flow, tabId: text(entry.tabId, 96), expiresAt: Number(entry.expiresAt), restoreLease, restoreAttempt };
+      flows[flowId] = { flow, tabId: text(entry.tabId, 96), expiresAt: Number(entry.expiresAt), restoreLease, restoreAttempt };
     }
     return { registry: { version: REGISTRY_VERSION, revision: parsed.revision, flows }, error: leaseError ? 'invalid-lease' : '' };
   } catch { return { registry: emptyRegistry(), error: 'corrupt' }; }

@@ -6,8 +6,10 @@
 #include "LightweaverWledRealtime.h"
 #include "LightweaverArtnet.h"
 #include "LightweaverConnectivityPolicy.h"
+#include "LightweaverControlTransaction.h"
 #include "LightweaverRecipe.h"
 #include "LightweaverConnectivityOrchestrator.h"
+#include "LightweaverHardwareContract.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
@@ -26,6 +28,12 @@ uint8_t* currentLookIndexPtr = nullptr;
 #ifndef LW_WEB_WIFI_ACK_MAX_BODY_BYTES
 #error "LW_WEB_WIFI_ACK_MAX_BODY_BYTES must be configured with the WebServer parser guard"
 #endif
+#ifndef LW_WEB_CONFIG_MAX_BODY_BYTES
+#error "LW_WEB_CONFIG_MAX_BODY_BYTES must be configured with the WebServer parser guard"
+#endif
+#ifndef LW_WEB_CANDIDATE_MAX_BODY_BYTES
+#error "LW_WEB_CANDIDATE_MAX_BODY_BYTES must be configured with the WebServer parser guard"
+#endif
 
 constexpr size_t LW_MAX_CONTROL_BODY_BYTES = 4096;
 uint8_t controlRequestBody[LW_MAX_CONTROL_BODY_BYTES + 1] = {};
@@ -36,6 +44,13 @@ constexpr size_t LW_MAX_RUNTIME_REQUEST_BODY_BYTES = 3968;
 constexpr size_t LW_CANDIDATE_ENVELOPE_BYTES = 14;
 constexpr size_t LW_MAX_CANDIDATE_REQUEST_BODY_BYTES =
   LW_MAX_RUNTIME_REQUEST_BODY_BYTES + LW_CANDIDATE_ENVELOPE_BYTES;
+static_assert(LW_MAX_RUNTIME_REQUEST_BODY_BYTES == LW_CARD_HARDWARE_CONFIG_CAPACITY_BYTES,
+              "runtime request capacity must match the generated hardware contract");
+static_assert(LW_WEB_CONFIG_MAX_BODY_BYTES == LW_CARD_HARDWARE_CONFIG_CAPACITY_BYTES,
+              "parser request capacity must match the generated hardware contract");
+static_assert(LW_WEB_CANDIDATE_MAX_BODY_BYTES ==
+                  LW_CARD_HARDWARE_CONFIG_CAPACITY_BYTES + LW_CANDIDATE_ENVELOPE_BYTES,
+              "candidate parser capacity must match the generated hardware contract");
 uint8_t runtimeRequestBody[LW_MAX_CANDIDATE_REQUEST_BODY_BYTES + 1] = {};
 size_t runtimeRequestBodyLength = 0;
 size_t runtimeRequestExpectedLength = 0;
@@ -249,6 +264,7 @@ String studioBridgeScript() {
               "const lwBridgeReply=(ev,msg)=>{try{ev.source&&ev.source.postMessage(Object.assign({app:'LightweaverCardBridge',version:");
   script += bridgeVersion;
   script += F("},msg),ev.origin)}catch(_){}};"
+              "const lwBridgeError=(reason,message)=>Object.assign(new Error(message),{reason});"
               "if(window.opener&&lwReadyOrigin){try{window.opener.postMessage({app:'LightweaverCardBridge',type:'ready',version:");
   script += bridgeVersion;
   script += F(",href:location.href,host:location.host},lwReadyOrigin)}catch(_){}};"
@@ -275,18 +291,18 @@ String studioBridgeScript() {
                 "lwFrameWs.onerror=()=>{try{lwFrameWs&&lwFrameWs.close()}catch(_){}}"
               "};"
               "const lwFrameFlush=()=>{"
-                "if(!lwFrameNext)return;"
-                "if(!lwFrameWs||lwFrameWs.readyState>1){lwFrameRetryLater();return}" // down: backoff-gated reconnect, never direct
-                "if(lwFrameWs.readyState===0)return;"                       // onopen flushes
-                "if(lwFrameWs.bufferedAmount>8192){lwFrameLater(lwFrameFlush,40);return}" // congested: keep only the latest
+                "if(!lwFrameNext)return lwFrameLastResult;"
+                "if(!lwFrameWs||lwFrameWs.readyState>1){lwFrameLastResult={relayed:false,reason:'relay-not-open'};lwFrameRetryLater();return lwFrameLastResult;}" // down: backoff-gated reconnect, never direct
+                "if(lwFrameWs.readyState===0){lwFrameLastResult={relayed:false,reason:'relay-connecting'};return lwFrameLastResult;}" // onopen flushes
+                "if(lwFrameWs.bufferedAmount>8192){lwFrameLastResult={relayed:false,reason:'relay-congested'};lwFrameLater(lwFrameFlush,40);return lwFrameLastResult;}" // congested: keep only the latest
                 "const p=lwFrameNext;lwFrameNext=null;"
                 "const s={i:p.pixels};if(Number.isInteger(p.seg))s.id=p.seg;"
-                "try{lwFrameWs.send(JSON.stringify({seg:[s]}))}catch(_){}"
+                "try{lwFrameWs.send(JSON.stringify({seg:[s]}));return lwFrameLastResult={relayed:true,reason:''}}catch(_){lwFrameNext=p;lwFrameLastResult={relayed:false,reason:'relay-send-failed'};try{lwFrameWs.close()}catch(_){};lwFrameRetryLater();return lwFrameLastResult}"
               "};"
-              // Returns true iff the frame was handed to an OPEN socket (sent, or
-              // parked in the pending slot of an open-but-congested socket that is
-              // already scheduled to flush).
-              "const lwFrameSend=p=>{if(!p||!Array.isArray(p.pixels))throw new Error('frame needs pixels');lwFrameNext=p;lwFrameFlush();return!!(lwFrameWs&&lwFrameWs.readyState===1)};"
+              "let lwFrameLastResult={relayed:false,reason:'relay-not-open'};"
+              // A reply says relayed only after WebSocket.send returns. Queued frames
+              // retain latest-frame-wins/backoff, but never claim delivery early.
+              "const lwFrameSend=p=>{if(!p||!Array.isArray(p.pixels))throw lwBridgeError('invalid-payload','frame needs pixels');lwFrameNext=p;return lwFrameFlush()};"
               // Stop: drop any undelivered frame and cancel the scheduled reconnect
               // so a stale frame can't land after cancelStream and re-claim the canvas.
               "const lwFrameCancel=()=>{lwFrameNext=null;if(lwFrameRetry){clearTimeout(lwFrameRetry);lwFrameRetry=null}};"
@@ -298,7 +314,7 @@ String studioBridgeScript() {
                   "else if(m.type==='zones'){response=await get('/api/zones')}"
                   "else if(m.type==='firmware-info'){response=await get('/api/firmware-info')}"
                   "else if(m.type==='wifi-handoff-ack'){response=await lwRelayWifiHandoffAck(ev)}"
-                  "else if(m.type==='frame'){const sent=lwFrameSend(m.payload||{});response={ok:true,relayed:sent,wsOpen:!!(lwFrameWs&&lwFrameWs.readyState===1)}}"
+                  "else if(m.type==='frame'){const sent=lwFrameSend(m.payload||{});response={ok:true,relayed:sent.relayed,wsOpen:!!(lwFrameWs&&lwFrameWs.readyState===1),reason:sent.reason}}"
                   "else if(m.type==='control'){const c=m.payload||{};if(c.cancelStream)lwFrameCancel();response=await post('/api/control',c)}"
                   "else if(m.type==='recover-lights'){response=await post('/api/recover-lights',m.payload||{})}"
                   "else if(m.type==='wiring-status'){response=await get('/api/wiring/status')}"
@@ -310,17 +326,17 @@ String studioBridgeScript() {
                   "else if(m.type==='reboot'){"
                     "const r=await fetch('/api/reboot',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});"
                     "response=await r.json().catch(()=>({ok:r.ok}));"
-                    "if(!r.ok||response.ok===false)throw new Error(response.error||('HTTP '+r.status));"
+                    "if(!r.ok||response.ok===false)throw lwBridgeError(!r.ok?'http':'runtime-rejected',response.error||('HTTP '+r.status));"
                   "}"
                   "else if(m.type==='config'){"
                     "const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(m.payload||{})});"
                     "response=await r.json().catch(()=>({ok:r.ok}));"
-                    "if(!r.ok||response.ok===false)throw new Error(response.error||('HTTP '+r.status));"
+                    "if(!r.ok||response.ok===false)throw lwBridgeError(!r.ok?'http':'runtime-rejected',response.error||('HTTP '+r.status));"
                     "const shouldReboot=response.state!=='staged'&&(m.reboot===true||response.requiresReboot===true||(m.reboot==='if-needed'&&response.requiresReboot!==false));"
                     "if(shouldReboot){response.rebooting=true;setTimeout(()=>post('/api/reboot',{}),250)}"
-                  "}else{throw new Error('unknown bridge request')}"
+                  "}else{throw lwBridgeError('invalid-payload','unknown bridge request')}"
                   "lwBridgeReply(ev,{id:m.id,type:m.type,ok:true,response})"
-                "}catch(e){lwBridgeReply(ev,{id:m.id,type:m.type,ok:false,error:e.message||String(e)})}"
+                "}catch(e){lwBridgeReply(ev,{id:m.id,type:m.type,ok:false,reason:e&&e.reason||(/^HTTP /.test(e&&e.message||'')?'http':'runtime-rejected'),error:e.message||String(e)})}"
               "});");
   return script;
 }
@@ -1718,27 +1734,45 @@ void handleControlPost() {
     confirmedRevision = doc["revision"].as<uint32_t>();
   }
   bool patternRequested = hasControlField(doc, "patternId");
-  bool patternApplied = !patternRequested;
   String confirmedPatternId = patternRequested ? controlString(doc, "patternId") : String("");
   if (patternRequested && (confirmedPatternId.length() == 0 || confirmedPatternId.length() > 64)) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"pattern id out of range\"}");
     return;
   }
-  if (patternRequested && !runtimeCanSelectPatternByIdZ(zoneTarget, confirmedPatternId)) {
+
+  bool nextRequested = hasControlField(doc, "next") && controlBool(doc, "next");
+  bool previousRequested = hasControlField(doc, "previous") && controlBool(doc, "previous");
+  uint8_t selectionRequestCount =
+      uint8_t(patternRequested) + uint8_t(nextRequested) + uint8_t(previousRequested);
+  if (selectionRequestCount > 1) {
+    server.send(400, "application/json",
+                "{\"ok\":false,\"error\":\"choose one pattern operation\"}");
+    return;
+  }
+  bool selectionRequested = selectionRequestCount == 1;
+  bool selectionPrepared = !selectionRequested;
+  if (patternRequested) {
+    selectionPrepared =
+        runtimePreparePatternByIdZ(zoneTarget, confirmedPatternId);
+  } else if (nextRequested) {
+    selectionPrepared = runtimePrepareStepPattern(1);
+  } else if (previousRequested) {
+    selectionPrepared = runtimePrepareStepPattern(-1);
+  }
+  if (!selectionPrepared) {
+    runtimeDiscardPreparedPatternSelection();
     JsonDocument rejected;
     rejected["ok"] = false;
     rejected["cardId"] = runtimeCardId();
-    rejected["error"] = "unknown pattern";
+    rejected["error"] = "pattern unavailable";
+    rejected["stateRevision"] = runtimeStateRevision();
     String body;
     serializeJson(rejected, body);
     server.send(422, "application/json", body);
     return;
   }
-
-  bool nextRequested = hasControlField(doc, "next") && controlBool(doc, "next");
-  bool previousRequested = hasControlField(doc, "previous") && controlBool(doc, "previous");
-  bool nextCanChange = nextRequested && runtimeCanStepPattern(1);
-  bool previousCanChange = previousRequested && runtimeCanStepPattern(-1);
+  bool nextCanChange = nextRequested;
+  bool previousCanChange = previousRequested;
   bool cancelStreamRequested =
       hasControlField(doc, "cancelStream") && controlBool(doc, "cancelStream");
   bool cancelStreamEffective = provisioningCancelStreamEffective(
@@ -1764,46 +1798,63 @@ void handleControlPost() {
   scopeInputs.syncStateChanged = syncStateChanged;
   ProvisioningOutputScope operationScope = provisioningOperationScope(scopeInputs);
   if (operationScope == ProvisioningOutputScope::None) {
+    runtimeDiscardPreparedPatternSelection();
     server.send(422, "application/json", "{\"ok\":false,\"error\":\"command affects zero outputs\"}");
     return;
   }
   uint8_t preflightAffectedOutputCount = runtimeAffectedOutputCount(zoneTarget, effectiveSyncZones, operationScope);
   if (!provisioningControlAdvancesRevision(
           true, operationScope, preflightAffectedOutputCount)) {
+    runtimeDiscardPreparedPatternSelection();
     server.send(422, "application/json", "{\"ok\":false,\"error\":\"command affects zero outputs\"}");
     return;
   }
 
-  // Apply sync mode before any empty-zone writes. Otherwise an "all sections"
-  // command sent while the card is in split preview mode updates only zone 0.
-  if (syncZonesRequested) runtimeSetSyncZones(controlBool(doc, "syncZones"));
-  if (colorOrderRequested) runtimeSetLedColorOrder(controlString(doc, "colorOrder"));
-  if (hasControlField(doc, "brightness")) runtimeSetBrightnessZ(zoneTarget, controlFloat(doc, "brightness"));
-  if (hasControlField(doc, "speed")) runtimeSetSpeedZ(zoneTarget, controlFloat(doc, "speed"));
-  if (hasControlField(doc, "hueShift")) runtimeSetHueShiftZ(zoneTarget, controlInt(doc, "hueShift"));
-  if (hasControlField(doc, "blackout")) runtimeSetBlackoutZ(zoneTarget, controlBool(doc, "blackout"));
-  if (nextCanChange) runtimeNextPattern();
-  if (previousCanChange) runtimePreviousPattern();
-  if (patternRequested) {
-    patternApplied = runtimeSelectPatternByIdZ(zoneTarget, confirmedPatternId);
+  uint32_t appliedStateRevision = runtimeStateRevision();
+  bool transactionApplied = applyPreparedControlTransaction(
+      selectionRequested,
+      []() { return runtimeCommitPreparedPatternSelection(); },
+      [&]() {
+        // Apply sync mode before any empty-zone writes. Otherwise an "all
+        // sections" command sent in split preview mode updates only zone 0.
+        if (syncZonesRequested) runtimeSetSyncZones(controlBool(doc, "syncZones"));
+        if (colorOrderRequested) runtimeSetLedColorOrder(controlString(doc, "colorOrder"));
+        if (hasControlField(doc, "brightness")) runtimeSetBrightnessZ(zoneTarget, controlFloat(doc, "brightness"));
+        if (hasControlField(doc, "speed")) runtimeSetSpeedZ(zoneTarget, controlFloat(doc, "speed"));
+        if (hasControlField(doc, "hueShift")) runtimeSetHueShiftZ(zoneTarget, controlInt(doc, "hueShift"));
+        if (hasControlField(doc, "blackout")) runtimeSetBlackoutZ(zoneTarget, controlBool(doc, "blackout"));
+        if (hasControlField(doc, "hue")) runtimeSetCustomHueZ(zoneTarget, uint8_t(controlInt(doc, "hue") & 0xff));
+        if (hasControlField(doc, "saturation")) runtimeSetCustomSaturationZ(zoneTarget, uint8_t(controlInt(doc, "saturation") & 0xff));
+        if (hasControlField(doc, "breathe")) runtimeSetCustomBreatheZ(zoneTarget, controlBool(doc, "breathe"));
+        if (hasControlField(doc, "drift")) runtimeSetCustomDriftZ(zoneTarget, controlBool(doc, "drift"));
+        if (hasControlField(doc, "driftMin") || hasControlField(doc, "driftMax")) {
+          uint8_t lo = hasControlField(doc, "driftMin") ? uint8_t(controlInt(doc, "driftMin") & 0xff) : runtimeGetDriftHueMin();
+          uint8_t hi = hasControlField(doc, "driftMax") ? uint8_t(controlInt(doc, "driftMax") & 0xff) : runtimeGetDriftHueMax();
+          runtimeSetDriftRangeZ(zoneTarget, lo, hi);
+        }
+        if (cancelStreamEffective) runtimeCancelStream();
+      },
+      []() { return runtimeAdvanceStateRevision(); },
+      appliedStateRevision);
+  if (!transactionApplied) {
+    runtimeDiscardPreparedPatternSelection();
+    JsonDocument rejected;
+    rejected["ok"] = false;
+    rejected["cardId"] = runtimeCardId();
+    rejected["error"] = "pattern unavailable";
+    rejected["stateRevision"] = runtimeStateRevision();
+    String body;
+    serializeJson(rejected, body);
+    server.send(422, "application/json", body);
+    return;
   }
-  if (hasControlField(doc, "hue")) runtimeSetCustomHueZ(zoneTarget, uint8_t(controlInt(doc, "hue") & 0xff));
-  if (hasControlField(doc, "saturation")) runtimeSetCustomSaturationZ(zoneTarget, uint8_t(controlInt(doc, "saturation") & 0xff));
-  if (hasControlField(doc, "breathe")) runtimeSetCustomBreatheZ(zoneTarget, controlBool(doc, "breathe"));
-  if (hasControlField(doc, "drift")) runtimeSetCustomDriftZ(zoneTarget, controlBool(doc, "drift"));
-  if (hasControlField(doc, "driftMin") || hasControlField(doc, "driftMax")) {
-    uint8_t lo = hasControlField(doc, "driftMin") ? uint8_t(controlInt(doc, "driftMin") & 0xff) : runtimeGetDriftHueMin();
-    uint8_t hi = hasControlField(doc, "driftMax") ? uint8_t(controlInt(doc, "driftMax") & 0xff) : runtimeGetDriftHueMax();
-    runtimeSetDriftRangeZ(zoneTarget, lo, hi);
-  }
-  if (cancelStreamEffective) runtimeCancelStream();
   // Echo current state back
   uint8_t affectedOutputCount =
       runtimeAffectedOutputCount(zoneTarget, runtimeGetSyncZones(), operationScope);
   JsonDocument out;
-  out["ok"] = !patternRequested || patternApplied;
+  out["ok"] = true;
   out["cardId"] = runtimeCardId();
-  out["stateRevision"] = runtimeAdvanceStateRevision();
+  out["stateRevision"] = appliedStateRevision;
   out["affectedOutputCount"] = affectedOutputCount;
   out["affectedOutputScope"] = operationScope == ProvisioningOutputScope::AllOutputs
       ? "all-active-outputs" : "selected-zones";
@@ -1818,7 +1869,7 @@ void handleControlPost() {
     out["revision"] = confirmedRevision;
     out["confirmedRevision"] = confirmedRevision;
   }
-  if (patternRequested && patternApplied) {
+  if (patternRequested) {
     out["patternId"] = confirmedPatternId;
     JsonObject confirmedLook = out["confirmedLook"].to<JsonObject>();
     confirmedLook["patternId"] = confirmedPatternId;
@@ -1838,7 +1889,7 @@ void handleControlPost() {
   out["driftMax"] = runtimeGetDriftHueMax();
   String body;
   serializeJson(out, body);
-  server.send(!patternRequested || patternApplied ? 200 : 422, "application/json", body);
+  server.send(200, "application/json", body);
 }
 
 void handleRecoverLights() {

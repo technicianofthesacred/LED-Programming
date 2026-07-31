@@ -48,7 +48,9 @@ import {
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
-import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard } from '../lib/cardPushClient.js';
+import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard, readCardProjectEvidence } from '../lib/cardPushClient.js';
+import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
+import { prepareCardDeployment, waitForCardDeploymentVerification } from '../lib/cardDeployment.js';
 import { ensureCardSectionsForPreview } from '../lib/cardSectionSync.js';
 import { applyTestStripToRuntimePackage, readTestStrip } from '../lib/testStrip.js';
 import { pushLivePreviewToCard, recoverCardLights } from '../lib/cardLiveControl.js';
@@ -679,7 +681,7 @@ import { PatternPreview } from './PatternPreview.jsx';
 
       const attempt = acquireCardBridgeFromGesture(cardHost, {
         studioUrl: typeof window !== 'undefined' ? window.location.href : '',
-        timeoutMs: 2500,
+        timeoutMs: 10000,
       });
       setHandoffUrl('');
       setStatusKind('');
@@ -813,6 +815,14 @@ import { PatternPreview } from './PatternPreview.jsx';
       setStatusKind('err');
       setStatus(message);
     };
+    const openCardInstaller = () => {
+      if (!handoffUrl) return;
+      const url = new URL(handoffUrl);
+      openLocalCardPage(cardHost, {
+        path: `${url.pathname}${url.search}${url.hash}`,
+        reason: 'card-installer',
+      });
+    };
 
     const checkCardLayoutWriteSafety = async (runtimePackageForCard, actionLabel = 'saving') => {
       const localPixels = Number(runtimePackageForCard?.config?.led?.pixels) || 0;
@@ -830,9 +840,18 @@ import { PatternPreview } from './PatternPreview.jsx';
 
     const savePreviewToCard = async () => {
       const requestedRevision = projectLifecycle.editedRevision;
+      const requestedGeneration = projectLifecycle.generation;
       const { nextLook, nextBoard, nextController: draftController } = buildCurrentHardwareState();
       const nextController = promotePatternFirst(draftController, nextLook.patternId);
-      const nextPackage = buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: nextBoard, standaloneController: nextController });
+      const prepared = prepareCardDeployment({
+        projectId,
+        projectName,
+        projectRevision: requestedRevision,
+        strips,
+        patchBoard: nextBoard,
+        standaloneController: nextController,
+      });
+      const nextPackage = prepared.runtimePackage;
       // Test strip mode (see src/lib/testStrip.js): the saved design (project
       // state below) is untouched — only what actually goes to the card is
       // collapsed to the single bench-strip output/zone.
@@ -849,8 +868,11 @@ import { PatternPreview } from './PatternPreview.jsx';
       setStatusKind('');
       setStatus('');
       try {
+        prepareCardStoragePayload(packageForCard);
         const safety = await checkCardLayoutWriteSafety(packageForCard, 'saving');
         if (!safety.ok) return;
+        const before = await readCardProjectEvidence({ host: safety.host || cardHost });
+        const exactPrepared = { ...prepared, cardId: before.cardId };
         dispatchCardSave({ type: 'start', revision: requestedRevision });
         const response = await pushConfigToCard(packageForCard, {
           host: safety.host || cardHost,
@@ -859,8 +881,22 @@ import { PatternPreview } from './PatternPreview.jsx';
           allowLayoutChange: testStrip.enabled || undefined,
           allowProjectChange: testStrip.enabled || undefined,
         });
+        if (response?.state === 'staged') {
+          throw new Error('The card kept this hardware change staged. Open Test & Install and confirm it on the real LEDs before it can be installed.');
+        }
+        const verification = await waitForCardDeploymentVerification(exactPrepared, {
+          readEvidence: () => readCardProjectEvidence({ host: safety.host || cardHost }),
+        });
         dispatchCardSave({ type: 'confirm' });
-        markProjectInstalled(requestedRevision);
+        if (!testStrip.enabled) {
+          markProjectInstalled({
+            revision: requestedRevision,
+            generation: requestedGeneration,
+            cardId: verification.cardId,
+            projectRevision: exactPrepared.config.projectRevision,
+            projectFingerprint: exactPrepared.config.projectFingerprint,
+          });
+        }
         markCardLookConfirmed({
           ...nextLook,
           zone: testStrip.enabled ? '' : (selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : ''),
@@ -1075,14 +1111,29 @@ import { PatternPreview } from './PatternPreview.jsx';
     // zone.
     const sendSplitPreview = async () => {
       const { nextLook, nextBoard, nextController } = buildCurrentHardwareState();
-      const nextPackage = buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: nextBoard, standaloneController: nextController });
+      const prepared = prepareCardDeployment({
+        projectId,
+        projectName,
+        projectRevision: projectLifecycle.editedRevision,
+        strips,
+        patchBoard: nextBoard,
+        standaloneController: nextController,
+      });
+      const nextPackage = prepared.runtimePackage;
       setHandoffUrl('');
       setStatusKind('');
       setStatus('');
       try {
         const safety = await checkCardLayoutWriteSafety(nextPackage, 'applying split preview');
         if (!safety.ok) return;
+        const before = await readCardProjectEvidence({ host: safety.host || cardHost });
         const response = await pushConfigToCard(nextPackage, { host: safety.host || cardHost, timeoutMs: 6000, reboot: 'if-needed', allowLayoutChange: true });
+        if (response?.state === 'staged') {
+          throw new Error('The split is staged but not installed. Open Test & Install and confirm it on the real LEDs.');
+        }
+        await waitForCardDeploymentVerification({ ...prepared, cardId: before.cardId }, {
+          readEvidence: () => readCardProjectEvidence({ host: safety.host || cardHost }),
+        });
         markCardLookConfirmed({ ...nextLook, zone: selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '', syncZones: selectedTarget?.kind !== 'section' });
         setPatchBoard(nextBoard);
         setStandaloneController(nextController);
@@ -1176,11 +1227,11 @@ import { PatternPreview } from './PatternPreview.jsx';
             <header className="pm-hero">
               <div className="pm-title">
                 <h1>Patterns &amp; Looks</h1>
-                <p>Choose chip-ready patterns, tune the colors, then save them as looks for the card.</p>
+                <p>Choose chip-ready patterns, tune the colors, then install the finished look on the card.</p>
                 <JourneyHint step={2} nextLabel="Arrange playlist" onNext={() => go?.('playlist')} />
               </div>
               <div className="pm-actions">
-                <button className="btn primary" title="Save the current look to the card" onClick={savePreviewToCard} disabled={cardSave.conflictsDisabled || Boolean(hardwareConfigurationIssue)}>{I.bolt}{cardSave.status === 'pending' ? 'Saving…' : cardSave.status === 'failed' ? 'Retry save' : 'Save to card'}</button>
+                <button className="btn primary" title="Install the current look on the card" onClick={savePreviewToCard} disabled={cardSave.conflictsDisabled || Boolean(hardwareConfigurationIssue)}>{I.bolt}{cardSave.status === 'pending' ? 'Sending…' : cardSave.status === 'failed' ? 'Retry install' : 'Install on card'}</button>
                 {connected &&
                   <button className="btn" title="Bring the lights back with a warm-white recovery" data-testid="recover-lights" onClick={repairLed} disabled={cardSave.conflictsDisabled}>{I.wrench}Recover lights</button>
                 }
@@ -1211,7 +1262,7 @@ import { PatternPreview } from './PatternPreview.jsx';
                 {status}
                 {handoffUrl &&
                   <div className="pmx-status-actions">
-                    <a className="btn primary" href={handoffUrl} target="_blank" rel="noopener noreferrer">Open card installer</a>
+                    <button type="button" className="btn primary" onClick={openCardInstaller}>Open card installer</button>
                   </div>
                 }
                 {showFlashAction &&

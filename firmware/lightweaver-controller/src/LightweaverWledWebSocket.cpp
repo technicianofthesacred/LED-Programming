@@ -30,6 +30,7 @@ bool started = false;
 // session; this guards against a reconnect storm or a room full of tabs
 // exhausting the server's client slots and wedging the socket.
 constexpr uint8_t LW_WS_MAX_CLIENTS = 3;
+constexpr size_t LW_WLED_WS_MAX_PAYLOAD_BYTES = 4096;
 
 // Decode an uppercase or lowercase 6-char hex string into RGB.
 bool hexToRgb(const char* s, uint8_t& r, uint8_t& g, uint8_t& b) {
@@ -51,6 +52,7 @@ bool hexToRgb(const char* s, uint8_t& r, uint8_t& g, uint8_t& b) {
 // Translate a WLED-shaped JSON state message into a frame write (live preview
 // path) or a state mutation. Mirrors the HTTP POST /json/state handler.
 void applyState(uint8_t* payload, size_t length) {
+  if (length > LW_WLED_WS_MAX_PAYLOAD_BYTES) return;
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, payload, length);
   if (err) return;
@@ -58,6 +60,12 @@ void applyState(uint8_t* payload, size_t length) {
   bool framePushed = false;
   JsonArray segs = doc["seg"].as<JsonArray>();
   if (!segs.isNull()) {
+    // Keep the WebSocket and HTTP WLED paths equivalent: neither supports
+    // segment on/fx transactions, and validation must finish before any
+    // frame or global state mutation.
+    for (JsonObject s : segs) {
+      if (!s["on"].isNull() || !s["fx"].isNull()) return;
+    }
     for (JsonObject s : segs) {
       JsonArray pixels = s["i"].as<JsonArray>();
       if (!pixels.isNull() && pixels.size() > 0) {
@@ -88,12 +96,6 @@ void applyState(uint8_t* payload, size_t length) {
           }
         }
         if (frameWritten) frameSourceMarkExternal(FRAME_WLED_REALTIME);
-      }
-      if (!s["fx"].isNull()) {
-        int fx = s["fx"].as<int>();
-        if (fx >= 0 && fx < lookCount) {
-          runtimeSelectPatternById(looks[fx].id);
-        }
       }
     }
   }

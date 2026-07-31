@@ -1,4 +1,6 @@
-export const CARD_CONFIG_STORAGE_LIMIT_BYTES = 3968;
+import { CARD_HARDWARE_CONTRACT } from './cardHardwareContract.js';
+
+export const CARD_CONFIG_STORAGE_LIMIT_BYTES = CARD_HARDWARE_CONTRACT.configCapacityBytes;
 
 export class CardConfigCapacityError extends Error {
   constructor(bytes, maxBytes) {

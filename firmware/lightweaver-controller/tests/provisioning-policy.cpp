@@ -105,11 +105,9 @@ int main() {
   assert(factoryBeaconPulseOn(250));
   assert(!factoryBeaconPulseOn(400));
 
-  assert(provisioningFactoryResetMayComplete(true, false, false, true));
-  assert(provisioningFactoryResetMayComplete(true, true, true, true));
-  assert(!provisioningFactoryResetMayComplete(false, false, false, true));
-  assert(!provisioningFactoryResetMayComplete(true, true, false, true));
-  assert(!provisioningFactoryResetMayComplete(true, false, false, false));
+  assert(provisioningFactoryResetMayComplete(true, true));
+  assert(!provisioningFactoryResetMayComplete(true, false));
+  assert(!provisioningFactoryResetMayComplete(false, true));
 
   assert(provisioningZoneSelected(0, false, 0, false));
   assert(!provisioningZoneSelected(1, false, 0, false));
