@@ -458,15 +458,17 @@ String sha256Hex(const String& value) {
   return String(encoded);
 }
 
-// This compact JSON is the cross-platform Lightweaver wiring-digest v1
-// contract. Key and array order are significant and intentionally fixed.
-String calculateWiringDigest(JsonDocument& doc) {
+// This compact JSON is the cross-platform Lightweaver wiring-digest contract.
+// Key and array order are significant and intentionally fixed. Version 2 adds
+// the LED protocol; version 1 is retained only to migrate configs already
+// persisted by firmware that stored led.type without binding it into the hash.
+String calculateWiringDigest(JsonDocument& doc, bool bindLedType) {
   JsonDocument canonical;
   JsonObject canonicalLed = canonical.to<JsonObject>();
-  bool hasLedType = !doc["led"]["type"].isNull();
+  bindLedType = bindLedType && !doc["led"]["type"].isNull();
   String ledType = String(doc["led"]["type"] | "WS2812B");
-  canonicalLed["version"] = hasLedType ? 2 : 1;
-  if (hasLedType) canonicalLed["type"] = ledType;
+  canonicalLed["version"] = bindLedType ? 2 : 1;
+  if (bindLedType) canonicalLed["type"] = ledType;
   canonicalLed["colorOrder"] = String(doc["led"]["colorOrder"] | "RGB");
   canonicalLed["maxMilliamps"] =
       doc["led"]["maxMilliamps"] | LW_DEFAULT_MAX_MILLIAMPS;
@@ -501,6 +503,27 @@ String calculateWiringDigest(JsonDocument& doc) {
   String serialized;
   serializeJson(canonical, serialized);
   return sha256Hex(serialized);
+}
+
+String calculateWiringDigest(JsonDocument& doc) {
+  return calculateWiringDigest(doc, !doc["led"]["type"].isNull());
+}
+
+bool upgradeLegacyNvsWiringDigest(String& json) {
+  JsonDocument doc;
+  if (deserializeJson(doc, json) || doc["led"]["type"].isNull()) return false;
+
+  String suppliedDigest = String(doc["wiringDigest"] | "");
+  String currentDigest = calculateWiringDigest(doc, true);
+  if (suppliedDigest == currentDigest) return false;
+
+  String legacyDigest = calculateWiringDigest(doc, false);
+  if (suppliedDigest != legacyDigest) return false;
+
+  doc["wiringDigest"] = currentDigest;
+  json = "";
+  serializeJson(doc, json);
+  return true;
 }
 
 bool isSafeProductionJobId(const String& value) {
@@ -889,7 +912,8 @@ ProvisioningStorageState readNvsString(Preferences& prefs,
 ProvisioningStorageState loadNvsConfigKeyStrict(const char* key,
                                                 RuntimeConfig& config,
                                                 bool& configParsed,
-                                                String& message) {
+                                                String& message,
+                                                bool allowLegacyDigestUpgrade = false) {
   configParsed = false;
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, true)) {
@@ -900,7 +924,31 @@ ProvisioningStorageState loadNvsConfigKeyStrict(const char* key,
   ProvisioningStorageState state = readNvsString(prefs, key, json, message);
   prefs.end();
   if (state != ProvisioningStorageState::Present) return state;
+  String originalJson = json;
+  bool upgradedLegacyDigest =
+      allowLegacyDigestUpgrade && upgradeLegacyNvsWiringDigest(json);
   configParsed = validateRuntimeConfigJsonStrict(json, config, message);
+  if (configParsed && upgradedLegacyDigest) {
+    if (!prefs.begin(NVS_NAMESPACE, false)) {
+      configParsed = false;
+      message = "legacy wiring digest upgrade could not open canonical storage";
+      return ProvisioningStorageState::Error;
+    }
+    bool wroteUpgrade = prefs.putString(key, json) == json.length();
+    String readback = wroteUpgrade ? prefs.getString(key, "") : "";
+    if (!wroteUpgrade || readback != json) {
+      bool restoredOriginal =
+          prefs.putString(key, originalJson) == originalJson.length() &&
+          prefs.getString(key, "") == originalJson;
+      prefs.end();
+      configParsed = false;
+      message = restoredOriginal
+          ? "legacy wiring digest upgrade failed; original config restored"
+          : "legacy wiring digest upgrade failed and original restore failed";
+      return ProvisioningStorageState::Error;
+    }
+    prefs.end();
+  }
   return ProvisioningStorageState::Present;
 }
 
@@ -1324,7 +1372,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
 
   bool knownGoodValid = false;
   ProvisioningStorageState knownGoodState = loadNvsConfigKeyStrict(
-      NVS_KNOWN_GOOD_CONFIG_KEY, config, knownGoodValid, message);
+      NVS_KNOWN_GOOD_CONFIG_KEY, config, knownGoodValid, message, true);
   if (provisioningStorageReadFailed(knownGoodState)) {
     applyDefaultRuntimeConfig(config);
     ensureDefaultZone(config);

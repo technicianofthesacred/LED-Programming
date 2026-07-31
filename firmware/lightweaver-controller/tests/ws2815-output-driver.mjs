@@ -24,8 +24,41 @@ assert.match(
 );
 assert.match(
   storage,
-  /canonicalLed\["version"\]\s*=\s*hasLedType\s*\?\s*2\s*:\s*1;[\s\S]*canonicalLed\["type"\]\s*=\s*ledType/,
+  /canonicalLed\["version"\]\s*=\s*bindLedType\s*\?\s*2\s*:\s*1;[\s\S]*canonicalLed\["type"\]\s*=\s*ledType/,
   'wiring digest v2 must bind an explicit LED chipset while keeping missing-type v1 compatibility',
+);
+const legacyUpgrade = storage.match(/bool upgradeLegacyNvsWiringDigest\([\s\S]*?\n\}/)?.[0] || '';
+assert.match(
+  legacyUpgrade,
+  /doc\["led"\]\["type"\]\.isNull\(\)[\s\S]*calculateWiringDigest\(doc, true\)[\s\S]*calculateWiringDigest\(doc, false\)[\s\S]*suppliedDigest\s*!=\s*legacyDigest/,
+  'only an explicit LED type with the exact legacy physical digest may enter the one-time upgrade path',
+);
+assert.match(
+  legacyUpgrade,
+  /doc\["wiringDigest"\]\s*=\s*currentDigest[\s\S]*serializeJson\(doc, json\)/,
+  'a verified legacy NVS config must be rewritten to the type-bound digest before strict validation',
+);
+const strictValidation = storage.match(/bool validateRuntimeConfigJsonStrict\([\s\S]*?\nbool loadSdConfig\(/)?.[0] || '';
+assert.doesNotMatch(
+  strictValidation,
+  /upgradeLegacyNvsWiringDigest/,
+  'new Studio and SD payloads must not bypass the type-bound digest contract',
+);
+const nvsLoad = storage.match(/ProvisioningStorageState loadNvsConfigKeyStrict\([\s\S]*?\n\}/)?.[0] || '';
+assert.match(
+  nvsLoad,
+  /allowLegacyDigestUpgrade\s*&&\s*upgradeLegacyNvsWiringDigest\(json\)[\s\S]*validateRuntimeConfigJsonStrict\(json[\s\S]*prefs\.putString\(key, json\)[\s\S]*prefs\.getString\(key,[\s\S]*prefs\.putString\(key, originalJson\)/,
+  'the opted-in persisted NVS config receives an exact-match upgrade with readback and rollback',
+);
+assert.match(
+  storage,
+  /loadNvsConfigKeyStrict\(\s*NVS_KNOWN_GOOD_CONFIG_KEY,\s*config,\s*knownGoodValid,\s*message,\s*true\)/,
+  'only the committed known-good slot opts into legacy digest migration',
+);
+assert.doesNotMatch(
+  storage,
+  /loadNvsConfigKeyStrict\(\s*NVS_CANDIDATE_CONFIG_KEY,[\s\S]{0,120},\s*true\)/,
+  'staged candidates must remain current-digest-only',
 );
 assert.match(
   main,
