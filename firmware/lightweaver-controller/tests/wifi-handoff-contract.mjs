@@ -81,15 +81,15 @@ assert.doesNotMatch(web, /Saved\. Rebooting[^'\"]*/,
 
 const advancedRoot = functionBody(web, /void\s+handleAdvancedRoot\s*\(\)\s*\{/);
 
-const setupMarkupStart = advancedRoot.indexOf('if (needsSetup) {');
-const liveMarkupStart = advancedRoot.indexOf('} else {', setupMarkupStart);
-assert.ok(setupMarkupStart >= 0 && liveMarkupStart > setupMarkupStart,
-  'advanced page must keep a separate first-time setup branch');
-const setupMarkup = advancedRoot.slice(setupMarkupStart, liveMarkupStart);
+const setupMarkupStart = advancedRoot.indexOf('if (needsWifiSetup) {');
+const commissioningMarkupStart = advancedRoot.indexOf('} else if (needsCommissioning) {', setupMarkupStart);
+assert.ok(setupMarkupStart >= 0 && commissioningMarkupStart > setupMarkupStart,
+  'advanced page must keep WiFi setup separate from connected-card commissioning');
+const setupMarkup = advancedRoot.slice(setupMarkupStart, commissioningMarkupStart);
 
 assert.match(advancedRoot,
-  /page \+= needsSetup \? F\("setup-mode"\) : F\("control-mode"\);/,
-  'advanced page must select setup-mode only for first-time setup and control-mode otherwise');
+  /page \+= needsWifiSetup \? F\("setup-mode"\) : F\("control-mode"\);/,
+  'advanced page must select setup-mode only when WiFi setup is required');
 assert.match(advancedRoot, /\.setup-mode \.wrap\{[^}]*safe-area-inset-top/,
   'compact setup must preserve safe-area padding without the spacious live shell');
 assert.match(advancedRoot,
@@ -100,8 +100,8 @@ assert.match(advancedRoot, /\.setup-mode button\{[^}]*min-height:44px/,
 assert.match(advancedRoot, /\.setup-options summary\{[^}]*min-height:44px/,
   'compact setup disclosure must retain a 44px touch target');
 assert.match(advancedRoot,
-  /<div class='head'><h1>Lightweaver<\/h1>"\);\s*if \(!needsSetup\) \{[\s\S]*id='piece-name'/,
-  'setup must show one Lightweaver identity while the live page keeps its piece name');
+  /<div class='head'><h1>Lightweaver<\/h1>"\);\s*if \(projectReady\) \{[\s\S]*id='piece-name'/,
+  'setup and blank-card commissioning must show one Lightweaver identity while a ready project keeps its piece name');
 assert.doesNotMatch(setupMarkup, /piece-name/,
   'setup markup must not repeat the live piece identity');
 

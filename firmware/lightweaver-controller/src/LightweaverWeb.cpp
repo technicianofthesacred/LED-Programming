@@ -348,11 +348,13 @@ void handleRoot() {
   RuntimeConfig& cfg = *runtimeConfigPtr;
   bool stationActive = cfg.activeTransport == WIFI_TRANSPORT_STATION;
   bool wifiConfigured = cfg.wifi.ssid.length() > 0;
-  bool needsSetup = !stationActive && !wifiConfigured;
+  bool projectReady = cfg.configValid && cfg.knownGoodProject;
+  bool needsWifiSetup = !wifiConfigured || (!stationActive && !projectReady);
 
-  // When the card hasn't been joined to home WiFi yet, the visitor surface
-  // is meaningless — defer to the advanced/setup flow which has the WiFi form.
-  if (needsSetup) {
+  // Pattern controls are truthful only for a valid known-good project. The
+  // advanced page distinguishes a missing WiFi connection from a blank card
+  // that is already reachable on gallery WiFi.
+  if (!projectReady || needsWifiSetup) {
     handleAdvancedRoot();
     return;
   }
@@ -756,7 +758,10 @@ void handleAdvancedRoot() {
   RuntimeConfig& cfg = *runtimeConfigPtr;
   bool stationActive = cfg.activeTransport == WIFI_TRANSPORT_STATION;
   bool wifiConfigured = cfg.wifi.ssid.length() > 0;
-  bool needsSetup = !stationActive && !wifiConfigured;
+  bool projectReady = cfg.configValid && cfg.knownGoodProject;
+  bool needsWifiSetup = !wifiConfigured || (!stationActive && !projectReady);
+  bool needsCommissioning = !projectReady && !needsWifiSetup;
+  bool factoryBlank = cfg.runtimePhase == ProvisioningPhase::Factory;
 
   String page;
   page.reserve(8192);
@@ -832,18 +837,18 @@ void handleAdvancedRoot() {
             ".setup-mode .foot{margin-top:14px}"
             "@media(max-width:300px){.setup-network{grid-template-columns:1fr}.setup-network #rescan{width:100%}}"
             "</style></head><body class='");
-  page += needsSetup ? F("setup-mode") : F("control-mode");
+  page += needsWifiSetup ? F("setup-mode") : F("control-mode");
   page += F("'><div class='wrap'>");
 
   page += F("<div class='head'><h1>Lightweaver</h1>");
-  if (!needsSetup) {
+  if (projectReady) {
     page += F("<span class='piece' id='piece-name'>");
     page += escapeHtml(cfg.pieceName);
     page += F("</span>");
   }
   page += F("</div>");
 
-  if (needsSetup) {
+  if (needsWifiSetup) {
     // First-time setup — only show the WiFi join form
     page += F("<div class='card'><h2>Join Wi&#8209;Fi</h2>"
               "<label class='field' for='ssid'>Network</label>"
@@ -863,6 +868,17 @@ void handleAdvancedRoot() {
               "</details>"
               "<div class='row join-row'><button class='primary' id='join' type='button'>Save and join Wi&#8209;Fi</button></div>"
               "<p class='note' id='msg' role='status' aria-live='polite'></p>"
+              "</div>");
+  } else if (needsCommissioning) {
+    page += F("<div class='card'><h2>Connected to gallery WiFi</h2>"
+              "<p><strong>");
+    page += factoryBlank ? F("No project loaded") : F("Project needs recovery/verification");
+    page += F("</strong></p>"
+              "<p class='note'>This card is online. Return to Lightweaver Studio to load, recover, or verify its project before using the lights.</p>"
+              "<p class='note'>If you are viewing this from the Lightweaver AP, rejoin gallery WiFi before returning to Studio.</p>"
+              "<a class='link' href='");
+    page += escapeHtml(studioBridgeUrl(cfg));
+    page += F("' target='_blank'>Return to Lightweaver Studio \xE2\x86\x92</a>"
               "</div>");
   } else {
     // Live control surface
@@ -996,7 +1012,7 @@ void handleAdvancedRoot() {
             "const installFromHash=async()=>{try{const hash=(location.hash||'').replace(/^#/,'');if(!hash)return;const params=new URLSearchParams(hash);const payload=params.get('lwconfig');if(!payload)return;showHandoff('Saving Studio package to this card...');const json=b64urlDecode(payload);const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:json});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false){showHandoff(j.error||'Could not save Studio package.','err');return}history.replaceState(null,'',location.pathname+location.search);if(j.state==='staged'){showHandoff('New wiring is staged. Return to Studio to run the safe physical test. Your working setup is unchanged.','ok');return}showHandoff('Saved on the card.','ok');if(j.requiresReboot===true&&params.get('reboot')==='1')setTimeout(()=>post('/api/reboot',{}),300)}catch(e){showHandoff(e.message||'Could not read Studio package.','err')}};"
             "installFromHash();");
 
-  if (needsSetup) {
+  if (needsWifiSetup) {
     // /api/wifi/scan answers {scanning:true} while the async scan is still
     // running, so a single fetch lands on "No networks found" forever. Poll
     // until scanning:false (capped at ~30s), show a Scanning placeholder
@@ -1023,7 +1039,7 @@ void handleAdvancedRoot() {
               "try{const r=await post('/api/wifi',{ssid:ssid,password:$('pw').value,hostname:$('hn').value});"
               "if(r.ok){m.textContent='Credentials saved. Waiting for this card to verify its gallery WiFi connection…';m.className='note';await pollWifiJoin(r.handoffGeneration,r.bootId,submitToken)}"
               "else{m.textContent=r.error||'Save failed';m.className='note err';btn.disabled=false}}catch(e){m.textContent=e.message;m.className='note err';btn.disabled=false}};");
-  } else {
+  } else if (!needsCommissioning) {
     page += F("let patterns=[],currentId='',blackoutOn=false;"
               "const swClass=id=>'sw-'+id.replace(/[^a-z0-9-]/g,'-');"
               "const selectedPattern=()=>patterns.find(x=>x.id===currentId)||null;"
