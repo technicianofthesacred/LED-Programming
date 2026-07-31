@@ -145,8 +145,9 @@ Automated source gate:
 
 - [ ] Run the Pattern Lab unit tests, `LWSEQ1` package checks, and
       `tests/pattern-lab-*.spec.ts` browser suite.
-- [ ] Run `npm run launch:source` from `lightweaver/` and `pio test -e native`
-      plus `pio run` from `firmware/lightweaver-controller/`.
+- [ ] Run `npm run launch:source` from `lightweaver/` (this now includes the
+      mapper contract/build gate), then run `pio test -e native` plus `pio run`
+      from `firmware/lightweaver-controller/`.
 - [ ] Confirm existing Patterns, Layout, Playlist, Show, Card, installer,
       Production Setup, persistence, migration, and recovery suites still pass.
 - [ ] On the protected signed release commit, run `npm run launch:check`; never

@@ -11,7 +11,7 @@ There is no public relay in this firmware. It does not register with `led.mandal
 - WS281x/WS2815-style addressable RGB LEDs.
 - One level shifter channel per LED output.
 - Shared ground between controller, LED power supply, and microSD module.
-- Brightness potentiometer, previous/next buttons, blackout button, and rotary encoder.
+- Optional previous/next buttons, blackout button, rotary encoder, and brightness potentiometer.
 
 ## Default Wiring
 
@@ -23,18 +23,21 @@ There is no public relay in this firmware. It does not register with `led.mandal
 | LED output 4 | 21 |
 | Encoder A | 4 |
 | Encoder B | 5 |
-| Encoder press | 6 |
+| Encoder press | 0 (alternate 6) |
 | Previous button | 7 |
 | Next button | 8 |
 | Blackout button | 9 |
-| Brightness pot | 1 |
+| Brightness pot | disabled by default (optional GPIO 1) |
 | Status LED | 2 |
 | microSD CS | 10 |
 | microSD MOSI | 11 |
 | microSD SCK | 12 |
 | microSD MISO | 13 |
 
-Buttons use `INPUT_PULLUP`, so wire each button between the GPIO and ground. The brightness potentiometer should be wired as a voltage divider between 3.3 V and ground with the wiper on GPIO 1.
+Buttons use `INPUT_PULLUP`, so wire each button between the GPIO and ground. GPIO 0
+is the default encoder press input and GPIO 6 is its alternate. The optional
+brightness potentiometer is disabled until assigned in the card configuration;
+when GPIO 1 is selected, wire it as a voltage divider between 3.3 V and ground.
 
 ## microSD Layout
 
@@ -53,6 +56,11 @@ The card should contain:
 ```
 
 Non-sequence controller modes still use `/lightweaver.json`, but may not include a `/sequences` folder.
+The profile is bound to the exact card ID. Every sequence entry declares its
+byte length and SHA-256 digest; the card verifies both before playback.
+If a factory reset is performed while the microSD card is absent, firmware
+stores a reset marker and ignores old SD autorun projects until a newly
+installed configuration explicitly clears that marker.
 
 ## Runtime Modes
 
@@ -105,21 +113,20 @@ firmware source, so this can't silently go stale again.
 The firmware includes runtime-safety behavior aimed at gallery uptime and
 brownout resilience:
 
-- **Power cap (opt-in):** set `led.maxMilliamps` in the chip config to the LED
-  power supply's rating (e.g. `4000` for a 5 V / 4 A supply). FastLED then
+- **Power cap:** Studio exports 80% of the configured supply rating as
+  `led.maxMilliamps` (for example, `3200` for a 5 V / 4 A supply). The firmware
+  defaults to a conservative 1500 mA when no valid cap is supplied. FastLED
   scales all pixels down uniformly to stay under that current budget, which
-  stops a full-white frame from sagging the rail into a brownout reset. Default
-  is `0` (disabled), so existing pieces are unchanged until you set it. This is
-  the recommended fix if a piece resets under bright patterns.
+  stops a full-white frame from sagging the rail into a brownout reset.
 - **Crash auto-recovery:** if the previous boot ended in a brownout, panic, or
   watchdog reset, the card comes up in the visible low-brightness warm-white
   recovery state instead of silently re-entering whatever failed.
 - **Task watchdog:** the loop task is watched with an 8 s timeout
   (`LW_WDT_TIMEOUT_S` build flag) and reboots the card if a handler ever wedges.
 - **Discovery:** the card advertises both `_http._tcp` and `_wled._tcp` over
-  mDNS, with a MAC-suffixed instance label (`Lightweaver-XXXX`) so two pieces on
-  one LAN are distinguishable in a browse list even though both answer to
-  `lightweaver.local`.
+  mDNS with a MAC-suffixed AP name (`Lightweaver-XXXX`) and default hostname
+  (`lightweaver-xxxx.local`). Studio also accepts a manually entered numeric
+  address when a network does not resolve mDNS.
 - **iOS captive portal:** Apple probe paths return a non-Success page so the
   setup UI reliably pops when a phone joins the `Lightweaver-XXXX` AP.
 
@@ -132,5 +139,6 @@ brownout resilience:
 5. Power the LEDs from the final supply, not from USB.
 6. Confirm shared ground between LED power and controller.
 7. Verify output 1, then add outputs 2-4 one at a time.
-8. Test next, previous, encoder press, brightness, and blackout controls.
+8. Test every fitted control: next, previous, encoder press, optional
+   brightness, and blackout.
 9. Let the piece loop for at least 30 minutes before handing it to a buyer.
