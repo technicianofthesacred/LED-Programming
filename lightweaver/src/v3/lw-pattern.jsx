@@ -77,6 +77,7 @@ import {
   readLocalChipDefault,
   writeLocalChipDefault, openLocalCardPage } from '../lib/cardBridge.js';
 import { computeSymmetryFit } from '../lib/symmetry.js';
+import { StripColorOrderCheck } from '../components/layout/wire/StripColorOrderCheck.jsx';
 import { PatternPreview } from './PatternPreview.jsx';
 
   // Mockup geometry id -> live symSettings.
@@ -343,6 +344,9 @@ import { PatternPreview } from './PatternPreview.jsx';
     const [menuOpen, setMenuOpen] = useState(false);
     const menuButtonRef = useRef(null);
     const menuRef = useRef(null);
+    const [colorOrderOpen, setColorOrderOpen] = useState(false);
+    const colorOrderButtonRef = useRef(null);
+    const colorOrderPopoverRef = useRef(null);
     const [mixName, setMixName] = useState("");
 
     // Show-more pagination so the browser isn't 130+ cards tall (which buries the
@@ -363,6 +367,21 @@ import { PatternPreview } from './PatternPreview.jsx';
       window.addEventListener('keydown', onKeyDown);
       return () => window.removeEventListener('keydown', onKeyDown);
     }, [menuOpen]);
+    const closeColorOrder = useCallback((restoreFocus = true) => {
+      setColorOrderOpen(false);
+      if (restoreFocus) requestAnimationFrame(() => colorOrderButtonRef.current?.focus());
+    }, []);
+    useEffect(() => {
+      if (!colorOrderOpen) return undefined;
+      colorOrderPopoverRef.current?.querySelector('button:not(:disabled)')?.focus();
+      const onKeyDown = event => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        closeColorOrder();
+      };
+      window.addEventListener('keydown', onKeyDown);
+      return () => window.removeEventListener('keydown', onKeyDown);
+    }, [closeColorOrder, colorOrderOpen]);
 
     // ── real engine state ───────────────────────────────────────────────
     const [cardHost, setCardHost] = useState(readStoredCardHost);
@@ -1438,12 +1457,42 @@ import { PatternPreview } from './PatternPreview.jsx';
                 {connected &&
                   <button className="btn" title="Bring the lights back with a warm-white recovery" data-testid="recover-lights" onClick={repairLed} disabled={cardSave.conflictsDisabled}>{I.wrench}Recover lights</button>
                 }
+                <div className="pm-color-order">
+                  <button
+                    ref={colorOrderButtonRef}
+                    type="button"
+                    className={"btn" + (colorOrderOpen ? " toggled" : "")}
+                    aria-expanded={colorOrderOpen}
+                    aria-haspopup="dialog"
+                    onClick={() => {
+                      if (colorOrderOpen) {
+                        closeColorOrder();
+                        return;
+                      }
+                      setMenuOpen(false);
+                      setColorOrderOpen(true);
+                    }}
+                  >{I.refresh}Shift colors</button>
+                  {colorOrderOpen &&
+                    <>
+                      <div className="pm-menu-backdrop" aria-hidden="true" onClick={() => closeColorOrder()} />
+                      <div ref={colorOrderPopoverRef} className="pm-color-order-pop" role="dialog" aria-label="Shift colors">
+                        <StripColorOrderCheck
+                          quick
+                          cardHost={cardHost}
+                          controller={standaloneController}
+                          setController={setStandaloneController}
+                        />
+                      </div>
+                    </>
+                  }
+                </div>
                 <div className="ag-conn">
                   <button className={"btn" + (localCard ? " toggled" : "")} aria-pressed={localCard} onClick={toggleLocalCard}>{localCard ? "Using local card" : "Use local card"}</button>
                   <button className="btn" onClick={openCardPage}>{I.open}Open card page</button>
                 </div>
                 <div className="pm-menu">
-                  <button ref={menuButtonRef} className="btn" aria-expanded={menuOpen} aria-haspopup="menu" onClick={() => setMenuOpen((o) => !o)} disabled={cardSave.conflictsDisabled || Boolean(hardwareConfigurationIssue)}>{I.dots}Card tools{I.chevronD}</button>
+                  <button ref={menuButtonRef} className="btn" aria-expanded={menuOpen} aria-haspopup="menu" onClick={() => { setColorOrderOpen(false); setMenuOpen((o) => !o); }} disabled={cardSave.conflictsDisabled || Boolean(hardwareConfigurationIssue)}>{I.dots}Card tools{I.chevronD}</button>
                   {menuOpen &&
                   <>
                       <div className="pm-menu-backdrop" aria-hidden="true" onClick={() => setMenuOpen(false)} />
