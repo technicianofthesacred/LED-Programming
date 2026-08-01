@@ -617,21 +617,36 @@ export function LayoutCanvas({
             )}
 
             {/* ── Strip mid-path badge (selected strip only) ── */}
-            {strips.filter(s => !hidden[s.id] && s.pixels?.length > 0 && s.id === selStripId).map(s => {
+            {!isEditingGesture && strips.filter(s => !hidden[s.id] && s.pixels?.length > 0 && s.id === selStripId).map(s => {
               const mid = s.pixels[Math.floor(s.pixels.length / 2)];
               const label = `${s.name} · ${s.pixelCount} LEDs`;
+              const labelSuffix = ` · ${s.pixelCount} LEDs`;
               const badgeCameraScale = selectionVbScale / vbScale;
               const badgeFontSize = vbScale * 10;
               const badgePaddingX = vbScale * 9;
               const badgeHeight = vbScale * 20;
-              const badgeWidth = Math.max(vbScale * 72, label.length * badgeFontSize * 0.62 + badgePaddingX * 2);
+              const badgeMinWidth = vbScale * 72;
+              const badgeMaxWidth = vbScale * 152;
+              const approximateCharacterWidth = badgeFontSize * 0.62;
+              const availableNameWidth = badgeMaxWidth - badgePaddingX * 2 - labelSuffix.length * approximateCharacterWidth;
+              const maximumNameCharacters = Math.max(1, Math.floor(availableNameWidth / approximateCharacterWidth) - 1);
+              const displayName = s.name.length > maximumNameCharacters
+                ? `${s.name.slice(0, maximumNameCharacters).trimEnd()}…`
+                : s.name;
+              const displayLabel = `${displayName}${labelSuffix}`;
+              const badgeWidth = Math.min(
+                badgeMaxWidth,
+                Math.max(badgeMinWidth, displayLabel.length * approximateCharacterWidth + badgePaddingX * 2),
+              );
               const badgeOffset = vbScale * 25;
               return (
                 <g
                   key={s.id + '-badge'}
                   data-testid="selected-strip-badge"
+                  aria-label={label}
                   transform={`translate(${mid.x} ${mid.y}) scale(${badgeCameraScale})`}
                   style={{ pointerEvents: 'none', userSelect: 'none' }}>
+                  <title>{label}</title>
                   <rect
                     x={-badgeWidth / 2}
                     y={-badgeOffset - badgeHeight}
@@ -651,7 +666,7 @@ export function LayoutCanvas({
                     fontSize={badgeFontSize}
                     fontFamily="var(--ui-font, monospace)"
                     fontWeight="600">
-                    {label}
+                    {displayLabel}
                   </text>
                 </g>
               );
