@@ -16,6 +16,15 @@ function lightweaverApiPlugin() {
     name: 'lightweaver-api',
     apply: 'serve',
     async configureServer(server) {
+      // Pages Functions are not mounted by plain Vite. Return a successful,
+      // empty session probe so local Studio use is truthfully signed out
+      // without Chrome reporting a missing API resource as a console error.
+      server.middlewares.use('/api/library/session', (request, response, next) => {
+        if (request.method !== 'GET') return next();
+        response.statusCode = 204;
+        response.setHeader('cache-control', 'no-store');
+        response.end();
+      });
       const { createLightweaverApiMiddleware } = await import('./server/index.js');
       server.middlewares.use('/api', createLightweaverApiMiddleware());
     },

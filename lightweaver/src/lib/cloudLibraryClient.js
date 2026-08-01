@@ -147,6 +147,13 @@ export function createCloudLibraryClient({
       });
     }
 
+    if (path === 'session' && response.status === 204) {
+      throw new CloudLibraryError('unauthenticated', 'Sign in to use the online project library.', {
+        status: 401,
+        state: 'sign-in',
+      });
+    }
+
     if (!response.ok) throw await errorFromResponse(response);
     if (!jsonContentType(response)) {
       throw invalidResponse(response.status);

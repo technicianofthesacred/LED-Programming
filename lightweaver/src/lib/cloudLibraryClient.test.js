@@ -79,6 +79,23 @@ test('normalizes authentication, permission, and revision conflict responses', a
   }
 });
 
+test('treats a no-content local session response as signed out without a failing resource', async () => {
+  const client = createCloudLibraryClient({
+    fetchImpl: async () => new Response(null, {
+      status: 204,
+      headers: { 'cache-control': 'no-store' },
+    }),
+  });
+
+  await assert.rejects(client.getSession(), error => {
+    assert.ok(error instanceof CloudLibraryError);
+    assert.equal(error.code, 'unauthenticated');
+    assert.equal(error.state, 'sign-in');
+    assert.equal(error.status, 401);
+    return true;
+  });
+});
+
 test('mutations preserve caller idempotency keys and optimistic base revisions', async () => {
   const requests = [];
   const client = createCloudLibraryClient({
