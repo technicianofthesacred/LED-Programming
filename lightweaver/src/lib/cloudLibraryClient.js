@@ -1,3 +1,6 @@
+import { isLibraryBackup } from './libraryBackup.js';
+import { migrateProject } from './projectModel.js';
+
 const ERROR_STATES = new Map([
   [401, 'sign-in'],
   [403, 'permission'],
@@ -49,6 +52,66 @@ function jsonContentType(response) {
   return (response.headers.get('content-type') || '').toLowerCase().startsWith('application/json');
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isProjectMetadata(value) {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && Boolean(value.id)
+    && typeof value.title === 'string'
+    && Boolean(value.title.trim())
+    && typeof value.archived === 'boolean'
+    && Number.isInteger(value.revision)
+    && value.revision >= 1;
+}
+
+function isSession(value) {
+  return isRecord(value)
+    && typeof value.email === 'string'
+    && Boolean(value.email)
+    && (value.role === 'owner' || value.role === 'worker');
+}
+
+function isRevision(value) {
+  return isRecord(value)
+    && Number.isInteger(value.revision)
+    && value.revision >= 1;
+}
+
+function isAsset(value) {
+  return isRecord(value)
+    && typeof value.kind === 'string'
+    && Boolean(value.kind)
+    && Number.isInteger(value.revision)
+    && value.revision >= 1
+    && value.value !== null
+    && typeof value.value === 'object';
+}
+
+function isPortableProjectDocument(value) {
+  if (!isRecord(value)) return false;
+  try {
+    return migrateProject(structuredClone(value)) !== null;
+  } catch {
+    return false;
+  }
+}
+
+function invalidResponse(status, cause) {
+  return new CloudLibraryError('invalid_response', 'The project library returned an invalid response.', {
+    status,
+    cause,
+  });
+}
+
+function resultField(payload, field, predicate, status) {
+  const value = isRecord(payload) ? payload[field] : undefined;
+  if (!predicate(value)) throw invalidResponse(status);
+  return value;
+}
+
 export function createCloudLibraryClient({
   fetchImpl = fetch,
   baseUrl = '/api/library',
@@ -85,68 +148,81 @@ export function createCloudLibraryClient({
     }
 
     if (!response.ok) throw await errorFromResponse(response);
-    if (responseType === 'blob') return response.blob();
     if (!jsonContentType(response)) {
-      throw new CloudLibraryError('invalid_response', 'The project library returned an invalid response.', {
-        status: response.status,
-      });
+      throw invalidResponse(response.status);
     }
+    let text;
+    let payload;
     try {
-      return await response.json();
+      text = await response.text();
+      payload = JSON.parse(text);
     } catch (cause) {
-      throw new CloudLibraryError('invalid_response', 'The project library returned invalid JSON.', {
-        status: response.status,
-        cause,
-      });
+      throw invalidResponse(response.status, cause);
     }
+    if (responseType === 'backup') {
+      if (!isLibraryBackup(payload)) throw invalidResponse(response.status);
+      return new Blob([text], { type: 'application/json' });
+    }
+    return { payload, status: response.status };
   }
 
   const client = {
     async getSession() {
-      return (await send('session')).session;
+      const result = await send('session');
+      return resultField(result.payload, 'session', isSession, result.status);
     },
 
     async listProjects({ state = 'active' } = {}) {
-      return (await send('projects', { searchParams: { state } })).projects;
+      const result = await send('projects', { searchParams: { state } });
+      return resultField(result.payload, 'projects', value => (
+        Array.isArray(value) && value.every(isProjectMetadata)
+      ), result.status);
     },
 
     async createProject({ title, project }, { requestId: mutationRequestId } = {}) {
-      return (await send('projects', {
+      const result = await send('projects', {
         method: 'POST',
         body: { title, project },
         mutationRequestId,
-      })).project;
+      });
+      return resultField(result.payload, 'project', isProjectMetadata, result.status);
     },
 
     async readProject(id) {
-      return (await send(`projects/${encodeURIComponent(id)}`)).project;
+      const result = await send(`projects/${encodeURIComponent(id)}`);
+      return resultField(result.payload, 'project', value => (
+        isProjectMetadata(value) && isPortableProjectDocument(value.document)
+      ), result.status);
     },
 
     async updateProject(id, { baseRevision, title, project }, { requestId: mutationRequestId } = {}) {
       const body = { baseRevision, project };
       if (title !== undefined) body.title = title;
-      return (await send(`projects/${encodeURIComponent(id)}`, {
+      const result = await send(`projects/${encodeURIComponent(id)}`, {
         method: 'PUT',
         body,
         mutationRequestId,
-      })).project;
+      });
+      return resultField(result.payload, 'project', isProjectMetadata, result.status);
     },
 
     async duplicateProject(id, { title } = {}, { requestId: mutationRequestId } = {}) {
       const body = title === undefined ? {} : { title };
-      return (await send(`projects/${encodeURIComponent(id)}/duplicate`, {
+      const result = await send(`projects/${encodeURIComponent(id)}/duplicate`, {
         method: 'POST',
         body,
         mutationRequestId,
-      })).project;
+      });
+      return resultField(result.payload, 'project', isProjectMetadata, result.status);
     },
 
     async setArchived(id, archived, { baseRevision }, { requestId: mutationRequestId } = {}) {
-      return (await send(`projects/${encodeURIComponent(id)}/${archived ? 'archive' : 'unarchive'}`, {
+      const result = await send(`projects/${encodeURIComponent(id)}/${archived ? 'archive' : 'unarchive'}`, {
         method: 'POST',
         body: { baseRevision },
         mutationRequestId,
-      })).project;
+      });
+      return resultField(result.payload, 'project', isProjectMetadata, result.status);
     },
 
     async archiveProject(id, input, options) {
@@ -158,47 +234,68 @@ export function createCloudLibraryClient({
     },
 
     async deleteProject(id, { baseRevision, confirmation }, { requestId: mutationRequestId } = {}) {
-      return send(`projects/${encodeURIComponent(id)}`, {
+      const result = await send(`projects/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         body: { baseRevision, confirmation },
         mutationRequestId,
       });
+      if (!isRecord(result.payload) || result.payload.deleted !== true) {
+        throw invalidResponse(result.status);
+      }
+      return result.payload;
     },
 
     async listRevisions(id) {
-      return (await send(`projects/${encodeURIComponent(id)}/revisions`)).revisions;
+      const result = await send(`projects/${encodeURIComponent(id)}/revisions`);
+      return resultField(result.payload, 'revisions', value => (
+        Array.isArray(value) && value.every(isRevision)
+      ), result.status);
     },
 
     async restoreRevision(id, revision, { baseRevision }, { requestId: mutationRequestId } = {}) {
-      return (await send(`projects/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revision)}/restore`, {
+      const result = await send(`projects/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revision)}/restore`, {
         method: 'POST',
         body: { baseRevision },
         mutationRequestId,
-      })).project;
+      });
+      return resultField(result.payload, 'project', isProjectMetadata, result.status);
     },
 
     async readAsset(kind) {
-      return (await send(`assets/${encodeURIComponent(kind)}`)).asset;
+      const result = await send(`assets/${encodeURIComponent(kind)}`);
+      return resultField(result.payload, 'asset', value => (
+        isAsset(value) && value.kind === kind
+      ), result.status);
     },
 
     async writeAsset(kind, { baseRevision, value }, { requestId: mutationRequestId } = {}) {
-      return (await send(`assets/${encodeURIComponent(kind)}`, {
+      const result = await send(`assets/${encodeURIComponent(kind)}`, {
         method: 'PUT',
         body: { baseRevision, value },
         mutationRequestId,
-      })).asset;
+      });
+      return resultField(result.payload, 'asset', asset => (
+        isAsset(asset) && asset.kind === kind
+      ), result.status);
     },
 
     downloadBackup() {
-      return send('backup', { responseType: 'blob' });
+      return send('backup', { responseType: 'backup' });
     },
 
     async restoreBackup(backup, { requestId: mutationRequestId } = {}) {
-      return (await send('restore', {
+      const result = await send('restore', {
         method: 'POST',
         body: backup,
         mutationRequestId,
-      })).summary;
+      });
+      return resultField(result.payload, 'summary', value => (
+        isRecord(value)
+        && Number.isInteger(value.projectsCreated)
+        && value.projectsCreated >= 0
+        && Number.isInteger(value.assetsCreated)
+        && value.assetsCreated >= 0
+      ), result.status);
     },
   };
 

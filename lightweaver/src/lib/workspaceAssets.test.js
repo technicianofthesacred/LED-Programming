@@ -14,6 +14,7 @@ import {
   savePatternLabDraft,
 } from './patternLabStorage.js';
 import {
+  WORKSPACE_ASSETS_POINTER_KEY,
   WORKSPACE_ASSETS_EVENT,
   WORKSPACE_ASSETS_VERSION,
   readWorkspaceAssets,
@@ -67,6 +68,30 @@ test('round-trips complete custom pattern, revision, and Pattern Lab state', () 
   assert.equal(storage.getItem(PATTERN_LAB_DRAFTS_BACKUP_KEY), storage.getItem(PATTERN_LAB_DRAFTS_KEY));
 });
 
+test('reads the committed workspace snapshot before best-effort legacy mirrors', () => {
+  const storage = memoryStorage();
+  const snapshot = completeSnapshot();
+  writeWorkspaceAssets(snapshot, storage, { dispatch: false });
+
+  storage.setItem(CUSTOM_PATTERNS_KEY, JSON.stringify([{ id: 'hybrid', name: 'Hybrid', code: '' }]));
+  storage.setItem(CUSTOM_PATTERN_REVISIONS_KEY, JSON.stringify({}));
+  storage.setItem(PATTERN_LAB_DRAFTS_KEY, JSON.stringify({ version: 2, drafts: [] }));
+
+  assert.deepEqual(readWorkspaceAssets(storage), snapshot);
+});
+
+test('reads valid legacy mirrors when no committed snapshot pointer exists', () => {
+  const snapshot = completeSnapshot();
+  const storage = memoryStorage({
+    [CUSTOM_PATTERNS_KEY]: JSON.stringify(snapshot.customPatterns),
+    [CUSTOM_PATTERN_REVISIONS_KEY]: JSON.stringify(snapshot.customPatternRevisions),
+    [PATTERN_LAB_DRAFTS_KEY]: JSON.stringify({ version: 2, drafts: snapshot.patternLabDrafts }),
+    [PATTERN_LAB_DRAFTS_BACKUP_KEY]: JSON.stringify({ version: 2, drafts: snapshot.patternLabDrafts }),
+  });
+
+  assert.deepEqual(readWorkspaceAssets(storage), snapshot);
+});
+
 test('validates every collection before making the first local write', () => {
   const storage = memoryStorage({ untouched: 'yes' });
   const invalid = completeSnapshot();
@@ -103,27 +128,54 @@ test('rejects lossy custom pattern values and unsupported stored draft envelopes
   assert.deepEqual(storage.writes, []);
 });
 
-test('rolls back all workspace keys when a local write fails', () => {
+test('persistent write failure cannot expose a hybrid workspace state', () => {
   const original = completeSnapshot();
   original.customPatterns[0].name = 'Original';
   const storage = memoryStorage();
   writeWorkspaceAssets(original, storage, { dispatch: false });
-  const before = new Map(storage.data);
+  const originalPointer = storage.getItem(WORKSPACE_ASSETS_POINTER_KEY);
   let writes = 0;
   const failingStorage = {
     getItem: storage.getItem,
-    removeItem: storage.removeItem,
+    removeItem() { throw new DOMException('persistent quota', 'QuotaExceededError'); },
     setItem(key, value) {
       writes += 1;
-      if (writes === 3) throw new DOMException('quota', 'QuotaExceededError');
+      if (writes >= 2) throw new DOMException('persistent quota', 'QuotaExceededError');
       storage.data.set(key, String(value));
     },
   };
   const replacement = completeSnapshot();
   replacement.customPatterns[0].name = 'Replacement';
 
-  assert.throws(() => writeWorkspaceAssets(replacement, failingStorage), /quota/i);
-  assert.deepEqual(storage.data, before);
+  assert.throws(() => writeWorkspaceAssets(replacement, failingStorage), /persistent quota/i);
+  assert.equal(storage.getItem(WORKSPACE_ASSETS_POINTER_KEY), originalPointer);
+  assert.deepEqual(readWorkspaceAssets(storage), original);
+});
+
+test('legacy mirror failures after the pointer switch do not invalidate the committed snapshot', () => {
+  const original = completeSnapshot();
+  original.customPatterns[0].name = 'Original';
+  const storage = memoryStorage();
+  writeWorkspaceAssets(original, storage, { dispatch: false });
+  let writes = 0;
+  const legacyFailingStorage = {
+    getItem: storage.getItem,
+    removeItem() { throw new DOMException('persistent quota', 'QuotaExceededError'); },
+    setItem(key, value) {
+      writes += 1;
+      if (writes >= 3) throw new DOMException('persistent quota', 'QuotaExceededError');
+      storage.data.set(key, String(value));
+    },
+  };
+  const replacement = completeSnapshot();
+  replacement.customPatterns[0].name = 'Replacement';
+
+  assert.deepEqual(
+    writeWorkspaceAssets(replacement, legacyFailingStorage, { dispatch: false }),
+    replacement,
+  );
+  assert.deepEqual(readWorkspaceAssets(legacyFailingStorage), replacement);
+  assert.equal(JSON.parse(storage.getItem(CUSTOM_PATTERNS_KEY))[0].name, 'Original');
 });
 
 test('custom-pattern and Pattern Lab mutations each dispatch one workspace change event', () => {

@@ -6,6 +6,26 @@ import {
   createCloudLibraryClient,
 } from './cloudLibraryClient.js';
 
+function projectMetadata(overrides = {}) {
+  return {
+    id: 'remote-one',
+    title: 'Cloud piece',
+    archived: false,
+    revision: 1,
+    ...overrides,
+  };
+}
+
+function emptyBackup() {
+  return {
+    format: 'lightweaver.library-backup',
+    version: 1,
+    exportedAt: '2026-08-01T00:00:00.000Z',
+    projects: [],
+    workspaceAssets: [],
+  };
+}
+
 function jsonResponse(value, { status = 200, headers = {} } = {}) {
   return new Response(JSON.stringify(value), {
     status,
@@ -22,13 +42,13 @@ test('reads same-origin no-store JSON responses', async () => {
   const client = createCloudLibraryClient({
     fetchImpl: async (url, options) => {
       requests.push({ url, options });
-      return jsonResponse({ projects: [{ id: 'remote-one', revision: 3 }] });
+      return jsonResponse({ projects: [projectMetadata({ revision: 3 })] });
     },
   });
 
   const projects = await client.listProjects({ state: 'archived' });
 
-  assert.deepEqual(projects, [{ id: 'remote-one', revision: 3 }]);
+  assert.deepEqual(projects, [projectMetadata({ revision: 3 })]);
   assert.equal(requests[0].url, '/api/library/projects?state=archived');
   assert.equal(requests[0].options.credentials, 'same-origin');
   assert.equal(requests[0].options.cache, 'no-store');
@@ -64,7 +84,7 @@ test('mutations preserve caller idempotency keys and optimistic base revisions',
   const client = createCloudLibraryClient({
     fetchImpl: async (url, options) => {
       requests.push({ url, options });
-      return jsonResponse({ project: { id: 'remote-one', revision: 8 } });
+      return jsonResponse({ project: projectMetadata({ revision: 8 }) });
     },
   });
   const project = { version: 3, id: 'portable-one' };
@@ -93,11 +113,11 @@ test('each mutation receives an idempotency header and backup downloads stay opa
     fetchImpl: async (url, options) => {
       requests.push({ url, options });
       if (url.endsWith('/backup')) {
-        return new Response('{"format":"lightweaver.library-backup"}', {
+        return new Response(JSON.stringify(emptyBackup()), {
           headers: { 'cache-control': 'no-store', 'content-type': 'application/json' },
         });
       }
-      return jsonResponse({ project: { id: 'created', revision: 1 } }, { status: 201 });
+      return jsonResponse({ project: projectMetadata({ id: 'created' }) }, { status: 201 });
     },
   });
 
@@ -106,7 +126,7 @@ test('each mutation receives an idempotency header and backup downloads stay opa
 
   assert.match(requests[0].options.headers['x-lightweaver-request'], /^[a-zA-Z0-9_-]{1,128}$/);
   assert.ok(blob instanceof Blob);
-  assert.equal(await blob.text(), '{"format":"lightweaver.library-backup"}');
+  assert.deepEqual(JSON.parse(await blob.text()), emptyBackup());
   assert.equal(Object.hasOwn(blob, 'objectKey'), false);
 });
 
@@ -122,4 +142,42 @@ test('rejects non-JSON API successes as typed invalid responses', async () => {
     client.getSession(),
     error => error instanceof CloudLibraryError && error.code === 'invalid_response',
   );
+});
+
+test('backup downloads reject HTML and malformed JSON envelopes as typed invalid responses', async t => {
+  for (const response of [
+    new Response('<html>proxy error</html>', { headers: { 'content-type': 'text/html' } }),
+    jsonResponse({ format: 'lightweaver.library-backup', version: 1 }),
+  ]) {
+    await t.test(response.headers.get('content-type'), async () => {
+      const client = createCloudLibraryClient({ fetchImpl: async () => response.clone() });
+      await assert.rejects(
+        client.downloadBackup(),
+        error => error instanceof CloudLibraryError && error.code === 'invalid_response',
+      );
+    });
+  }
+});
+
+test('successful JSON response families reject malformed payloads with typed errors', async t => {
+  const cases = [
+    ['session', {}, client => client.getSession()],
+    ['project list', { projects: {} }, client => client.listProjects()],
+    ['project', { project: { id: 'remote-one', revision: 1 } }, client => client.createProject({ title: 'A', project: {} })],
+    ['opened project document', { project: { ...projectMetadata(), document: {} } }, client => client.readProject('remote-one')],
+    ['revision list', { revisions: [{}] }, client => client.listRevisions('remote-one')],
+    ['asset', { asset: { kind: 'custom-patterns', revision: '1', value: {} } }, client => client.readAsset('custom-patterns')],
+    ['delete', { deleted: 'yes' }, client => client.deleteProject('remote-one', { baseRevision: 1, confirmation: 'DELETE' })],
+    ['restore summary', { summary: { projectsCreated: '1', assetsCreated: 0 } }, client => client.restoreBackup(emptyBackup())],
+  ];
+
+  for (const [name, payload, invoke] of cases) {
+    await t.test(name, async () => {
+      const client = createCloudLibraryClient({ fetchImpl: async () => jsonResponse(payload) });
+      await assert.rejects(
+        invoke(client),
+        error => error instanceof CloudLibraryError && error.code === 'invalid_response',
+      );
+    });
+  }
 });

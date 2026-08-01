@@ -37,7 +37,10 @@ import {
 } from './cardPlaylist.js';
 
 export const PROJECT_VERSION = 3;
-const FOREIGN_PROJECT_FORMATS = new Set(['lightweaver.mapper-project']);
+const FOREIGN_PROJECT_FORMATS = new Set([
+  'lightweaver.library-backup',
+  'lightweaver.mapper-project',
+]);
 
 export function createProjectId() {
   const random = Math.random().toString(36).slice(2, 10);
