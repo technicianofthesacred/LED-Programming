@@ -11,7 +11,8 @@ import { compileWiring } from '../src/lib/wiringCompiler.js';
 // (src/v3/lw-pattern.jsx). The DOM is the mockup's own: .pm wrapper, .pmcard
 // browse cards, .pm-targetcard, .chips/.chip, and the testids
 // that the live component exposes (save-current-combo,
-// section-target-*, look-color-picker, look-*-slider/-readout, card-*-label).
+// section-target-*, look-color-picker, look-*-slider/-readout, and visible
+// preview state exposed by the compact preview toolbar).
 
 async function setRangeValue(locator, value: string) {
   await locator.evaluate((node: HTMLInputElement, nextValue) => {
@@ -131,7 +132,7 @@ test('fresh strip preview and design target stay synchronized without committing
   const targetSelect = page.getByLabel('Preview target');
   const outerTarget = page.getByTestId('section-target-patch-default-outer-circle');
   const stage = page.getByTestId('pattern-piece-preview');
-  const previewHeading = page.locator('.pm-preview-pane .sec-h .m');
+  const previewHeading = page.getByTestId('pattern-preview-meta');
   await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_autosave_v3'))).not.toBeNull();
   const savedBefore = await page.evaluate(() => {
     const project = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
@@ -140,17 +141,16 @@ test('fresh strip preview and design target stay synchronized without committing
 
   await expect(targetSelect).toHaveValue('patch-default-outer-circle');
   await expect(outerTarget).toHaveClass(/\bon\b/);
-  await expect(page.getByTestId('card-target-label')).toHaveText('Outer circle');
-  await expect(previewHeading).toHaveText('Outer circle · Lava Lamp');
+  await expect(previewHeading).toContainText('Lava Lamp');
   await expect(stage).toHaveAttribute('data-preview-patterns', 'lava');
 
   await page.getByLabel('Preview taps on the LED card').uncheck();
   await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
-  await expect(previewHeading).toHaveText('Outer circle · Plasma');
+  await expect(previewHeading).toContainText('Plasma');
   await expect(stage).toHaveAttribute('data-preview-patterns', 'plasma');
 
   await page.getByRole('button', { name: 'On my piece' }).click();
-  await expect(page.getByTestId('card-target-label')).toHaveText('Outer circle');
+  await expect(outerTarget).toHaveClass(/\bon\b/);
   await expect(stage).toHaveAttribute('data-preview-patterns', 'plasma,lava');
   await page.waitForTimeout(650);
   const savedAfter = await page.evaluate(() => {
@@ -176,26 +176,56 @@ test('mapped preview lists LED-backed targets only and crops to the selected geo
   await expect(stage).not.toHaveAttribute('data-preview-view-box', project.layout.viewBox);
 });
 
-test('desktop preview keeps target navigation above a full-width piece toggle', async ({ page }) => {
+test('preview toolbar is one compact desktop row and the redundant card panel is absent', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   const project = createPiecePreviewProject('piece-preview-desktop-controls');
   await gotoSavedProjectPatterns(page, project);
 
   const controls = page.getByLabel('Pattern preview controls');
+  const metadata = page.getByTestId('pattern-preview-meta');
   const previous = page.getByRole('button', { name: 'Previous LED target' });
   const target = page.getByLabel('Preview target');
   const next = page.getByRole('button', { name: 'Next LED target' });
   const toggle = page.getByRole('button', { name: 'On my piece' });
   const boxes = await Promise.all([
-    controls.boundingBox(), previous.boundingBox(), target.boundingBox(), next.boundingBox(), toggle.boundingBox(),
+    controls.boundingBox(), metadata.boundingBox(), previous.boundingBox(), target.boundingBox(), next.boundingBox(), toggle.boundingBox(),
   ]);
-  const [controlsBox, previousBox, targetBox, nextBox, toggleBox] = boxes;
-  expect(controlsBox && previousBox && targetBox && nextBox && toggleBox).toBeTruthy();
-  expect(toggleBox!.y).toBeGreaterThan(targetBox!.y + 4);
-  expect(toggleBox!.width).toBeGreaterThanOrEqual(controlsBox!.width - 1);
-  expect(targetBox!.width).toBeGreaterThanOrEqual(120);
-  expect(previousBox!.width).toBeGreaterThanOrEqual(44);
-  expect(nextBox!.width).toBeGreaterThanOrEqual(44);
+  const [controlsBox, metadataBox, previousBox, targetBox, nextBox, toggleBox] = boxes;
+  expect(controlsBox && metadataBox && previousBox && targetBox && nextBox && toggleBox).toBeTruthy();
+  const rowY = metadataBox!.y;
+  for (const box of [previousBox!, targetBox!, nextBox!, toggleBox!]) {
+    expect(Math.abs(box.y - rowY)).toBeLessThanOrEqual(1);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+  }
+  expect(controlsBox!.height).toBeLessThanOrEqual(44);
+  await expect(page.getByText('Card', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('textbox', { name: 'Card local page host' })).toHaveCount(0);
+});
+
+test('phone preview toolbar uses no more than two compact rows', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const project = createPiecePreviewProject('piece-preview-phone-controls');
+  await gotoSavedProjectPatterns(page, project);
+
+  const toolbar = page.getByLabel('Pattern preview controls');
+  const items = [
+    page.getByTestId('pattern-preview-meta'),
+    page.getByRole('button', { name: 'Previous LED target' }),
+    page.getByLabel('Preview target'),
+    page.getByRole('button', { name: 'Next LED target' }),
+    page.getByRole('button', { name: 'On my piece' }),
+  ];
+  const boxes = await Promise.all(items.map(item => item.boundingBox()));
+  expect(boxes.every(Boolean)).toBe(true);
+  const rows = new Set(boxes.map(box => Math.round(box!.y)));
+  expect(rows.size).toBeLessThanOrEqual(2);
+  const toolbarBox = await toolbar.boundingBox();
+  expect(toolbarBox).toBeTruthy();
+  expect(toolbarBox!.height).toBeLessThanOrEqual(92);
+  for (const box of boxes) {
+    expect(box!.x).toBeGreaterThanOrEqual(toolbarBox!.x - 1);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(toolbarBox!.x + toolbarBox!.width + 1);
+  }
 });
 
 test('preview dropdown and chevrons move through LED targets without wrapping', async ({ page }) => {
@@ -243,7 +273,7 @@ test('On my piece returns to the last strip and restores preview state per proje
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: 'On my piece' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByLabel('Preview target')).toHaveValue('piece');
-  await expect(page.getByTestId('card-target-label')).toHaveText('Inner circle');
+  await expect(page.getByTestId('section-target-patch-default-inner-circle')).toHaveClass(/\bon\b/);
 
   const anotherProject = createPiecePreviewProject('piece-preview-other');
   const otherContext = await browser.newContext();
@@ -305,12 +335,11 @@ test('leaving whole-piece preview restores the remembered strip as the edit targ
   await innerTarget.click();
   await allTarget.click();
   await expect(stage).toHaveAttribute('data-preview-mode', 'piece');
-  await expect(page.getByTestId('card-target-label')).toHaveText('All sections');
+  await expect(allTarget).toHaveClass(/\bon\b/);
 
   await toggle.click();
   await expect(stage).toHaveAttribute('data-preview-target', 'patch-default-inner-circle');
   await expect(innerTarget).toHaveClass(/\bon\b/);
-  await expect(page.getByTestId('card-target-label')).toHaveText('Inner circle');
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
   await setRangeValue(page.getByTestId('look-brightness-slider'), '0.42');
@@ -386,13 +415,13 @@ test('an edit made during verification remains a draft above the installed snaps
   await expect(install).toBeDisabled();
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="ripple"]').click();
-  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Ripple');
+  await expect(page.getByTestId('pattern-preview-meta')).toContainText('Ripple');
   releaseVerification?.();
   await expect(install).toBeEnabled();
   await page.waitForTimeout(300);
 
   await expect(page.locator('.savechip')).toContainText('Unsaved changes');
-  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Ripple');
+  await expect(page.getByTestId('pattern-preview-meta')).toContainText('Ripple');
   await expect(innerTarget).toHaveClass(/\bon\b/);
   await expect.poll(() => page.evaluate(() => {
     const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
@@ -414,7 +443,7 @@ test('a rejected Install preserves canonical Studio state and the current draft'
   await page.getByTitle('Install the current look on the card').click();
 
   await expect(page.getByTitle('Install the current look on the card')).toHaveText(/Retry install/);
-  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Plasma');
+  await expect(page.getByTestId('pattern-preview-meta')).toContainText('Plasma');
   await page.waitForTimeout(650);
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}'));
   expect(JSON.stringify(saved.layout.patchBoard)).toBe(canonicalBefore);
@@ -533,9 +562,9 @@ test('first load reads warm (Lava Lamp) on a fresh, untitled project', async ({ 
   // The factory default look is aurora (green); on a fresh untitled project with
   // no saved looks the screen prefers the warm default for the INITIAL preview,
   // matching the mockup's Lava Lamp opening. Saved state is not mutated.
-  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Lava Lamp');
-  await expect(page.getByTestId('card-startup-label')).toHaveText('Lava Lamp');
-  await expect(page.getByTestId('card-live-preview-label')).not.toHaveText('Aurora');
+  await expect(page.getByTestId('pattern-preview-meta')).toContainText('Lava Lamp');
+  await expect(page.locator('.pm-cards .pmcard[data-pattern-id="lava"]')).toHaveClass(/\bon\b/);
+  await expect(page.getByTestId('pattern-preview-meta')).not.toContainText('Aurora');
 });
 
 test('card-to-Studio return hydrates the selected pattern and preserves bridge correlation', async ({ page }) => {
@@ -543,9 +572,9 @@ test('card-to-Studio return hydrates the selected pattern and preserves bridge c
     waitUntil: 'domcontentloaded',
   });
 
-  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Fire');
+  await expect(page.getByTestId('pattern-preview-meta')).toContainText('Fire');
   await expect(page.locator('.pm-cards .pmcard[data-pattern-id="fire"]')).toHaveClass(/\bon\b/);
-  await expect(page.getByRole('textbox', { name: 'Card local page host' })).toHaveValue('192.168.18.70');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_chip_card_host'))).toBe('192.168.18.70');
   await expect.poll(() => new URL(page.url()).searchParams.get('editPattern')).toBeNull();
   const returned = new URL(page.url());
   expect(returned.searchParams.get('cardBridge')).toBe('1');
@@ -588,7 +617,7 @@ test('clicking a card updates the preview', async ({ page }) => {
 
   // Selected card is marked, and the preview/labels reflect Ocean.
   await expect(page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]')).toHaveClass(/\bon\b/);
-  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Ocean');
+  await expect(page.getByTestId('pattern-preview-meta')).toContainText('Ocean');
   await expect(page.locator('.pm-preview-pane')).toContainText('Ocean');
   // Live preview pushes the selected pattern to the card.
   await expect.poll(() => controlRequests.some(r => r.patternId === 'ocean')).toBe(true);
@@ -619,7 +648,7 @@ test('Studio preview changes immediately while runtime application waits for the
   await page.evaluate(() => localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-preview-test' })));
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
-  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Ocean');
+  await expect(page.getByTestId('pattern-preview-meta')).toContainText('Ocean');
   await expect(page.getByTestId('physical-preview-status')).toHaveText('Sending to Lightweaver');
   await expect.poll(() => Boolean(releaseControl)).toBe(true);
   releaseControl?.();
@@ -643,7 +672,7 @@ test('an old card keeps the Studio selection and offers a card software update',
   await gotoFreshPatterns(page);
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
-  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Ocean');
+  await expect(page.getByTestId('pattern-preview-meta')).toContainText('Ocean');
   const alert = page.getByRole('alert').filter({ hasText: 'This card is running old software and cannot report which preview command it applied.' });
   await expect(alert).toBeVisible();
   await expect(alert.getByRole('button', { name: 'Update card' })).toBeVisible();
@@ -781,7 +810,7 @@ test('production bridge transport sends only the newest selection to the source-
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
   await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
-  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Plasma');
+  await expect(page.getByTestId('pattern-preview-meta')).toContainText('Plasma');
   expect(await page.evaluate(() => (window as any).__bridgeOpenCalls)).toHaveLength(1);
   await page.waitForTimeout(150);
   expect(controlRequests).toHaveLength(0);

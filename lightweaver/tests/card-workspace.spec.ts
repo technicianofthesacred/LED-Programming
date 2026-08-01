@@ -723,7 +723,7 @@ test('Hardware loads the verified production project that matches the paired car
   await page.getByRole('button', { name: 'Load matching card project' }).click();
 
   await expect(page).toHaveURL(/#screen=pattern$/);
-  await expect(page.getByText('44 pixels', { exact: true })).toBeVisible();
+  await expect(page.locator('.pm-targetcard .tc-layer .tc-total')).toHaveText('LEDs44');
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}').id)).toBe('bench-fixture');
 });
 
