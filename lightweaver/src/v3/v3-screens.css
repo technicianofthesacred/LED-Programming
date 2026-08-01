@@ -848,6 +848,29 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .cloud-library-guidance, .cloud-conflict { padding: 12px; border: 1px solid var(--accent-line); border-radius: var(--r-md); background: var(--accent-soft); }
 .cloud-library-guidance strong, .cloud-conflict strong { color: var(--text-hi); font-size: 12.5px; }
 .cloud-library-guidance p { margin: 4px 0 10px; color: var(--text-lo); font-size: 11.5px; line-height: 1.5; }
+.cloud-account-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 8px; }
+.cloud-account-form > strong, .cloud-account-form > p, .cloud-account-form > .cloud-account-error { grid-column: 1 / -1; }
+.cloud-account-form label { color: var(--text-lo); font-size: 10px; }
+.cloud-account-form .btn { justify-self: start; margin-top: 3px; }
+.cloud-account-error { margin: 3px 0 0; color: var(--danger); font-size: 11px; }
+.cloud-account-session { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: var(--r-md); }
+.cloud-account-admin { display: grid; gap: 9px; padding: 12px; border: 1px solid var(--border-soft); border-radius: var(--r-md); background: color-mix(in srgb, var(--bg-elev) 55%, transparent); }
+.cloud-account-admin h4, .cloud-draft-review h4 { color: var(--text-hi); font-size: 13px; }
+.cloud-account-create { display: grid; grid-template-columns: repeat(4, minmax(100px, 1fr)) auto; gap: 5px; }
+.cloud-account-table-wrap { overflow-x: auto; }
+.cloud-account-table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+.cloud-account-table th { color: var(--text-faint); font-size: 9px; font-weight: 600; letter-spacing: .06em; text-align: left; text-transform: uppercase; }
+.cloud-account-table th, .cloud-account-table td { padding: 7px 6px; border-top: 1px solid var(--border-hair); vertical-align: top; }
+.cloud-account-table td:first-child { display: grid; min-width: 125px; }
+.cloud-account-table td:first-child span { color: var(--text-faint); font-family: var(--font-mono); font-size: 9px; }
+.cloud-account-table select { min-width: 92px; }
+.cloud-account-status { color: var(--success); font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; }
+.cloud-account-status.is-disabled { color: var(--text-faint); }
+.cloud-account-actions, .cloud-assignments { display: grid; gap: 4px; min-width: 190px; }
+.cloud-account-actions > .btn { justify-self: start; }
+.cloud-assignments > span, .cloud-assignment-create { display: flex; align-items: center; justify-content: space-between; gap: 5px; color: var(--text-lo); }
+.cloud-draft-label { color: var(--accent); font-size: 10px; font-style: normal; }
+.cloud-draft-review { display: grid; gap: 5px; padding: 12px; border: 1px solid var(--accent-line); border-radius: var(--r-md); background: var(--accent-soft); }
 .cloud-sync { display: flex; align-items: center; gap: 7px; min-height: 30px; padding: 6px 9px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); background: var(--bg-elev); }
 .cloud-sync-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--text-faint); }
 .cloud-sync strong { color: var(--text-mid); font-size: 11px; }
@@ -893,6 +916,8 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
   .cloud-identity { justify-items: start; }
   .cloud-create-row { grid-template-columns: 1fr; }
   .cloud-create-row label { grid-column: auto; }
+  .cloud-account-form, .cloud-account-create { grid-template-columns: 1fr; }
+  .cloud-account-form > strong, .cloud-account-form > p, .cloud-account-form > .cloud-account-error { grid-column: auto; }
   .cloud-library-filter .pm-input { width: 100%; }
 }
 

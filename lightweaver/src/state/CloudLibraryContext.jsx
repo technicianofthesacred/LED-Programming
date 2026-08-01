@@ -304,7 +304,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     markProjectPersisted,
   } = useProject();
 
-  const [session, setSession] = useState({ status: 'loading', email: '', role: null, error: null });
+  const [session, setSession] = useState({ status: 'loading', username: '', displayName: '', role: null, error: null });
   const [projectsByState, setProjectsByState] = useState({ active: [], archived: [] });
   const [activeRemoteProject, setActiveRemoteProject] = useState(null);
   const [syncStatus, setSyncStatus] = useState('idle');
@@ -412,13 +412,14 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     pendingSaveOperationRef.current = null;
     queuedRef.current = false;
     const next = error?.status === 401 || error?.state === 'sign-in'
-      ? { status: 'unauthenticated', email: '', role: null, error }
-      : { status: 'error', email: '', role: null, error };
+      ? { status: 'unauthenticated', username: '', displayName: '', role: null, error }
+      : { status: 'error', username: '', displayName: '', role: null, error };
     sessionRef.current = next;
     if (!mountedRef.current) return;
     setSession(next);
     setProjectsByState({ active: [], archived: [] });
-  }, []);
+    setActiveRemote(null);
+  }, [setActiveRemote]);
 
   const handleLibraryError = useCallback(rawError => {
     const error = normalizeError(rawError);
@@ -445,6 +446,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   }, []);
 
   const performWorkspaceAssetSync = useCallback(async suppliedOperations => {
+    if (sessionRef.current.role === 'customer') return { ok: false, reason: 'disabled' };
     if (!workspaceAssetsLoadedRef.current || sessionRef.current.status !== 'authenticated') {
       workspaceAssetQueuedRef.current = true;
       return { ok: false, reason: 'not-ready' };
@@ -622,6 +624,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   performWorkspaceAssetSyncRef.current = performWorkspaceAssetSync;
 
   const queueWorkspaceAssetSync = useCallback(() => {
+    if (sessionRef.current.role === 'customer') return;
     workspaceAssetQueuedRef.current = true;
     if (!workspaceAssetsLoadedRef.current || sessionRef.current.status !== 'authenticated') return;
     if (workspaceAssetConflictsRef.current.size === WORKSPACE_ASSET_KINDS.length) {
@@ -638,6 +641,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   }, [publishWorkspaceAssetConflicts]);
 
   const loadWorkspaceAssets = useCallback(async ({ force = false, replaceLocal = false } = {}) => {
+    if (sessionRef.current.role === 'customer') return { ok: true, disabled: true };
     if (!force && workspaceAssetsLoadedRef.current) return { ok: true, unchanged: true };
     const loadOperation = ++workspaceAssetLoadOperationRef.current;
     setWorkspaceAssetStatus({ status: 'loading', ready: false, error: null });
@@ -783,12 +787,70 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   const loadSession = useCallback(async () => {
     if (mountedRef.current) setSession(current => ({ ...current, status: 'loading', error: null }));
     try {
-      const identity = await client.getSession();
+      let identity;
+      try {
+        identity = typeof client.getAccountSession === 'function'
+          ? await client.getAccountSession()
+          : await client.getSession();
+      } catch (accountError) {
+        const normalizedAccountError = normalizeError(accountError);
+        if (!isAuthenticationError(normalizedAccountError)) throw normalizedAccountError;
+        try {
+          const transitional = await client.getSession();
+          if (!mountedRef.current) return;
+          if (transitional?.email && transitional.role === 'owner') {
+            const bootstrap = { status: 'bootstrap', ...transitional, error: null };
+            sessionRef.current = bootstrap;
+            setSession(bootstrap);
+            setProjectsByState({ active: [], archived: [] });
+            setWorkspaceAssets(current => ({
+              ...current,
+              status: 'local',
+              ready: true,
+              error: null,
+              generation: current.generation + 1,
+            }));
+            return;
+          }
+        } catch (transitionalError) {
+          const normalizedTransitionalError = normalizeError(transitionalError);
+          if (!isAuthenticationError(normalizedTransitionalError)) throw normalizedTransitionalError;
+        }
+        throw normalizedAccountError;
+      }
       if (!mountedRef.current) return;
+      if (identity.mustChangePassword) {
+        const forced = { status: 'password-change', ...identity, error: null };
+        sessionRef.current = forced;
+        setSession(forced);
+        setProjectsByState({ active: [], archived: [] });
+        setActiveRemote(null);
+        setWorkspaceAssets(current => ({
+          ...current,
+          status: 'local',
+          ready: true,
+          error: null,
+          generation: current.generation + 1,
+        }));
+        return;
+      }
       const authenticated = { status: 'authenticated', ...identity, error: null };
       sessionRef.current = authenticated;
       setSession(authenticated);
-      const assetResult = await loadWorkspaceAssets();
+      const assetResult = identity.role === 'customer'
+        ? { ok: true, disabled: true }
+        : await loadWorkspaceAssets();
+      if (identity.role === 'customer') {
+        workspaceAssetsLoadedRef.current = false;
+        setWorkspaceAssets(current => ({
+          ...current,
+          status: 'disabled',
+          ready: true,
+          conflict: null,
+          error: null,
+          generation: current.generation + 1,
+        }));
+      }
       if (!mountedRef.current || isAuthenticationError(assetResult?.error)) return;
       sessionRef.current = authenticated;
       setSession(authenticated);
@@ -833,8 +895,8 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       if (!mountedRef.current) return;
       const error = normalizeError(rawError);
       const next = error.state === 'sign-in'
-        ? { status: 'unauthenticated', email: '', role: null, error }
-        : { status: 'error', email: '', role: null, error };
+        ? { status: 'unauthenticated', username: '', displayName: '', role: null, error }
+        : { status: 'error', username: '', displayName: '', role: null, error };
       sessionRef.current = next;
       setSession(next);
       setProjectsByState({ active: [], archived: [] });
@@ -1446,6 +1508,121 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
 
   const claimedBrowserIds = readClaimedBrowserProjectIds();
   const browserProjects = listProjectLibraryRecords().filter(record => !claimedBrowserIds.has(record.id));
+  const login = useCallback(async credentials => {
+    try {
+      const identity = await client.login(credentials);
+      if (!mountedRef.current) return { ok: false, reason: 'unmounted' };
+      const next = {
+        status: identity.mustChangePassword ? 'password-change' : 'loading',
+        ...identity,
+        error: null,
+      };
+      sessionRef.current = next;
+      setSession(next);
+      if (!identity.mustChangePassword) await loadSession();
+      return { ok: true, session: identity };
+    } catch (error) {
+      return { ok: false, error: normalizeError(error) };
+    }
+  }, [client, loadSession]);
+
+  const bootstrapOwner = useCallback(async input => {
+    try {
+      await client.bootstrapOwner(input);
+      const identity = await client.login({ username: input.username, password: input.temporaryPassword });
+      if (!mountedRef.current) return { ok: false, reason: 'unmounted' };
+      const next = { status: 'password-change', ...identity, error: null };
+      sessionRef.current = next;
+      setSession(next);
+      return { ok: true, session: identity };
+    } catch (error) {
+      return { ok: false, error: normalizeError(error) };
+    }
+  }, [client]);
+
+  const changePassword = useCallback(async password => {
+    try {
+      await client.changePassword(password);
+      await loadSession();
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: normalizeError(error) };
+    }
+  }, [client, loadSession]);
+
+  const logout = useCallback(async () => {
+    try {
+      await client.logout();
+    } catch (error) {
+      const normalized = normalizeError(error);
+      if (!isAuthenticationError(normalized)) return { ok: false, error: normalized };
+    }
+    openOperationRef.current += 1;
+    workspaceAssetLoadOperationRef.current += 1;
+    clearTimeout(saveTimerRef.current);
+    clearTimeout(retryRef.current);
+    clearTimeout(workspaceAssetTimerRef.current);
+    clearTimeout(workspaceAssetRetryRef.current);
+    pendingSaveOperationRef.current = null;
+    pendingWorkspaceAssetOperationsRef.current = null;
+    queuedRef.current = false;
+    workspaceAssetQueuedRef.current = false;
+    workspaceAssetsLoadedRef.current = false;
+    setCurrentConflict(null);
+    setSyncError(null);
+    setSyncStatus('idle');
+    setActiveRemote(null);
+    setProjectsByState({ active: [], archived: [] });
+    const signedOut = { status: 'unauthenticated', username: '', displayName: '', role: null, error: null };
+    sessionRef.current = signedOut;
+    setSession(signedOut);
+    setWorkspaceAssets(current => ({
+      ...current,
+      status: 'local',
+      ready: true,
+      conflict: null,
+      error: null,
+      generation: current.generation + 1,
+    }));
+    return { ok: true };
+  }, [client, setActiveRemote, setCurrentConflict]);
+
+  const accountAction = useCallback(async action => {
+    try {
+      return { ok: true, value: await action() };
+    } catch (error) {
+      return { ok: false, error: normalizeError(error) };
+    }
+  }, []);
+
+  const listAccounts = useCallback(() => accountAction(() => client.listAccounts()), [accountAction, client]);
+  const createAccount = useCallback(input => accountAction(() => client.createAccount(input)), [accountAction, client]);
+  const resetAccountPassword = useCallback((id, password) => accountAction(() => client.resetAccountPassword(id, password)), [accountAction, client]);
+  const setAccountStatus = useCallback((id, status) => accountAction(() => client.setAccountStatus(id, status)), [accountAction, client]);
+  const setAccountRole = useCallback((id, role) => accountAction(() => client.setAccountRole(id, role)), [accountAction, client]);
+  const listAssignments = useCallback(id => accountAction(() => client.listAssignments(id)), [accountAction, client]);
+  const assignProject = useCallback((id, projectId) => accountAction(() => client.assignProject(id, projectId)), [accountAction, client]);
+  const unassignProject = useCallback((id, projectId) => accountAction(() => client.unassignProject(id, projectId)), [accountAction, client]);
+  const listProjectDrafts = useCallback(async project => {
+    const result = await accountAction(async () => {
+      const [drafts, accounts] = await Promise.all([
+        client.listProjectDrafts(project.id),
+        client.listAccounts(),
+      ]);
+      const byId = new Map(accounts.map(account => [account.id, account]));
+      return drafts.map(draft => ({ ...draft, customer: byId.get(draft.draftOwnerAccountId) || null }));
+    });
+    return result;
+  }, [accountAction, client]);
+  const promoteDraft = useCallback(async (official, draft) => {
+    const result = await accountAction(() => client.promoteDraft(draft.id, {
+      officialBaseRevision: official.revision,
+      draftBaseRevision: draft.revision,
+    }));
+    if (result.ok) await refreshProjects();
+    return result;
+  }, [accountAction, client, refreshProjects]);
+
   const signIn = useCallback(() => {
     window.location.assign(signInUrl());
   }, []);
@@ -1466,6 +1643,20 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     syncState,
     workspaceAssets,
     browserProjects,
+    login,
+    logout,
+    bootstrapOwner,
+    changePassword,
+    listAccounts,
+    createAccount,
+    resetAccountPassword,
+    setAccountStatus,
+    setAccountRole,
+    listAssignments,
+    assignProject,
+    unassignProject,
+    listProjectDrafts,
+    promoteDraft,
     signIn,
     retrySession: loadSession,
     refreshProjects,
@@ -1488,11 +1679,12 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     claimBrowserProjects,
     resolveConflict,
   }), [
-    activeRemoteProject, archiveProject, browserProjects, claimBrowserProjects, createProject,
-    deleteProject, duplicateProject, exportMaster, exportProject, importProject, listHistory,
+    accountAction, activeRemoteProject, archiveProject, assignProject, bootstrapOwner, browserProjects,
+    changePassword, claimBrowserProjects, createAccount, createProject, deleteProject, duplicateProject,
+    exportMaster, exportProject, importProject, listAccounts, listAssignments, listHistory, listProjectDrafts, login, logout,
     detachProject, loadSession, openProject, projectsByState, refreshProjects, renameProject, resolveConflict,
-    resolveWorkspaceAssetConflict, restoreHistory, restoreMaster, saveNow, session, signIn, syncState,
-    unarchiveProject, workspaceAssets,
+    promoteDraft, resetAccountPassword, resolveWorkspaceAssetConflict, restoreHistory, restoreMaster, saveNow,
+    session, setAccountRole, setAccountStatus, signIn, syncState, unarchiveProject, unassignProject, workspaceAssets,
   ]);
 
   return <CloudLibraryContext.Provider value={value}>{children}</CloudLibraryContext.Provider>;

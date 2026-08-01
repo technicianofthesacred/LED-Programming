@@ -110,14 +110,14 @@ export function ProjectHistoryDialog({ project, revisions, loading, onClose, onR
                   <strong>Revision {revision.revision}</strong>
                   <span>{formatRevisionTime(revision.createdAt)} · {revision.editor || 'Unknown editor'}{revision.archived ? ' · archived' : ''}</span>
                 </div>
-                <button
+                {onRestore && <button
                   type="button"
                   className="btn ghost-sm"
                   disabled={revision.revision === project.revision}
                   onClick={() => onRestore(revision.revision)}
                 >
                   {revision.revision === project.revision ? 'Current' : 'Restore'}
-                </button>
+                </button>}
               </div>
             ))}
           </div>

@@ -68,10 +68,63 @@ function isProjectMetadata(value) {
 }
 
 function isSession(value) {
+  if (!isRecord(value)) return false;
+  if (typeof value.email === 'string' && Boolean(value.email)) {
+    return value.role === 'owner' || value.role === 'worker';
+  }
+  return typeof value.username === 'string'
+    && Boolean(value.username)
+    && typeof value.displayName === 'string'
+    && Boolean(value.displayName.trim())
+    && (value.role === 'owner' || value.role === 'worker' || value.role === 'customer')
+    && typeof value.mustChangePassword === 'boolean';
+}
+
+function isNativeSession(value) {
+  return isSession(value) && typeof value.username === 'string';
+}
+
+function isAccount(value) {
   return isRecord(value)
-    && typeof value.email === 'string'
-    && Boolean(value.email)
-    && (value.role === 'owner' || value.role === 'worker');
+    && typeof value.id === 'string'
+    && Boolean(value.id)
+    && typeof value.username === 'string'
+    && Boolean(value.username)
+    && typeof value.displayName === 'string'
+    && Boolean(value.displayName.trim())
+    && (value.role === 'owner' || value.role === 'worker' || value.role === 'customer')
+    && (value.status === 'active' || value.status === 'disabled')
+    && typeof value.mustChangePassword === 'boolean'
+    && typeof value.createdAt === 'string'
+    && Boolean(value.createdAt)
+    && typeof value.updatedAt === 'string'
+    && Boolean(value.updatedAt);
+}
+
+function isDraftMetadata(value) {
+  return isProjectMetadata(value)
+    && typeof value.draftOfProjectId === 'string'
+    && Boolean(value.draftOfProjectId)
+    && typeof value.draftOwnerAccountId === 'string'
+    && Boolean(value.draftOwnerAccountId)
+    && typeof value.officialTitle === 'string'
+    && Boolean(value.officialTitle.trim());
+}
+
+function isAssignment(value) {
+  return isRecord(value)
+    && typeof value.customerId === 'string'
+    && Boolean(value.customerId)
+    && typeof value.projectId === 'string'
+    && Boolean(value.projectId)
+    && typeof value.draftProjectId === 'string'
+    && Boolean(value.draftProjectId)
+    && typeof value.assignedAt === 'string'
+    && Boolean(value.assignedAt)
+    && isDraftMetadata(value.project)
+    && value.project.id === value.draftProjectId
+    && value.project.draftOfProjectId === value.projectId
+    && value.project.draftOwnerAccountId === value.customerId;
 }
 
 function isRevision(value) {
@@ -124,6 +177,7 @@ export function createCloudLibraryClient({
     searchParams,
     mutationRequestId,
     responseType = 'json',
+    requestBaseUrl = baseUrl,
   } = {}) {
     const headers = { accept: 'application/json' };
     if (body !== undefined) {
@@ -133,7 +187,7 @@ export function createCloudLibraryClient({
 
     let response;
     try {
-      response = await fetchImpl(apiUrl(baseUrl, path, searchParams), {
+      response = await fetchImpl(apiUrl(requestBaseUrl, path, searchParams), {
         method,
         credentials: 'same-origin',
         cache: 'no-store',
@@ -174,9 +228,107 @@ export function createCloudLibraryClient({
   }
 
   const client = {
+    async login({ username, password }) {
+      const result = await send('login', {
+        method: 'POST',
+        body: { username, password },
+        requestBaseUrl: '/api/account',
+      });
+      return resultField(result.payload, 'session', isNativeSession, result.status);
+    },
+
+    async getAccountSession() {
+      const result = await send('session', { requestBaseUrl: '/api/account' });
+      return resultField(result.payload, 'session', isNativeSession, result.status);
+    },
+
+    async changePassword(password) {
+      const result = await send('password', {
+        method: 'POST',
+        body: { password },
+        requestBaseUrl: '/api/account',
+      });
+      return resultField(result.payload, 'session', isNativeSession, result.status);
+    },
+
+    async logout() {
+      const result = await send('logout', {
+        method: 'POST',
+        body: {},
+        requestBaseUrl: '/api/account',
+      });
+      if (!isRecord(result.payload) || result.payload.loggedOut !== true) throw invalidResponse(result.status);
+      return result.payload;
+    },
+
     async getSession() {
       const result = await send('session');
       return resultField(result.payload, 'session', isSession, result.status);
+    },
+
+    async bootstrapOwner(input) {
+      const result = await send('accounts/bootstrap', { method: 'POST', body: input });
+      return resultField(result.payload, 'account', isAccount, result.status);
+    },
+
+    async listAccounts() {
+      const result = await send('accounts');
+      return resultField(result.payload, 'accounts', value => (
+        Array.isArray(value) && value.every(isAccount)
+      ), result.status);
+    },
+
+    async createAccount(input) {
+      const result = await send('accounts', { method: 'POST', body: input });
+      return resultField(result.payload, 'account', isAccount, result.status);
+    },
+
+    async resetAccountPassword(id, temporaryPassword) {
+      const result = await send(`accounts/${encodeURIComponent(id)}/reset`, {
+        method: 'POST',
+        body: { temporaryPassword },
+      });
+      return resultField(result.payload, 'account', isAccount, result.status);
+    },
+
+    async setAccountStatus(id, status) {
+      const result = await send(`accounts/${encodeURIComponent(id)}/status`, {
+        method: 'POST',
+        body: { status },
+      });
+      return resultField(result.payload, 'account', isAccount, result.status);
+    },
+
+    async setAccountRole(id, role) {
+      const result = await send(`accounts/${encodeURIComponent(id)}/role`, {
+        method: 'POST',
+        body: { role },
+      });
+      return resultField(result.payload, 'account', isAccount, result.status);
+    },
+
+    async listAssignments(accountId) {
+      const result = await send(`accounts/${encodeURIComponent(accountId)}/assignments`);
+      return resultField(result.payload, 'assignments', value => (
+        Array.isArray(value) && value.every(isAssignment)
+      ), result.status);
+    },
+
+    async assignProject(accountId, projectId) {
+      const result = await send(`accounts/${encodeURIComponent(accountId)}/assignments`, {
+        method: 'POST',
+        body: { projectId },
+      });
+      return resultField(result.payload, 'assignment', isAssignment, result.status);
+    },
+
+    async unassignProject(accountId, projectId) {
+      const result = await send(`accounts/${encodeURIComponent(accountId)}/assignments/${encodeURIComponent(projectId)}`, {
+        method: 'DELETE',
+        body: {},
+      });
+      if (!isRecord(result.payload) || result.payload.unassigned !== true) throw invalidResponse(result.status);
+      return result.payload;
     },
 
     async listProjects({ state = 'active' } = {}) {
@@ -257,6 +409,22 @@ export function createCloudLibraryClient({
       return resultField(result.payload, 'revisions', value => (
         Array.isArray(value) && value.every(isRevision)
       ), result.status);
+    },
+
+    async listProjectDrafts(officialId) {
+      const result = await send(`projects/${encodeURIComponent(officialId)}/drafts`);
+      return resultField(result.payload, 'drafts', value => (
+        Array.isArray(value) && value.every(isDraftMetadata)
+      ), result.status);
+    },
+
+    async promoteDraft(draftId, { officialBaseRevision, draftBaseRevision }, { requestId: mutationRequestId } = {}) {
+      const result = await send(`projects/${encodeURIComponent(draftId)}/promote`, {
+        method: 'POST',
+        body: { officialBaseRevision, draftBaseRevision },
+        mutationRequestId,
+      });
+      return resultField(result.payload, 'project', isProjectMetadata, result.status);
     },
 
     async restoreRevision(id, revision, { baseRevision }, { requestId: mutationRequestId } = {}) {

@@ -16,6 +16,30 @@ function projectMetadata(overrides = {}) {
   };
 }
 
+function nativeSession(overrides = {}) {
+  return {
+    username: 'studio-owner',
+    displayName: 'Studio Owner',
+    role: 'owner',
+    mustChangePassword: false,
+    ...overrides,
+  };
+}
+
+function account(overrides = {}) {
+  return {
+    id: 'account-one',
+    username: 'customer-one',
+    displayName: 'Customer One',
+    role: 'customer',
+    status: 'active',
+    mustChangePassword: true,
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
 function emptyBackup() {
   return {
     format: 'lightweaver.library-backup',
@@ -197,4 +221,116 @@ test('successful JSON response families reject malformed payloads with typed err
       );
     });
   }
+});
+
+test('uses native account endpoints with same-origin credentials and validates sessions', async () => {
+  const requests = [];
+  const responses = [
+    { session: nativeSession({ mustChangePassword: true }) },
+    { session: nativeSession() },
+    { session: nativeSession() },
+    { loggedOut: true },
+  ];
+  const client = createCloudLibraryClient({
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return jsonResponse(responses.shift());
+    },
+  });
+
+  assert.deepEqual(await client.login({ username: 'studio-owner', password: 'temporary-password' }), nativeSession({ mustChangePassword: true }));
+  assert.deepEqual(await client.getAccountSession(), nativeSession());
+  assert.deepEqual(await client.changePassword('a-personal-password'), nativeSession());
+  assert.deepEqual(await client.logout(), { loggedOut: true });
+
+  assert.deepEqual(requests.map(request => [request.url, request.options.method]), [
+    ['/api/account/login', 'POST'],
+    ['/api/account/session', 'GET'],
+    ['/api/account/password', 'POST'],
+    ['/api/account/logout', 'POST'],
+  ]);
+  assert.ok(requests.every(request => request.options.credentials === 'same-origin'));
+  assert.deepEqual(JSON.parse(requests[0].options.body), { username: 'studio-owner', password: 'temporary-password' });
+  assert.deepEqual(JSON.parse(requests[2].options.body), { password: 'a-personal-password' });
+  assert.deepEqual(JSON.parse(requests[3].options.body), {});
+});
+
+test('validates every native account response family', async t => {
+  const cases = [
+    ['login session', { session: { ...nativeSession(), mustChangePassword: 'no' } }, client => client.login({ username: 'owner', password: 'password' })],
+    ['account session', { session: { ...nativeSession(), role: 'admin' } }, client => client.getAccountSession()],
+    ['password session', { session: { ...nativeSession(), displayName: '' } }, client => client.changePassword('twelve-characters')],
+    ['logout', { loggedOut: 'yes' }, client => client.logout()],
+    ['account list', { accounts: [{ ...account(), status: 'pending' }] }, client => client.listAccounts()],
+    ['account create', { account: { ...account(), id: '' } }, client => client.createAccount({ username: 'a', displayName: 'A', role: 'worker', temporaryPassword: 'temporary-pass' })],
+    ['assignment list', { assignments: [{ projectId: 'official', draftProjectId: 2 }] }, client => client.listAssignments('account-one')],
+    ['assignment create', { assignment: { customerId: 'account-one', projectId: '', draftProjectId: 'draft-one', assignedAt: 'now', project: projectMetadata() } }, client => client.assignProject('account-one', 'official-one')],
+    ['assignment delete', { unassigned: false }, client => client.unassignProject('account-one', 'official-one')],
+    ['draft list', { drafts: [{ ...projectMetadata(), draftOfProjectId: 'official-one' }] }, client => client.listProjectDrafts('official-one')],
+    ['promotion', { project: { ...projectMetadata(), revision: 0 } }, client => client.promoteDraft('draft-one', { officialBaseRevision: 2, draftBaseRevision: 3 })],
+  ];
+
+  for (const [name, payload, invoke] of cases) {
+    await t.test(name, async () => {
+      const client = createCloudLibraryClient({ fetchImpl: async () => jsonResponse(payload) });
+      await assert.rejects(invoke(client), error => error instanceof CloudLibraryError && error.code === 'invalid_response');
+    });
+  }
+});
+
+test('sends account administration, assignments, and exact draft promotion payloads', async () => {
+  const requests = [];
+  const client = createCloudLibraryClient({
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      if (url === '/api/library/accounts' && options.method === 'GET') return jsonResponse({ accounts: [] });
+      if (url.endsWith('/assignments') && options.method === 'GET') return jsonResponse({ assignments: [] });
+      if (url.endsWith('/assignments') && options.method === 'POST') return jsonResponse({ assignment: {
+        customerId: 'account-one',
+        projectId: 'official-one',
+        draftProjectId: 'draft-one',
+        assignedAt: '2026-08-01T00:00:00.000Z',
+        project: projectMetadata({
+          id: 'draft-one',
+          draftOfProjectId: 'official-one',
+          draftOwnerAccountId: 'account-one',
+          officialTitle: 'Cloud piece',
+        }),
+      } });
+      if (options.method === 'DELETE') return jsonResponse({ unassigned: true });
+      if (url.endsWith('/drafts')) return jsonResponse({ drafts: [] });
+      if (url.endsWith('/promote')) return jsonResponse({ project: projectMetadata({ revision: 4 }) });
+      return jsonResponse({ account: account() }, { status: options.method === 'POST' ? 201 : 200 });
+    },
+  });
+
+  await client.bootstrapOwner({ username: 'owner', displayName: 'Owner', temporaryPassword: 'temporary-pass' });
+  await client.listAccounts();
+  await client.createAccount({ username: 'customer', displayName: 'Customer', role: 'customer', temporaryPassword: 'temporary-pass' });
+  await client.resetAccountPassword('account-one', 'replacement-pass');
+  await client.setAccountStatus('account-one', 'disabled');
+  await client.setAccountRole('account-one', 'worker');
+  await client.listAssignments('account-one');
+  await client.assignProject('account-one', 'official-one');
+  await client.unassignProject('account-one', 'official-one');
+  await client.listProjectDrafts('official-one');
+  await client.promoteDraft('draft-one', { officialBaseRevision: 2, draftBaseRevision: 7 });
+
+  assert.deepEqual(requests.map(request => [request.url, request.options.method]), [
+    ['/api/library/accounts/bootstrap', 'POST'],
+    ['/api/library/accounts', 'GET'],
+    ['/api/library/accounts', 'POST'],
+    ['/api/library/accounts/account-one/reset', 'POST'],
+    ['/api/library/accounts/account-one/status', 'POST'],
+    ['/api/library/accounts/account-one/role', 'POST'],
+    ['/api/library/accounts/account-one/assignments', 'GET'],
+    ['/api/library/accounts/account-one/assignments', 'POST'],
+    ['/api/library/accounts/account-one/assignments/official-one', 'DELETE'],
+    ['/api/library/projects/official-one/drafts', 'GET'],
+    ['/api/library/projects/draft-one/promote', 'POST'],
+  ]);
+  assert.deepEqual(JSON.parse(requests.at(-1).options.body), {
+    officialBaseRevision: 2,
+    draftBaseRevision: 7,
+  });
 });
