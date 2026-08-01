@@ -115,12 +115,12 @@ function signInUrl() {
   const configured = String(import.meta.env.VITE_LIBRARY_LOGIN_URL || '').trim();
   let target;
   try {
-    target = new URL(configured || '/api/library/session', window.location.origin);
+    target = new URL(configured || '/api/library/login', window.location.origin);
   } catch {
-    target = new URL('/api/library/session', window.location.origin);
+    target = new URL('/api/library/login', window.location.origin);
   }
   if (target.origin !== window.location.origin && target.protocol !== 'https:') {
-    target = new URL('/api/library/session', window.location.origin);
+    target = new URL('/api/library/login', window.location.origin);
   }
   target.searchParams.set('returnTo', returnTo);
   return target.href;
@@ -160,12 +160,16 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   const retryRef = useRef(null);
   const mountedRef = useRef(true);
   const openOperationRef = useRef(0);
+  const onlineRef = useRef(online);
+  const pendingSaveOperationRef = useRef(null);
+  const performSaveRef = useRef(null);
 
   lifecycleRef.current = projectLifecycle;
   documentRef.current = serializeProject();
   activeRemoteRef.current = activeRemoteProject;
   sessionRef.current = session;
   conflictRef.current = conflict;
+  onlineRef.current = online;
 
   const waitForLocalEdit = useCallback(async (previousMarker, predicate) => {
     for (let frame = 0; frame < 6; frame += 1) {
@@ -179,6 +183,11 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   }, []);
 
   const setActiveRemote = useCallback((project, acknowledgedMarker = null) => {
+    if (!project || activeRemoteRef.current?.id !== project.id) {
+      pendingSaveOperationRef.current = null;
+      queuedRef.current = false;
+      clearTimeout(retryRef.current);
+    }
     activeRemoteRef.current = project;
     setActiveRemoteProject(project);
     writeActiveRemoteAssociation(project);
@@ -193,6 +202,8 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   const demoteSession = useCallback(error => {
     clearTimeout(saveTimerRef.current);
     clearTimeout(retryRef.current);
+    pendingSaveOperationRef.current = null;
+    queuedRef.current = false;
     const next = error?.status === 401 || error?.state === 'sign-in'
       ? { status: 'unauthenticated', email: '', role: null, error }
       : { status: 'error', email: '', role: null, error };
@@ -307,10 +318,18 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
 
   useEffect(() => {
     const onOnline = () => {
+      onlineRef.current = true;
       setOnline(true);
-      setRefreshTick(value => value + 1);
+      const pending = pendingSaveOperationRef.current;
+      if (pending) {
+        clearTimeout(retryRef.current);
+        void performSaveRef.current?.(pending);
+      } else {
+        setRefreshTick(value => value + 1);
+      }
     };
     const onOffline = () => {
+      onlineRef.current = false;
       setOnline(false);
       if (activeRemoteRef.current) setSyncStatus('waiting');
     };
@@ -322,12 +341,11 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     };
   }, []);
 
-  const performSaveRef = useRef(null);
   const performSave = useCallback(async suppliedOperation => {
     const remote = activeRemoteRef.current;
     if (!remote || sessionRef.current.status !== 'authenticated') return { ok: false, reason: 'unassociated' };
     if (conflictRef.current) return { ok: false, reason: 'conflict' };
-    if (!online || navigator.onLine === false) {
+    if (!onlineRef.current || navigator.onLine === false) {
       if (mountedRef.current) setSyncStatus('waiting');
       return { ok: false, reason: 'offline' };
     }
@@ -353,18 +371,18 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     }
     const capturedKey = markerKey(operation.marker);
     let completed = false;
-    try {
-      const acknowledged = await client.updateProject(operation.remoteId, {
-        baseRevision: operation.baseRevision,
-        title: operation.document.name || remote.title,
-        project: operation.document,
-      }, { requestId: operation.requestId });
+    const clearPendingOperation = () => {
+      if (pendingSaveOperationRef.current?.requestId === operation.requestId) {
+        pendingSaveOperationRef.current = null;
+        clearTimeout(retryRef.current);
+      }
+    };
+    const acknowledge = acknowledged => {
       if (!mountedRef.current
         || activeRemoteRef.current?.id !== operation.remoteId
-        || activeRemoteRef.current?.revision !== operation.baseRevision) {
-        return { ok: false, reason: 'replaced' };
-      }
+        || activeRemoteRef.current?.revision !== operation.baseRevision) return false;
       completed = true;
+      clearPendingOperation();
       activeRemoteRef.current = acknowledged;
       setActiveRemoteProject(acknowledged);
       writeActiveRemoteAssociation(acknowledged);
@@ -374,34 +392,65 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         archived: current.archived.map(item => item.id === acknowledged.id ? acknowledged : item),
       }));
       const currentMarker = projectMarker(lifecycleRef.current);
+      markProjectPersisted('cloud', operation.marker);
       if (markerKey(currentMarker) === capturedKey) {
-        markProjectPersisted('cloud', operation.marker);
         setSyncStatus('saved');
       } else {
-        markProjectPersisted('cloud', operation.marker);
         queuedRef.current = true;
         setSyncStatus('waiting');
       }
+      setSyncError(null);
+      return true;
+    };
+    try {
+      const acknowledged = await client.updateProject(operation.remoteId, {
+        baseRevision: operation.baseRevision,
+        title: operation.document.name || remote.title,
+        project: operation.document,
+      }, { requestId: operation.requestId });
+      if (!acknowledge(acknowledged)) {
+        return { ok: false, reason: 'replaced' };
+      }
       return { ok: true, project: acknowledged };
     } catch (rawError) {
-      const error = normalizeError(rawError);
+      let error = normalizeError(rawError);
       if (!mountedRef.current) return { ok: false, reason: 'unmounted', error };
+      if (error.code === 'idempotency_conflict') {
+        try {
+          const latest = await client.readProject(operation.remoteId);
+          const expectedTitle = operation.document.name || remote.title;
+          const matchesAcceptedSave = latest.revision === operation.baseRevision + 1
+            && latest.title === expectedTitle
+            && canonicalJson(latest.document) === canonicalJson(operation.document);
+          if (matchesAcceptedSave && acknowledge(latest)) {
+            return { ok: true, project: latest, reconciled: true };
+          }
+        } catch (readError) {
+          error = normalizeError(readError);
+          if (!mountedRef.current) return { ok: false, reason: 'unmounted', error };
+        }
+      }
       if (error.state === 'conflict') {
+        clearPendingOperation();
         setCurrentConflict({ remoteId: operation.remoteId, localDocument: structuredClone(documentRef.current), error });
         setSyncStatus('conflict');
       } else if (isAuthenticationError(error)) {
+        clearPendingOperation();
         setSyncError(error);
         demoteSession(error);
       } else {
         setSyncError(error);
         if (isTransientError(error) || navigator.onLine === false) {
+          pendingSaveOperationRef.current = operation;
           setSyncStatus('waiting');
           clearTimeout(retryRef.current);
           retryRef.current = setTimeout(() => {
             if (!mountedRef.current || conflictRef.current) return;
-            void performSaveRef.current?.(operation);
+            const pending = pendingSaveOperationRef.current;
+            if (pending) void performSaveRef.current?.(pending);
           }, CLOUD_RETRY_MS);
         } else {
+          clearPendingOperation();
           setSyncStatus('error');
         }
       }
@@ -413,7 +462,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         setRefreshTick(value => value + 1);
       }
     }
-  }, [client, demoteSession, markProjectPersisted, online, setCurrentConflict]);
+  }, [client, demoteSession, markProjectPersisted, setCurrentConflict]);
   performSaveRef.current = performSave;
 
   useEffect(() => {
@@ -421,6 +470,12 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     const remote = activeRemoteProject;
     if (!remote || session.status !== 'authenticated' || conflict) return undefined;
     const currentMarker = projectMarker(projectLifecycle);
+    const pendingOperation = pendingSaveOperationRef.current;
+    if (pendingOperation) {
+      if (markerKey(pendingOperation.marker) !== markerKey(currentMarker)) queuedRef.current = true;
+      if (!inFlightRef.current) setSyncStatus('waiting');
+      return undefined;
+    }
     const acknowledgedMarker = acknowledgedMarkerRef.current;
     if (acknowledgedMarker && markerKey(acknowledgedMarker) === markerKey(currentMarker)) {
       if (!inFlightRef.current) setSyncStatus('saved');

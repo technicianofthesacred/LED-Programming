@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 const FOCUSABLE = [
   'button:not([disabled])',
@@ -9,16 +10,22 @@ const FOCUSABLE = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(', ');
 
-export function useCloudDialogLifecycle({ open, backdropRef, dialogRef, initialFocusRef, onClose }) {
+export function CloudLibraryDialogPortal({ children, dialogRef, initialFocusRef, onClose }) {
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const [portalRoot] = useState(() => {
+    if (typeof document === 'undefined') return null;
+    const element = document.createElement('div');
+    element.setAttribute('data-cloud-library-dialog-root', '');
+    return element;
+  });
 
   useEffect(() => {
-    if (!open) return undefined;
+    if (!portalRoot) return undefined;
+    document.body.appendChild(portalRoot);
     const previousFocus = document.activeElement;
-    const backdrop = backdropRef.current;
-    const background = [...(backdrop?.parentElement?.children || [])]
-      .filter(element => element !== backdrop)
+    const background = [...document.body.children]
+      .filter(element => element !== portalRoot)
       .map(element => ({
         element,
         inert: element.inert,
@@ -58,11 +65,14 @@ export function useCloudDialogLifecycle({ open, backdropRef, dialogRef, initialF
         if (ariaHidden === null) element.removeAttribute('aria-hidden');
         else element.setAttribute('aria-hidden', ariaHidden);
       }
+      portalRoot.remove();
       window.requestAnimationFrame(() => {
         if (previousFocus?.isConnected) previousFocus.focus?.();
       });
     };
-  }, [backdropRef, dialogRef, initialFocusRef, open]);
+  }, [dialogRef, initialFocusRef, portalRoot]);
+
+  return portalRoot ? createPortal(children, portalRoot) : null;
 }
 
 function formatRevisionTime(value) {
@@ -77,20 +87,13 @@ function formatRevisionTime(value) {
 
 export function ProjectHistoryDialog({ project, revisions, loading, onClose, onRestore }) {
   const closeRef = useRef(null);
-  const backdropRef = useRef(null);
   const dialogRef = useRef(null);
-  useCloudDialogLifecycle({
-    open: Boolean(project),
-    backdropRef,
-    dialogRef,
-    initialFocusRef: closeRef,
-    onClose,
-  });
 
   if (!project) return null;
   return (
-    <div ref={backdropRef} className="cloud-library-backdrop">
-      <section ref={dialogRef} className="cloud-library-dialog" role="dialog" aria-modal="true" aria-labelledby="cloud-history-title">
+    <CloudLibraryDialogPortal dialogRef={dialogRef} initialFocusRef={closeRef} onClose={onClose}>
+      <div className="cloud-library-backdrop">
+        <section ref={dialogRef} className="cloud-library-dialog" role="dialog" aria-modal="true" aria-labelledby="cloud-history-title">
         <div className="cloud-dialog-heading">
           <div>
             <span className="cloud-kicker">Immutable revisions</span>
@@ -119,7 +122,8 @@ export function ProjectHistoryDialog({ project, revisions, loading, onClose, onR
             ))}
           </div>
         )}
-      </section>
-    </div>
+        </section>
+      </div>
+    </CloudLibraryDialogPortal>
   );
 }

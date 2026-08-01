@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 
 import { isLibraryBackup } from '../../lib/libraryBackup.js';
 import { useCloudLibrary } from '../../state/CloudLibraryContext.jsx';
-import { ProjectHistoryDialog, useCloudDialogLifecycle } from './ProjectHistoryDialog.jsx';
+import { CloudLibraryDialogPortal, ProjectHistoryDialog } from './ProjectHistoryDialog.jsx';
 
 const MAX_PROJECT_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_MASTER_BACKUP_BYTES = 8 * 1024 * 1024;
@@ -40,20 +40,8 @@ export function ProjectLibraryPanel() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const projectImportRef = useRef(null);
   const masterRestoreRef = useRef(null);
-  const deleteBackdropRef = useRef(null);
   const deleteDialogRef = useRef(null);
   const deleteCancelRef = useRef(null);
-
-  useCloudDialogLifecycle({
-    open: Boolean(deleteTarget),
-    backdropRef: deleteBackdropRef,
-    dialogRef: deleteDialogRef,
-    initialFocusRef: deleteCancelRef,
-    onClose: () => {
-      setDeleteTarget(null);
-      setDeleteConfirmation('');
-    },
-  });
 
   const sourceProjects = view === 'archived' ? library.archivedProjects : library.activeProjects;
   const shownProjects = useMemo(() => {
@@ -296,8 +284,16 @@ export function ProjectLibraryPanel() {
       )}
 
       {deleteTarget && (
-        <div ref={deleteBackdropRef} className="cloud-library-backdrop">
-          <section ref={deleteDialogRef} className="cloud-library-dialog" role="dialog" aria-modal="true" aria-labelledby="cloud-delete-title">
+        <CloudLibraryDialogPortal
+          dialogRef={deleteDialogRef}
+          initialFocusRef={deleteCancelRef}
+          onClose={() => {
+            setDeleteTarget(null);
+            setDeleteConfirmation('');
+          }}
+        >
+          <div className="cloud-library-backdrop">
+            <section ref={deleteDialogRef} className="cloud-library-dialog" role="dialog" aria-modal="true" aria-labelledby="cloud-delete-title">
             <span className="cloud-kicker">Owner-only permanent action</span>
             <h2 id="cloud-delete-title">Delete {deleteTarget.title} permanently?</h2>
             <p>This removes the archived project and all of its online history. Download a backup first if it may be needed later.</p>
@@ -307,8 +303,9 @@ export function ProjectLibraryPanel() {
               <button ref={deleteCancelRef} type="button" className="btn" onClick={() => { setDeleteTarget(null); setDeleteConfirmation(''); }}>Cancel</button>
               <button type="button" className="btn danger" disabled={deleteConfirmation !== deleteTarget.title} onClick={confirmDelete}>Delete permanently</button>
             </div>
-          </section>
-        </div>
+            </section>
+          </div>
+        </CloudLibraryDialogPortal>
       )}
     </div>
   );

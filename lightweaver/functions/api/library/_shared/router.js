@@ -30,6 +30,34 @@ function jsonResponse(value, status = 200, headers = {}) {
   });
 }
 
+function redirectResponse(location) {
+  return new Response(null, {
+    status: 302,
+    headers: {
+      'cache-control': 'no-store',
+      location,
+    },
+  });
+}
+
+function sanitizedStudioReturnPath(request) {
+  const url = new URL(request.url);
+  const candidate = url.searchParams.get('returnTo');
+  if (!candidate
+    || !candidate.startsWith('/')
+    || candidate.startsWith('//')
+    || candidate.includes('\\')
+    || /[\u0000-\u0020\u007f]/.test(candidate)
+    || /%(?:0a|0d)/i.test(candidate)) return '/';
+  try {
+    const resolved = new URL(candidate, url.origin);
+    if (resolved.origin !== url.origin) return '/';
+    return `${resolved.pathname}${resolved.search}${resolved.hash}` || '/';
+  } catch {
+    return '/';
+  }
+}
+
 function errorResponse(status, code, message, requestId) {
   return jsonResponse({
     error: {
@@ -105,11 +133,17 @@ export async function handleLibraryRequest({
     if (!isIdentity(identity)) {
       return errorResponse(401, 'unauthenticated', 'Authentication is required.', requestId);
     }
-    if (!store) return errorResponse(503, 'library_unavailable', 'The project library is unavailable.', requestId);
 
     const segments = parsePath(request);
     if (!segments) return errorResponse(404, 'not_found', 'The requested library route was not found.', requestId);
     const { method } = request;
+
+    if (segments.length === 1 && segments[0] === 'login') {
+      if (method !== 'GET') return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);
+      return redirectResponse(sanitizedStudioReturnPath(request));
+    }
+
+    if (!store) return errorResponse(503, 'library_unavailable', 'The project library is unavailable.', requestId);
 
     if (segments.length === 1 && segments[0] === 'session') {
       if (method !== 'GET') return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);

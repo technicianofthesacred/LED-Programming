@@ -58,7 +58,9 @@ async function call(store, {
     maxBytes,
     maxBackupBytes,
   });
-  const payload = await response.json();
+  const payload = (response.headers.get('content-type') || '').startsWith('application/json')
+    ? await response.json()
+    : null;
   assert.equal(response.headers.get('cache-control'), 'no-store');
   return { response, payload };
 }
@@ -106,6 +108,40 @@ test('returns the authenticated owner or worker session', async () => {
     email: 'owner@example.test',
     role: 'owner',
   });
+});
+
+test('protected login returns a no-store same-origin redirect to a sanitized Studio path', async () => {
+  const safe = await call(null, {
+    path: '/login?returnTo=%2F%3Fmode%3Dedit%23screen%3Dcard%26section%3Dpreferences',
+  });
+
+  assert.equal(safe.response.status, 302);
+  assert.equal(safe.response.headers.get('location'), '/?mode=edit#screen=card&section=preferences');
+  assert.equal(safe.payload, null);
+
+  for (const returnTo of [
+    'https://evil.example/steal',
+    '//evil.example/steal',
+    '/\\evil.example/steal',
+    '/%0d%0aLocation:%20https://evil.example',
+    'preferences',
+  ]) {
+    const result = await call(null, {
+      path: `/login?returnTo=${encodeURIComponent(returnTo)}`,
+    });
+    assert.equal(result.response.status, 302, returnTo);
+    assert.equal(result.response.headers.get('location'), '/', returnTo);
+  }
+});
+
+test('login remains Access-protected and rejects non-GET requests', async () => {
+  const unauthenticated = await call(null, { role: null, path: '/login?returnTo=%2Fprivate' });
+  const wrongMethod = await call(null, { method: 'POST', path: '/login', body: {} });
+
+  assert.equal(unauthenticated.response.status, 401);
+  assert.equal(unauthenticated.payload.error.code, 'unauthenticated');
+  assert.equal(wrongMethod.response.status, 405);
+  assert.equal(wrongMethod.payload.error.code, 'method_not_allowed');
 });
 
 test('worker can create, list, open, and update a portable project', async () => {

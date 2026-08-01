@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { handleLibraryRequest } from '../functions/api/library/_shared/router.js';
 import { createDefaultProject } from '../src/lib/projectModel.js';
 
 type Role = 'owner' | 'worker' | null;
@@ -35,6 +36,14 @@ function json(route: Route, body: unknown, status = 200) {
     contentType: 'application/json',
     headers: { 'cache-control': 'no-store' },
     body: JSON.stringify(body),
+  });
+}
+
+async function fulfillResponse(route: Route, response: Response) {
+  return route.fulfill({
+    status: response.status,
+    headers: Object.fromEntries(response.headers.entries()),
+    body: await response.text(),
   });
 }
 
@@ -73,6 +82,8 @@ class LibraryFixture {
   updateFailures: number[] = [];
   updateRequestIds: string[] = [];
   updateCount = 0;
+  loseNextUpdateResponse = false;
+  acceptedUpdateRequestIds = new Set<string>();
   signInNavigations: string[] = [];
   delayNextCreate = false;
   delayedCreateStarted: Promise<void> | null = null;
@@ -158,11 +169,18 @@ class LibraryFixture {
       const segments = url.pathname.slice('/api/library/'.length).split('/').filter(Boolean);
       const method = request.method();
 
-      if (segments[0] === 'session' && method === 'GET' && request.isNavigationRequest()) {
+      if (segments[0] === 'login' && method === 'GET' && request.isNavigationRequest()) {
         const returnTo = url.searchParams.get('returnTo') || '/';
         this.signInNavigations.push(returnTo);
+        // This transition represents Cloudflare Access completing before the
+        // protected Function runs. Redirect semantics come from the real router.
         this.role = 'worker';
-        await route.fulfill({ status: 302, headers: { location: returnTo }, body: '' });
+        const response = await handleLibraryRequest({
+          request: new Request(request.url()),
+          identity: { email: this.email, role: this.role, subject: 'fixture-access-subject' },
+          store: null,
+        });
+        await fulfillResponse(route, response);
         return;
       }
 
@@ -216,8 +234,13 @@ class LibraryFixture {
         }
         if (method === 'PUT') {
           this.updateCount += 1;
-          this.updateRequestIds.push(request.headers()['x-lightweaver-request'] || '');
+          const updateRequestId = request.headers()['x-lightweaver-request'] || '';
+          this.updateRequestIds.push(updateRequestId);
           const body = request.postDataJSON();
+          if (this.acceptedUpdateRequestIds.has(updateRequestId)) {
+            await json(route, { error: { code: 'idempotency_conflict', message: 'The idempotency key was already accepted.', requestId: 'fixture-idempotency' } }, 409);
+            return;
+          }
           const failure = this.updateFailures.shift();
           if (failure) {
             await json(route, { error: { code: `fixture_${failure}`, message: `Fixture failure ${failure}.`, requestId: `fixture-${failure}` } }, failure);
@@ -260,6 +283,12 @@ class LibraryFixture {
             editor: this.email,
             document: structuredClone(project.document),
           });
+          this.acceptedUpdateRequestIds.add(updateRequestId);
+          if (this.loseNextUpdateResponse) {
+            this.loseNextUpdateResponse = false;
+            await route.abort('failed');
+            return;
+          }
           await json(route, { project: metadata(project) });
           return;
         }
@@ -511,6 +540,28 @@ test('retries transient saves with one request ID, waits exactly, and demotes re
   await expect(page.getByText('worker@example.test')).toHaveCount(0);
 });
 
+test('reconnect replays a committed save with its original request ID and reconciles the lost response', async ({ page, context }) => {
+  const fixture = new LibraryFixture('worker');
+  const remote = fixture.seed('Reconnect project');
+  await fixture.install(page);
+  await openLibrary(page);
+  await page.getByTestId('cloud-project-row').getByRole('button', { name: 'Open' }).click();
+
+  fixture.loseNextUpdateResponse = true;
+  await page.getByLabel('Project name').fill('Recovered after reconnect');
+  await expect.poll(() => fixture.updateCount).toBe(1);
+  await expect(page.getByTestId('cloud-sync-status')).toHaveText('Waiting to save online');
+  expect(fixture.projects.get(remote.id)?.revision).toBe(2);
+
+  await context.setOffline(true);
+  await context.setOffline(false);
+  await expect.poll(() => fixture.updateCount).toBe(2);
+  await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
+  await expect(page.getByRole('button', { name: 'Open latest' })).toHaveCount(0);
+  expect(fixture.updateRequestIds[1]).toBe(fixture.updateRequestIds[0]);
+  expect(fixture.projects.get(remote.id)?.document.name).toBe('Recovered after reconnect');
+});
+
 test('demotes a forbidden authenticated session without retrying', async ({ page }) => {
   const fixture = new LibraryFixture('worker');
   fixture.seed('Forbidden project');
@@ -585,7 +636,7 @@ test('opens, renames, duplicates, archives, restores history, and unarchives pro
   const fixture = new LibraryFixture('worker');
   const first = portable('First draft', 'lwproj-history');
   const latest = portable('Current sculpture', 'lwproj-history');
-  fixture.seed('Current sculpture', { revisions: [first, latest] });
+  const seeded = fixture.seed('Current sculpture', { revisions: [first, latest] });
   await fixture.install(page);
   await openLibrary(page);
 
@@ -595,9 +646,12 @@ test('opens, renames, duplicates, archives, restores history, and unarchives pro
   await row.getByRole('button', { name: 'Rename' }).click();
   await page.getByLabel('Rename project').fill('Temple sculpture');
   await page.getByRole('button', { name: 'Save name' }).click();
-  await expect(page.getByText('Temple sculpture', { exact: true })).toBeVisible();
+  await expect.poll(() => fixture.projects.get(seeded.id)?.title).toBe('Temple sculpture');
+  const renamedRow = page.getByTestId('cloud-project-row').filter({ has: page.getByText('Temple sculpture', { exact: true }) });
+  await expect(renamedRow).toHaveCount(1);
+  await expect(renamedRow).toContainText('revision 3');
   await expect(page.getByLabel('Project name')).toHaveValue('Temple sculpture');
-  expect([...fixture.projects.values()][0].document.name).toBe('Temple sculpture');
+  expect(fixture.projects.get(seeded.id)?.document.name).toBe('Temple sculpture');
 
   await page.getByTestId('cloud-project-row').filter({ hasText: 'Temple sculpture' }).getByRole('button', { name: 'Duplicate' }).click();
   await expect(page.getByText('Temple sculpture Copy', { exact: true })).toBeVisible();
@@ -666,26 +720,38 @@ test('history and delete dialogs trap focus, close on Escape, isolate the backgr
   fixture.seed('Delete focus', { archived: true });
   await fixture.install(page);
   await openLibrary(page);
+  const studioRoot = page.locator('#root');
+  expect(await studioRoot.evaluate(element => ({ aria: element.getAttribute('aria-hidden'), inert: element.inert })))
+    .toEqual({ aria: null, inert: false });
 
   const historyTrigger = page.getByTestId('cloud-project-row').filter({ hasText: 'History focus' }).getByRole('button', { name: 'History' });
   await historyTrigger.focus();
   await historyTrigger.click();
   const historyDialog = page.getByRole('dialog', { name: 'Project history' });
   await expect(historyDialog.getByRole('button', { name: 'Close' })).toBeFocused();
-  await expect(page.locator('.cloud-library > .cloud-library-heading')).toHaveAttribute('aria-hidden', 'true');
+  await expect(page.locator('body > [data-cloud-library-dialog-root]')).toHaveCount(1);
+  await expect(studioRoot).toHaveAttribute('aria-hidden', 'true');
+  expect(await studioRoot.evaluate(element => element.inert)).toBe(true);
+  expect(await historyDialog.evaluate(dialog => !document.getElementById('root')?.contains(dialog))).toBe(true);
   await page.keyboard.press('Shift+Tab');
   await expect(historyDialog.getByRole('button', { name: 'Restore' })).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(historyDialog).toHaveCount(0);
   await expect(historyTrigger).toBeFocused();
+  await expect(page.locator('body > [data-cloud-library-dialog-root]')).toHaveCount(0);
+  expect(await studioRoot.evaluate(element => ({ aria: element.getAttribute('aria-hidden'), inert: element.inert })))
+    .toEqual({ aria: null, inert: false });
 
   await page.getByRole('button', { name: 'Archived projects' }).click();
   const deleteTrigger = page.getByTestId('cloud-project-row').filter({ hasText: 'Delete focus' }).getByRole('button', { name: 'Delete permanently' });
+  await studioRoot.evaluate(element => element.setAttribute('aria-hidden', 'false'));
   await deleteTrigger.focus();
   await deleteTrigger.click();
   const deleteDialog = page.getByRole('dialog', { name: 'Delete Delete focus permanently?' });
   await expect(deleteDialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
-  await expect(page.locator('.cloud-library > .cloud-library-heading')).toHaveAttribute('aria-hidden', 'true');
+  await expect(page.locator('body > [data-cloud-library-dialog-root]')).toHaveCount(1);
+  await expect(studioRoot).toHaveAttribute('aria-hidden', 'true');
+  expect(await studioRoot.evaluate(element => element.inert)).toBe(true);
   await deleteDialog.getByLabel('Type project title to confirm').fill('Delete focus');
   await deleteDialog.getByRole('button', { name: 'Delete permanently' }).focus();
   await page.keyboard.press('Tab');
@@ -693,6 +759,9 @@ test('history and delete dialogs trap focus, close on Escape, isolate the backgr
   await page.keyboard.press('Escape');
   await expect(deleteDialog).toHaveCount(0);
   await expect(deleteTrigger).toBeFocused();
+  await expect(page.locator('body > [data-cloud-library-dialog-root]')).toHaveCount(0);
+  expect(await studioRoot.evaluate(element => ({ aria: element.getAttribute('aria-hidden'), inert: element.inert })))
+    .toEqual({ aria: 'false', inert: false });
 });
 
 test('claims browser projects and supports individual and master import/export', async ({ page }) => {
