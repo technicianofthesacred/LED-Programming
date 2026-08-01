@@ -33,17 +33,23 @@ async function callAccount(accountStore, path, {
   body,
   cookie,
   contentType = body === undefined ? null : 'application/json',
+  contentLength,
   origin = 'https://led.mandalacodes.com',
+  rawBody,
 } = {}) {
   const headers = new Headers();
   if (origin !== null) headers.set('origin', origin);
   if (cookie) headers.set('cookie', cookie);
   if (contentType) headers.set('content-type', contentType);
+  if (contentLength !== undefined) headers.set('content-length', String(contentLength));
+  const requestBody = rawBody === undefined
+    ? body === undefined ? undefined : JSON.stringify(body)
+    : rawBody;
   const response = await handleAccountPagesRequest({
     request: new Request(`https://led.mandalacodes.com/api/account${path}`, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: requestBody,
     }),
     env: {},
     params: {},
@@ -120,6 +126,55 @@ test('account login keeps credential failures generic and requires exact same-or
   });
   assert.equal(wrongType.response.status, 415);
   assert.equal(wrongType.payload.error.code, 'invalid_request');
+});
+
+test('account login rejects declared and actual oversized JSON before credential work', async () => {
+  let loginCalls = 0;
+  const accountStore = {
+    async verifyLogin() {
+      loginCalls += 1;
+      throw new Error('credential work must not run');
+    },
+  };
+  const declared = await callAccount(accountStore, '/login', {
+    method: 'POST',
+    body: { username: 'workshop', password: 'temporary-passphrase' },
+    contentLength: 8 * 1024 + 1,
+  });
+  assert.equal(declared.response.status, 413);
+  assert.equal(declared.payload.error.code, 'payload_too_large');
+
+  const actual = await callAccount(accountStore, '/login', {
+    method: 'POST',
+    rawBody: JSON.stringify({
+      username: 'workshop',
+      password: 'x'.repeat(8 * 1024),
+    }),
+    contentType: 'application/json',
+  });
+  assert.equal(actual.response.status, 413);
+  assert.equal(actual.payload.error.code, 'payload_too_large');
+  assert.equal(loginCalls, 0);
+});
+
+test('account login rejects overlong credentials before credential work', async () => {
+  let loginCalls = 0;
+  const accountStore = {
+    async verifyLogin() {
+      loginCalls += 1;
+      throw new Error('credential work must not run');
+    },
+  };
+
+  for (const body of [
+    { username: 'u'.repeat(65), password: 'temporary-passphrase' },
+    { username: 'workshop', password: 'p'.repeat(257) },
+  ]) {
+    const denied = await callAccount(accountStore, '/login', { method: 'POST', body });
+    assert.equal(denied.response.status, 400);
+    assert.equal(denied.payload.error.code, 'invalid_request');
+  }
+  assert.equal(loginCalls, 0);
 });
 
 test('account session, password change, and logout rotate then revoke the cookie session', async () => {

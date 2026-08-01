@@ -5,6 +5,7 @@ export const SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
 const PASSWORD_SCHEME = 'pbkdf2-sha256';
 const PASSWORD_VERSION = 'v1';
 const MINIMUM_PASSWORD_LENGTH = 12;
+const MAXIMUM_PASSWORD_LENGTH = 256;
 
 function cryptoApi(candidate) {
   const value = candidate || globalThis.crypto;
@@ -43,8 +44,12 @@ function bytesToHex(bytes) {
 }
 
 function validatePassword(password) {
-  if (typeof password !== 'string' || [...password].length < MINIMUM_PASSWORD_LENGTH) {
+  const length = typeof password === 'string' ? [...password].length : -1;
+  if (length < MINIMUM_PASSWORD_LENGTH) {
     throw new TypeError('Password must be at least 12 characters.');
+  }
+  if (length > MAXIMUM_PASSWORD_LENGTH) {
+    throw new TypeError('Password must be at most 256 characters.');
   }
   return password;
 }
@@ -104,7 +109,9 @@ export function createPasswordVerificationPlaceholder(options = {}) {
 }
 
 export async function verifyPassword(password, encoded, options = {}) {
-  if (typeof password !== 'string' || typeof encoded !== 'string') return false;
+  if (typeof password !== 'string'
+    || [...password].length > MAXIMUM_PASSWORD_LENGTH
+    || typeof encoded !== 'string') return false;
   const [scheme, version, rawIterations, rawSalt, rawDigest, ...rest] = encoded.split('$');
   const iterations = Number(rawIterations);
   const salt = base64UrlToBytes(rawSalt);

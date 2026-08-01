@@ -9,6 +9,9 @@ const NO_STORE_HEADERS = {
   'cache-control': 'no-store',
   'content-type': 'application/json; charset=utf-8',
 };
+const MAX_ACCOUNT_BODY_BYTES = 8 * 1024;
+const MAX_USERNAME_LENGTH = 64;
+const MAX_PASSWORD_LENGTH = 256;
 
 function jsonResponse(value, status = 200, headers = {}) {
   return new Response(JSON.stringify(value), {
@@ -52,14 +55,55 @@ async function readJson(request) {
       status: 415,
     });
   }
+  const declaredLength = Number(request.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_ACCOUNT_BODY_BYTES) {
+    throw Object.assign(new Error('The JSON payload is too large.'), {
+      code: 'payload_too_large',
+      status: 413,
+    });
+  }
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.byteLength > MAX_ACCOUNT_BODY_BYTES) {
+    throw Object.assign(new Error('The JSON payload is too large.'), {
+      code: 'payload_too_large',
+      status: 413,
+    });
+  }
   try {
-    const body = await request.json();
+    const body = JSON.parse(new TextDecoder().decode(bytes));
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error();
     return body;
-  } catch (error) {
-    if (error?.code) throw error;
+  } catch {
     throw Object.assign(new Error('The request body must be a JSON object.'), {
       code: 'invalid_request',
+      status: 400,
+    });
+  }
+}
+
+function codePointLength(value) {
+  return typeof value === 'string' ? [...value].length : -1;
+}
+
+function requireLoginCredentials(body) {
+  const usernameLength = codePointLength(body.username);
+  const passwordLength = codePointLength(body.password);
+  if (usernameLength < 3
+    || usernameLength > MAX_USERNAME_LENGTH
+    || passwordLength < 1
+    || passwordLength > MAX_PASSWORD_LENGTH) {
+    throw Object.assign(new Error('Username and password must be within the supported lengths.'), {
+      code: 'invalid_request',
+      status: 400,
+    });
+  }
+}
+
+function requireNewPassword(body) {
+  const passwordLength = codePointLength(body.password);
+  if (passwordLength < 12 || passwordLength > MAX_PASSWORD_LENGTH) {
+    throw Object.assign(new Error('Password must be 12–256 characters.'), {
+      code: 'invalid_password',
       status: 400,
     });
   }
@@ -78,6 +122,7 @@ async function handleAccountRequest(request, accountStore) {
       return errorResponse(403, 'invalid_origin', 'The request origin is not allowed.');
     }
     const body = await readJson(request);
+    requireLoginCredentials(body);
     const verified = await accountStore.verifyLogin({
       username: body.username,
       password: body.password,
@@ -108,6 +153,7 @@ async function handleAccountRequest(request, accountStore) {
       return errorResponse(403, 'invalid_origin', 'The request origin is not allowed.');
     }
     const body = await readJson(request);
+    requireNewPassword(body);
     const token = readSessionCookie(request);
     const authenticated = token
       ? await accountStore.authenticateSession(token, { includeGeneration: true })

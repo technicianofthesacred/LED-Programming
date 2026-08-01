@@ -147,7 +147,7 @@ export function createAccountStore(repository, options = {}) {
         iterations: passwordIterations,
       });
     } catch (error) {
-      if (/at least 12 characters/i.test(error?.message || '')) {
+      if (/Password must be/i.test(error?.message || '')) {
         fail('invalid_password', error.message, 400);
       }
       throw error;
@@ -247,7 +247,14 @@ export function createAccountStore(repository, options = {}) {
     const account = await requireAccount(id);
     const nextStatus = cleanStatus(status);
     const updatedAt = timestamp();
-    await repository.updateStatusAndRevokeSessions(account.id, nextStatus, updatedAt);
+    const updated = await repository.updateStatusAndRevokeSessions(
+      account.id,
+      nextStatus,
+      updatedAt,
+    );
+    if (!updated) {
+      fail('last_owner_required', 'At least one active owner is required.', 409);
+    }
     return publicAccount(await requireAccount(account.id));
   }
 
@@ -255,7 +262,10 @@ export function createAccountStore(repository, options = {}) {
     const account = await requireAccount(id);
     const nextRole = cleanRole(role);
     const updatedAt = timestamp();
-    await repository.updateRoleAndRevokeSessions(account.id, nextRole, updatedAt);
+    const updated = await repository.updateRoleAndRevokeSessions(account.id, nextRole, updatedAt);
+    if (!updated) {
+      fail('last_owner_required', 'At least one active owner is required.', 409);
+    }
     return publicAccount(await requireAccount(account.id));
   }
 
@@ -516,30 +526,54 @@ export function createD1AccountRepository(db) {
       ]);
     },
     async updateStatusAndRevokeSessions(id, status, updatedAt) {
-      await db.batch([
+      const [updated] = await db.batch([
         db.prepare(`
           UPDATE accounts SET status = ?, session_generation = session_generation + 1,
-            updated_at = ? WHERE id = ?
+            updated_at = ? WHERE id = ? AND (
+              ? <> 'disabled'
+              OR role <> 'owner'
+              OR status <> 'active'
+              OR EXISTS (
+                SELECT 1 FROM accounts AS other
+                WHERE other.id <> ? AND other.role = 'owner' AND other.status = 'active'
+              )
+            )
         `)
-          .bind(status, updatedAt, id),
+          .bind(status, updatedAt, id, status, id),
         db.prepare(`
           UPDATE account_sessions SET revoked_at = ?
-          WHERE account_id = ? AND revoked_at IS NULL
-        `).bind(updatedAt, id),
+          WHERE account_id = ? AND revoked_at IS NULL AND EXISTS (
+            SELECT 1 FROM accounts
+            WHERE id = ? AND status = ? AND updated_at = ?
+          )
+        `).bind(updatedAt, id, id, status, updatedAt),
       ]);
+      return (updated?.meta?.changes || 0) > 0;
     },
     async updateRoleAndRevokeSessions(id, role, updatedAt) {
-      await db.batch([
+      const [updated] = await db.batch([
         db.prepare(`
           UPDATE accounts SET role = ?, session_generation = session_generation + 1,
-            updated_at = ? WHERE id = ?
+            updated_at = ? WHERE id = ? AND (
+              ? = 'owner'
+              OR role <> 'owner'
+              OR status <> 'active'
+              OR EXISTS (
+                SELECT 1 FROM accounts AS other
+                WHERE other.id <> ? AND other.role = 'owner' AND other.status = 'active'
+              )
+            )
         `)
-          .bind(role, updatedAt, id),
+          .bind(role, updatedAt, id, role, id),
         db.prepare(`
           UPDATE account_sessions SET revoked_at = ?
-          WHERE account_id = ? AND revoked_at IS NULL
-        `).bind(updatedAt, id),
+          WHERE account_id = ? AND revoked_at IS NULL AND EXISTS (
+            SELECT 1 FROM accounts
+            WHERE id = ? AND role = ? AND updated_at = ?
+          )
+        `).bind(updatedAt, id, id, role, updatedAt),
       ]);
+      return (updated?.meta?.changes || 0) > 0;
     },
     async updateLoginState(id, values) {
       await db.prepare(`
@@ -708,15 +742,29 @@ export function createMemoryAccountRepository(seed = {}) {
     },
     async updateStatusAndRevokeSessions(id, status, updatedAt) {
       const row = account(id);
+      if (row.role === 'owner'
+        && row.status === 'active'
+        && status === 'disabled'
+        && ![...accounts.values()].some(value => (
+          value.id !== id && value.role === 'owner' && value.status === 'active'
+        ))) return false;
       Object.assign(row, { status, updated_at: updatedAt });
       row.session_generation += 1;
       revokeAccountSessions(id, updatedAt);
+      return true;
     },
     async updateRoleAndRevokeSessions(id, role, updatedAt) {
       const row = account(id);
+      if (row.role === 'owner'
+        && row.status === 'active'
+        && role !== 'owner'
+        && ![...accounts.values()].some(value => (
+          value.id !== id && value.role === 'owner' && value.status === 'active'
+        ))) return false;
       Object.assign(row, { role, updated_at: updatedAt });
       row.session_generation += 1;
       revokeAccountSessions(id, updatedAt);
+      return true;
     },
     async updateLoginState(id, values) {
       Object.assign(account(id), structuredClone(values));

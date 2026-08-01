@@ -110,6 +110,19 @@ test('creates and verifies a versioned password hash without storing plaintext',
   );
 });
 
+test('rejects overlong passwords before PBKDF2 work', async () => {
+  const countingCrypto = createCountingCrypto();
+
+  await assert.rejects(
+    hashPassword('p'.repeat(257), {
+      crypto: countingCrypto.api,
+      iterations: TEST_ITERATIONS,
+    }),
+    /at most 256 characters/i,
+  );
+  assert.equal(countingCrypto.count(), 0);
+});
+
 test('generates opaque session credentials and strict host-only cookie headers', async () => {
   const credential = await createSessionCredential();
 
@@ -152,6 +165,20 @@ test('normalizes unique usernames, fixes roles, and never lists credential field
     createWorker(accounts, { username: 'different', role: 'administrator' }),
     error => error instanceof AccountStoreError && error.code === 'invalid_role',
   );
+});
+
+test('validates account names before password derivation', async () => {
+  const countingCrypto = createCountingCrypto();
+  const { accounts } = setup({ crypto: countingCrypto.api });
+
+  await assert.rejects(createWorker(accounts, {
+    username: 'u'.repeat(65),
+  }), { code: 'invalid_username', status: 400 });
+  await assert.rejects(createWorker(accounts, {
+    username: 'valid-worker',
+    displayName: 'd'.repeat(81),
+  }), { code: 'invalid_display_name', status: 400 });
+  assert.equal(countingCrypto.count(), 0);
 });
 
 test('returns one generic login error for unknown and incorrect credentials', async () => {
@@ -405,6 +432,83 @@ test('denies expired or disabled sessions and revokes sessions on role changes',
   const customer = await accounts.setAccountRole({ id: worker.id, role: 'customer' });
   assert.equal(customer.role, 'customer');
   assert.equal(await accounts.authenticateSession(changedRole.token), null);
+});
+
+test('the sole active owner cannot be disabled or demoted', async () => {
+  const { accounts } = setup();
+  const owner = await createWorker(accounts, {
+    username: 'owner',
+    displayName: 'Owner',
+    role: 'owner',
+  });
+  const session = await createInitialSession(accounts, owner);
+
+  await assert.rejects(accounts.setAccountStatus({
+    id: owner.id,
+    status: 'disabled',
+  }), { code: 'last_owner_required', status: 409 });
+  await assert.rejects(accounts.setAccountRole({
+    id: owner.id,
+    role: 'worker',
+  }), { code: 'last_owner_required', status: 409 });
+  assert.deepEqual((await accounts.listAccounts()).map(account => ({
+    role: account.role,
+    status: account.status,
+  })), [{ role: 'owner', status: 'active' }]);
+  assert.equal((await accounts.authenticateSession(session.token)).accountId, owner.id);
+});
+
+test('one of two active owners may be disabled or demoted', async t => {
+  for (const [name, mutate] of [
+    ['disable', (accounts, id) => accounts.setAccountStatus({ id, status: 'disabled' })],
+    ['demote', (accounts, id) => accounts.setAccountRole({ id, role: 'worker' })],
+  ]) {
+    await t.test(name, async () => {
+      const { accounts } = setup();
+      const first = await createWorker(accounts, {
+        username: `${name}-owner-a`,
+        displayName: 'Owner A',
+        role: 'owner',
+      });
+      await createWorker(accounts, {
+        username: `${name}-owner-b`,
+        displayName: 'Owner B',
+        role: 'owner',
+      });
+
+      await mutate(accounts, first.id);
+      const activeOwners = (await accounts.listAccounts())
+        .filter(account => account.role === 'owner' && account.status === 'active');
+      assert.equal(activeOwners.length, 1);
+    });
+  }
+});
+
+test('concurrent owner mutations leave at least one active owner', async () => {
+  const { accounts } = setup();
+  const first = await createWorker(accounts, {
+    username: 'owner-a',
+    displayName: 'Owner A',
+    role: 'owner',
+  });
+  const second = await createWorker(accounts, {
+    username: 'owner-b',
+    displayName: 'Owner B',
+    role: 'owner',
+  });
+
+  const settled = await Promise.allSettled([
+    accounts.setAccountStatus({ id: first.id, status: 'disabled' }),
+    accounts.setAccountRole({ id: second.id, role: 'worker' }),
+  ]);
+  assert.deepEqual(settled.map(result => result.status).sort(), ['fulfilled', 'rejected']);
+  assert.equal(
+    settled.find(result => result.status === 'rejected').reason.code,
+    'last_owner_required',
+  );
+  const activeOwners = (await accounts.listAccounts())
+    .filter(account => account.role === 'owner' && account.status === 'active');
+  assert.equal(activeOwners.length, 1);
 });
 
 test('password reset revokes sessions and password change clears forced-change state', async () => {
@@ -662,4 +766,57 @@ test('D1 rejects a password change authenticated before a concurrent owner reset
     SELECT COUNT(*) AS count FROM account_sessions WHERE revoked_at IS NULL
   `).first();
   assert.equal(activeSessions.count, 0);
+});
+
+test('D1 serializes concurrent owner mutations around the final active owner', async t => {
+  const miniflare = new Miniflare({
+    compatibilityDate: '2026-07-15',
+    modules: true,
+    script: 'export default { fetch() { return new Response("ok") } }',
+    d1Databases: ['PROJECTS_DB'],
+  });
+  t.after(() => miniflare.dispose());
+  const db = await miniflare.getD1Database('PROJECTS_DB');
+  for (const migrationName of [
+    '0001_cloud_project_library.sql',
+    '0002_account_access.sql',
+    '0003_account_session_generation.sql',
+  ]) {
+    const migration = await readFile(
+      new URL(`../../../../migrations/${migrationName}`, import.meta.url),
+      'utf8',
+    );
+    for (const statement of migration.split(';').map(value => value.trim()).filter(Boolean)) {
+      await db.prepare(statement).run();
+    }
+  }
+
+  const accounts = createD1AccountStore({ PROJECTS_DB: db }, {
+    now: () => '2026-08-01T00:00:00.000Z',
+    passwordIterations: TEST_ITERATIONS,
+  });
+  const first = await createWorker(accounts, {
+    username: 'owner-a',
+    displayName: 'Owner A',
+    role: 'owner',
+  });
+  const second = await createWorker(accounts, {
+    username: 'owner-b',
+    displayName: 'Owner B',
+    role: 'owner',
+  });
+
+  const settled = await Promise.allSettled([
+    accounts.setAccountStatus({ id: first.id, status: 'disabled' }),
+    accounts.setAccountRole({ id: second.id, role: 'worker' }),
+  ]);
+  assert.deepEqual(settled.map(result => result.status).sort(), ['fulfilled', 'rejected']);
+  assert.equal(
+    settled.find(result => result.status === 'rejected').reason.code,
+    'last_owner_required',
+  );
+  const result = await db.prepare(`
+    SELECT COUNT(*) AS count FROM accounts WHERE role = 'owner' AND status = 'active'
+  `).first();
+  assert.equal(result.count, 1);
 });
