@@ -784,6 +784,7 @@ test('oversized setup JSON stops copy and download before browser side effects',
     projectName: project.name,
     strips: project.layout.strips,
     patchBoard: project.layout.patchBoard,
+    wiring: project.layout.wiring,
     standaloneController: project.devices.standaloneController,
   });
   let capacityError: any = null;
