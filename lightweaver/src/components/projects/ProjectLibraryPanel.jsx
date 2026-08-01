@@ -2,7 +2,10 @@ import { useMemo, useRef, useState } from 'react';
 
 import { isLibraryBackup } from '../../lib/libraryBackup.js';
 import { useCloudLibrary } from '../../state/CloudLibraryContext.jsx';
-import { ProjectHistoryDialog } from './ProjectHistoryDialog.jsx';
+import { ProjectHistoryDialog, useCloudDialogLifecycle } from './ProjectHistoryDialog.jsx';
+
+const MAX_PROJECT_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_MASTER_BACKUP_BYTES = 8 * 1024 * 1024;
 
 function formatTime(value) {
   if (!value) return 'Not dated';
@@ -37,6 +40,20 @@ export function ProjectLibraryPanel() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const projectImportRef = useRef(null);
   const masterRestoreRef = useRef(null);
+  const deleteBackdropRef = useRef(null);
+  const deleteDialogRef = useRef(null);
+  const deleteCancelRef = useRef(null);
+
+  useCloudDialogLifecycle({
+    open: Boolean(deleteTarget),
+    backdropRef: deleteBackdropRef,
+    dialogRef: deleteDialogRef,
+    initialFocusRef: deleteCancelRef,
+    onClose: () => {
+      setDeleteTarget(null);
+      setDeleteConfirmation('');
+    },
+  });
 
   const sourceProjects = view === 'archived' ? library.archivedProjects : library.activeProjects;
   const shownProjects = useMemo(() => {
@@ -93,6 +110,10 @@ export function ProjectLibraryPanel() {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
+    if (file.size > MAX_PROJECT_FILE_BYTES) {
+      setNotice('Project files must be 2 MB or smaller.');
+      return;
+    }
     try {
       const candidate = await readJsonFile(file);
       await run('import-project', () => library.importProject(candidate), result => `Imported ${result.project.title}.`);
@@ -105,6 +126,10 @@ export function ProjectLibraryPanel() {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
+    if (file.size > MAX_MASTER_BACKUP_BYTES) {
+      setNotice('Master backups must be 8 MB or smaller.');
+      return;
+    }
     try {
       const candidate = await readJsonFile(file);
       if (!isLibraryBackup(candidate)) {
@@ -161,7 +186,7 @@ export function ProjectLibraryPanel() {
         <div className="cloud-library-guidance">
           <strong>Sign in to use the online project library</strong>
           <p>Your browser recovery copy is still working. Sign in through Lightweaver’s private access page to save across devices.</p>
-          <button type="button" className="btn primary" onClick={library.retrySession}>Retry sign in</button>
+          <button type="button" className="btn primary" onClick={library.signIn}>Sign in</button>
         </div>
       )}
       {library.session.status === 'error' && (
@@ -271,15 +296,15 @@ export function ProjectLibraryPanel() {
       )}
 
       {deleteTarget && (
-        <div className="cloud-library-backdrop">
-          <section className="cloud-library-dialog" role="dialog" aria-modal="true" aria-labelledby="cloud-delete-title">
+        <div ref={deleteBackdropRef} className="cloud-library-backdrop">
+          <section ref={deleteDialogRef} className="cloud-library-dialog" role="dialog" aria-modal="true" aria-labelledby="cloud-delete-title">
             <span className="cloud-kicker">Owner-only permanent action</span>
             <h2 id="cloud-delete-title">Delete {deleteTarget.title} permanently?</h2>
             <p>This removes the archived project and all of its online history. Download a backup first if it may be needed later.</p>
             <label htmlFor="cloud-delete-confirmation">Type <strong>{deleteTarget.title}</strong> to confirm</label>
             <input id="cloud-delete-confirmation" className="pm-input" aria-label="Type project title to confirm" value={deleteConfirmation} onChange={event => setDeleteConfirmation(event.target.value)} />
             <div className="set-actions">
-              <button type="button" className="btn" onClick={() => setDeleteTarget(null)}>Cancel</button>
+              <button ref={deleteCancelRef} type="button" className="btn" onClick={() => { setDeleteTarget(null); setDeleteConfirmation(''); }}>Cancel</button>
               <button type="button" className="btn danger" disabled={deleteConfirmation !== deleteTarget.title} onClick={confirmDelete}>Delete permanently</button>
             </div>
           </section>

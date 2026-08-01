@@ -70,6 +70,20 @@ class LibraryFixture {
   private delayedUpdateGate: Promise<void> | null = null;
   private releaseDelayedUpdate: (() => void) | null = null;
   forceNextConflict = false;
+  updateFailures: number[] = [];
+  updateRequestIds: string[] = [];
+  updateCount = 0;
+  signInNavigations: string[] = [];
+  delayNextCreate = false;
+  delayedCreateStarted: Promise<void> | null = null;
+  private signalDelayedCreateStarted: (() => void) | null = null;
+  private delayedCreateGate: Promise<void> | null = null;
+  private releaseDelayedCreate: (() => void) | null = null;
+  delayedReadStarted: Promise<void> | null = null;
+  private delayedReadId = '';
+  private signalDelayedReadStarted: (() => void) | null = null;
+  private delayedReadGate: Promise<void> | null = null;
+  private releaseDelayedRead: (() => void) | null = null;
 
   constructor(role: Role = 'worker', email = role === 'owner' ? 'owner@example.test' : 'worker@example.test') {
     this.role = role;
@@ -115,12 +129,42 @@ class LibraryFixture {
     this.releaseDelayedUpdate = null;
   }
 
+  holdNextCreate() {
+    this.delayNextCreate = true;
+    this.delayedCreateStarted = new Promise(resolve => { this.signalDelayedCreateStarted = resolve; });
+    this.delayedCreateGate = new Promise<void>(resolve => { this.releaseDelayedCreate = resolve; });
+  }
+
+  releaseCreate() {
+    this.releaseDelayedCreate?.();
+    this.releaseDelayedCreate = null;
+  }
+
+  holdRead(id: string) {
+    this.delayedReadId = id;
+    this.delayedReadStarted = new Promise(resolve => { this.signalDelayedReadStarted = resolve; });
+    this.delayedReadGate = new Promise<void>(resolve => { this.releaseDelayedRead = resolve; });
+  }
+
+  releaseRead() {
+    this.releaseDelayedRead?.();
+    this.releaseDelayedRead = null;
+  }
+
   async install(page: Page) {
     await page.route('**/api/library/**', async route => {
       const request = route.request();
       const url = new URL(request.url());
       const segments = url.pathname.slice('/api/library/'.length).split('/').filter(Boolean);
       const method = request.method();
+
+      if (segments[0] === 'session' && method === 'GET' && request.isNavigationRequest()) {
+        const returnTo = url.searchParams.get('returnTo') || '/';
+        this.signInNavigations.push(returnTo);
+        this.role = 'worker';
+        await route.fulfill({ status: 302, headers: { location: returnTo }, body: '' });
+        return;
+      }
 
       if (!this.role) {
         await json(route, { error: { code: 'unauthenticated', message: 'Authentication is required.', requestId: 'fixture-401' } }, 401);
@@ -137,6 +181,11 @@ class LibraryFixture {
       }
       if (segments[0] === 'projects' && segments.length === 1 && method === 'POST') {
         const body = request.postDataJSON();
+        if (this.delayNextCreate) {
+          this.delayNextCreate = false;
+          this.signalDelayedCreateStarted?.();
+          await this.delayedCreateGate;
+        }
         const project = this.seed(body.title, { revisions: [body.project] });
         await json(route, { project: metadata(project) }, 201);
         return;
@@ -148,6 +197,11 @@ class LibraryFixture {
           return;
         }
         if (method === 'GET') {
+          if (this.delayedReadId === project.id) {
+            this.delayedReadId = '';
+            this.signalDelayedReadStarted?.();
+            await this.delayedReadGate;
+          }
           await json(route, { project: { ...metadata(project), document: structuredClone(project.document) } });
           return;
         }
@@ -161,7 +215,14 @@ class LibraryFixture {
           return;
         }
         if (method === 'PUT') {
+          this.updateCount += 1;
+          this.updateRequestIds.push(request.headers()['x-lightweaver-request'] || '');
           const body = request.postDataJSON();
+          const failure = this.updateFailures.shift();
+          if (failure) {
+            await json(route, { error: { code: `fixture_${failure}`, message: `Fixture failure ${failure}.`, requestId: `fixture-${failure}` } }, failure);
+            return;
+          }
           if (this.forceNextConflict) {
             this.forceNextConflict = false;
             project.revision += 1;
@@ -290,16 +351,41 @@ async function openLibrary(page: Page) {
   await expect(page.getByTestId('project-library-panel')).toBeVisible();
 }
 
-test('guides signed-out users and identifies authenticated workers', async ({ page }) => {
+test('signs in with a top-level Access navigation and returns to the Studio', async ({ page }) => {
   const fixture = new LibraryFixture(null);
   await fixture.install(page);
   await openLibrary(page);
   await expect(page.getByText('Sign in to use the online project library')).toBeVisible();
 
-  fixture.role = 'worker';
-  await page.getByRole('button', { name: 'Retry sign in' }).click();
+  await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page.getByText('worker@example.test')).toBeVisible();
   await expect(page.getByText('Worker', { exact: true })).toBeVisible();
+  expect(fixture.signInNavigations).toEqual(['/#screen=card&section=preferences']);
+});
+
+test('turns a remembered remote revision divergence into an explicit conflict without overwriting either side', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  const original = portable('Original recovery', 'lwproj-divergence');
+  const latest = portable('Latest remote', 'lwproj-divergence');
+  const remote = fixture.seed('Latest remote', { revisions: [original, latest] });
+  await page.addInitScript(({ local, remoteId }) => {
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(local));
+    localStorage.setItem('lw_autosave_v3_backup', JSON.stringify(local));
+    localStorage.setItem('lw_cloud_active_project_v1', JSON.stringify({ id: remoteId, revision: 1 }));
+  }, { local: original, remoteId: remote.id });
+  await fixture.install(page);
+  await openLibrary(page);
+
+  await expect(page.getByTestId('cloud-sync-status')).toHaveText('Online conflict');
+  await expect(page.getByRole('button', { name: 'Open latest' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Save as copy' })).toBeVisible();
+  await page.waitForTimeout(1200);
+  expect(fixture.updateCount).toBe(0);
+  expect([...fixture.projects.values()][0].document.name).toBe('Latest remote');
+  await page.getByRole('button', { name: 'Save as copy' }).click();
+  await expect(page.getByTestId('cloud-project-row').getByText('Original recovery copy', { exact: true })).toBeVisible();
+  expect([...fixture.projects.values()].some(project => project.document.name === 'Latest remote')).toBe(true);
+  expect([...fixture.projects.values()].some(project => project.document.name === 'Original recovery copy')).toBe(true);
 });
 
 test('creates a named online project and reports only acknowledged revisions as saved', async ({ page, context }) => {
@@ -311,11 +397,13 @@ test('creates a named online project and reports only acknowledged revisions as 
   await page.getByRole('button', { name: 'Create online project' }).click();
   await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
   await expect(page.getByTestId('cloud-project-row').getByText('Gallery Bloom', { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_cloud_active_project_v1') || 'null')))
+    .toEqual({ id: [...fixture.projects.values()][0].id, revision: 1 });
 
   fixture.holdNextUpdate();
   await page.getByLabel('Project name').fill('Gallery Bloom revised');
   await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saving online');
-  await expect.poll(() => fixture.delayedUpdateStarted).not.toBeNull();
+  await fixture.delayedUpdateStarted;
 
   await page.getByLabel('Project name').fill('Gallery Bloom final');
   fixture.releaseUpdate();
@@ -339,6 +427,160 @@ test('creates a named online project and reports only acknowledged revisions as 
   await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
 });
 
+test('create and active rename acknowledge only captured markers and queue newer edits', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  await fixture.install(page);
+  await openLibrary(page);
+
+  fixture.holdNextCreate();
+  await page.getByLabel('Online project title').fill('Captured create');
+  await page.getByRole('button', { name: 'Create online project' }).click();
+  await fixture.delayedCreateStarted;
+  await page.getByLabel('Project name').fill('Edited while creating');
+  fixture.releaseCreate();
+  await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
+  const created = [...fixture.projects.values()][0];
+  await expect.poll(() => fixture.projects.get(created.id)?.document.name).toBe('Edited while creating');
+
+  const row = page.getByTestId('cloud-project-row').filter({ hasText: 'Edited while creating' });
+  await row.getByRole('button', { name: 'Rename' }).click();
+  await page.getByLabel('Rename project').fill('Captured rename');
+  fixture.holdNextUpdate();
+  await page.getByRole('button', { name: 'Save name' }).click();
+  await fixture.delayedUpdateStarted;
+  await expect(page.getByLabel('Project name')).toHaveValue('Captured rename');
+  await page.getByLabel('Project name').fill('Edited while renaming');
+  fixture.releaseUpdate();
+  await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
+  await expect.poll(() => fixture.projects.get(created.id)?.document.name).toBe('Edited while renaming');
+  expect(fixture.projects.get(created.id)?.title).toBe('Edited while renaming');
+});
+
+test('ignores superseded reads and confirms before a late read can replace intervening edits', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  const first = fixture.seed('Slow first');
+  fixture.seed('Fast second');
+  await fixture.install(page);
+  await openLibrary(page);
+
+  fixture.holdRead(first.id);
+  await page.getByTestId('cloud-project-row').filter({ hasText: 'Slow first' }).getByRole('button', { name: 'Open' }).click();
+  await fixture.delayedReadStarted;
+  await page.getByTestId('cloud-project-row').filter({ hasText: 'Fast second' }).getByRole('button', { name: 'Open' }).click();
+  await expect(page.getByLabel('Project name')).toHaveValue('Fast second');
+  fixture.releaseRead();
+  await page.waitForTimeout(200);
+  await expect(page.getByLabel('Project name')).toHaveValue('Fast second');
+
+  fixture.holdRead(first.id);
+  await page.getByTestId('cloud-project-row').filter({ hasText: 'Slow first' }).getByRole('button', { name: 'Open' }).click();
+  await fixture.delayedReadStarted;
+  await page.getByLabel('Project name').fill('Intervening local edit');
+  fixture.releaseRead();
+  const confirmation = page.getByRole('dialog', { name: 'Replace current project?' });
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole('button', { name: 'Keep editing' }).click();
+  await expect(page.getByLabel('Project name')).toHaveValue('Intervening local edit');
+});
+
+test('retries transient saves with one request ID, waits exactly, and demotes rejected sessions', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  fixture.seed('Retry project');
+  await fixture.install(page);
+  await openLibrary(page);
+  await page.getByTestId('cloud-project-row').getByRole('button', { name: 'Open' }).click();
+
+  fixture.updateFailures.push(503);
+  await page.getByLabel('Project name').fill('Retry once');
+  await expect(page.getByTestId('cloud-sync-status')).toHaveText('Waiting to save online');
+  await expect.poll(() => fixture.updateCount, { timeout: 6000 }).toBe(2);
+  await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
+  expect(fixture.updateRequestIds[0]).toBeTruthy();
+  expect(fixture.updateRequestIds[1]).toBe(fixture.updateRequestIds[0]);
+
+  fixture.updateFailures.push(400);
+  await page.getByLabel('Project name').fill('Do not retry bad request');
+  await expect(page.getByTestId('cloud-sync-status')).toHaveText('Online save needs attention');
+  const requestsAfterBadInput = fixture.updateCount;
+  await page.waitForTimeout(2800);
+  expect(fixture.updateCount).toBe(requestsAfterBadInput);
+
+  fixture.updateFailures.push(401);
+  await page.getByLabel('Project name').fill('Expired identity');
+  await expect(page.getByText('Sign in to use the online project library')).toBeVisible();
+  await expect(page.getByText('worker@example.test')).toHaveCount(0);
+});
+
+test('demotes a forbidden authenticated session without retrying', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  fixture.seed('Forbidden project');
+  await fixture.install(page);
+  await openLibrary(page);
+  await page.getByTestId('cloud-project-row').getByRole('button', { name: 'Open' }).click();
+  fixture.updateFailures.push(403);
+  await page.getByLabel('Project name').fill('Forbidden edit');
+  await expect(page.getByText('The online library is unavailable')).toBeVisible();
+  const count = fixture.updateCount;
+  await page.waitForTimeout(2800);
+  expect(fixture.updateCount).toBe(count);
+});
+
+test('cancels a pending transient retry when the cloud provider unmounts', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(async () => {
+    document.body.innerHTML = '<div id="cloud-unmount-root"></div>';
+    const React = (await import('/node_modules/.vite/deps/react.js')).default;
+    const { createRoot } = (await import('/node_modules/.vite/deps/react-dom_client.js')).default;
+    const { CloudLibraryError } = await import('/src/lib/cloudLibraryClient.js');
+    const { CloudLibraryProvider, useCloudLibrary } = await import('/src/state/CloudLibraryContext.jsx');
+    const { ProjectProvider, useProject } = await import('/src/state/ProjectContext.jsx');
+
+    const stats = { updates: 0 };
+    let stored = null;
+    const client = {
+      getSession: async () => ({ email: 'worker@example.test', role: 'worker' }),
+      listProjects: async ({ state }) => state === 'active' && stored ? [stored] : [],
+      createProject: async ({ title, project }) => {
+        stored = {
+          id: 'unmount-remote', title, archived: false, revision: 1,
+          createdAt: '2026-08-01T01:00:00.000Z', updatedAt: '2026-08-01T01:00:00.000Z',
+          createdBy: 'worker@example.test', lastEditor: 'worker@example.test',
+          embeddedProjectId: project.id,
+        };
+        return stored;
+      },
+      updateProject: async () => {
+        stats.updates += 1;
+        throw new CloudLibraryError('temporary', 'Temporary failure.', { status: 503 });
+      },
+    };
+
+    function Harness() {
+      const library = useCloudLibrary();
+      const { setProjectName } = useProject();
+      const started = React.useRef(false);
+      React.useEffect(() => {
+        if (library.session.status !== 'authenticated' || started.current) return;
+        started.current = true;
+        void library.createProject('Unmount retry').then(result => {
+          if (result.ok) setProjectName('Unmount retry changed');
+        });
+      }, [library, setProjectName]);
+      return React.createElement('div', null, library.syncState.label);
+    }
+
+    const root = createRoot(document.getElementById('cloud-unmount-root'));
+    root.render(React.createElement(ProjectProvider, null,
+      React.createElement(CloudLibraryProvider, { client }, React.createElement(Harness))));
+    window.__LW_CLOUD_UNMOUNT__ = { root, stats };
+  });
+
+  await expect.poll(() => page.evaluate(() => window.__LW_CLOUD_UNMOUNT__.stats.updates)).toBe(1);
+  await page.evaluate(() => window.__LW_CLOUD_UNMOUNT__.root.unmount());
+  await page.waitForTimeout(3000);
+  expect(await page.evaluate(() => window.__LW_CLOUD_UNMOUNT__.stats.updates)).toBe(1);
+});
+
 test('opens, renames, duplicates, archives, restores history, and unarchives projects', async ({ page }) => {
   const fixture = new LibraryFixture('worker');
   const first = portable('First draft', 'lwproj-history');
@@ -354,6 +596,8 @@ test('opens, renames, duplicates, archives, restores history, and unarchives pro
   await page.getByLabel('Rename project').fill('Temple sculpture');
   await page.getByRole('button', { name: 'Save name' }).click();
   await expect(page.getByText('Temple sculpture', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Project name')).toHaveValue('Temple sculpture');
+  expect([...fixture.projects.values()][0].document.name).toBe('Temple sculpture');
 
   await page.getByTestId('cloud-project-row').filter({ hasText: 'Temple sculpture' }).getByRole('button', { name: 'Duplicate' }).click();
   await expect(page.getByText('Temple sculpture Copy', { exact: true })).toBeVisible();
@@ -416,6 +660,41 @@ test('never offers worker delete and requires an owner to type an archived proje
   await expect(page.getByText('Owner archive', { exact: true })).toHaveCount(0);
 });
 
+test('history and delete dialogs trap focus, close on Escape, isolate the background, and restore focus', async ({ page }) => {
+  const fixture = new LibraryFixture('owner');
+  fixture.seed('History focus', { revisions: [portable('Earlier focus'), portable('History focus')] });
+  fixture.seed('Delete focus', { archived: true });
+  await fixture.install(page);
+  await openLibrary(page);
+
+  const historyTrigger = page.getByTestId('cloud-project-row').filter({ hasText: 'History focus' }).getByRole('button', { name: 'History' });
+  await historyTrigger.focus();
+  await historyTrigger.click();
+  const historyDialog = page.getByRole('dialog', { name: 'Project history' });
+  await expect(historyDialog.getByRole('button', { name: 'Close' })).toBeFocused();
+  await expect(page.locator('.cloud-library > .cloud-library-heading')).toHaveAttribute('aria-hidden', 'true');
+  await page.keyboard.press('Shift+Tab');
+  await expect(historyDialog.getByRole('button', { name: 'Restore' })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(historyDialog).toHaveCount(0);
+  await expect(historyTrigger).toBeFocused();
+
+  await page.getByRole('button', { name: 'Archived projects' }).click();
+  const deleteTrigger = page.getByTestId('cloud-project-row').filter({ hasText: 'Delete focus' }).getByRole('button', { name: 'Delete permanently' });
+  await deleteTrigger.focus();
+  await deleteTrigger.click();
+  const deleteDialog = page.getByRole('dialog', { name: 'Delete Delete focus permanently?' });
+  await expect(deleteDialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  await expect(page.locator('.cloud-library > .cloud-library-heading')).toHaveAttribute('aria-hidden', 'true');
+  await deleteDialog.getByLabel('Type project title to confirm').fill('Delete focus');
+  await deleteDialog.getByRole('button', { name: 'Delete permanently' }).focus();
+  await page.keyboard.press('Tab');
+  await expect(deleteDialog.getByLabel('Type project title to confirm')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(deleteDialog).toHaveCount(0);
+  await expect(deleteTrigger).toBeFocused();
+});
+
 test('claims browser projects and supports individual and master import/export', async ({ page }) => {
   const fixture = new LibraryFixture('worker');
   fixture.seed('Download me');
@@ -473,4 +752,14 @@ test('claims browser projects and supports individual and master import/export',
   await page.setInputFiles('[data-testid="cloud-master-restore"]', restorePath);
   await expect(page.getByText('Restored 1 project and 0 workspace assets')).toBeVisible();
   await expect(page.getByText('Backup project (restored)', { exact: true })).toBeVisible();
+
+  const oversizedProjectPath = path.join(temp, 'oversized.lw.json');
+  fs.writeFileSync(oversizedProjectPath, Buffer.alloc(2 * 1024 * 1024 + 1, 0x20));
+  await page.setInputFiles('[data-testid="cloud-project-import"]', oversizedProjectPath);
+  await expect(page.getByText('Project files must be 2 MB or smaller.')).toBeVisible();
+
+  const oversizedBackupPath = path.join(temp, 'oversized.lw-library.json');
+  fs.writeFileSync(oversizedBackupPath, Buffer.alloc(8 * 1024 * 1024 + 1, 0x20));
+  await page.setInputFiles('[data-testid="cloud-master-restore"]', oversizedBackupPath);
+  await expect(page.getByText('Master backups must be 8 MB or smaller.')).toBeVisible();
 });
