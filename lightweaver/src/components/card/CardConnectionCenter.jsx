@@ -1,6 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createBridgeResultChannel, resumeBridgeReturnCode } from '../../lib/bridgeLaunch.js';
-import { adoptDiscoveredCardBridgeIdentity, rePairDiscoveredCardBridgeIdentity } from '../../lib/cardBridge.js';
+import {
+  acquireCardBridgeFromGesture,
+  adoptDiscoveredCardBridgeIdentity,
+  getCardBridgeState,
+  rePairDiscoveredCardBridgeIdentity,
+} from '../../lib/cardBridge.js';
 import {
   CARD_HOST_CHANGED_EVENT,
   isLocalCardHost,
@@ -55,6 +60,8 @@ export function CardConnectionCenter({
   const [host, setHost] = useState(readStoredCardHost);
   const [bridgeLaunchState, setBridgeLaunchState] = useState('idle');
   const [bridgeReturnCode, setBridgeReturnCode] = useState('');
+  const [takeoverHost, setTakeoverHost] = useState('');
+  const [pairingBusy, setPairingBusy] = useState(false);
   const capabilities = useMemo(platformCapabilities, [open]);
   const rememberedCard = readPersistedCardIdentity();
   const hasKnownCard = Boolean(link.card?.id || link.expectedCard?.id || rememberedCard?.id);
@@ -158,18 +165,59 @@ export function CardConnectionCenter({
     if (capabilities.canWebSerialInstall) openInstall();
   };
 
+  const pairDiscoveredBridgeCard = async (targetHost) => {
+    if (!readPersistedCardIdentity()?.id) {
+      await adoptDiscoveredCardBridgeIdentity(targetHost);
+    } else {
+      await rePairDiscoveredCardBridgeIdentity(targetHost);
+    }
+  };
+
   const useDiscoveredCard = async () => {
+    setPairingBusy(true);
     try {
       if (link.transport === 'direct' && link.discoveredCard?.id) {
         await adoptDiscoveredDirectCard();
-      } else if (!rememberedCard?.id) {
-        await adoptDiscoveredCardBridgeIdentity(link.host);
       } else {
-        await rePairDiscoveredCardBridgeIdentity(link.host);
+        await pairDiscoveredBridgeCard(link.host);
       }
+      setTakeoverHost('');
       setFailure('');
     } catch (error) {
-      setFailure(error?.message || 'Studio could not pair this card.');
+      if (error?.reason === 'stale-host') {
+        const activeHost = normalizeCardHost(getCardBridgeState().host || link.host || readStoredCardHost());
+        setTakeoverHost(activeHost);
+        setFailure('Studio found the card through an earlier connection. Take over that connection to use the card in this Studio.');
+      } else {
+        setTakeoverHost('');
+        setFailure(error?.message || 'Studio could not pair this card.');
+      }
+    } finally {
+      setPairingBusy(false);
+    }
+  };
+
+  const takeOverConnection = async () => {
+    if (!takeoverHost || pairingBusy) return;
+    setPairingBusy(true);
+    setFailure('Taking over the card connection…');
+    try {
+      // Acquisition must begin synchronously inside this click so the browser
+      // permits the named card-page window to be reclaimed. Discovery is
+      // read-only; the explicit pair/re-pair below still performs an uncached
+      // status verification before persisting card identity.
+      const attempt = acquireCardBridgeFromGesture(takeoverHost, {
+        timeoutMs: 15000,
+        acceptDiscovered: true,
+      });
+      await attempt.ready;
+      await pairDiscoveredBridgeCard(takeoverHost);
+      setTakeoverHost('');
+      setFailure('');
+    } catch (error) {
+      setFailure(error?.message || 'Studio could not take over this card connection.');
+    } finally {
+      setPairingBusy(false);
     }
   };
 
@@ -232,7 +280,7 @@ export function CardConnectionCenter({
       case 'ready-local-card':
         return <button type="button" className="btn primary" onClick={closeAndRestore}>Done</button>;
       case 'pair-local-card':
-        return <button type="button" className="btn primary" onClick={useDiscoveredCard}>Connect</button>;
+        return <button type="button" className="btn primary" onClick={useDiscoveredCard} disabled={pairingBusy}>{pairingBusy ? 'Connecting…' : 'Connect'}</button>;
       case 'card-needs-project':
         return <button type="button" className="btn primary" onClick={openInstall}>Install your project</button>;
       case 'ready-browser-usb':
@@ -370,6 +418,13 @@ export function CardConnectionCenter({
       )}
 
       {failure && <p className="card-connection-failure" role="alert">{failure}</p>}
+      {takeoverHost && (
+        <div className="card-connection-actions">
+          <button type="button" className="btn primary" onClick={takeOverConnection} disabled={pairingBusy}>
+            {pairingBusy ? 'Taking over…' : 'Take over connection'}
+          </button>
+        </div>
+      )}
 
       <details className="card-connection-details">
         <summary>Connection details</summary>
