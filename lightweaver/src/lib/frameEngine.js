@@ -226,26 +226,29 @@ export function renderPixelFrame({
 
       let symSide = 0;
       let symSplit = false;
-      let stripProgress = pt.p;
+      let stripProgress = pt.kaleidoscopeProgress ?? pt.p;
       let evalIndex = globalIdx;
       if (symSettings?.enabled) {
         const sym = applySymmetry(nx, ny, symSettings, t);
         nx = sym.x; ny = sym.y;
         symSide = sym.side || 0;
         symSplit = !!sym.split;
-        stripProgress = Number.isFinite(sym.progress)
+        const symmetryProgress = Number.isFinite(sym.progress)
           ? sym.progress
           : progressFromSymmetryCoords(nx, ny, pt.p);
-        evalIndex = indexFromProgress(stripProgress, pixelCount);
+        if (!pt.hasKaleidoscope) {
+          stripProgress = symmetryProgress;
+        }
+        evalIndex = indexFromProgress(symmetryProgress, pixelCount);
       }
 
       let r = 0, g = 0, b = 0;
       if (stripFn) {
-        const colA = evalPixel(stripFn, evalIndex, nx, ny, stripT, stripTime, pixelCount, stripPalette, beat, beatSin, stripParams, s.id, stripProgress, bass, mid, hi);
+        const colA = evalPixel(stripFn, evalIndex, nx, ny, stripT, stripTime, pixelCount, stripPalette, beat, beatSin, stripParams, s.id, stripProgress, bass, mid, hi, pt);
         r = colA.r; g = colA.g; b = colA.b;
 
         if (fnB && blendAmount > 0) {
-          const colB = evalPixel(fnB, evalIndex, nx, ny, stripT, stripTime, pixelCount, paletteNorm, beat, beatSin, blendParams, s.id, stripProgress, bass, mid, hi);
+          const colB = evalPixel(fnB, evalIndex, nx, ny, stripT, stripTime, pixelCount, paletteNorm, beat, beatSin, blendParams, s.id, stripProgress, bass, mid, hi, pt);
           if (blendType === 'fade-black') {
             const a2 = blendAmount < 0.5 ? 1 - blendAmount * 2 : 0;
             const b2 = blendAmount > 0.5 ? (blendAmount - 0.5) * 2 : 0;

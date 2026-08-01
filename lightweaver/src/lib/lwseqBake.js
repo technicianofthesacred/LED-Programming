@@ -17,6 +17,7 @@ import {
   estimateLwseqBytes,
   toLwseqBytes,
 } from './standaloneController.js';
+import { normalizeProjectRenderStrips } from './renderGeometry.js';
 
 const MAX_BAKE_FPS = 24;
 const MAX_BAKE_DURATION_SECONDS = 15 * 60;
@@ -210,6 +211,12 @@ function sourceStrips(strips, hidden = {}) {
       speed: safeCoordinate(strip.speed ?? 1, `Strip ${strip.id} speed`),
       brightness: hidden?.[strip.id] ? 0 : safeCoordinate(strip.brightness ?? 1, `Strip ${strip.id} brightness`),
       hueShift: safeCoordinate(strip.hueShift ?? 0, `Strip ${strip.id} hue shift`),
+      ...(strip.kaleidoscope ? {
+        kaleidoscope: {
+          ...strip.kaleidoscope,
+          offsets: [...(strip.kaleidoscope.offsets || [])],
+        },
+      } : {}),
       pixels: pixels.map((pixel, pixelIndex) => ({
         x: safeCoordinate(pixel?.x, `Strip ${strip.id} pixel ${pixelIndex} x`),
         y: safeCoordinate(pixel?.y, `Strip ${strip.id} pixel ${pixelIndex} y`),
@@ -434,14 +441,7 @@ function audioBandsAt(audioLanes, time) {
 }
 
 function renderStrips(strips) {
-  return strips.map(strip => ({
-    id: strip.id,
-    speed: strip.speed,
-    brightness: strip.brightness,
-    hueShift: strip.hueShift,
-    patternId: null,
-    pts: strip.pixels.map(pixel => ({ x: pixel.x, y: pixel.y, p: pixel.p })),
-  }));
+  return normalizeProjectRenderStrips(strips).map(strip => ({ ...strip, patternId: null }));
 }
 
 function renderDirectFrame(prepared, time) {

@@ -6,6 +6,9 @@ import {
   pixelsFromPatchBoard,
   remapFrameToPatchBoard,
   toDmxCsv,
+  pixelsFromStrips,
+  toCSV,
+  toFastLED,
   toWLEDLedmap,
 } from './export.js';
 
@@ -32,6 +35,29 @@ test('pixelsFromPatchBoard follows physical patch order for ledmap export', () =
 
   assert.deepEqual(pixels.map(px => px.sourceLed), [4, 3, 2, null, null, 0, 1]);
   assert.equal(JSON.parse(toWLEDLedmap(pixels, { normalize: false })).n, 7);
+});
+
+test('WLED physical map output is byte-identical when only Kaleidoscope metadata changes', () => {
+  const pixels = strips[0].pixels.map((pixel, sourceLed) => ({ ...pixel, stripId: 'outer', sourceLed }));
+  const before = toWLEDLedmap(pixels, { normalize: false });
+  const withMetadata = strips.map(strip => ({
+    ...strip,
+    kaleidoscope: { enabled: true, pointCount: 2, startLed: 1, offsets: [0, 0] },
+  }));
+  assert.equal(withMetadata[0].pixels, strips[0].pixels);
+  assert.equal(toWLEDLedmap(pixels, { normalize: false }), before);
+  assert.doesNotMatch(before, /kaleidoscope|reflection/i);
+});
+
+test('coordinate-map JSON, CSV, and FastLED headers ignore Kaleidoscope metadata byte-for-byte', () => {
+  const plain = pixelsFromStrips(strips);
+  const mapped = pixelsFromStrips(strips.map(strip => ({
+    ...strip,
+    kaleidoscope: { enabled: true, pointCount: 2, startLed: 1, offsets: [0, 0] },
+  })));
+  assert.equal(toWLEDLedmap(mapped), toWLEDLedmap(plain));
+  assert.equal(toCSV(mapped), toCSV(plain));
+  assert.equal(toFastLED(mapped), toFastLED(plain));
 });
 
 test('remapFrameToPatchBoard emits frame colors in mapped order and black for off blocks', () => {

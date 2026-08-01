@@ -107,6 +107,7 @@ function makeInitialLayoutState(layout) {
       stripCountOverrides: layout.stripCountOverrides,
       stripDensities: layout.stripDensities,
       hidden: layout.hidden || {},
+      projectWarnings: layout.projectWarnings || [],
       svgText: layout.svgText ?? null,
       viewBox: layout.viewBox || '0 0 640 400',
       density: layout.density,
@@ -379,6 +380,7 @@ export function ProjectProvider({ children }) {
     viewBox,
     svgText,
     hidden,
+    projectWarnings,
     layers: layoutLayers,
     density: layoutDensity,
     pxPerMm: layoutPxPerMm,
@@ -429,6 +431,10 @@ export function ProjectProvider({ children }) {
     dispatchLayout({ type: 'layout/setWiring', wiring: result.wiring });
     return result;
   }, [wiring, strips]);
+  const updateStripKaleidoscope = useCallback((id, kaleidoscope, { recordHistory = true } = {}) => {
+    if (recordHistory) dispatchLayout({ type: 'layout/pushHistory' });
+    dispatchLayout(layoutActions.updateKaleidoscope(id, kaleidoscope));
+  }, []);
   const replaceLayoutGeometry = useCallback((nextStrips) => {
     const normalized = Array.isArray(nextStrips) ? nextStrips : [];
     dispatchLayout({
@@ -722,6 +728,7 @@ export function ProjectProvider({ children }) {
         viewBox: layout.viewBox || defaults.layout.viewBox,
         svgText: layout.svgText ?? null,
         hidden: layout.hidden || {},
+        projectWarnings: layout.projectWarnings || [],
         layers: layout.layers || [],
         density: layout.density || defaults.layout.density,
         pxPerMm: layout.pxPerMm || defaults.layout.pxPerMm,
@@ -845,7 +852,7 @@ export function ProjectProvider({ children }) {
       id: projectId,
       name: projectName,
       layout: {
-        strips, starterPending, viewBox, svgText, hidden,
+        strips, starterPending, viewBox, svgText, hidden, projectWarnings,
         layers: layoutLayers,
         density: layoutDensity,
         pxPerMm: layoutPxPerMm,
@@ -894,7 +901,7 @@ export function ProjectProvider({ children }) {
 
     return project;
   }, [
-    projectId, projectName, strips, starterPending, viewBox, svgText, hidden, patchBoard, wiring,
+    projectId, projectName, strips, starterPending, viewBox, svgText, hidden, projectWarnings, patchBoard, wiring,
     layoutLayers, layoutDensity, layoutPxPerMm, layoutEditCounts, layoutStripCountOverrides, layoutStripDensities, layoutLayerGroups, layoutLayerOrder,
     activePatternId, palette, masterSpeed, masterBrightness, masterSaturation,
     masterHueShift, gammaEnabled, gammaValue, patternParams, bpm, symSettings,
@@ -999,6 +1006,7 @@ export function ProjectProvider({ children }) {
       viewBox, setViewBox,
       svgText, setSvgText,
       hidden,  setHidden,
+      projectWarnings,
       layoutLayers,      setLayoutLayers,
       layoutDensity,     setLayoutDensity,
       layoutPxPerMm,     setLayoutPxPerMm,
@@ -1010,6 +1018,7 @@ export function ProjectProvider({ children }) {
       patchBoard,        setPatchBoard,
       updatePatchBoard,
       wiring, updateWiring, compiledWiring,
+      updateStripKaleidoscope,
       replaceLayoutGeometry,
       // Layout undo/redo (single shared snapshot stack)
       pushLayoutHistory, undoLayout, redoLayout,

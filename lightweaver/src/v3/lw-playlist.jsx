@@ -102,6 +102,7 @@ function realPatternShape(patternId) {
       projectName,
       strips,
       patchBoard,
+      compiledWiring,
       standaloneController,
       setStandaloneController,
       markCardLookConfirmed,
@@ -148,6 +149,7 @@ function realPatternShape(patternId) {
             projectRevision: projectLifecycle.editedRevision,
             strips,
             patchBoard: board,
+            compiledWiring,
             standaloneController,
           }),
           error: null,
@@ -155,7 +157,7 @@ function realPatternShape(patternId) {
       } catch (error) {
         return { runtimePackage: null, error };
       }
-    }, [projectId, projectName, projectLifecycle.editedRevision, strips, board, standaloneController]);
+    }, [projectId, projectName, projectLifecycle.editedRevision, strips, board, compiledWiring, standaloneController]);
     const runtimePackage = runtimeBuild.prepared?.runtimePackage || null;
     const hardwareConfigurationIssue = runtimeBuild.error
       ? String(runtimeBuild.error.message || runtimeBuild.error).replace('is already owned by an LED output or another control', 'is already used by an LED output or another control')

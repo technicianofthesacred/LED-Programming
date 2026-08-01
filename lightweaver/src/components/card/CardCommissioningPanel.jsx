@@ -606,6 +606,7 @@ export function CardCommissioningPanel({
         allowProjectChange: true,
         allowLayoutChange: true,
         commissioningFlowId: flow.flowId,
+        cardEvidence: freshStatus,
       });
       await recordCardRestorationResponse(flow, lease.id, mutation.fencingToken, response);
       const refreshedStatus = await readCardStatusEnvelope({

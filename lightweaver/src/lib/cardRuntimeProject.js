@@ -34,6 +34,10 @@ export function buildCardRuntimePackageFromProject({
   compiledWiring = null,
   standaloneController = {},
 } = {}) {
+  const usesKaleidoscope = strips.some(strip => strip?.kaleidoscope?.enabled === true);
+  if (usesKaleidoscope && !compiledWiring && !wiring) {
+    throw new Error('Kaleidoscope card setup requires current project wiring so its standalone mapping can be compiled safely.');
+  }
   const compiled = compiledWiring || (wiring ? compileWiring({ wiring, strips }) : null);
   if (compiled && !compiled.ok) throw new Error(compiled.errors.map(error => error.message).join(' '));
   const totalPixels = compiled?.totalPixels ?? totalPhysicalAddresses(patchBoard, strips);
@@ -82,6 +86,9 @@ export function buildCardRuntimePackageFromProject({
     customHue: visualLook.customHue,
     customSaturation: visualLook.customSaturation,
     customBreathe: visualLook.customBreathe,
+    breatheLowerPct: visualLook.breatheLowerPct,
+    breatheUpperPct: visualLook.breatheUpperPct,
+    breatheCycleSeconds: visualLook.breatheCycleSeconds,
     customDrift: visualLook.customDrift,
     ranges: [{ start: 0, count: resolvedPixels }],
   }];
@@ -134,6 +141,7 @@ export function buildCardRuntimePackageFromProject({
     looks,
     startupPatternId: looks[0]?.id || visualLook.patternId,
     zones: runtimeZones,
+    kaleidoscopeMappings: compiled?.kaleidoscopeMappings,
     syncZones: runtimeZones.length <= 1,
   });
 }
@@ -277,6 +285,9 @@ function applyLookFieldsToZone(zone, look) {
     customHue: look.customHue,
     customSaturation: look.customSaturation,
     customBreathe: look.customBreathe,
+    breatheLowerPct: look.breatheLowerPct,
+    breatheUpperPct: look.breatheUpperPct,
+    breatheCycleSeconds: look.breatheCycleSeconds,
     customDrift: look.customDrift,
   };
 }
@@ -292,6 +303,9 @@ function zoneLooksFromZones(zones = []) {
     customHue: zone.customHue,
     customSaturation: zone.customSaturation,
     customBreathe: zone.customBreathe,
+    breatheLowerPct: zone.breatheLowerPct,
+    breatheUpperPct: zone.breatheUpperPct,
+    breatheCycleSeconds: zone.breatheCycleSeconds,
     customDrift: zone.customDrift,
   }));
 }
@@ -313,6 +327,9 @@ function applyVisualLookDefaultsToZones(zones, patchBoard, visualLook) {
       customHue: hasExplicit(playback.customHue) ? zone.customHue : visualLook.customHue,
       customSaturation: hasExplicit(playback.customSaturation) ? zone.customSaturation : visualLook.customSaturation,
       customBreathe: hasExplicit(playback.customBreathe) ? zone.customBreathe : visualLook.customBreathe,
+      breatheLowerPct: hasExplicit(playback.breatheLowerPct) ? zone.breatheLowerPct : visualLook.breatheLowerPct,
+      breatheUpperPct: hasExplicit(playback.breatheUpperPct) ? zone.breatheUpperPct : visualLook.breatheUpperPct,
+      breatheCycleSeconds: hasExplicit(playback.breatheCycleSeconds) ? zone.breatheCycleSeconds : visualLook.breatheCycleSeconds,
       customDrift: hasExplicit(playback.customDrift) ? zone.customDrift : visualLook.customDrift,
     };
   });

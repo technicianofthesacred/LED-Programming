@@ -67,9 +67,10 @@ return { r: v*255, g: v*255, b: v*255 };`,
     preview: 'radial-gradient(ellipse,#06d6a0 0%,#036644 50%,#010e09 100%)',
     code:
 `// @param hue float 0.45 0.0 1.0
-// @param rate float 0.5 0.1 2.0
-// Smooth sine breathe
-const v = pow((sin(t * params.rate * TAU) * 0.5 + 0.5), 2);
+// @param cycleSeconds float 9 4 30
+// Gentle cosine breathe with no blackout.
+const phase = ((t % params.cycleSeconds) + params.cycleSeconds) % params.cycleSeconds / params.cycleSeconds;
+const v = lerp(0.85, 1.0, 0.5 - 0.5 * cos(phase * TAU));
 return hsv(params.hue, 0.9, v);`,
   },
   {

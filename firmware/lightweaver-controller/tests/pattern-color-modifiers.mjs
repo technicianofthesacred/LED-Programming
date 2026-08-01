@@ -12,8 +12,33 @@ assert.match(source, /void applyGlobalColorModifiers\(/);
 assert.match(source, /rgb2hsv_approximate/);
 assert.match(source, /int16_t\(mods\.customHue\) - int16_t\(LW_DEFAULT_CUSTOM_HUE\)/);
 assert.match(source, /hsv\.saturation = uint8_t\(sat > 255 \? 255 : sat\)/);
-assert.match(source, /applyGlobalColorModifiers\(leds, totalPixels, t, mods\);/);
-assert.match(source, /applyGlobalColorModifiers\(leds, totalPixels, millis\(\), mods\);/);
+assert.match(source, /resolveBreatheScale\(now, mods\.breatheLowerPct, mods\.breatheUpperPct, mods\.breatheCycleSeconds\)/);
+assert.match(source, /applyGlobalColorModifiers\(leds, totalPixels, now, mods\);/);
+assert.doesNotMatch(source, /applyGlobalColorModifiers\(leds, totalPixels, millis\(\), mods\);/);
+assert.doesNotMatch(source, /beatsin8\(5, 38, 150\)/);
+assert.match(source, /const uint8_t breatheLevel = preset == "breathe"\s*\? resolveBreatheScale\(t, 85, 100, 9\)/,
+  'the built-in Breathe pattern must retain the speed-scaled pattern clock');
+assert.match(source, /const uint8_t calmLevel = preset == "calm"\s*\? resolveBreatheScale\(t, 15, 59, 12\)/,
+  'Calm should share one speed-scaled frame-global envelope');
+
+const proceduralStart = source.indexOf('bool renderProceduralPattern(');
+const proceduralEnd = source.indexOf('\nbool renderPresetPattern(', proceduralStart);
+const procedural = source.slice(proceduralStart, proceduralEnd);
+const pixelLoopStart = procedural.indexOf('for (uint16_t i = 0; i < totalPixels; i++)');
+assert.notEqual(pixelLoopStart, -1);
+assert.doesNotMatch(procedural.slice(pixelLoopStart), /resolveBreatheScale\(/,
+  'frame-global Breathe and Calm envelopes must not recompute cosine per pixel');
+
+const customColorStart = source.indexOf('if (preset == "custom-color")');
+const customColorEnd = source.indexOf('\n  } else {\n    for (uint16_t i = 0;', customColorStart);
+assert.notEqual(customColorStart, -1);
+assert.notEqual(customColorEnd, -1);
+const customColor = source.slice(customColorStart, customColorEnd);
+assert.doesNotMatch(customColor, /beatsin8|speedBpm/, 'custom color must not keep the legacy speed-scaled breathe path');
+assert.doesNotMatch(customColor, /return true/, 'custom color must not return before the shared canonical modifier post-pass');
+assert.match(source.slice(customColorStart, source.indexOf('\n  return true;', customColorEnd)),
+  /applyGlobalColorModifiers\(leds, totalPixels, now, mods\);/,
+  'custom color must flow through the canonical wall-clock breathe envelope and its configured bounds');
 assert.match(source, /preset == "test-white"/, 'firmware preset renderer should support a white strip test');
 assert.match(header, /bool\s+isSupportedCompiledPattern\(const String& patternId\)/, 'compiled pattern support must be queryable without rendering');
 assert.match(source, /bool\s+isSupportedProceduralPattern\(/, 'procedural support must have an explicit resolver');

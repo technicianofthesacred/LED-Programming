@@ -29,6 +29,7 @@ function preparedForProject(input) {
     projectRevision: 0,
     strips: project.layout.strips,
     patchBoard: project.layout.patchBoard,
+    wiring: project.layout.wiring,
     standaloneController: project.devices.standaloneController,
   });
   return prepareCardStoragePayload(prepared.runtimePackage);

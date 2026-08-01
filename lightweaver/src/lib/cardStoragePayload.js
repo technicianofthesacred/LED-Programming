@@ -6,7 +6,7 @@ export class CardConfigCapacityError extends Error {
   constructor(bytes, maxBytes) {
     super(
       `Card configuration is ${bytes} bytes, exceeding the ${maxBytes}-byte flash storage limit. ` +
-      'Remove playlist looks or simplify combo zones, then try again.',
+      'Reduce playlist looks, combo zones, or Kaleidoscope reflection points, then try again.',
     );
     this.name = 'CardConfigCapacityError';
     this.reason = 'config-too-large';
@@ -35,7 +35,24 @@ export function compactCardStorageConfig(runtimePackageOrConfig = {}) {
     delete config.controls.encoder.patternCycleIds;
   }
 
+  if (Array.isArray(config.kaleidoscopeMappings)) {
+    config.kaleidoscopeMappings = config.kaleidoscopeMappings.map(compactKaleidoscopeMapping);
+  }
+
   return config;
+}
+
+function compactKaleidoscopeMapping(mapping) {
+  if (!isObject(mapping)) return cloneValue(mapping);
+  return {
+    id: cloneValue(mapping.id),
+    zoneId: cloneValue(mapping.zoneId),
+    pixelCount: cloneValue(mapping.pixelCount),
+    pointCount: cloneValue(mapping.pointCount),
+    startLed: cloneValue(mapping.startLed),
+    offsets: cloneValue(mapping.offsets),
+    spans: cloneValue(mapping.spans),
+  };
 }
 
 export function prepareCardStoragePayload(
@@ -79,6 +96,9 @@ function compactZone(zone) {
     customHue: 32,
     customSaturation: 230,
     customBreathe: false,
+    breatheLowerPct: 85,
+    breatheUpperPct: 100,
+    breatheCycleSeconds: 9,
     customDrift: false,
     blackout: false,
   };

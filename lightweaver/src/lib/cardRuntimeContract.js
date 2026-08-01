@@ -1,6 +1,13 @@
 import { CARD_PATTERN_BANK } from './cardPatternBank.js';
 import { CARD_HARDWARE_CONTRACT } from './cardHardwareContract.js';
 import { chainPixelOffsets, chainRowIds } from './patchBoard.js';
+import { normalizeBreatheSettings } from './breatheEnvelope.js';
+import {
+  CARD_KALEIDOSCOPE_MAX_AGGREGATE_OFFSETS,
+  CARD_KALEIDOSCOPE_MAX_MAPPINGS,
+  CARD_KALEIDOSCOPE_MAX_SPANS_PER_MAPPING,
+} from './cardKaleidoscope.js';
+import { validateKaleidoscope } from './kaleidoscope.js';
 
 export const CARD_RUNTIME_MODES = ['factory-flash', 'website-flash', 'sd-sequence', 'live-host'];
 export const CARD_RUNTIME_MAX_ZONES = CARD_HARDWARE_CONTRACT.maxZones;
@@ -10,6 +17,9 @@ export const CARD_PRODUCTION_JOB_DIGEST_LENGTH = 64;
 export const DEFAULT_PRODUCTION_MAX_MILLIAMPS = 1500;
 export const MIN_PRODUCTION_MAX_MILLIAMPS = 100;
 export const MAX_PRODUCTION_MAX_MILLIAMPS = 20000;
+export const CARD_KALEIDOSCOPE_REFLECTION_POINTS_VERSION = 1;
+const CARD_KALEIDOSCOPE_MAPPING_KEYS = ['id', 'zoneId', 'pixelCount', 'pointCount', 'startLed', 'offsets', 'spans'];
+const CARD_KALEIDOSCOPE_SPAN_KEYS = ['start', 'count', 'sourceStart', 'sourceStep'];
 
 export const CARD_HARDWARE_CAPABILITIES = Object.freeze({
   maxPixels: CARD_HARDWARE_CONTRACT.maxPixels,
@@ -137,6 +147,11 @@ export function normalizeCardRuntimeConfig(config = {}) {
   CARD_HARDWARE_CAPABILITIES.assertSupported({ ...config, led, controls });
   const totalPixels = led.pixels;
   const zones = normalizeZones(config.zones, totalPixels);
+  const kaleidoscopeMappings = normalizeCardKaleidoscopeMappings(
+    config.kaleidoscopeMappings,
+    totalPixels,
+    zones,
+  );
   const patterns = normalizePatterns(config.patterns);
   const looks = normalizeLooks(config.looks, patterns);
   const lookIds = looks.map(look => look.id);
@@ -162,8 +177,149 @@ export function normalizeCardRuntimeConfig(config = {}) {
     looks,
     startupPatternId: sanitizeId(config.startupPatternId || config.startupLookId || patternIds[0] || DEFAULT_CARD_PATTERN_BANK[0].id),
     zones,
+    ...(Object.hasOwn(config, 'kaleidoscopeMappings') && kaleidoscopeMappings.length
+      ? { kaleidoscopeMappings }
+      : {}),
     syncZones: config.syncZones === undefined ? true : Boolean(config.syncZones),
   };
+}
+
+export function normalizeCardKaleidoscopeMappings(value, totalPixels, knownZonesInput) {
+  if (value === undefined || (Array.isArray(value) && value.length === 0)) return [];
+  if (!Array.isArray(value)) throw new RangeError('Kaleidoscope mappings must be an array.');
+  if (value.length > CARD_KALEIDOSCOPE_MAX_MAPPINGS) {
+    throw new RangeError(`Kaleidoscope mappings support at most ${CARD_KALEIDOSCOPE_MAX_MAPPINGS} entries.`);
+  }
+
+  const globalPixelCount = exactInteger(totalPixels, 'Kaleidoscope totalPixels', 1);
+  const knownZones = knownZonesInput === undefined
+    ? null
+    : new Map(knownZonesInput.map(zone => (
+        typeof zone === 'string'
+          ? [zone, null]
+          : [zone?.id, Array.isArray(zone?.ranges) ? zone.ranges : []]
+      )));
+  const ids = new Set();
+  const aggregateGlobalCoverage = new Set();
+  let aggregateOffsets = 0;
+  const normalized = value.map((entry, index) => {
+    const label = `Kaleidoscope mapping entry ${index + 1}`;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new RangeError(`${label} must be an object.`);
+    }
+    rejectUnsupportedKeys(entry, CARD_KALEIDOSCOPE_MAPPING_KEYS, label);
+    const id = exactMappingId(entry.id, `${label} id`);
+    if (ids.has(id)) throw new RangeError(`${label} id must be unique.`);
+    ids.add(id);
+    const zoneId = exactMappingId(entry.zoneId, `${label} zoneId`);
+    if (knownZones && !knownZones.has(zoneId)) {
+      throw new RangeError(`${label} zoneId must name a known runtime zone.`);
+    }
+    const zoneRanges = knownZones?.get(zoneId) ?? null;
+    const pixelCount = exactInteger(entry.pixelCount, `${label} pixelCount`, 2, globalPixelCount);
+    const pointCount = exactInteger(entry.pointCount, `${label} pointCount`, 2, pixelCount);
+    const startLed = exactInteger(entry.startLed, `${label} startLed`, 0, pixelCount - 1);
+    if (!Array.isArray(entry.offsets) || entry.offsets.length !== pointCount) {
+      throw new RangeError(`${label} offsets must contain exactly pointCount entries.`);
+    }
+    const offsets = entry.offsets.map((offset, offsetIndex) => exactInteger(
+      offset,
+      `${label} offsets[${offsetIndex}]`,
+      -(pixelCount - 1),
+      pixelCount - 1,
+    ));
+    aggregateOffsets += offsets.length;
+
+    const reflectionValidation = validateKaleidoscope({
+      enabled: true,
+      pointCount,
+      startLed,
+      offsets,
+    }, pixelCount);
+    if (!reflectionValidation.ok) {
+      throw new RangeError(`${label} offsets are invalid: ${reflectionValidation.errors[0]?.message || 'invalid reflection points'}`);
+    }
+
+    if (!Array.isArray(entry.spans) || entry.spans.length === 0) {
+      throw new RangeError(`${label} spans must be a non-empty array.`);
+    }
+    if (entry.spans.length > CARD_KALEIDOSCOPE_MAX_SPANS_PER_MAPPING) {
+      throw new RangeError(`${label} spans support at most ${CARD_KALEIDOSCOPE_MAX_SPANS_PER_MAPPING} entries.`);
+    }
+    const sourceCoverage = Array(pixelCount).fill(0);
+    const globalCoverage = new Set();
+    const spans = entry.spans.map((span, spanIndex) => {
+      const spanLabel = `${label} spans[${spanIndex}]`;
+      if (!span || typeof span !== 'object' || Array.isArray(span)) {
+        throw new RangeError(`${spanLabel} must be an object.`);
+      }
+      rejectUnsupportedKeys(span, CARD_KALEIDOSCOPE_SPAN_KEYS, spanLabel);
+      const start = exactInteger(span.start, `${spanLabel} start`, 0, globalPixelCount - 1);
+      const count = exactInteger(span.count, `${spanLabel} count`, 1, globalPixelCount);
+      if (start + count > globalPixelCount) {
+        throw new RangeError(`${spanLabel} exceeds the global pixel bounds.`);
+      }
+      const sourceStart = exactInteger(span.sourceStart, `${spanLabel} sourceStart`, 0, pixelCount - 1);
+      const sourceStep = exactInteger(span.sourceStep, `${spanLabel} sourceStep`, -1, 1);
+      if (sourceStep !== -1 && sourceStep !== 1) {
+        throw new RangeError(`${spanLabel} sourceStep must equal 1 or -1.`);
+      }
+      const sourceEnd = sourceStart + ((count - 1) * sourceStep);
+      if (sourceEnd < 0 || sourceEnd >= pixelCount) {
+        throw new RangeError(`${spanLabel} exceeds the source pixel bounds.`);
+      }
+      for (let offset = 0; offset < count; offset += 1) {
+        const sourceLed = sourceStart + (offset * sourceStep);
+        sourceCoverage[sourceLed] += 1;
+        const globalLed = start + offset;
+        if (globalCoverage.has(globalLed)) {
+          throw new RangeError(`${label} spans overlap in global pixel coverage.`);
+        }
+        if (aggregateGlobalCoverage.has(globalLed)) {
+          throw new RangeError(`${label} spans overlap global pixels from another mapping.`);
+        }
+        if (zoneRanges && !zoneRanges.some(range => (
+          globalLed >= range.start && globalLed < range.start + range.count
+        ))) {
+          throw new RangeError(`${spanLabel} is outside the declared zone ranges.`);
+        }
+        globalCoverage.add(globalLed);
+        aggregateGlobalCoverage.add(globalLed);
+      }
+      return { start, count, sourceStart, sourceStep };
+    });
+    if (sourceCoverage.some(count => count !== 1)) {
+      throw new RangeError(`${label} spans must provide exact source coverage.`);
+    }
+
+    return { id, zoneId, pixelCount, pointCount, startLed, offsets, spans };
+  });
+
+  if (aggregateOffsets > CARD_KALEIDOSCOPE_MAX_AGGREGATE_OFFSETS) {
+    throw new RangeError(
+      `Kaleidoscope mappings exceed the aggregate ${CARD_KALEIDOSCOPE_MAX_AGGREGATE_OFFSETS}-offset limit.`,
+    );
+  }
+  return normalized;
+}
+
+function exactInteger(value, label, min, max = Number.MAX_SAFE_INTEGER) {
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new RangeError(`${label} must be an integer from ${min} through ${max}.`);
+  }
+  return value;
+}
+
+function exactMappingId(value, label) {
+  if (typeof value !== 'string' || !value.trim() || value.length > 128) {
+    throw new RangeError(`${label} must be a non-empty string of at most 128 characters.`);
+  }
+  return value;
+}
+
+function rejectUnsupportedKeys(value, allowed, label) {
+  const unsupported = Object.keys(value).find(key => !allowed.includes(key));
+  if (unsupported) throw new RangeError(`${label} field ${unsupported} is unsupported.`);
 }
 
 // Translate a designer-side PatchBoard (or raw zone list) into the firmware's
@@ -191,6 +347,7 @@ export function patchBoardToZones(patchBoard, strips = []) {
       customHue: clampInt(playback.customHue, 32, 0, 255),
       customSaturation: clampInt(playback.customSaturation, 230, 0, 255),
       customBreathe: Boolean(playback.customBreathe),
+      ...normalizeBreatheSettings(playback),
       customDrift: Boolean(playback.customDrift),
       reversed: range.reversed,
       ranges: [{ start, count: range.count }],
@@ -213,6 +370,7 @@ function normalizeZones(zones, totalPixels) {
       customHue: clampInt(z.customHue, 32, 0, 255),
       customSaturation: clampInt(z.customSaturation, 230, 0, 255),
       customBreathe: Boolean(z.customBreathe),
+      ...normalizeBreatheSettings(z),
       customDrift: Boolean(z.customDrift),
       ranges: Array.isArray(z.ranges) && z.ranges.length
         ? z.ranges.slice(0, CARD_HARDWARE_CONTRACT.maxRangesPerZone).map(r => ({
@@ -244,6 +402,7 @@ export function buildCardRuntimeConfig({
   looks = [],
   startupPatternId = '',
   zones,
+  kaleidoscopeMappings,
   syncZones,
 } = {}) {
   return normalizeCardRuntimeConfig({
@@ -260,6 +419,7 @@ export function buildCardRuntimeConfig({
     looks,
     startupPatternId,
     zones,
+    kaleidoscopeMappings,
     syncZones,
   });
 }
@@ -447,6 +607,7 @@ function normalizeLookZones(zones = []) {
     customHue: clampInt(zone.customHue, 32, 0, 255),
     customSaturation: clampInt(zone.customSaturation, 230, 0, 255),
     customBreathe: Boolean(zone.customBreathe),
+    ...normalizeBreatheSettings(zone),
     customDrift: Boolean(zone.customDrift),
   })).filter(zone => zone.id && zone.patternId);
 }

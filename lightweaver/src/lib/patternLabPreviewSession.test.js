@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { createPatternLabPreviewSession } from './patternLabPreviewSession.js';
 
-function harness({ snapshot = { syncZones: false, zones: [{ id: 'outer', patternId: 'ocean', brightness: 0.4, driftHueMin: 9, driftHueMax: 177 }] }, snapshotError = null } = {}) {
+function harness({ snapshot = { syncZones: false, zones: [{ id: 'outer', patternId: 'ocean', brightness: 0.4, customBreathe: true, breatheLowerPct: 73, breatheUpperPct: 92, breatheCycleSeconds: 16, driftHueMin: 9, driftHueMax: 177 }] }, snapshotError = null } = {}) {
   const calls = [];
   let health = null;
   let active = false;
@@ -55,7 +55,9 @@ test('stop cancels streaming before restoring every snapshotted zone', async () 
   const restoreIndex = calls.findIndex(call => Array.isArray(call) && call[0] === 'restore:look');
   assert.ok(stopIndex >= 0 && restoreIndex > stopIndex);
   assert.deepEqual(calls[restoreIndex][1], {
-    patternId: 'ocean', brightness: 0.4, driftHueMin: 9, driftHueMax: 177,
+    patternId: 'ocean', brightness: 0.4, customBreathe: true,
+    breatheLowerPct: 73, breatheUpperPct: 92, breatheCycleSeconds: 16,
+    driftHueMin: 9, driftHueMax: 177,
     zone: 'outer', syncZones: false,
   });
   assert.equal(session.status().state, 'restored');

@@ -187,6 +187,38 @@ Physical ESP32-S3 gate:
 See [the Pattern Lab operator guide](pattern-lab-user-guide.md) and
 [algorithm provenance](pattern-lab-algorithm-provenance.md).
 
+## Kaleidoscope standalone acceptance — 2026-08-01
+
+Automated contract evidence from the integrated source:
+
+| Source pixels / reflection points | Serialized config bytes | 3968-byte limit |
+| --- | ---: | --- |
+| 400 / 4 | 1012 | Pass |
+| 400 / 6 | 1016 | Pass |
+| 400 / 8 | 1020 | Pass |
+| 453 / 4 | 1012 | Pass |
+| 453 / 6 | 1016 | Pass |
+| 453 / 8 | 1020 | Pass |
+
+- Firmware build identity: local development build; no signed release ID yet.
+- ESP32-S3 build: pass; RAM 198232 / 327680 bytes (60.5%), flash
+  1216117 / 6553600 bytes (18.6%).
+- Native derivation/sampling; host-rendered `aurora`, `rainbow`, `wave`, and
+  native-recipe goldens; strict no-wrap/no-overlap storage rejection before
+  candidate writes; exact mapping read-back; legacy omission; fresh-evidence
+  capability gates; and streamed/sequence buffer isolation: pass.
+- Physical card ID: **not run**.
+- Five-minute mapped standalone minimum FPS: **not run** (must be at least 28).
+- Physical 400–453-pixel 4/6/8-point calibration, start shift, one-LED nudge,
+  reversal, seam, split, inactive gap, second output, disconnected playback,
+  and exact reconnect read-back: **not run**.
+- Old-firmware standalone-install rejection with transient RGB streaming still
+  available: **not run**.
+
+Do not treat the automated results as physical acceptance. Record the exact
+card ID, signed firmware build ID, measured minimum FPS, and pass/fail for every
+physical case above before shipping a Kaleidoscope installation.
+
 ## Current limiter
 
 As of 2026-07-21, the USB byte-order and ESP32-S3 RTC-watchdog restart fixes are

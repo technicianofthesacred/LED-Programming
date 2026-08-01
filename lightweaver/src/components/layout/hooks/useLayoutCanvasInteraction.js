@@ -25,6 +25,7 @@ import {
 } from '../../../lib/layoutGeometry.js';
 import { isClosedPathData } from '../../../lib/pathClosure.js';
 import { useProject } from '../../../state/ProjectContext.jsx';
+import { normalizeProjectRenderStrips } from '../../../lib/renderGeometry.js';
 
 // Draw | Wire — deep-linked via `#screen=layout&mode=<x>`.
 const LAYOUT_MODES = ['draw', 'wire'];
@@ -584,21 +585,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
 
   const layoutPatternFrame = useMemo(() => {
     if (!strips.length) return new Map();
-    const frameStrips = strips
-      .filter(s => !hidden[s.id])
-      .map(s => ({
-        id: s.id,
-        patternId: s.patternId || null,
-        speed: s.speed,
-        brightness: s.brightness,
-        hueShift: s.hueShift,
-        pts: (s.pixels || []).map((px, i) => ({
-          x: px.x,
-          y: px.y,
-          p: (s.pixels || []).length > 1 ? i / ((s.pixels || []).length - 1) : 0.5,
-          i,
-        })),
-      }));
+    const frameStrips = normalizeProjectRenderStrips(strips, { hidden });
     if (!frameStrips.length) return new Map();
 
     const perStripFns = new Map();

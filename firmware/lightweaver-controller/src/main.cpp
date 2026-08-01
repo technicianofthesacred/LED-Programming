@@ -14,6 +14,7 @@
 #include "LightweaverFrameSource.h"
 #include "LightweaverOutputPolicy.h"
 #include "LightweaverSequenceActivationPolicy.h"
+#include "LightweaverSequencePlayback.h"
 #include "LightweaverWledRealtime.h"
 #include "LightweaverArtnet.h"
 #include "LightweaverWledWebSocket.h"
@@ -76,6 +77,8 @@ LookConfig looks[LW_MAX_LOOKS];
 
 RuntimeConfig runtimeConfig;
 LightweaverColorPipeline outputColorPipeline;
+KaleidoscopePixelLookup kaleidoscopePixelLookup[LW_MAX_PIXELS];
+int8_t kaleidoscopeMappingZoneIndex[LW_MAX_KALEIDOSCOPE_MAPPINGS] = {};
 
 String pieceName = "Lightweaver";
 String runtimeMode = "sequence";
@@ -175,11 +178,15 @@ String recoveryPatternId = "warm-white";
 uint8_t customHue = 32;          // 0..255 (FastLED hue space)
 uint8_t customSaturation = 230;  // 0..255
 bool customBreathe = false;
+uint8_t breatheLowerPct = 85;
+uint8_t breatheUpperPct = 100;
+uint8_t breatheCycleSeconds = 9;
 bool customDrift = false;
 uint8_t driftHueMin = 0;
 uint8_t driftHueMax = 255;
 
 void applyRuntimeConfig(const RuntimeConfig& config);
+void rebuildKaleidoscopePixelLookup(const RuntimeConfig& config);
 bool loadProfile();
 bool setupLedOutputs();
 bool setupFactoryBeaconOutputs();
@@ -379,6 +386,15 @@ void loop() {
   // overwrite the recovery frame before the user sees it.
   recoveryHoldActive = int32_t(recoveryHoldUntilMs - millis()) > 0;
 
+  // Every restart transition clears the physical LEDs. Keep subsequent loop
+  // ticks dark too: config saves may replace RuntimeConfig while a browser is
+  // still deciding whether it can reboot the card, and no old sequence or
+  // stream may render against that newly accepted state.
+  if (restartTransitionPending) {
+    delay(10);
+    return;
+  }
+
   if (safeDiscoveryMode) {
     showSafeDiscoveryFrame();
     delay(10);
@@ -475,6 +491,28 @@ void applyRuntimeConfig(const RuntimeConfig& config) {
   lookCount = config.lookCount;
   for (uint8_t i = 0; i < lookCount; i++) {
     looks[i] = config.looks[i];
+  }
+  rebuildKaleidoscopePixelLookup(config);
+}
+
+void rebuildKaleidoscopePixelLookup(const RuntimeConfig& config) {
+  for (uint8_t mappingIndex = 0;
+       mappingIndex < LW_MAX_KALEIDOSCOPE_MAPPINGS; mappingIndex++) {
+    kaleidoscopeMappingZoneIndex[mappingIndex] = -1;
+  }
+  if (!replaceKaleidoscopePixelLookup(
+          kaleidoscopePixelLookup, totalPixels, config.kaleidoscopeMappings,
+          config.kaleidoscopeMappingCount)) return;
+  for (uint8_t mappingIndex = 0;
+       mappingIndex < config.kaleidoscopeMappingCount; mappingIndex++) {
+    const KaleidoscopeMappingConfig& mapping =
+        config.kaleidoscopeMappings[mappingIndex];
+    for (uint8_t zoneIndex = 0; zoneIndex < config.zoneCount; zoneIndex++) {
+      if (config.zones[zoneIndex].id == mapping.zoneId) {
+        kaleidoscopeMappingZoneIndex[mappingIndex] = static_cast<int8_t>(zoneIndex);
+        break;
+      }
+    }
   }
 }
 
@@ -977,6 +1015,9 @@ void applyLookZoneToRuntimeZone(ZoneConfig& zone, const LookZoneConfig& lookZone
   zone.customHue = lookZone.customHue;
   zone.customSaturation = lookZone.customSaturation;
   zone.customBreathe = lookZone.customBreathe;
+  zone.breatheLowerPct = lookZone.breatheLowerPct;
+  zone.breatheUpperPct = lookZone.breatheUpperPct;
+  zone.breatheCycleSeconds = lookZone.breatheCycleSeconds;
   zone.customDrift = lookZone.customDrift;
   zone.blackout = lookZone.blackout;
 }
@@ -1055,7 +1096,49 @@ bool isLoadedLookRenderable(const LookConfig& look, bool zoneTargeted) {
   return false;
 }
 
-bool renderZone(const ZoneConfig& zone, uint32_t now) {
+KaleidoscopeSample sampleKaleidoscope(
+    const KaleidoscopeMappingConfig* mapping, uint16_t sourceLed) {
+  if (!mapping || mapping->pointPoolStart + mapping->pointCount >
+          runtimeConfig.kaleidoscopePointPoolCount) {
+    return KaleidoscopeSample{};
+  }
+  return ::sampleKaleidoscope(
+      mapping->pixelCount,
+      runtimeConfig.kaleidoscopeOrderedPoints + mapping->pointPoolStart,
+      mapping->pointCount,
+      sourceLed);
+}
+
+bool renderZoneSlice(const ZoneConfig& zone, const LookConfig* look,
+                     const PatternModifiers& mods, uint16_t start,
+                     uint16_t count, uint32_t now,
+                     const PatternCoordinateContext* context = nullptr) {
+  if (count == 0 || start + count > totalPixels) return false;
+  CRGB* zoneLeds = leds + start;
+  if (zone.blackout) {
+    fill_solid(zoneLeds, count, CRGB::Black);
+    return true;
+  }
+
+  bool rendered = false;
+  if (!look) {
+    rendered = renderProceduralPattern(zone.patternId, zoneLeds, count, now, mods, context);
+    if (!rendered) rendered = renderPresetPattern(zone.patternId, zoneLeds, count, now, mods);
+  } else if (look->mode == "procedural") {
+    rendered = renderProceduralPattern(look->preset, zoneLeds, count, now, mods, context);
+  } else if (look->mode == "preset") {
+    rendered = renderPresetPattern(look->preset, zoneLeds, count, now, mods);
+  }
+  if (!rendered) return false;
+
+  const uint8_t scale = uint8_t(constrain(int(zone.brightness * 255.0f), 0, 255));
+  if (scale < 255) {
+    for (uint16_t pixel = 0; pixel < count; pixel++) zoneLeds[pixel].nscale8(scale);
+  }
+  return true;
+}
+
+bool renderZone(const ZoneConfig& zone, uint8_t zoneIndex, uint32_t now) {
   if (zone.rangeCount == 0) return false;
   const LookConfig* look = isSupportedCompiledPattern(zone.patternId) ? nullptr : findLookById(zone.patternId);
 
@@ -1065,50 +1148,64 @@ bool renderZone(const ZoneConfig& zone, uint32_t now) {
   mods.customHue = zone.customHue;
   mods.customSaturation = zone.customSaturation;
   mods.customBreathe = zone.customBreathe;
+  mods.breatheLowerPct = zone.breatheLowerPct;
+  mods.breatheUpperPct = zone.breatheUpperPct;
+  mods.breatheCycleSeconds = zone.breatheCycleSeconds;
   mods.customDrift = zone.customDrift;
   mods.driftHueMin = zone.driftHueMin;
   mods.driftHueMax = zone.driftHueMax;
 
-  // Render every range the zone declares. Storage parses up to
-  // LW_MAX_RANGES_PER_ZONE ranges and /api/zones reports them all, so split
-  // zones must not silently leave their later ranges dark. Each range runs
-  // the pattern from its own pixel 0 — visually each segment of a split zone
-  // breathes/waves in step rather than continuing one long strip.
+  // Traverse each range once. The bounded lookup was built when the runtime
+  // config was applied, so frame rendering performs no mapping scans or zone
+  // String comparisons per pixel.
   bool any = false;
   for (uint8_t r = 0; r < zone.rangeCount; r++) {
     const PixelRange& range = zone.ranges[r];
     if (range.count == 0) continue;
     if (range.start + range.count > totalPixels) continue;
+    const uint16_t end = static_cast<uint16_t>(range.start + range.count);
+    uint16_t cursor = range.start;
+    while (cursor < end) {
+      const KaleidoscopePixelLookup& first = kaleidoscopePixelLookup[cursor];
+      const bool mapped = first.mappingIndex >= 0 &&
+          kaleidoscopeMappingZoneIndex[first.mappingIndex] == zoneIndex;
+      const uint16_t runStart = cursor;
+      if (!mapped) {
+        do {
+          cursor++;
+          if (cursor >= end) break;
+          const KaleidoscopePixelLookup& next = kaleidoscopePixelLookup[cursor];
+          if (next.mappingIndex >= 0 &&
+              kaleidoscopeMappingZoneIndex[next.mappingIndex] == zoneIndex) break;
+        } while (true);
+        if (renderZoneSlice(zone, look, mods, runStart,
+                            static_cast<uint16_t>(cursor - runStart), now)) any = true;
+        continue;
+      }
 
-    CRGB* zoneLeds = leds + range.start;
-    uint16_t zonePixels = range.count;
-
-    if (zone.blackout) {
-      fill_solid(zoneLeds, zonePixels, CRGB::Black);
-      any = true;
-      continue;
+      const uint8_t mappingIndex = static_cast<uint8_t>(first.mappingIndex);
+      const int8_t sourceStep = first.sourceStep;
+      uint16_t previousSource = first.sourceLed;
+      cursor++;
+      while (cursor < end) {
+        const KaleidoscopePixelLookup& next = kaleidoscopePixelLookup[cursor];
+        const int32_t expectedSource =
+            static_cast<int32_t>(previousSource) + sourceStep;
+        if (next.mappingIndex != first.mappingIndex || next.sourceStep != sourceStep ||
+            next.sourceLed != expectedSource) break;
+        previousSource = next.sourceLed;
+        cursor++;
+      }
+      const KaleidoscopeMappingConfig& mapping =
+          runtimeConfig.kaleidoscopeMappings[mappingIndex];
+      PatternCoordinateContext context;
+      context.sourcePixelCount = mapping.pixelCount;
+      context.sourceStart = first.sourceLed;
+      context.sourceStep = sourceStep;
+      context.kaleidoscope = &mapping;
+      if (renderZoneSlice(zone, look, mods, runStart,
+                          static_cast<uint16_t>(cursor - runStart), now, &context)) any = true;
     }
-
-    bool rendered = false;
-    if (!look) {
-      rendered = renderProceduralPattern(zone.patternId, zoneLeds, zonePixels, now, mods);
-      if (!rendered) rendered = renderPresetPattern(zone.patternId, zoneLeds, zonePixels, mods);
-    } else if (look->mode == "procedural") {
-      rendered = renderProceduralPattern(look->preset, zoneLeds, zonePixels, now, mods);
-    } else if (look->mode == "preset") {
-      rendered = renderPresetPattern(look->preset, zoneLeds, zonePixels, mods);
-    }
-    if (!rendered) continue;
-
-    // Per-zone brightness scaling. The global FastLED.setBrightness() still
-    // applies on top of this — it represents the legacy "master" knob plus
-    // the brightnessLimit safety ceiling — so per-zone brightness multiplies
-    // into the final value.
-    uint8_t scale = uint8_t(constrain(int(zone.brightness * 255.0f), 0, 255));
-    if (scale < 255) {
-      for (uint16_t i = 0; i < zonePixels; i++) zoneLeds[i].nscale8(scale);
-    }
-    any = true;
   }
   return any;
 }
@@ -1130,7 +1227,7 @@ bool renderCurrentLook(bool force) {
 
   bool anyRendered = false;
   for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
-    if (renderZone(runtimeConfig.zones[i], now)) anyRendered = true;
+    if (renderZone(runtimeConfig.zones[i], i, now)) anyRendered = true;
   }
   return anyRendered;
 }
@@ -1165,12 +1262,7 @@ bool renderSequenceFrame(bool force) {
 }
 
 void applySequenceFrameBufferToLeds() {
-  uint32_t cursor = 0;
-  for (uint16_t i = 0; i < totalPixels; i++) {
-    leds[i].r = frameBuffer[cursor++];
-    leds[i].g = frameBuffer[cursor++];
-    leds[i].b = frameBuffer[cursor++];
-  }
+  applySequenceRgbFrame(leds, totalPixels, frameBuffer, sequenceFrameBytes);
 }
 
 bool renderProceduralFrame(const String& preset) {
@@ -1180,6 +1272,9 @@ bool renderProceduralFrame(const String& preset) {
   mods.customHue = customHue;
   mods.customSaturation = customSaturation;
   mods.customBreathe = customBreathe;
+  mods.breatheLowerPct = breatheLowerPct;
+  mods.breatheUpperPct = breatheUpperPct;
+  mods.breatheCycleSeconds = breatheCycleSeconds;
   mods.customDrift = customDrift;
   mods.driftHueMin = driftHueMin;
   mods.driftHueMax = driftHueMax;
@@ -1193,8 +1288,11 @@ bool renderPresetFrame(const String& preset) {
   mods.customHue = customHue;
   mods.customSaturation = customSaturation;
   mods.customBreathe = customBreathe;
+  mods.breatheLowerPct = breatheLowerPct;
+  mods.breatheUpperPct = breatheUpperPct;
+  mods.breatheCycleSeconds = breatheCycleSeconds;
   mods.customDrift = customDrift;
-  return renderPresetPattern(preset, leds, totalPixels, mods);
+  return renderPresetPattern(preset, leds, totalPixels, millis(), mods);
 }
 
 bool isRecoveryPresetPattern(const String& id) {
@@ -1873,6 +1971,14 @@ bool runtimeOutputReady() {
 bool runtimeConfigValid() { return runtimeConfig.configValid; }
 bool runtimeKnownGoodProject() { return runtimeConfig.knownGoodProject; }
 
+void runtimeApplySavedConfig() {
+  // handleConfigPost and loop run on the same Arduino task, so the complete
+  // mirror + lookup replacement finishes before another frame can render.
+  applyRuntimeConfig(runtimeConfig);
+  if (lookCount == 0) currentLookIndex = 0;
+  else if (currentLookIndex >= lookCount) currentLookIndex = findStartupLook();
+}
+
 bool runtimeCommandReady() {
   bool transitionPending = runtimeTransitionPending() || errorCode != ERROR_NONE;
   ProvisioningReadinessInputs inputs;
@@ -1896,6 +2002,31 @@ void runtimeSetWifiTransitionPending(bool pending) {
   wifiTransitionPending = pending;
 }
 
+void serializeKaleidoscopeMappings(JsonArray target, const RuntimeConfig& config) {
+  for (uint8_t index = 0; index < config.kaleidoscopeMappingCount; index++) {
+    const KaleidoscopeMappingConfig& mapping = config.kaleidoscopeMappings[index];
+    JsonObject object = target.add<JsonObject>();
+    object["id"] = mapping.id;
+    object["zoneId"] = mapping.zoneId;
+    object["pixelCount"] = mapping.pixelCount;
+    object["pointCount"] = mapping.pointCount;
+    object["startLed"] = mapping.startLed;
+    JsonArray offsets = object["offsets"].to<JsonArray>();
+    for (uint16_t point = 0; point < mapping.pointCount; point++) {
+      offsets.add(config.kaleidoscopeOffsets[mapping.pointPoolStart + point]);
+    }
+    JsonArray spans = object["spans"].to<JsonArray>();
+    for (uint8_t spanIndex = 0; spanIndex < mapping.spanCount; spanIndex++) {
+      const KaleidoscopeSpan& span = mapping.spans[spanIndex];
+      JsonObject spanObject = spans.add<JsonObject>();
+      spanObject["start"] = span.start;
+      spanObject["count"] = span.count;
+      spanObject["sourceStart"] = span.sourceStart;
+      spanObject["sourceStep"] = span.sourceStep;
+    }
+  }
+}
+
 String runtimeFirmwareInfo() {
   JsonDocument doc;
   doc["app"] = "Lightweaver";
@@ -1912,6 +2043,8 @@ String runtimeFirmwareInfo() {
   doc["knownGoodProject"] = runtimeKnownGoodProject();
   doc["configSchemaVersion"] = LW_CONFIG_SCHEMA_VERSION;
   doc["capabilitiesVersion"] = LW_CAPABILITIES_VERSION;
+  doc["capabilities"]["kaleidoscopeReflectionPoints"] =
+      LW_KALEIDOSCOPE_REFLECTION_POINTS_VERSION;
   doc["build"] = __DATE__ " " __TIME__;
   doc["pixels"] = totalPixels;
   doc["piece"]["id"] = runtimeConfig.pieceId;
@@ -1947,6 +2080,8 @@ String runtimeFirmwareInfo() {
   // Never serialize the WiFi password into this (unauthenticated) response —
   // only a boolean hint that credentials exist.
   doc["wifi"]["configured"] = runtimeConfig.wifi.ssid.length() > 0;
+  serializeKaleidoscopeMappings(
+      doc["kaleidoscopeMappings"].to<JsonArray>(), runtimeConfig);
   JsonArray outputArray = doc["outputs"].to<JsonArray>();
   for (uint8_t i = 0; i < outputCount; i++) {
     JsonObject output = outputArray.add<JsonObject>();
@@ -2173,6 +2308,37 @@ void runtimeSetCustomBreatheZ(const String& targetId, bool on) {
   if (targetId.length() == 0) customBreathe = on;
   applyToZones(targetId, [&](ZoneConfig& z) { z.customBreathe = on; });
 }
+void runtimeSetBreatheSettingsZ(const String& targetId, uint8_t lowerPct, uint8_t upperPct, uint8_t cycleSeconds) {
+  if (targetId.length() == 0) { breatheLowerPct = lowerPct; breatheUpperPct = upperPct; breatheCycleSeconds = cycleSeconds; }
+  applyToZones(targetId, [&](ZoneConfig& z) { z.breatheLowerPct = lowerPct; z.breatheUpperPct = upperPct; z.breatheCycleSeconds = cycleSeconds; });
+}
+uint8_t runtimeGetBreatheLowerPct() { return breatheLowerPct; }
+uint8_t runtimeGetBreatheUpperPct() { return breatheUpperPct; }
+uint8_t runtimeGetBreatheCycleSeconds() { return breatheCycleSeconds; }
+uint8_t runtimeGetBreatheLowerPctZ(const String& targetId) {
+  if (targetId.length() > 0) {
+    for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
+      if (runtimeConfig.zones[i].id == targetId) return runtimeConfig.zones[i].breatheLowerPct;
+    }
+  }
+  return runtimeConfig.zoneCount > 0 ? runtimeConfig.zones[0].breatheLowerPct : breatheLowerPct;
+}
+uint8_t runtimeGetBreatheUpperPctZ(const String& targetId) {
+  if (targetId.length() > 0) {
+    for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
+      if (runtimeConfig.zones[i].id == targetId) return runtimeConfig.zones[i].breatheUpperPct;
+    }
+  }
+  return runtimeConfig.zoneCount > 0 ? runtimeConfig.zones[0].breatheUpperPct : breatheUpperPct;
+}
+uint8_t runtimeGetBreatheCycleSecondsZ(const String& targetId) {
+  if (targetId.length() > 0) {
+    for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
+      if (runtimeConfig.zones[i].id == targetId) return runtimeConfig.zones[i].breatheCycleSeconds;
+    }
+  }
+  return runtimeConfig.zoneCount > 0 ? runtimeConfig.zones[0].breatheCycleSeconds : breatheCycleSeconds;
+}
 void runtimeSetCustomDriftZ(const String& targetId, bool on) {
   if (targetId.length() == 0) customDrift = on;
   applyToZones(targetId, [&](ZoneConfig& z) { z.customDrift = on; });
@@ -2180,6 +2346,14 @@ void runtimeSetCustomDriftZ(const String& targetId, bool on) {
 uint8_t runtimeGetCustomHue() { return customHue; }
 uint8_t runtimeGetCustomSaturation() { return customSaturation; }
 bool runtimeGetCustomBreathe() { return customBreathe; }
+bool runtimeGetCustomBreatheZ(const String& targetId) {
+  if (targetId.length() > 0) {
+    for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
+      if (runtimeConfig.zones[i].id == targetId) return runtimeConfig.zones[i].customBreathe;
+    }
+  }
+  return runtimeConfig.zoneCount > 0 ? runtimeConfig.zones[0].customBreathe : customBreathe;
+}
 bool runtimeGetCustomDrift() { return customDrift; }
 
 void runtimeSetLedColorOrder(const String& order) {
@@ -2422,6 +2596,9 @@ String runtimeRecoverLights(const String& patternId, float brightness, bool sync
     zone.customHue = 32;
     zone.customSaturation = 230;
     zone.customBreathe = false;
+    zone.breatheLowerPct = 85;
+    zone.breatheUpperPct = 100;
+    zone.breatheCycleSeconds = 9;
     zone.customDrift = false;
     zone.driftHueMin = 0;
     zone.driftHueMax = 255;
@@ -2500,6 +2677,8 @@ String runtimeRecoverLights(const String& patternId, float brightness, bool sync
 String runtimeZonesJson() {
   JsonDocument doc;
   doc["syncZones"] = runtimeConfig.syncZones;
+  serializeKaleidoscopeMappings(
+      doc["kaleidoscopeMappings"].to<JsonArray>(), runtimeConfig);
   JsonArray arr = doc["zones"].to<JsonArray>();
   for (uint8_t i = 0; i < runtimeConfig.zoneCount; i++) {
     const ZoneConfig& z = runtimeConfig.zones[i];
@@ -2513,6 +2692,9 @@ String runtimeZonesJson() {
     obj["customHue"] = z.customHue;
     obj["customSaturation"] = z.customSaturation;
     obj["customBreathe"] = z.customBreathe;
+    obj["breatheLowerPct"] = z.breatheLowerPct;
+    obj["breatheUpperPct"] = z.breatheUpperPct;
+    obj["breatheCycleSeconds"] = z.breatheCycleSeconds;
     obj["customDrift"] = z.customDrift;
     obj["driftHueMin"] = z.driftHueMin;
     obj["driftHueMax"] = z.driftHueMax;

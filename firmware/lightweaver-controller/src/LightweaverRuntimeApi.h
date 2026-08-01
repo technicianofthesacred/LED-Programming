@@ -1,7 +1,10 @@
 #pragma once
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include "LightweaverProvisioningPolicy.h"
+
+struct RuntimeConfig;
 
 struct FactoryResetResult {
   bool accepted = false;
@@ -24,6 +27,7 @@ void runtimeSetCustomDrift(bool on);
 uint8_t runtimeGetCustomHue();
 uint8_t runtimeGetCustomSaturation();
 bool runtimeGetCustomBreathe();
+bool runtimeGetCustomBreatheZ(const String& targetId);
 bool runtimeGetCustomDrift();
 
 // Zone-targeted setters. Empty targetId broadcasts under sync rules.
@@ -34,6 +38,13 @@ void runtimeSetBlackoutZ(const String& targetId, bool on);
 void runtimeSetCustomHueZ(const String& targetId, uint8_t hue);
 void runtimeSetCustomSaturationZ(const String& targetId, uint8_t sat);
 void runtimeSetCustomBreatheZ(const String& targetId, bool on);
+void runtimeSetBreatheSettingsZ(const String& targetId, uint8_t lowerPct, uint8_t upperPct, uint8_t cycleSeconds);
+uint8_t runtimeGetBreatheLowerPct();
+uint8_t runtimeGetBreatheUpperPct();
+uint8_t runtimeGetBreatheCycleSeconds();
+uint8_t runtimeGetBreatheLowerPctZ(const String& targetId);
+uint8_t runtimeGetBreatheUpperPctZ(const String& targetId);
+uint8_t runtimeGetBreatheCycleSecondsZ(const String& targetId);
 void runtimeSetCustomDriftZ(const String& targetId, bool on);
 bool runtimeCanSelectPatternByIdZ(const String& targetId, const String& patternId);
 bool runtimePreparePatternByIdZ(const String& targetId, const String& patternId);
@@ -83,9 +94,11 @@ bool runtimeCommandReady();
 bool runtimeOutputReady();
 bool runtimeConfigValid();
 bool runtimeKnownGoodProject();
+void runtimeApplySavedConfig();
 void runtimeMarkRestartPending();
 void runtimeSetWifiTransitionPending(bool pending);
 String runtimeFirmwareInfo();
+void serializeKaleidoscopeMappings(JsonArray target, const RuntimeConfig& config);
 String runtimeRecipeCapabilities();
 FactoryResetResult runtimeFactoryReset();
 bool runtimeFinalizeFactoryResetRadio(String& message);

@@ -50,6 +50,43 @@ test.describe('Draw tool — shape primitives', () => {
     await expect(page.locator('#strips-layer g[data-strip-id]')).toHaveCount(1);
   });
 
+  test('creating template shapes fits every LED strip inside a stale zoomed and panned canvas', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto('/');
+
+    const wrapper = page.locator('.canvas-wrapper');
+    const wrapperBox = (await wrapper.boundingBox())!;
+
+    // Wheel-zoom near the bottom-right corner, matching the real pointer path.
+    // The camera updates both zoom and pan to keep that point fixed.
+    await page.mouse.move(
+      wrapperBox.x + wrapperBox.width - 19,
+      wrapperBox.y + wrapperBox.height - 19,
+    );
+    for (let i = 0; i < 30; i++) await page.mouse.wheel(0, -100);
+    await expect(page.locator('#zoom-level')).toHaveText('800%');
+
+    await page.locator('.shape-btn[data-shape="rings"]').click();
+    const strips = page.locator('#strips-layer g[data-strip-id]');
+    await expect(strips).toHaveCount(3);
+    await page.evaluate(() => new Promise(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    ));
+
+    const margin = 46;
+    await expect.poll(async () => {
+      const viewport = await wrapper.evaluate(el => el.getBoundingClientRect().toJSON());
+      const stripRects = await strips.evaluateAll(els =>
+        els.map(el => el.getBoundingClientRect().toJSON()),
+      );
+      return stripRects.every(rect =>
+        rect.width > 0 && rect.height > 0 &&
+        rect.left >= viewport.left + margin && rect.right <= viewport.right - margin &&
+        rect.top >= viewport.top + margin && rect.bottom <= viewport.bottom - margin,
+      );
+    }).toBe(true);
+  });
+
   test('Path: Escape undoes the last point without wiping the line; Enter finishes', async ({ page }) => {
     await page.goto('/');
     await page.locator('#tool-draw').click();

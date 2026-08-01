@@ -60,8 +60,8 @@ function geometryMetadataBytes(geometry) {
 }
 
 export function validatePatternLabWorkerGeometry(geometry) {
-  if (!geometry || geometry.version !== 1) {
-    throw new RangeError('Pattern Lab worker geometry version must be 1');
+  if (!geometry || geometry.version !== 2) {
+    throw new RangeError('Pattern Lab worker geometry version must be 2');
   }
   const sourcePixelCount = Number(geometry.sourcePixelCount);
   const visiblePixelCount = Number(geometry.visiblePixelCount);
@@ -80,6 +80,19 @@ export function validatePatternLabWorkerGeometry(geometry) {
     || geometry.progress.length !== visiblePixelCount) {
     throw new RangeError('Pattern Lab worker geometry progress must be a bounded Float64Array');
   }
+  for (const name of ['reflectionProgress', 'kaleidoscopeProgress', 'reflectionDistance']) {
+    if (!(geometry[name] instanceof Float64Array) || geometry[name].length !== visiblePixelCount) {
+      throw new RangeError(`Pattern Lab worker geometry ${name} must be a bounded Float64Array`);
+    }
+  }
+  for (const name of ['reflectionSegment', 'reflectionPoint']) {
+    if (!(geometry[name] instanceof Int32Array) || geometry[name].length !== visiblePixelCount) {
+      throw new RangeError(`Pattern Lab worker geometry ${name} must be a bounded Int32Array`);
+    }
+  }
+  if (!(geometry.reflectionFlags instanceof Uint8Array) || geometry.reflectionFlags.length !== visiblePixelCount) {
+    throw new RangeError('Pattern Lab worker geometry reflectionFlags must be a bounded Uint8Array');
+  }
   for (const coordinate of geometry.coordinates) {
     if (!Number.isFinite(coordinate)) {
       throw new RangeError('Pattern Lab worker geometry coordinates must be finite');
@@ -88,6 +101,13 @@ export function validatePatternLabWorkerGeometry(geometry) {
   for (const value of geometry.progress) {
     if (!Number.isFinite(value) || value < 0 || value > 1) {
       throw new RangeError('Pattern Lab worker geometry progress must stay between zero and one');
+    }
+  }
+  for (const name of ['reflectionProgress', 'kaleidoscopeProgress', 'reflectionDistance']) {
+    for (const value of geometry[name]) {
+      if (!Number.isFinite(value) || value < 0 || value > 1) {
+        throw new RangeError(`Pattern Lab worker geometry ${name} must stay between zero and one`);
+      }
     }
   }
   const bounds = geometry.normalizationBounds;
@@ -111,7 +131,10 @@ export function validatePatternLabWorkerGeometry(geometry) {
   if (offset !== visiblePixelCount) {
     throw new RangeError('Pattern Lab worker geometry strip counts do not match visible pixels');
   }
-  const typedBytes = geometry.coordinates.byteLength + geometry.progress.byteLength;
+  const typedBytes = geometry.coordinates.byteLength + geometry.progress.byteLength
+    + geometry.reflectionProgress.byteLength + geometry.kaleidoscopeProgress.byteLength
+    + geometry.reflectionDistance.byteLength + geometry.reflectionSegment.byteLength
+    + geometry.reflectionPoint.byteLength + geometry.reflectionFlags.byteLength;
   const metadataBytes = geometryMetadataBytes(geometry);
   if (metadataBytes > PATTERN_LAB_WORKER_BUDGETS.maxGeometryMetadataBytes) {
     throw new RangeError(`Pattern Lab worker geometry metadata exceeds ${PATTERN_LAB_WORKER_BUDGETS.maxGeometryMetadataBytes} bytes`);
@@ -159,11 +182,22 @@ export function compactPatternLabWorkerGeometry(input = {}) {
   if (sourcePixelCount < 1 || visiblePixelCount < 1) {
     throw new RangeError('Pattern Lab worker geometry requires at least one visible source pixel');
   }
+  const renderStrips = normalizeProjectRenderStrips(strips, { hidden });
   const coordinates = new Float64Array(visiblePixelCount * 2);
   const progress = new Float64Array(visiblePixelCount);
+  const reflectionProgress = new Float64Array(visiblePixelCount);
+  const kaleidoscopeProgress = new Float64Array(visiblePixelCount);
+  const reflectionDistance = new Float64Array(visiblePixelCount);
+  const reflectionSegment = new Int32Array(visiblePixelCount);
+  const reflectionPoint = new Int32Array(visiblePixelCount);
+  const reflectionFlags = new Uint8Array(visiblePixelCount);
+  reflectionPoint.fill(-1);
   const compactStrips = [];
   let cursor = 0;
-  for (const { strip, pixels, start } of visibleStrips) {
+  for (const renderStrip of renderStrips) {
+    const strip = renderStrip;
+    const pixels = renderStrip.pts;
+    const start = cursor;
     compactStrips.push({
       id: String(strip.id || `strip-${compactStrips.length + 1}`),
       start,
@@ -171,16 +205,23 @@ export function compactPatternLabWorkerGeometry(input = {}) {
       speed: finiteNumber(strip.speed, 1),
       brightness: finiteNumber(strip.brightness, 1),
       hueShift: finiteNumber(strip.hueShift, 0),
+      hasKaleidoscope: Boolean(strip.kaleidoscopeContext),
     });
     pixels.forEach((pixel, pixelIndex) => {
       coordinates[cursor * 2] = finiteNumber(pixel?.x);
       coordinates[cursor * 2 + 1] = finiteNumber(pixel?.y);
-      progress[cursor] = pixels.length > 1 ? pixelIndex / (pixels.length - 1) : 0.5;
+      progress[cursor] = pixel.sourceProgress;
+      reflectionProgress[cursor] = pixel.reflectionProgress;
+      kaleidoscopeProgress[cursor] = pixel.kaleidoscopeProgress;
+      reflectionDistance[cursor] = pixel.reflectionDistance;
+      reflectionSegment[cursor] = pixel.reflectionSegment;
+      reflectionPoint[cursor] = pixel.reflectionPoint ?? -1;
+      reflectionFlags[cursor] = pixel.isReflectionPoint ? 1 : 0;
       cursor += 1;
     });
   }
   const geometry = {
-    version: 1,
+    version: 2,
     sourcePixelCount,
     visiblePixelCount,
     normalizationBounds: {
@@ -193,6 +234,12 @@ export function compactPatternLabWorkerGeometry(input = {}) {
     strips: compactStrips,
     coordinates,
     progress,
+    reflectionProgress,
+    kaleidoscopeProgress,
+    reflectionDistance,
+    reflectionSegment,
+    reflectionPoint,
+    reflectionFlags,
     bpm: finiteNumber(input.bpm, 120),
     gammaEnabled: Boolean(input.gammaEnabled),
     gammaValue: finiteNumber(input.gammaValue, 2.2),
@@ -201,6 +248,12 @@ export function compactPatternLabWorkerGeometry(input = {}) {
   };
   geometry.geometryBytes = geometry.coordinates.byteLength
     + geometry.progress.byteLength
+    + geometry.reflectionProgress.byteLength
+    + geometry.kaleidoscopeProgress.byteLength
+    + geometry.reflectionDistance.byteLength
+    + geometry.reflectionSegment.byteLength
+    + geometry.reflectionPoint.byteLength
+    + geometry.reflectionFlags.byteLength
     + geometryMetadataBytes(geometry);
   return validatePatternLabWorkerGeometry(geometry);
 }
@@ -213,10 +266,25 @@ export function clonePatternLabWorkerGeometryForTransfer(cachedGeometry) {
     normalizationBounds: { ...cachedGeometry.normalizationBounds },
     coordinates: new Float64Array(cachedGeometry.coordinates),
     progress: new Float64Array(cachedGeometry.progress),
+    reflectionProgress: new Float64Array(cachedGeometry.reflectionProgress),
+    kaleidoscopeProgress: new Float64Array(cachedGeometry.kaleidoscopeProgress),
+    reflectionDistance: new Float64Array(cachedGeometry.reflectionDistance),
+    reflectionSegment: new Int32Array(cachedGeometry.reflectionSegment),
+    reflectionPoint: new Int32Array(cachedGeometry.reflectionPoint),
+    reflectionFlags: new Uint8Array(cachedGeometry.reflectionFlags),
   };
   return {
     geometry,
-    transfer: [geometry.coordinates.buffer, geometry.progress.buffer],
+    transfer: [
+      geometry.coordinates.buffer,
+      geometry.progress.buffer,
+      geometry.reflectionProgress.buffer,
+      geometry.kaleidoscopeProgress.buffer,
+      geometry.reflectionDistance.buffer,
+      geometry.reflectionSegment.buffer,
+      geometry.reflectionPoint.buffer,
+      geometry.reflectionFlags.buffer,
+    ],
   };
 }
 
@@ -389,3 +457,4 @@ export function validatePatternLabWorkerFrameReply(reply, pending) {
   }
   return { ...payload, colors, indices };
 }
+import { normalizeProjectRenderStrips } from './renderGeometry.js';

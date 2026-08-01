@@ -160,6 +160,13 @@ test('xLights export fails closed for unknown wiring and lossy or invalid coordi
   assert.throws(() => toXlightsXmodel(large), /grid.*limit/i);
 });
 
+test('xLights output ignores optional Kaleidoscope metadata byte-for-byte', () => {
+  const plain = fixture();
+  const mapped = fixture();
+  mapped.strips[0].kaleidoscope = { enabled: true, pointCount: 2, startLed: 1, offsets: [0, 0] };
+  assert.equal(toXlightsXmodel(mapped), toXlightsXmodel(plain));
+});
+
 test('xLights grid preserves non-uniform coordinate spacing instead of collapsing to ranks', () => {
   const spaced = fixture();
   spaced.strips[0].pixels[1].x = 2;

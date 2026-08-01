@@ -1,4 +1,5 @@
 import { DEFAULT_CARD_PATTERN_BANK } from './cardRuntimeContract.js';
+import { DEFAULT_BREATHE_SETTINGS, normalizeBreatheSettings } from './breatheEnvelope.js';
 
 const PATTERN_IDS = new Set([
   ...DEFAULT_CARD_PATTERN_BANK.map(pattern => pattern.id),
@@ -19,6 +20,7 @@ export const DEFAULT_CARD_VISUAL_LOOK = Object.freeze({
   customHue: 32,
   customSaturation: 230,
   customBreathe: false,
+  ...DEFAULT_BREATHE_SETTINGS,
   customDrift: false,
 });
 
@@ -32,6 +34,7 @@ export function normalizeCardVisualLook(look = {}) {
     customHue: clampInt(look.customHue, DEFAULT_CARD_VISUAL_LOOK.customHue, 0, 255),
     customSaturation: clampInt(look.customSaturation, DEFAULT_CARD_VISUAL_LOOK.customSaturation, 0, 255),
     customBreathe: Boolean(look.customBreathe),
+    ...normalizeBreatheSettings(look),
     customDrift: Boolean(look.customDrift),
   };
 }

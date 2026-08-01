@@ -97,6 +97,9 @@ assert.deepEqual(payload, {
   hue: 138,
   saturation: 210,
   breathe: true,
+  breatheLowerPct: 85,
+  breatheUpperPct: 100,
+  breatheCycleSeconds: 9,
   drift: false,
   driftMin: 17,
   driftMax: 203,
@@ -855,6 +858,9 @@ assert.deepEqual(JSON.parse(resetFallbackRequests[1].options.body), {
   hue: 32,
   saturation: 230,
   breathe: false,
+  breatheLowerPct: 85,
+  breatheUpperPct: 100,
+  breatheCycleSeconds: 9,
   drift: false,
 });
 
