@@ -740,6 +740,7 @@ const canvasManager = new CanvasManager(svgEl, {
     syncExportInfo();
     _updateEmptyState();
     canvasManager.setStripDots(strip.id, strip.pixels);
+    _fitAllVisibleShapes();
   },
 
   onStripSelected(id) {
@@ -992,8 +993,7 @@ function _startShapeTemplate(shape) {
   } else if (shape === 'spiral') {
     _createQuickStrip('Spiral', _spiralPathData(w, h, 3, 120), leds, undefined, density);
   }
-  // onStripCreated handles _reindex/_rebuildNorm/renderStripsList/syncExportInfo/_updateEmptyState
-  // for each strip; no duplicate calls needed here.
+  _fitAllVisibleShapes();
 }
 
 // ── File import (shared by button + drag-drop) ─────────────────────────────
@@ -2869,6 +2869,45 @@ function _resetZoom() {
   state.canvasZoom = 1;
   state.canvasPanX = 0;
   state.canvasPanY = 0;
+  _applyCanvasTransform();
+}
+
+function _fitAllVisibleShapes() {
+  const viewport = wrapper.getBoundingClientRect();
+  const visibleIds = new Set(
+    state.strips.filter(strip => strip.visible !== false).map(strip => strip.id),
+  );
+  const groups = [...svgEl.querySelectorAll('#strips-layer > g[data-strip-id]')]
+    .filter(group => visibleIds.has(group.dataset.stripId));
+  if (!groups.length || viewport.width <= 0 || viewport.height <= 0) return;
+
+  const measure = () => {
+    const rects = groups.map(group => group.getBoundingClientRect());
+    return {
+      left:   Math.min(...rects.map(rect => rect.left)),
+      right:  Math.max(...rects.map(rect => rect.right)),
+      top:    Math.min(...rects.map(rect => rect.top)),
+      bottom: Math.max(...rects.map(rect => rect.bottom)),
+    };
+  };
+
+  state.canvasZoom = 1;
+  state.canvasPanX = 0;
+  state.canvasPanY = 0;
+  _applyCanvasTransform();
+
+  const bounds = measure();
+  const width  = bounds.right - bounds.left;
+  const height = bounds.bottom - bounds.top;
+  const padding = Math.min(48, viewport.width * 0.08, viewport.height * 0.08);
+  const scaleX = width  > 0 ? (viewport.width  - padding * 2) / width  : Infinity;
+  const scaleY = height > 0 ? (viewport.height - padding * 2) / height : Infinity;
+  state.canvasZoom = Math.max(0.1, Math.min(8, Math.min(scaleX, scaleY)));
+  _applyCanvasTransform();
+
+  const fitted = measure();
+  state.canvasPanX = viewport.left + viewport.width  / 2 - (fitted.left + fitted.right) / 2;
+  state.canvasPanY = viewport.top  + viewport.height / 2 - (fitted.top + fitted.bottom) / 2;
   _applyCanvasTransform();
 }
 
