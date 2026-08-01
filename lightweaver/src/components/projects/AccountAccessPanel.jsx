@@ -7,7 +7,7 @@ function messageFor(error, fallback) {
   return error?.message || fallback;
 }
 
-function PasswordChange({ library }) {
+function PasswordChange({ library, onCancel, onDone }) {
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [notice, setNotice] = useState('');
@@ -32,6 +32,7 @@ function PasswordChange({ library }) {
     else {
       setPassword('');
       setConfirmation('');
+      onDone?.();
     }
   };
 
@@ -43,7 +44,10 @@ function PasswordChange({ library }) {
       <input id="cloud-new-password" className="pm-input" type="password" autoComplete="new-password" minLength={12} maxLength={256} value={password} onChange={event => setPassword(event.target.value)} />
       <label htmlFor="cloud-confirm-password">Confirm new password</label>
       <input id="cloud-confirm-password" className="pm-input" type="password" autoComplete="new-password" minLength={12} maxLength={256} value={confirmation} onChange={event => setConfirmation(event.target.value)} />
-      <button type="submit" className="btn primary" disabled={busy}>Change password</button>
+      <div className="set-actions">
+        {onCancel && <button type="button" className="btn" disabled={busy} onClick={onCancel}>Cancel</button>}
+        <button type="submit" className="btn primary" disabled={busy}>Change password</button>
+      </div>
       {notice && <p className="cloud-account-error" role="alert">{notice}</p>}
     </form>
   );
@@ -141,8 +145,10 @@ function OwnerAccounts({ library }) {
                 <td><span className={`cloud-account-status is-${account.status}`}>{account.status}</span></td>
                 <td>
                   <div className="cloud-account-actions">
-                    <input className="pm-input" aria-label={`Reset password for ${account.username}`} type="password" autoComplete="new-password" minLength={12} maxLength={256} placeholder="New temporary password" value={resetPasswords[account.id] || ''} onChange={event => setResetPasswords(current => ({ ...current, [account.id]: event.target.value }))} />
-                    <button type="button" className="btn ghost-sm" disabled={(resetPasswords[account.id] || '').length < 12 || busy === `reset-${account.id}`} onClick={() => reset(account)}>Reset password</button>
+                    {isSelf ? <span>Use Change Password for your own account.</span> : <>
+                      <input className="pm-input" aria-label={`Reset password for ${account.username}`} type="password" autoComplete="new-password" minLength={12} maxLength={256} placeholder="New temporary password" value={resetPasswords[account.id] || ''} onChange={event => setResetPasswords(current => ({ ...current, [account.id]: event.target.value }))} />
+                      <button type="button" className="btn ghost-sm" disabled={(resetPasswords[account.id] || '').length < 12 || busy === `reset-${account.id}`} onClick={() => reset(account)}>Reset password</button>
+                    </>}
                     <button type="button" className="btn ghost-sm" disabled={isSelf || busy === `status-${account.id}`} onClick={() => run(`status-${account.id}`, () => library.setAccountStatus(account.id, account.status === 'active' ? 'disabled' : 'active'), `${account.status === 'active' ? 'Disabled' : 'Enabled'} @${account.username}.`)}>{account.status === 'active' ? 'Disable' : 'Enable'}</button>
                     {(account.role === 'customer' || accountAssignments.length > 0) && (
                       <div className="cloud-assignments">
@@ -168,6 +174,7 @@ export function AccountAccessPanel() {
   const [bootstrap, setBootstrap] = useState({ username: '', displayName: '', temporaryPassword: '' });
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
   const authenticated = library.session.status === 'authenticated';
   const sessionBoundary = `${library.session.status}:${library.session.username || library.session.email || ''}:${library.session.role || ''}:${library.session.mustChangePassword ? 'forced' : 'ready'}`;
   const nativeOwner = authenticated && library.session.role === 'owner' && Boolean(library.session.username);
@@ -178,6 +185,7 @@ export function AccountAccessPanel() {
     setBootstrap({ username: '', displayName: '', temporaryPassword: '' });
     setNotice('');
     setBusy(false);
+    setChangingPassword(false);
   }, [sessionBoundary]);
 
   const signIn = async event => {
@@ -227,8 +235,10 @@ export function AccountAccessPanel() {
     <>
       <div className="cloud-account-session">
         <div className="cloud-identity"><strong>{library.session.displayName}</strong><span>@{library.session.username}</span><span>{roleLabel}</span></div>
+        <button type="button" className="btn ghost-sm" onClick={() => setChangingPassword(true)}>Change password</button>
         <button type="button" className="btn ghost-sm" onClick={library.logout}>Sign out</button>
       </div>
+      {changingPassword && <PasswordChange key={`personal:${sessionBoundary}`} library={library} onCancel={() => setChangingPassword(false)} onDone={() => setChangingPassword(false)} />}
       {nativeOwner && <OwnerAccounts key={sessionBoundary} library={library} />}
     </>
   );

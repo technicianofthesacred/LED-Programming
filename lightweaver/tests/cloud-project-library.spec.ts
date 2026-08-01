@@ -434,7 +434,11 @@ class LibraryFixture {
           return;
         }
         const actor = this.username ? this.accounts.get(this.username) : null;
-        if (!actor || actor.role !== 'owner') {
+        if (!actor) {
+          await json(route, { error: { code: 'unauthenticated', message: 'Authentication is required.' } }, 401);
+          return;
+        }
+        if (actor.role !== 'owner') {
           await json(route, { error: { code: 'forbidden', message: 'Only a native owner may manage accounts.' } }, 403);
           return;
         }
@@ -493,8 +497,16 @@ class LibraryFixture {
         if (segments.length === 3 && method === 'POST') {
           const body = request.postDataJSON();
           if (segments[2] === 'reset') {
+            if (target.id === actor.id) {
+              await json(route, { error: { code: 'use_change_password', message: 'Use Change Password for your own account.' } }, 409);
+              return;
+            }
             target.password = body.temporaryPassword;
             target.mustChangePassword = true;
+            if (this.username === target.username) {
+              this.username = null;
+              this.role = null;
+            }
           } else if (segments[2] === 'status') {
             if (target.username === actor.username && body.status === 'disabled') {
               await json(route, { error: { code: 'last_owner_required', message: 'At least one active owner is required.' } }, 409);
@@ -927,6 +939,205 @@ async function freshWorkspacePage(browser: Browser, fixture: LibraryFixture, has
   return { context, page };
 }
 
+async function installAuthEpochHarness(page: Page) {
+  await page.goto('/');
+  await page.evaluate(async () => {
+    document.body.innerHTML = '<div id="auth-epoch-root"></div>';
+    const React = (await import('/node_modules/.vite/deps/react.js')).default;
+    const { createRoot } = (await import('/node_modules/.vite/deps/react-dom_client.js')).default;
+    const { CloudLibraryProvider, useCloudLibrary } = await import('/src/state/CloudLibraryContext.jsx');
+    const { ProjectProvider } = await import('/src/state/ProjectContext.jsx');
+
+    const identities = {
+      'account-a': { username: 'account-a', displayName: 'Account A', role: 'customer', mustChangePassword: false },
+      'account-b': { username: 'account-b', displayName: 'Account B', role: 'customer', mustChangePassword: false },
+    };
+    const projects = {
+      'account-a': { id: 'project-a', title: 'Account A private project', archived: false, revision: 1, createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z' },
+      'account-b': { id: 'project-b', title: 'Account B private project', archived: false, revision: 1, createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z' },
+    };
+    const state = {
+      username: 'account-a',
+      api: null,
+      heldProjectCalls: 0,
+      projectRefreshStarted: null,
+      releaseProjectRefresh: null,
+      accountRefreshStarted: null,
+      releaseAccountRefresh: null,
+      sessionRefreshStarted: null,
+      releaseSessionRefresh: null,
+      holdProjects: false,
+      holdAccounts: false,
+      holdSession: false,
+      refreshSettled: false,
+      accountsSettled: false,
+      sessionSettled: false,
+      accountRequestStarted: false,
+      sessionRequestStarted: false,
+    };
+    const deferred = () => {
+      let resolve;
+      const promise = new Promise(done => { resolve = done; });
+      return { promise, resolve };
+    };
+    state.prepareProjectRefresh = () => {
+      const started = deferred();
+      const release = deferred();
+      state.heldProjectCalls = 0;
+      state.projectRefreshStarted = started.promise;
+      state.releaseProjectRefresh = release.resolve;
+      state.projectStartedResolve = started.resolve;
+      state.projectGate = release.promise;
+      state.holdProjects = true;
+    };
+    state.prepareAccountRefresh = () => {
+      const started = deferred();
+      const release = deferred();
+      state.accountRefreshStarted = started.promise;
+      state.releaseAccountRefresh = release.resolve;
+      state.accountStartedResolve = started.resolve;
+      state.accountGate = release.promise;
+      state.holdAccounts = true;
+    };
+    state.prepareSessionRefresh = () => {
+      const started = deferred();
+      const release = deferred();
+      state.sessionRefreshStarted = started.promise;
+      state.releaseSessionRefresh = release.resolve;
+      state.sessionStartedResolve = started.resolve;
+      state.sessionGate = release.promise;
+      state.holdSession = true;
+    };
+
+    const client = {
+      getAccountSession: async () => {
+        const captured = state.username;
+        if (state.holdSession && captured === 'account-a') {
+          state.holdSession = false;
+          state.sessionRequestStarted = true;
+          state.sessionStartedResolve();
+          await state.sessionGate;
+        }
+        if (!captured) throw Object.assign(new Error('Authentication is required.'), { status: 401 });
+        return { ...identities[captured] };
+      },
+      getSession: async () => { throw Object.assign(new Error('Authentication is required.'), { status: 401 }); },
+      login: async ({ username }) => {
+        state.username = username;
+        return { ...identities[username] };
+      },
+      logout: async () => { state.username = null; },
+      listProjects: async ({ state: projectState }) => {
+        const captured = state.username;
+        const result = projectState === 'active' && captured ? [{ ...projects[captured] }] : [];
+        if (state.holdProjects && captured === 'account-a') {
+          state.heldProjectCalls += 1;
+          if (state.heldProjectCalls === 2) state.projectStartedResolve();
+          await state.projectGate;
+          if (state.heldProjectCalls === 2) state.holdProjects = false;
+        }
+        return result;
+      },
+      listAccounts: async () => {
+        const captured = state.username;
+        const result = [{ id: `${captured}-secret`, username: `${captured}-managed`, displayName: `${captured} managed account`, role: 'customer', status: 'active', mustChangePassword: false, createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z' }];
+        if (state.holdAccounts && captured === 'account-a') {
+          state.accountRequestStarted = true;
+          state.accountStartedResolve();
+          await state.accountGate;
+          state.holdAccounts = false;
+        }
+        return result;
+      },
+    };
+
+    function Harness() {
+      const library = useCloudLibrary();
+      const [accounts, setAccounts] = React.useState([]);
+      const boundary = `${library.session.status}:${library.session.username || ''}:${library.session.role || ''}`;
+      React.useEffect(() => setAccounts([]), [boundary]);
+      state.api = library;
+      state.loadAccounts = async () => {
+        const result = await library.listAccounts();
+        if (result.ok) setAccounts(result.value);
+        return result;
+      };
+      return React.createElement('div', null,
+        React.createElement('span', { 'data-testid': 'epoch-session' }, `${library.session.status}:${library.session.username || ''}:${library.session.role || ''}`),
+        React.createElement('span', { 'data-testid': 'epoch-projects' }, library.activeProjects.map(project => project.title).join('|')),
+        React.createElement('span', { 'data-testid': 'epoch-accounts' }, accounts.map(account => account.displayName).join('|')),
+      );
+    }
+
+    const root = createRoot(document.getElementById('auth-epoch-root'));
+    root.render(React.createElement(ProjectProvider, null,
+      React.createElement(CloudLibraryProvider, { client }, React.createElement(Harness))));
+    window.__LW_AUTH_EPOCH__ = state;
+  });
+  await expect(page.getByTestId('epoch-session')).toHaveText('authenticated:account-a:customer');
+  await expect(page.getByTestId('epoch-projects')).toHaveText('Account A private project');
+}
+
+test('ignores delayed project and account refreshes from the previous authenticated account', async ({ page }) => {
+  await installAuthEpochHarness(page);
+  await page.evaluate(() => {
+    const state = window.__LW_AUTH_EPOCH__;
+    state.prepareProjectRefresh();
+    state.prepareAccountRefresh();
+    state.refreshPromise = state.api.refreshProjects().finally(() => { state.refreshSettled = true; });
+    state.accountsPromise = state.loadAccounts().finally(() => { state.accountsSettled = true; });
+  });
+  await expect.poll(() => page.evaluate(() => window.__LW_AUTH_EPOCH__.heldProjectCalls)).toBe(2);
+  await expect.poll(() => page.evaluate(() => window.__LW_AUTH_EPOCH__.accountRequestStarted)).toBe(true);
+
+  await page.evaluate(async () => {
+    const state = window.__LW_AUTH_EPOCH__;
+    const api = state.api;
+    await api.logout();
+    await api.login({ username: 'account-b', password: 'account-b-password' });
+  });
+  await expect(page.getByTestId('epoch-session')).toHaveText('authenticated:account-b:customer');
+  await expect(page.getByTestId('epoch-projects')).toHaveText('Account B private project');
+  await expect(page.getByTestId('epoch-accounts')).toHaveText('');
+
+  await page.evaluate(async () => {
+    const state = window.__LW_AUTH_EPOCH__;
+    state.releaseProjectRefresh();
+    state.releaseAccountRefresh();
+    await Promise.all([state.refreshPromise, state.accountsPromise]);
+  });
+  await expect(page.getByTestId('epoch-session')).toHaveText('authenticated:account-b:customer');
+  await expect(page.getByTestId('epoch-projects')).toHaveText('Account B private project');
+  await expect(page.getByTestId('epoch-accounts')).toHaveText('');
+});
+
+test('ignores a delayed session probe from account A after account B authenticates', async ({ page }) => {
+  await installAuthEpochHarness(page);
+  await page.evaluate(() => {
+    const state = window.__LW_AUTH_EPOCH__;
+    state.prepareSessionRefresh();
+    state.sessionPromise = state.api.retrySession().finally(() => { state.sessionSettled = true; });
+  });
+  await expect.poll(() => page.evaluate(() => window.__LW_AUTH_EPOCH__.sessionRequestStarted)).toBe(true);
+
+  await page.evaluate(async () => {
+    const state = window.__LW_AUTH_EPOCH__;
+    const api = state.api;
+    await api.logout();
+    await api.login({ username: 'account-b', password: 'account-b-password' });
+  });
+  await expect(page.getByTestId('epoch-session')).toHaveText('authenticated:account-b:customer');
+  await expect(page.getByTestId('epoch-projects')).toHaveText('Account B private project');
+
+  await page.evaluate(async () => {
+    const state = window.__LW_AUTH_EPOCH__;
+    state.releaseSessionRefresh();
+    await state.sessionPromise;
+  });
+  await expect(page.getByTestId('epoch-session')).toHaveText('authenticated:account-b:customer');
+  await expect(page.getByTestId('epoch-projects')).toHaveText('Account B private project');
+});
+
 test('signs in with native credentials, reports bad credentials generically, and signs out safely', async ({ page }) => {
   const fixture = new LibraryFixture(null);
   await fixture.install(page);
@@ -1009,11 +1220,36 @@ test('offers owner bootstrap only to a verified transitional owner session', asy
 
 test('owner creates, resets, disables, enables, and changes account roles without exposing self-demotion', async ({ page }) => {
   const fixture = new LibraryFixture('owner');
+  fixture.addAccount('backup-owner', 'owner', {
+    displayName: 'Backup Owner',
+    password: 'backup-owner-password',
+    mustChangePassword: false,
+  });
   await fixture.install(page);
   await openLibrary(page);
   const selfRow = page.getByTestId('account-row').filter({ hasText: '@owner' });
   await expect(selfRow.getByRole('button', { name: 'Disable' })).toBeDisabled();
   await expect(selfRow.getByLabel('Role for owner')).toBeDisabled();
+  await expect(selfRow.getByLabel('Reset password for owner')).toHaveCount(0);
+  await expect(selfRow.getByRole('button', { name: 'Reset password' })).toHaveCount(0);
+  await expect(selfRow.getByText('Use Change Password for your own account.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Change password' })).toBeVisible();
+
+  const selfReset = await page.evaluate(async id => {
+    const response = await fetch(`/api/library/accounts/${id}/reset`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ temporaryPassword: 'replacement-owner-password' }),
+    });
+    return { status: response.status, code: (await response.json()).error?.code };
+  }, fixture.accounts.get('owner')!.id);
+  expect(selfReset).toEqual({ status: 409, code: 'use_change_password' });
+
+  const backupOwnerRow = page.getByTestId('account-row').filter({ hasText: '@backup-owner' });
+  await backupOwnerRow.getByLabel('Reset password for backup-owner').fill('backup-owner-replacement');
+  await backupOwnerRow.getByRole('button', { name: 'Reset password' }).click();
+  await expect(backupOwnerRow.getByLabel('Reset password for backup-owner')).toHaveValue('');
+  expect(fixture.accounts.get('backup-owner')!.mustChangePassword).toBe(true);
 
   await page.getByLabel('New account username').fill('studio-worker');
   await page.getByLabel('New account display name').fill('Studio Worker');
@@ -1032,6 +1268,14 @@ test('owner creates, resets, disables, enables, and changes account roles withou
   await expect(row.getByText('disabled')).toBeVisible();
   await row.getByRole('button', { name: 'Enable' }).click();
   await expect(row.getByText('active')).toBeVisible();
+
+  fixture.username = null;
+  fixture.role = null;
+  await page.getByLabel('New account username').fill('revoked-action');
+  await page.getByLabel('New account display name').fill('Revoked action');
+  await page.getByLabel('Temporary password').fill('revoked-action-password');
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await expect(page.getByText('Sign in to use the online project library')).toBeVisible();
 });
 
 test('clears owner account and draft-review state across logout and same-page role changes', async ({ page }) => {
@@ -1052,8 +1296,8 @@ test('clears owner account and draft-review state across logout and same-page ro
   await openLibrary(page);
 
   await page.getByLabel('Temporary password').fill('owner-form-secret');
-  const selfRow = page.getByTestId('account-row').filter({ hasText: '@owner' });
-  await selfRow.getByLabel('Reset password for owner').fill('owner-reset-secret');
+  const clientRow = page.getByTestId('account-row').filter({ hasText: '@client' });
+  await clientRow.getByLabel('Reset password for client').fill('owner-reset-secret');
   await page.getByRole('button', { name: 'Review drafts' }).click();
   const review = page.getByRole('region', { name: 'Draft review for Session boundary installation' });
   await expect(review.getByText('Client One · revision 1')).toBeVisible();
@@ -1086,7 +1330,7 @@ test('clears owner account and draft-review state across logout and same-page ro
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page.getByText('@owner').first()).toBeVisible();
   await expect(page.getByLabel('Temporary password')).toHaveValue('');
-  await expect(page.getByTestId('account-row').filter({ hasText: '@owner' }).getByLabel('Reset password for owner')).toHaveValue('');
+  await expect(page.getByTestId('account-row').filter({ hasText: '@client' }).getByLabel('Reset password for client')).toHaveValue('');
   await expect(page.getByText('Customer drafts')).toHaveCount(0);
 });
 

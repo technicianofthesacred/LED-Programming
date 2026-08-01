@@ -292,8 +292,16 @@ export async function handleLibraryRequest({
         if (!requireSameOrigin(request)) {
           return errorResponse(403, 'invalid_origin', 'The request origin is not allowed.', requestId);
         }
-        const body = await readJson(request, maxBytes);
         const id = segments[1];
+        if (segments[2] === 'reset' && id === identity.accountId) {
+          return errorResponse(
+            409,
+            'use_change_password',
+            'Use Change Password for your own account.',
+            requestId,
+          );
+        }
+        const body = await readJson(request, maxBytes);
         let account;
         if (segments[2] === 'reset') {
           account = await accountStore.resetPassword({

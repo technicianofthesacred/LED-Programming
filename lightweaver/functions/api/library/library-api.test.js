@@ -501,6 +501,16 @@ test('owner account administration creates, lists, resets, disables, and changes
   });
   const owner = await activeNativeIdentity(accountStore, ownerAccount, 'owner-passphrase-456');
 
+  const selfReset = await call(null, {
+    identity: owner,
+    accountStore,
+    method: 'POST',
+    path: `/accounts/${ownerAccount.id}/reset`,
+    body: { temporaryPassword: 'replacement-owner-passphrase' },
+  });
+  assert.equal(selfReset.response.status, 409);
+  assert.equal(selfReset.payload.error.code, 'use_change_password');
+
   const wrongOrigin = await call(null, {
     identity: owner,
     accountStore,
@@ -563,6 +573,30 @@ test('owner account administration creates, lists, resets, disables, and changes
   assert.equal(reset.response.status, 200);
   assert.equal(reset.payload.account.mustChangePassword, true);
 
+  const secondOwner = await accountStore.createAccount({
+    username: 'second-owner',
+    displayName: 'Second Owner',
+    role: 'owner',
+    temporaryPassword: 'second-owner-temporary',
+  });
+  const secondOwnerLogin = await accountStore.verifyLogin({
+    username: secondOwner.username,
+    password: 'second-owner-temporary',
+  });
+  const secondOwnerSession = await accountStore.createSession(secondOwner.id, {
+    expectedGeneration: secondOwnerLogin.observedGeneration,
+  });
+  const otherOwnerReset = await call(null, {
+    identity: owner,
+    accountStore,
+    method: 'POST',
+    path: `/accounts/${secondOwner.id}/reset`,
+    body: { temporaryPassword: 'second-owner-replacement' },
+  });
+  assert.equal(otherOwnerReset.response.status, 200);
+  assert.equal(otherOwnerReset.payload.account.mustChangePassword, true);
+  assert.equal(await accountStore.authenticateSession(secondOwnerSession.token), null);
+
   const disabled = await call(null, {
     identity: owner,
     accountStore,
@@ -581,7 +615,7 @@ test('owner account administration creates, lists, resets, disables, and changes
   assert.equal(listed.response.status, 200);
   assert.deepEqual(
     listed.payload.accounts.map(account => account.username).sort(),
-    ['owner', 'workshop'],
+    ['owner', 'second-owner', 'workshop'],
   );
   for (const account of listed.payload.accounts) {
     assert.deepEqual(Object.keys(account).sort(), [
@@ -595,7 +629,7 @@ test('owner account administration creates, lists, resets, disables, and changes
       'username',
     ]);
   }
-  assert.equal(repository.snapshot().accounts.length, 2);
+  assert.equal(repository.snapshot().accounts.length, 3);
 });
 
 test('workers and customers receive forbidden for every owner account administration route', async () => {
