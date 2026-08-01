@@ -19,6 +19,7 @@ import {
   svgPt,
   parsedVb,
   zoomBy,
+  wheelZoomFactor,
   layoutViewBox,
   fitViewToBounds,
   pathIntersectsRect,
@@ -449,11 +450,12 @@ export function useLayoutCanvasInteraction(ctx, deps) {
       }
       const isTextEditingTarget = ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)
         || e.target.isContentEditable;
+      const isInteractiveTarget = isTextEditingTarget
+        || Boolean(e.target.closest?.('button, a, [role="button"], [tabindex]'));
       if (e.code === 'Space') {
+        if (isInteractiveTarget) return;
         spaceRef.current = true;
-        if (!isTextEditingTarget) {
-          e.preventDefault();
-        }
+        e.preventDefault();
         return;
       }
       if (isTextEditingTarget) return;
@@ -888,7 +890,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
   const handleWheel = (e) => {
     e.preventDefault();
     if (!svgRef.current) return;
-    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+    const factor = wheelZoomFactor(e.deltaY, e.deltaMode);
     zoomByFactor(factor, { clientX: e.clientX, clientY: e.clientY });
   };
 
