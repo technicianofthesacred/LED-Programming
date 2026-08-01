@@ -425,6 +425,7 @@ export async function handleLibraryRequest({
       const result = await store.promoteDraft({
         draftId: segments[1],
         officialBaseRevision: validateBaseRevision(body.officialBaseRevision),
+        draftBaseRevision: validateBaseRevision(body.draftBaseRevision),
         ...mutationContext(identity, requestId),
       });
       return jsonResponse({ project: result });

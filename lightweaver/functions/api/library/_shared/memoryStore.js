@@ -43,7 +43,7 @@ function editor(actor) {
   return typeof actor?.email === 'string' ? actor.email : 'unknown';
 }
 
-function publicMetadata(record) {
+function publicMetadata(record, { redactAudit = false } = {}) {
   const metadata = {
     id: record.id,
     embeddedProjectId: record.embeddedProjectId,
@@ -54,9 +54,11 @@ function publicMetadata(record) {
     bytes: record.bytes,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
-    createdBy: record.createdBy,
-    lastEditor: record.lastEditor,
   };
+  if (!redactAudit) {
+    metadata.createdBy = record.createdBy;
+    metadata.lastEditor = record.lastEditor;
+  }
   if (record.draftOfProjectId) {
     metadata.draftOfProjectId = record.draftOfProjectId;
     metadata.draftOwnerAccountId = record.draftOwnerAccountId;
@@ -65,15 +67,16 @@ function publicMetadata(record) {
   return metadata;
 }
 
-function publicRevision(revision) {
-  return {
+function publicRevision(revision, { redactAudit = false } = {}) {
+  const result = {
     revision: revision.revision,
     archived: revision.archived,
     hash: revision.hash,
     bytes: revision.bytes,
     createdAt: revision.createdAt,
-    editor: revision.editor,
   };
+  if (!redactAudit) result.editor = revision.editor;
+  return result;
 }
 
 export function createMemoryLibraryStore(seed = {}) {
@@ -205,7 +208,7 @@ export function createMemoryLibraryStore(seed = {}) {
         return false;
       })
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id))
-      .map(record => publicMetadata(record));
+      .map(record => publicMetadata(record, { redactAudit: role(identity) === 'customer' }));
   }
 
   async function createProject({ title, project, actor, idempotencyKey }) {
@@ -238,7 +241,10 @@ export function createMemoryLibraryStore(seed = {}) {
   async function readProject({ id, identity }) {
     const record = requireVisibleProject(id, identity);
     const head = record.revisions.find(item => item.revision === record.revision);
-    return { ...publicMetadata(record), document: clone(head.document) };
+    return {
+      ...publicMetadata(record, { redactAudit: role(identity) === 'customer' }),
+      document: clone(head.document),
+    };
   }
 
   async function updateProject({ id, title, project, baseRevision, actor, idempotencyKey }) {
@@ -260,7 +266,7 @@ export function createMemoryLibraryStore(seed = {}) {
     record.updatedAt = revision.createdAt;
     record.lastEditor = editor(actor);
     acceptKey(idempotencyKey);
-    return publicMetadata(record);
+    return publicMetadata(record, { redactAudit: role(actor) === 'customer' });
   }
 
   async function duplicateProject({ id, title, actor, idempotencyKey }) {
@@ -343,7 +349,7 @@ export function createMemoryLibraryStore(seed = {}) {
     return requireVisibleProject(id, identity, 'history').revisions
       .slice()
       .sort((left, right) => right.revision - left.revision)
-      .map(publicRevision);
+      .map(revision => publicRevision(revision, { redactAudit: role(identity) === 'customer' }));
   }
 
   async function restoreRevision({ id, revision, baseRevision, actor, idempotencyKey }) {
@@ -532,6 +538,13 @@ export function createMemoryLibraryStore(seed = {}) {
     return account;
   }
 
+  function requireAccountReference(account) {
+    if (!account || typeof account.id !== 'string' || !account.id) {
+      throw new LibraryStoreError('invalid_assignment', 'An existing account is required.', 400);
+    }
+    return account;
+  }
+
   function draftFor(customerId, officialId) {
     return [...projects.values()].find(record => (
       record.draftOfProjectId === officialId
@@ -592,7 +605,7 @@ export function createMemoryLibraryStore(seed = {}) {
   async function unassignCustomerProject({ targetAccount, projectId, actor, idempotencyKey }) {
     requireOwner(actor, { native: true });
     requireUnusedKey(idempotencyKey);
-    const customer = requireCustomerAccount(targetAccount);
+    const customer = requireAccountReference(targetAccount);
     const official = requireProject(projectId);
     if (official.draftOfProjectId) {
       throw new LibraryStoreError('not_found', 'The requested project was not found.', 404);
@@ -604,7 +617,7 @@ export function createMemoryLibraryStore(seed = {}) {
 
   async function listCustomerAssignments({ targetAccount, identity }) {
     requireOwner(identity, { native: true });
-    const customer = requireCustomerAccount(targetAccount);
+    const customer = requireAccountReference(targetAccount);
     const results = [];
     for (const [key] of assignments) {
       const [customerId, projectId] = key.split('\u0000');
@@ -631,13 +644,20 @@ export function createMemoryLibraryStore(seed = {}) {
       .sort((left, right) => left.id.localeCompare(right.id));
   }
 
-  async function promoteDraft({ draftId, officialBaseRevision, actor, idempotencyKey }) {
+  async function promoteDraft({
+    draftId,
+    officialBaseRevision,
+    draftBaseRevision,
+    actor,
+    idempotencyKey,
+  }) {
     requireOwner(actor);
     requireUnusedKey(idempotencyKey);
     const draft = requireProject(draftId);
     if (!draft.draftOfProjectId) {
       throw new LibraryStoreError('not_found', 'The requested project was not found.', 404);
     }
+    requireHead(draft, draftBaseRevision);
     const official = requireProject(draft.draftOfProjectId);
     requireHead(official, officialBaseRevision);
     const draftHead = draft.revisions.find(item => item.revision === draft.revision);

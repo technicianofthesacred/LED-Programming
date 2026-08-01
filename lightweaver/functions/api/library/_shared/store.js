@@ -40,7 +40,7 @@ async function contentDetails(value) {
   return { hash, bytes: encoded.byteLength, text };
 }
 
-function publicProject(row) {
+function publicProject(row, { redactAudit = false } = {}) {
   const project = {
     id: row.id,
     embeddedProjectId: row.embedded_project_id,
@@ -51,9 +51,11 @@ function publicProject(row) {
     bytes: row.current_bytes,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    createdBy: row.created_by,
-    lastEditor: row.last_editor,
   };
+  if (!redactAudit) {
+    project.createdBy = row.created_by;
+    project.lastEditor = row.last_editor;
+  }
   if (row.draft_of_project_id) {
     project.draftOfProjectId = row.draft_of_project_id;
     project.draftOwnerAccountId = row.draft_owner_account_id;
@@ -62,15 +64,16 @@ function publicProject(row) {
   return project;
 }
 
-function publicRevision(row) {
-  return {
+function publicRevision(row, { redactAudit = false } = {}) {
+  const revision = {
     revision: row.revision,
     archived: row.archived === 1,
     hash: row.content_hash,
     bytes: row.byte_length,
     createdAt: row.created_at,
-    editor: row.editor,
   };
+  if (!redactAudit) revision.editor = row.editor;
+  return revision;
 }
 
 function actorEmail(actor) {
@@ -298,7 +301,7 @@ export function createD1R2LibraryStore(env, options = {}) {
       WHERE p.archived = ? AND p.deleted_at IS NULL AND ${visibility}
       ORDER BY p.updated_at DESC, p.id ASC
     `).bind(archived, ...visibilityValues).all();
-    return results.map(publicProject);
+    return results.map(row => publicProject(row, { redactAudit: identity.role === 'customer' }));
   }
 
   async function createProject({ title, project, actor, idempotencyKey }) {
@@ -355,10 +358,21 @@ export function createD1R2LibraryStore(env, options = {}) {
       await readBody(row.current_object_key, row.current_hash),
       { maxBytes },
     );
-    return { ...publicProject(row), document };
+    return {
+      ...publicProject(row, { redactAudit: identity?.role === 'customer' }),
+      document,
+    };
   }
 
-  async function updateProject({ id, title, project, baseRevision, actor, idempotencyKey }) {
+  async function updateProject({
+    id,
+    title,
+    project,
+    baseRevision,
+    actor,
+    idempotencyKey,
+    reviewedDraft,
+  }) {
     await unusedKey(idempotencyKey);
     const head = await requireProjectHead(id, baseRevision, actor, 'update');
     const cleanTitle = title === undefined ? head.title : validateProjectTitle(title);
@@ -371,6 +385,13 @@ export function createD1R2LibraryStore(env, options = {}) {
     const updatedAt = timestamp();
     const attemptId = crypto.randomUUID();
     const objectKey = `projects/${id}/revisions/${revision}-${crypto.randomUUID()}.lw.json`;
+    const reviewCondition = reviewedDraft
+      ? `AND EXISTS (
+          SELECT 1 FROM projects reviewed
+          WHERE reviewed.id = ? AND reviewed.current_revision = ? AND reviewed.deleted_at IS NULL
+        )`
+      : '';
+    const reviewValues = reviewedDraft ? [reviewedDraft.id, reviewedDraft.revision] : [];
     await putBody(objectKey, details);
 
     const statements = [
@@ -380,25 +401,30 @@ export function createD1R2LibraryStore(env, options = {}) {
           project_version, created_at, editor
         )
         SELECT id, ?, archived, ?, ?, ?, ?, ?, ? FROM projects
-        WHERE id = ? AND current_revision = ? AND deleted_at IS NULL
+        WHERE id = ? AND current_revision = ? AND deleted_at IS NULL ${reviewCondition}
       `).bind(
         revision, objectKey, details.hash, details.bytes, document.version,
-        updatedAt, actorEmail(actor), id, baseRevision,
+        updatedAt, actorEmail(actor), id, baseRevision, ...reviewValues,
       ),
       db.prepare(`
         UPDATE projects SET
           title = ?, current_revision = ?, current_object_key = ?, current_hash = ?,
           current_bytes = ?, updated_at = ?, last_editor = ?
-        WHERE id = ? AND current_revision = ? AND deleted_at IS NULL
+        WHERE id = ? AND current_revision = ? AND deleted_at IS NULL ${reviewCondition}
       `).bind(
         cleanTitle, revision, objectKey, details.hash, details.bytes, updatedAt,
-        actorEmail(actor), id, baseRevision,
+        actorEmail(actor), id, baseRevision, ...reviewValues,
       ),
       mutationStatement(db, {
         actor,
         attemptId,
-        conditionSql: 'EXISTS (SELECT 1 FROM projects WHERE id = ? AND current_revision = ? AND current_object_key = ?)',
-        conditionValues: [id, revision, objectKey],
+        conditionSql: `EXISTS (
+          SELECT 1 FROM projects WHERE id = ? AND current_revision = ? AND current_object_key = ?
+        )${reviewedDraft ? ` AND EXISTS (
+          SELECT 1 FROM projects reviewed
+          WHERE reviewed.id = ? AND reviewed.current_revision = ? AND reviewed.deleted_at IS NULL
+        )` : ''}`,
+        conditionValues: [id, revision, objectKey, ...reviewValues],
         idempotencyKey,
         kind: 'update-project',
         timestamp: updatedAt,
@@ -408,9 +434,16 @@ export function createD1R2LibraryStore(env, options = {}) {
       attemptId,
       cleanup: [objectKey],
       idempotencyKey,
-      onConflict: async () => (await rawProjectRow(id)).current_revision !== baseRevision,
+      onConflict: async () => {
+        if ((await rawProjectRow(id)).current_revision !== baseRevision) return true;
+        if (!reviewedDraft) return false;
+        const reviewed = await anyProjectRow(reviewedDraft.id);
+        return !reviewed
+          || reviewed.deleted_at
+          || reviewed.current_revision !== reviewedDraft.revision;
+      },
     });
-    return publicProject(await rawProjectRow(id));
+    return publicProject(await rawProjectRow(id), { redactAudit: actor?.role === 'customer' });
   }
 
   async function duplicateProject({ id, title, actor, idempotencyKey }) {
@@ -596,7 +629,7 @@ export function createD1R2LibraryStore(env, options = {}) {
       SELECT revision, archived, content_hash, byte_length, created_at, editor
       FROM project_revisions WHERE project_id = ? ORDER BY revision DESC
     `).bind(id).all();
-    return results.map(publicRevision);
+    return results.map(row => publicRevision(row, { redactAudit: identity?.role === 'customer' }));
   }
 
   async function restoreRevision({ id, revision: sourceRevision, baseRevision, actor, idempotencyKey }) {
@@ -1042,6 +1075,14 @@ export function createD1R2LibraryStore(env, options = {}) {
     return account;
   }
 
+  async function knownAccount(id) {
+    const account = typeof id === 'string' && id
+      ? await db.prepare('SELECT id, role, status FROM accounts WHERE id = ?').bind(id).first()
+      : null;
+    if (!account) fail('invalid_assignment', 'An existing account is required.', 400);
+    return account;
+  }
+
   async function customerDraftRow(customerId, officialId) {
     return db.prepare(`
       SELECT draft.*, official.title AS official_title
@@ -1162,7 +1203,7 @@ export function createD1R2LibraryStore(env, options = {}) {
   async function unassignCustomerProject({ targetAccount, projectId, actor, idempotencyKey }) {
     requireOwner(actor, { native: true });
     await unusedKey(idempotencyKey);
-    const customer = await activeCustomerAccount(targetAccount?.id);
+    const customer = await knownAccount(targetAccount?.id);
     const official = await rawProjectRow(projectId);
     if (official.draft_of_project_id) fail('not_found', 'The requested project was not found.', 404);
     const removedAt = timestamp();
@@ -1184,7 +1225,7 @@ export function createD1R2LibraryStore(env, options = {}) {
 
   async function listCustomerAssignments({ targetAccount, identity }) {
     requireOwner(identity, { native: true });
-    const customer = await activeCustomerAccount(targetAccount?.id);
+    const customer = await knownAccount(targetAccount?.id);
     const { results } = await db.prepare(`
       SELECT a.project_id FROM project_assignments a
       JOIN projects official ON official.id = a.project_id AND official.deleted_at IS NULL
@@ -1208,12 +1249,23 @@ export function createD1R2LibraryStore(env, options = {}) {
     return results.map(publicProject);
   }
 
-  async function promoteDraft({ draftId, officialBaseRevision, actor, idempotencyKey }) {
+  async function promoteDraft({
+    draftId,
+    officialBaseRevision,
+    draftBaseRevision,
+    actor,
+    idempotencyKey,
+  }) {
     requireOwner(actor);
+    await unusedKey(idempotencyKey);
     validateBaseRevision(officialBaseRevision);
+    validateBaseRevision(draftBaseRevision);
     const draft = await rawProjectRow(draftId);
     if (!draft.draft_of_project_id || !draft.draft_owner_account_id) {
       fail('not_found', 'The requested project was not found.', 404);
+    }
+    if (draft.current_revision !== draftBaseRevision) {
+      fail('revision_conflict', 'The project changed since it was reviewed.', 409);
     }
     const official = await rawProjectRow(draft.draft_of_project_id);
     if (official.current_revision !== officialBaseRevision) {
@@ -1232,6 +1284,7 @@ export function createD1R2LibraryStore(env, options = {}) {
       baseRevision: officialBaseRevision,
       actor,
       idempotencyKey,
+      reviewedDraft: { id: draft.id, revision: draftBaseRevision },
     });
   }
 

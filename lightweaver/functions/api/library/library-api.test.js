@@ -416,7 +416,7 @@ async function createNativeLibraryFixture() {
   ]) {
     accounts[username] = await accountStore.createAccount({
       username,
-      displayName: username.replace('-', ' '),
+      displayName: username === 'owner' ? 'Sensitive Owner Label' : username.replace('-', ' '),
       role,
       temporaryPassword: 'temporary-passphrase',
     });
@@ -1013,6 +1013,8 @@ test('owner assignment creates one reusable private draft and customer edits nev
   });
   assert.deepEqual(customerProjects.payload.projects.map(project => project.id), [draftId]);
   assert.equal(customerProjects.payload.projects[0].draftOfProjectId, official.payload.project.id);
+  assert.equal('createdBy' in customerProjects.payload.projects[0], false);
+  assert.equal('lastEditor' in customerProjects.payload.projects[0], false);
 
   const draft = await call(store, {
     identity: identities['customer-one'], accountStore, path: `/projects/${draftId}`,
@@ -1029,9 +1031,18 @@ test('owner assignment creates one reusable private draft and customer edits nev
   });
   assert.equal(updated.response.status, 200);
   assert.equal(updated.payload.project.revision, 2);
-  assert.deepEqual((await call(store, {
+  const customerHistory = await call(store, {
     identity: identities['customer-one'], accountStore, path: `/projects/${draftId}/revisions`,
-  })).payload.revisions.map(revision => revision.revision), [2, 1]);
+  });
+  assert.deepEqual(customerHistory.payload.revisions.map(revision => revision.revision), [2, 1]);
+  assert.equal(customerHistory.payload.revisions.every(revision => !('editor' in revision)), true);
+  const customerJson = JSON.stringify({
+    list: customerProjects.payload,
+    read: draft.payload,
+    update: updated.payload,
+    history: customerHistory.payload,
+  });
+  assert.doesNotMatch(customerJson, /Sensitive Owner Label|\(owner\)|customer one|\(customer-one\)/i);
 
   const unchangedOfficial = await call(store, {
     identity: identities.owner, accountStore, path: `/projects/${official.payload.project.id}`,
@@ -1169,7 +1180,7 @@ test('only owners review customer drafts and promotion appends conflict-safe off
     accountStore,
     method: 'POST',
     path: `/projects/${draftId}/promote`,
-    body: { officialBaseRevision: 1 },
+    body: { officialBaseRevision: 1, draftBaseRevision: 2 },
   })).response.status, 403);
 
   for (const [path, body] of [
@@ -1189,15 +1200,51 @@ test('only owners review customer drafts and promotion appends conflict-safe off
     assert.equal(denied.payload.error.code, 'forbidden');
   }
 
+  const missingDraftBase = await call(store, {
+    identity: identities.owner,
+    accountStore,
+    method: 'POST',
+    path: `/projects/${draftId}/promote`,
+    body: { officialBaseRevision: 1 },
+  });
+  assert.equal(missingDraftBase.response.status, 400);
+  assert.equal(missingDraftBase.payload.error.code, 'invalid_request');
+
   const conflict = await call(store, {
     identity: identities.owner,
     accountStore,
     method: 'POST',
     path: `/projects/${draftId}/promote`,
-    body: { officialBaseRevision: 0 },
+    body: { officialBaseRevision: 0, draftBaseRevision: 2 },
   });
   assert.equal(conflict.response.status, 409);
   assert.equal(conflict.payload.error.code, 'revision_conflict');
+
+  const savedAfterReview = structuredClone(customerDocument);
+  savedAfterReview.pattern.masterBrightness = 0.47;
+  const concurrentSave = await call(store, {
+    identity: identities['customer-one'],
+    accountStore,
+    method: 'PUT',
+    path: `/projects/${draftId}`,
+    requestId: 'save-after-owner-review',
+    body: { baseRevision: 2, title: 'Customer Draft Title', project: savedAfterReview },
+  });
+  assert.equal(concurrentSave.payload.project.revision, 3);
+
+  const staleDraftPromotion = await call(store, {
+    identity: identities.owner,
+    accountStore,
+    method: 'POST',
+    path: `/projects/${draftId}/promote`,
+    requestId: 'promote-stale-draft-review',
+    body: { officialBaseRevision: 1, draftBaseRevision: 2 },
+  });
+  assert.equal(staleDraftPromotion.response.status, 409);
+  assert.equal(staleDraftPromotion.payload.error.code, 'revision_conflict');
+  assert.equal((await call(store, {
+    identity: identities.owner, accountStore, path: `/projects/${official.payload.project.id}`,
+  })).payload.project.revision, 1);
 
   const promoted = await call(store, {
     identity: identities.owner,
@@ -1205,7 +1252,7 @@ test('only owners review customer drafts and promotion appends conflict-safe off
     method: 'POST',
     path: `/projects/${draftId}/promote`,
     requestId: 'promote-draft',
-    body: { officialBaseRevision: 1 },
+    body: { officialBaseRevision: 1, draftBaseRevision: 3 },
   });
   assert.equal(promoted.response.status, 200);
   assert.equal(promoted.payload.project.id, official.payload.project.id);
@@ -1218,12 +1265,91 @@ test('only owners review customer drafts and promotion appends conflict-safe off
   });
   assert.equal(opened.payload.project.document.id, 'canonical-id');
   assert.equal(opened.payload.project.document.name, 'Canonical Title');
-  assert.equal(opened.payload.project.document.pattern.masterBrightness, 0.38);
+  assert.equal(opened.payload.project.document.pattern.masterBrightness, 0.47);
   assert.deepEqual((await call(store, {
     identity: identities.owner,
     accountStore,
     path: `/projects/${official.payload.project.id}/revisions`,
   })).payload.revisions.map(revision => revision.revision), [2, 1]);
+
+  const replay = await call(store, {
+    identity: identities.owner,
+    accountStore,
+    method: 'POST',
+    path: `/projects/${draftId}/promote`,
+    requestId: 'promote-draft',
+    body: { officialBaseRevision: 2, draftBaseRevision: 3 },
+  });
+  assert.equal(replay.response.status, 409);
+  assert.equal(replay.payload.error.code, 'idempotency_conflict');
+});
+
+test('owners can inspect and remove assignments after customer disable or role change', async () => {
+  const store = createMemoryLibraryStore();
+  const { accountStore, accounts, identities } = await createNativeLibraryFixture();
+  const official = await call(store, {
+    identity: identities.owner,
+    accountStore,
+    method: 'POST',
+    path: '/projects',
+    body: { title: 'Cleanup Official', project: portableProject({ id: 'cleanup-official' }) },
+  });
+  for (const username of ['customer-one', 'customer-two']) {
+    const assigned = await call(store, {
+      identity: identities.owner,
+      accountStore,
+      method: 'POST',
+      path: `/accounts/${accounts[username].id}/assignments`,
+      requestId: `cleanup-assign-${username}`,
+      body: { projectId: official.payload.project.id },
+    });
+    assert.equal(assigned.response.status, 201);
+  }
+  await accountStore.setAccountStatus({ id: accounts['customer-one'].id, status: 'disabled' });
+  await accountStore.setAccountRole({ id: accounts['customer-two'].id, role: 'worker' });
+
+  for (const username of ['customer-one', 'customer-two']) {
+    const path = `/accounts/${accounts[username].id}/assignments`;
+    const listed = await call(store, { identity: identities.owner, accountStore, path });
+    assert.equal(listed.response.status, 200);
+    assert.equal(listed.payload.assignments.length, 1);
+
+    const creationDenied = await call(store, {
+      identity: identities.owner,
+      accountStore,
+      method: 'POST',
+      path,
+      requestId: `cleanup-reassign-${username}`,
+      body: { projectId: official.payload.project.id },
+    });
+    assert.equal(creationDenied.response.status, 400);
+    assert.equal(creationDenied.payload.error.code, 'invalid_assignment');
+
+    const removed = await call(store, {
+      identity: identities.owner,
+      accountStore,
+      method: 'DELETE',
+      path: `${path}/${official.payload.project.id}`,
+      requestId: `cleanup-unassign-${username}`,
+    });
+    assert.equal(removed.response.status, 200);
+    assert.deepEqual((await call(store, { identity: identities.owner, accountStore, path })).payload.assignments, []);
+  }
+
+  const worker = {
+    accountId: accounts['customer-two'].id,
+    username: 'customer-two',
+    displayName: 'customer two',
+    role: 'worker',
+    mustChangePassword: false,
+    subject: `account:${accounts['customer-two'].id}`,
+  };
+  const denied = await call(store, {
+    identity: worker,
+    accountStore,
+    path: `/accounts/${accounts['customer-one'].id}/assignments`,
+  });
+  assert.equal(denied.response.status, 403);
 });
 
 test('workspace assets use optimistic revisions and preserve their history in backup', async () => {

@@ -496,13 +496,21 @@ test('D1 assignment races create one reusable customer draft and clean the losin
 
   const customerList = await store.listProjects({ state: 'active', identity: customer });
   assert.deepEqual(customerList.map(project => project.id), [draftIds[0]]);
-  assert.deepEqual((await store.listProjects({ state: 'active', identity: owner })).map(project => project.id), [official.id]);
+  const ownerList = await store.listProjects({ state: 'active', identity: owner });
+  assert.deepEqual(ownerList.map(project => project.id), [official.id]);
+  assert.equal(ownerList[0].createdBy, 'Draft Owner (draft-owner)');
   const opened = await store.readProject({ id: draftIds[0], identity: customer });
-  await store.updateProject({
+  const updated = await store.updateProject({
     id: draftIds[0], baseRevision: 1,
     project: portableProject({ id: opened.embeddedProjectId, brightness: 0.4 }),
     actor: customer, idempotencyKey: 'customer-draft-update',
   });
+  const customerHistory = await store.listRevisions({ id: draftIds[0], identity: customer });
+  assert.equal(customerHistory.every(revision => !('editor' in revision)), true);
+  assert.doesNotMatch(
+    JSON.stringify({ customerList, opened, updated, customerHistory }),
+    /Draft Owner|draft-owner|Draft Customer|draft-customer/,
+  );
   assert.equal((await store.readProject({ id: official.id, identity: owner })).revision, 1);
 
   assert.deepEqual(await store.unassignCustomerProject({
@@ -519,6 +527,36 @@ test('D1 assignment races create one reusable customer draft and clean the losin
   });
   assert.equal(reassigned.assignment.draftProjectId, draftIds[0]);
   assert.equal(reassigned.assignment.project.revision, 2);
+
+  await accountStore.setAccountStatus({ id: customerAccount.id, status: 'disabled' });
+  const disabledAccount = await accountStore.getAccount(customerAccount.id);
+  assert.equal((await store.listCustomerAssignments({
+    targetAccount: disabledAccount, identity: owner,
+  })).length, 1);
+  await assert.rejects(store.assignCustomerProject({
+    targetAccount: disabledAccount, projectId: official.id, actor: owner,
+    idempotencyKey: 'disabled-assignment-denied',
+  }), error => error.code === 'invalid_assignment');
+  assert.deepEqual(await store.unassignCustomerProject({
+    targetAccount: disabledAccount, projectId: official.id, actor: owner,
+    idempotencyKey: 'disabled-assignment-cleanup',
+  }), { unassigned: true });
+
+  await accountStore.setAccountStatus({ id: customerAccount.id, status: 'active' });
+  const activeAgain = await accountStore.getAccount(customerAccount.id);
+  await store.assignCustomerProject({
+    targetAccount: activeAgain, projectId: official.id, actor: owner,
+    idempotencyKey: 'role-change-assignment',
+  });
+  await accountStore.setAccountRole({ id: customerAccount.id, role: 'worker' });
+  const reRoleAccount = await accountStore.getAccount(customerAccount.id);
+  assert.equal((await store.listCustomerAssignments({
+    targetAccount: reRoleAccount, identity: owner,
+  })).length, 1);
+  assert.deepEqual(await store.unassignCustomerProject({
+    targetAccount: reRoleAccount, projectId: official.id, actor: owner,
+    idempotencyKey: 'role-change-assignment-cleanup',
+  }), { unassigned: true });
 });
 
 test('D1 promotion preserves official identity and permanent delete cleans drafts, assignments, revisions, and R2', async t => {
@@ -553,10 +591,51 @@ test('D1 promotion preserves official identity and permanent delete cleans draft
   });
 
   await assert.rejects(store.promoteDraft({
-    draftId, officialBaseRevision: 0, actor: owner, idempotencyKey: 'promotion-conflict',
+    draftId, officialBaseRevision: 0, draftBaseRevision: 2,
+    actor: owner, idempotencyKey: 'promotion-conflict',
   }), error => error.code === 'revision_conflict');
+
+  await store.updateProject({
+    id: draftId, baseRevision: 2,
+    project: portableProject({ id: 'untouched-official-id', name: 'Later Customer Save', brightness: 0.27 }),
+    title: 'Later Customer Title', actor: customer, idempotencyKey: 'promotion-concurrent-save',
+  });
+  await assert.rejects(store.promoteDraft({
+    draftId, officialBaseRevision: 1, draftBaseRevision: 2,
+    actor: owner, idempotencyKey: 'promotion-stale-draft',
+  }), error => error.code === 'revision_conflict');
+  assert.equal((await store.readProject({ id: official.id, identity: owner })).revision, 1);
+
+  let injectedConcurrentSave = false;
+  const racingDb = {
+    prepare: (...args) => db.prepare(...args),
+    async batch(statements) {
+      if (!injectedConcurrentSave) {
+        injectedConcurrentSave = true;
+        await store.updateProject({
+          id: draftId,
+          baseRevision: 3,
+          project: portableProject({
+            id: 'untouched-official-id', name: 'Save During Promotion', brightness: 0.37,
+          }),
+          title: 'Save During Promotion',
+          actor: customer,
+          idempotencyKey: 'save-inside-promotion-window',
+        });
+      }
+      return db.batch(statements);
+    },
+  };
+  const racingStore = createD1R2LibraryStore({ PROJECTS_DB: racingDb, PROJECT_BLOBS: bucket });
+  await assert.rejects(racingStore.promoteDraft({
+    draftId, officialBaseRevision: 1, draftBaseRevision: 3,
+    actor: owner, idempotencyKey: 'promotion-raced-draft',
+  }), error => error.code === 'revision_conflict');
+  assert.equal((await store.readProject({ id: official.id, identity: owner })).revision, 1);
+
   const promoted = await store.promoteDraft({
-    draftId, officialBaseRevision: 1, actor: owner, idempotencyKey: 'promotion-success',
+    draftId, officialBaseRevision: 1, draftBaseRevision: 4,
+    actor: owner, idempotencyKey: 'promotion-success',
   });
   assert.equal(promoted.revision, 2);
   assert.equal(promoted.title, 'Untouched Official Title');
@@ -564,12 +643,17 @@ test('D1 promotion preserves official identity and permanent delete cleans draft
   const opened = await store.readProject({ id: official.id, identity: owner });
   assert.equal(opened.document.id, 'untouched-official-id');
   assert.equal(opened.document.name, 'Untouched Official Title');
-  assert.equal(opened.document.pattern.masterBrightness, 0.17);
+  assert.equal(opened.document.pattern.masterBrightness, 0.37);
   assert.deepEqual(
     (await store.listRevisions({ id: official.id, identity: owner })).map(revision => revision.revision),
     [2, 1],
   );
-  assert.equal((await bucket.list()).objects.length, 4);
+  assert.equal((await bucket.list()).objects.length, 6);
+
+  await assert.rejects(store.promoteDraft({
+    draftId, officialBaseRevision: 2, draftBaseRevision: 4,
+    actor: owner, idempotencyKey: 'promotion-success',
+  }), error => error.code === 'idempotency_conflict');
 
   assert.deepEqual(await store.deleteProject({
     id: official.id, baseRevision: 2, actor: owner, idempotencyKey: 'delete-official-and-drafts',
