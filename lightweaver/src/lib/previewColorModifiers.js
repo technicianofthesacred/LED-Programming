@@ -16,6 +16,8 @@
  * Operates in place on an array of { r, g, b } (0–255) pixels, at time `tMs`.
  */
 
+import { resolveBreatheScale } from './breatheEnvelope.js';
+
 export const LW_DEFAULT_CUSTOM_HUE = 32;
 export const LW_DEFAULT_CUSTOM_SATURATION = 230;
 
@@ -156,13 +158,15 @@ export function applyLookColorModifiers(pixels, tMs, look = {}) {
   const advHueShift = clampInt(look.hueShift, 0, -128, 128);
 
   let hueShift = (customHue - LW_DEFAULT_CUSTOM_HUE) + advHueShift;
-  if (look.customDrift) hueShift += resolveDriftHue(tMs) - customHue;
+  if (look.customDrift) {
+    const rawSpeed = Number(look.speed);
+    const speed = Number.isFinite(rawSpeed) ? Math.max(0.05, Math.min(3, rawSpeed)) : 1;
+    hueShift += resolveDriftHue(tMs * speed) - customHue;
+  }
 
   const shiftsHue = hueShift !== 0;
   const changesSaturation = customSaturation !== LW_DEFAULT_CUSTOM_SATURATION;
-  const breatheScale = look.customBreathe
-    ? 86 + scale8(sin8(Math.floor(tMs / 14) & 0xff), 169)
-    : 255;
+  const breatheScale = resolveBreatheScale(tMs, look);
 
   if (!shiftsHue && !changesSaturation && breatheScale >= 255) return pixels;
 

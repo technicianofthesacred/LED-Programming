@@ -428,7 +428,9 @@ import { PatternPreview } from './PatternPreview.jsx';
         strips, board,
         savedGlobalLook.patternId, savedGlobalLook.brightness, savedGlobalLook.speed,
         savedGlobalLook.hueShift, savedGlobalLook.customHue, savedGlobalLook.customSaturation,
-        savedGlobalLook.customBreathe, savedGlobalLook.customDrift,
+        savedGlobalLook.customBreathe, savedGlobalLook.breatheLowerPct,
+        savedGlobalLook.breatheUpperPct, savedGlobalLook.breatheCycleSeconds,
+        savedGlobalLook.customDrift,
       ],
     );
     const selectedTarget = sectionTargets.find(target => target.id === selectedTargetId) || sectionTargets[0];
@@ -445,6 +447,11 @@ import { PatternPreview } from './PatternPreview.jsx';
       draftLooks[selectedTarget?.id] ||
       (selectedTarget?.kind === 'section' && draftLooks[ALL_SECTIONS_TARGET_ID] ? draftDefaultLook : savedTargetLook),
     );
+    const breatheSummary = !look.customBreathe
+      ? 'Breathe off'
+      : look.breatheLowerPct === look.breatheUpperPct
+        ? `Breathe · ${look.breatheLowerPct}% steady`
+        : `Breathe · ${look.breatheLowerPct}–${look.breatheUpperPct}% · ${look.breatheCycleSeconds}s`;
     const effectiveSectionTargets = useMemo(
       () => sectionTargets.map(target => ({ ...target, look: resolveDraftTargetLook(target) })),
       [resolveDraftTargetLook, sectionTargets],
@@ -503,13 +510,13 @@ import { PatternPreview } from './PatternPreview.jsx';
     const runtimeBuild = useMemo(() => {
       try {
         return {
-          runtimePackage: buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: board, standaloneController }),
+          runtimePackage: buildCardRuntimePackageFromProject({ projectId, projectName, strips, patchBoard: board, compiledWiring, standaloneController }),
           error: null,
         };
       } catch (error) {
         return { runtimePackage: null, error };
       }
-    }, [projectId, projectName, strips, board, standaloneController]);
+    }, [projectId, projectName, strips, board, compiledWiring, standaloneController]);
     const runtimePackage = runtimeBuild.runtimePackage;
     const hardwareConfigurationIssue = runtimeBuild.error
       ? String(runtimeBuild.error.message || runtimeBuild.error).replace('is already owned by an LED output or another control', 'is already used by an LED output or another control')
@@ -916,6 +923,7 @@ import { PatternPreview } from './PatternPreview.jsx';
         projectRevision: requestedRevision,
         strips,
         patchBoard: nextBoard,
+        compiledWiring,
         standaloneController: nextController,
       });
       const nextPackage = prepared.runtimePackage;
@@ -1184,6 +1192,7 @@ import { PatternPreview } from './PatternPreview.jsx';
         projectRevision: projectLifecycle.editedRevision,
         strips,
         patchBoard: nextBoard,
+        compiledWiring,
         standaloneController: nextController,
       });
       const nextPackage = prepared.runtimePackage;
@@ -1482,7 +1491,7 @@ import { PatternPreview } from './PatternPreview.jsx';
                 </div>
 
                 <div className="card pm-pane">
-                  <div className="sec-h"><span className="t">Color</span><button type="button" className="pm-save" data-testid="look-save-preset" onClick={savePreset}>Save look</button><button type="button" className="pm-reset" data-testid="look-reset" onClick={() => updatePreviewLook({ brightness: DEFAULT_CARD_VISUAL_LOOK.brightness, speed: DEFAULT_CARD_VISUAL_LOOK.speed, customHue: DEFAULT_CARD_VISUAL_LOOK.customHue, customSaturation: DEFAULT_CARD_VISUAL_LOOK.customSaturation, hueShift: DEFAULT_CARD_VISUAL_LOOK.hueShift, customBreathe: false, customDrift: false })}>Reset</button></div>
+                  <div className="sec-h"><span className="t">Color</span><button type="button" className="pm-save" data-testid="look-save-preset" onClick={savePreset}>Save look</button><button type="button" className="pm-reset" data-testid="look-reset" onClick={() => updatePreviewLook({ brightness: DEFAULT_CARD_VISUAL_LOOK.brightness, speed: DEFAULT_CARD_VISUAL_LOOK.speed, customHue: DEFAULT_CARD_VISUAL_LOOK.customHue, customSaturation: DEFAULT_CARD_VISUAL_LOOK.customSaturation, hueShift: DEFAULT_CARD_VISUAL_LOOK.hueShift, customBreathe: false, breatheLowerPct: 85, breatheUpperPct: 100, breatheCycleSeconds: 9, customDrift: false })}>Reset</button></div>
                   <div className="pm-palette">
                     <span className="pm-palrow">{sel.pal.map((c, i) => {
                       const h = c.replace('#', '');
@@ -1506,12 +1515,17 @@ import { PatternPreview } from './PatternPreview.jsx';
 
                   {/* Advanced: Breathe / Drift + Hue-shift, tucked in the mockup idiom */}
                   <details className="pmx-advanced">
-                    <summary>Advanced</summary>
+                    <summary><span>Advanced</span><span className="pmx-advanced-summary" data-testid="breathe-summary">{breatheSummary}</span></summary>
                     <div className="pmx-advanced-body">
                       <div className="pmx-switches">
                         <label><input type="checkbox" checked={look.customBreathe} onChange={(e) => updatePreviewLook({ customBreathe: e.target.checked })} /> Breathe</label>
                         <label><input type="checkbox" checked={look.customDrift} onChange={(e) => updatePreviewLook({ customDrift: e.target.checked })} /> Drift</label>
                       </div>
+                      {look.customBreathe && <div className="pmx-breathe-controls">
+                        <Slider k="Lower brightness" v={`${look.breatheLowerPct}%`} value={look.breatheLowerPct} min={0} max={look.breatheUpperPct} step={1} testId="breathe-lower" onChange={(breatheLowerPct) => updatePreviewLook({ breatheLowerPct })} />
+                        <Slider k="Upper brightness" v={`${look.breatheUpperPct}%`} value={look.breatheUpperPct} min={look.breatheLowerPct} max={100} step={1} testId="breathe-upper" onChange={(breatheUpperPct) => updatePreviewLook({ breatheUpperPct })} />
+                        <Slider k="Cycle" v={`${look.breatheCycleSeconds}s`} value={look.breatheCycleSeconds} min={4} max={30} step={1} testId="breathe-cycle" onChange={(breatheCycleSeconds) => updatePreviewLook({ breatheCycleSeconds })} />
+                      </div>}
                       <Slider k="Hue shift" v={String(look.hueShift)} value={look.hueShift} min={-128} max={128} step={1} testId="look-hue-shift" onChange={(hueShift) => updatePreviewLook({ hueShift })} />
                     </div>
                   </details>

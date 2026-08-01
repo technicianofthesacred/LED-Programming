@@ -92,6 +92,13 @@ test('compacts static geometry once with authoritative bounds and hidden pixel m
   assert.deepEqual(geometry.normalizationBounds, { minX: 0, minY: -5000, range: 10000 });
   assert.equal(geometry.coordinates.length, 1000);
   assert.equal(geometry.progress.length, 500);
+  assert.equal(geometry.version, 2);
+  assert.equal(geometry.reflectionProgress.length, 500);
+  assert.equal(geometry.kaleidoscopeProgress.length, 500);
+  assert.equal(geometry.reflectionDistance.length, 500);
+  assert.equal(geometry.reflectionSegment.length, 500);
+  assert.equal(geometry.reflectionPoint.length, 500);
+  assert.equal(geometry.reflectionFlags.length, 500);
   assert.equal(geometry.strips.length, 1);
   assert.equal(geometry.strips[0].count, 500);
   assert.equal('svgText' in geometry, false);
@@ -117,8 +124,25 @@ test('geometry transfer cloning leaves the cached typed snapshot reusable', () =
   const cloned = clonePatternLabWorkerGeometryForTransfer(cached);
   assert.notEqual(cloned.geometry.coordinates.buffer, cached.coordinates.buffer);
   assert.notEqual(cloned.geometry.progress.buffer, cached.progress.buffer);
-  assert.deepEqual(cloned.transfer, [cloned.geometry.coordinates.buffer, cloned.geometry.progress.buffer]);
+  assert.equal(cloned.transfer.length, 8);
+  assert.ok(cloned.transfer.includes(cloned.geometry.reflectionProgress.buffer));
+  assert.ok(cloned.transfer.includes(cloned.geometry.reflectionFlags.buffer));
   assert.equal(cached.coordinates.byteLength, 32);
+});
+
+test('geometry carries source-local Kaleidoscope context through typed arrays', () => {
+  const geometry = compactPatternLabWorkerGeometry({
+    strips: [{
+      id: 'ring',
+      pixelCount: 8,
+      pixels: Array.from({ length: 8 }, (_, index) => ({ x: index, y: 0 })),
+      kaleidoscope: { enabled: true, pointCount: 4, startLed: 0, offsets: [0, 0, 0, 0] },
+    }],
+  });
+  assert.deepEqual([...geometry.kaleidoscopeProgress], [0, 0.5, 1, 0.5, 0, 0.5, 1, 0.5]);
+  assert.deepEqual([...geometry.reflectionSegment], [0, 0, 1, 1, 2, 2, 3, 3]);
+  assert.deepEqual([...geometry.reflectionPoint], [0, -1, 1, -1, 2, -1, 3, -1]);
+  assert.deepEqual([...geometry.reflectionFlags], [1, 0, 1, 0, 1, 0, 1, 0]);
 });
 
 test('worker-side geometry validation rejects forged non-finite typed values', () => {

@@ -67,6 +67,14 @@ function sampledStrips(geometry, indices) {
       x: geometry.coordinates[sourceIndex * 2],
       y: geometry.coordinates[sourceIndex * 2 + 1],
       p: geometry.progress[sourceIndex],
+      sourceProgress: geometry.progress[sourceIndex],
+      reflectionProgress: geometry.reflectionProgress[sourceIndex],
+      kaleidoscopeProgress: geometry.kaleidoscopeProgress[sourceIndex],
+      reflectionDistance: geometry.reflectionDistance[sourceIndex],
+      reflectionSegment: geometry.reflectionSegment[sourceIndex],
+      reflectionPoint: geometry.reflectionPoint[sourceIndex] < 0 ? null : geometry.reflectionPoint[sourceIndex],
+      isReflectionPoint: geometry.reflectionFlags[sourceIndex] === 1,
+      hasKaleidoscope: Boolean(sourceStrip.hasKaleidoscope),
       i: sourceIndex,
     });
   }

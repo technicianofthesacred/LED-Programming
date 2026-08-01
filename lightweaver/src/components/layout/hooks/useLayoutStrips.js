@@ -12,6 +12,7 @@ import {
 } from '../../../lib/layoutPrimitives.js';
 import { scaleStripGeometry } from '../../../lib/stripScale.js';
 import { moveStripRowsInChain } from '../../../lib/patchBoard.js';
+import { reprojectStripKaleidoscope, reverseKaleidoscope } from '../../../lib/kaleidoscope.js';
 
 // scaleStrip clamps: never shrink a strip's path below this length (px)…
 const MIN_STRIP_SVG_LENGTH = 20;
@@ -37,6 +38,7 @@ export function useLayoutStrips(ctx) {
     selectedStripIds, orderedStrips, stripSelectionName,
     nextColor, scrollToStrip, stripGroupMember,
     rebuildStrip,
+    setKaleidoscopeResetNotices,
   } = ctx;
 
   // Density is a physical fact of the purchased strip — count and length are
@@ -103,7 +105,12 @@ export function useLayoutStrips(ctx) {
       if (s.id !== id) return s;
       const reversed = !s.reversed;
       const pixels = s.pixels.slice().reverse();
-      return { ...s, reversed, pixels };
+      return {
+        ...s,
+        reversed,
+        pixels,
+        ...(s.kaleidoscope ? { kaleidoscope: reverseKaleidoscope(s.kaleidoscope, s.pixelCount) } : {}),
+      };
     });
     pushLayoutHistory();
     setStrips(newStrips);
@@ -121,6 +128,9 @@ export function useLayoutStrips(ctx) {
       ...s, id: newId, name: `${s.name} copy`,
       sourceLayerId: null, sourcePathId: null,
       pixels: s.pixels.slice(),
+      ...(s.kaleidoscope ? {
+        kaleidoscope: { ...s.kaleidoscope, offsets: [...s.kaleidoscope.offsets] },
+      } : {}),
     };
     const newStrips = strips.flatMap(st => st.id === id ? [st, newStrip] : [st]);
     pushLayoutHistory();
@@ -218,12 +228,19 @@ export function useLayoutStrips(ctx) {
       ? scaled.pixelCount
       : physicalCountForLength(scaled.svgLength, id);
     pushLayoutHistory();
+    const projection = reprojectStripKaleidoscope(scaled, pixelCount);
+    if (projection.resetPointIndices.length) {
+      setKaleidoscopeResetNotices?.(current => ({
+        ...current,
+        [id]: projection.resetPointIndices,
+      }));
+    }
+    const projected = projection.strip;
     setStrips(prev => prev.map(st => st.id !== id ? st : {
-      ...scaled,
-      pixelCount,
-      pixels: sampleStripPixels(scaled.pathData, pixelCount, scaled.reversed, scaled.x || 0, scaled.y || 0),
+      ...projected,
+      pixels: sampleStripPixels(projected.pathData, pixelCount, projected.reversed, projected.x || 0, projected.y || 0),
     }));
-  }, [strips, viewBox, stripCountOverrides, physicalCountForLength, pushLayoutHistory, setStrips]);
+  }, [strips, viewBox, stripCountOverrides, physicalCountForLength, pushLayoutHistory, setStrips, setKaleidoscopeResetNotices]);
 
   const createStripGroupFromIds = useCallback((stripIds, nameOverride = '') => {
     const uniqueIds = [...new Set(stripIds)].filter(Boolean);
@@ -313,6 +330,7 @@ export function useLayoutStrips(ctx) {
       reversed: false,
       mergedFrom: picked.map(s => ({ id: s.id, name: s.name, pixelCount: s.pixelCount })),
     };
+    delete mergedStrip.kaleidoscope;
     const insertAt = strips.findIndex(s => pickedIds.has(s.id));
     const remaining = strips.filter(s => !pickedIds.has(s.id));
     const newStrips = [...remaining];

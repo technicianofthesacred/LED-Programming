@@ -9,6 +9,7 @@ import { createPatternLabRecipe, normalizePatternLabRecipe } from './patternLabR
 import { applyPatternLabTransform, samplePatternLabMask } from './patternLabTransforms.js';
 import { parseParamsFromCode } from './patternParams.js';
 import { getPatternById, isBuiltInPattern } from './patternRegistry.js';
+import { normalizeProjectRenderStrips } from './renderGeometry.js';
 
 const RECIPE_OWNED_RENDER_KEYS = [
   'activeFn',
@@ -160,6 +161,11 @@ export function renderPatternLabRecipeFrame(recipe, context = {}) {
     masterBrightness: 1,
     gammaLUT: null,
   };
+  if ((renderContext.strips || []).some(strip => Array.isArray(strip?.pixels))) {
+    renderContext.strips = normalizeProjectRenderStrips(renderContext.strips, {
+      hidden: context.hidden || {},
+    });
+  }
   for (const key of RECIPE_OWNED_RENDER_KEYS) delete renderContext[key];
   const bounds = geometryBounds(renderContext.strips, renderContext.normBounds);
   renderContext.normBounds = bounds;

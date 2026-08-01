@@ -9,6 +9,7 @@
 #include "LightweaverHardwareContract.h"
 #include "LightweaverProvisioningPolicy.h"
 #include "LightweaverConnectivityPolicy.h"
+#include "LightweaverKaleidoscope.h"
 
 #ifndef LW_MAX_PIXELS
 #define LW_MAX_PIXELS 1024
@@ -20,6 +21,7 @@ constexpr uint8_t LW_MAX_LOOKS = 32;
 constexpr uint8_t LW_MAX_PATTERN_IDS = 32;
 constexpr uint8_t LW_MAX_ZONES = 10;
 constexpr uint8_t LW_MAX_RANGES_PER_ZONE = 4;
+constexpr uint16_t LW_MAX_KALEIDOSCOPE_OFFSETS = LW_MAX_PIXELS;
 static_assert(LW_MAX_PIXELS == LW_CARD_HARDWARE_MAX_PIXELS,
               "pixel capacity must match the generated hardware contract");
 static_assert(LW_MAX_OUTPUTS == LW_CARD_HARDWARE_MAX_OUTPUTS,
@@ -152,6 +154,9 @@ struct LookZoneConfig {
   uint8_t customHue = 32;
   uint8_t customSaturation = 230;
   bool customBreathe = false;
+  uint8_t breatheLowerPct = 85;
+  uint8_t breatheUpperPct = 100;
+  uint8_t breatheCycleSeconds = 9;
   bool customDrift = false;
   bool blackout = false;
 };
@@ -200,6 +205,17 @@ struct PixelRange {
   uint16_t count = 0;
 };
 
+struct KaleidoscopeMappingConfig {
+  String id;
+  String zoneId;
+  uint16_t pixelCount = 0;
+  uint16_t startLed = 0;
+  uint16_t pointCount = 0;
+  uint16_t pointPoolStart = 0;
+  KaleidoscopeSpan spans[LW_MAX_KALEIDOSCOPE_SPANS];
+  uint8_t spanCount = 0;
+};
+
 // One controllable area of LEDs. Has its own pattern + appearance state,
 // so each zone can play something independent. The card-side default is
 // a single zone covering all pixels named "all"; the website's design
@@ -216,6 +232,9 @@ struct ZoneConfig {
   uint8_t customHue = 32;
   uint8_t customSaturation = 230;
   bool customBreathe = false;
+  uint8_t breatheLowerPct = 85;
+  uint8_t breatheUpperPct = 100;
+  uint8_t breatheCycleSeconds = 9;
   bool customDrift = false;
   // Drift palette bounds. Default 0..255 = full rainbow. Warm = 0..60,
   // Cool = 130..200. Custom lets the owner pick any range.
@@ -259,6 +278,11 @@ struct RuntimeConfig {
   String activeHostname;
   ZoneConfig zones[LW_MAX_ZONES];
   uint8_t zoneCount = 0;
+  int16_t kaleidoscopeOffsets[LW_MAX_KALEIDOSCOPE_OFFSETS] = {};
+  uint16_t kaleidoscopeOrderedPoints[LW_MAX_KALEIDOSCOPE_OFFSETS] = {};
+  uint16_t kaleidoscopePointPoolCount = 0;
+  KaleidoscopeMappingConfig kaleidoscopeMappings[LW_MAX_KALEIDOSCOPE_MAPPINGS];
+  uint8_t kaleidoscopeMappingCount = 0;
   // When true (default), control writes apply to every zone identically — the
   // card looks single-zone to the casual visitor. When false, controls target
   // a specific zone, exposing the multi-zone capability.

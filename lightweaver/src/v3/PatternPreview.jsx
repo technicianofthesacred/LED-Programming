@@ -13,6 +13,7 @@ import {
   restingLedColor,
 } from '../lib/previewVisuals.js';
 import { DEMO_STRIPS, PALETTE_DEFAULT } from '../data.js';
+import { normalizeProjectRenderStrips } from '../lib/renderGeometry.js';
 
 function hexToNorm(hex) {
   const n = parseInt(hex.replace('#', ''), 16);
@@ -421,25 +422,8 @@ export function PatternPreview({
 
   const realStripData = useMemo(() => {
     if (!useRealStrips) return [];
-    return propStrips.map(s => {
-      const pts = (s.pixels || []).map((px, i) => ({
-        x: px.x, y: px.y,
-        p: s.pixels.length > 1 ? i / (s.pixels.length - 1) : 0.5, i,
-      }));
-      return {
-        id: s.id,
-        color: s.color,
-        speed: s.speed,
-        brightness: s.brightness,
-        hueShift: s.hueShift,
-        patternId: s.patternId || null,
-        pts,
-        spacing: calcSpacing(pts),
-        pathData: s.pathData || '',
-        x: s.x || 0,
-        y: s.y || 0,
-      };
-    });
+    return normalizeProjectRenderStrips(propStrips, { includeHidden: true })
+      .map(strip => ({ ...strip, spacing: calcSpacing(strip.pts) }));
   }, [propStrips, useRealStrips]);
 
   const demoStripData = useMemo(() => {

@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import {
+  CARD_KALEIDOSCOPE_REFLECTION_POINTS_VERSION,
   CARD_RUNTIME_MODES,
   DEFAULT_CARD_LED,
   DEFAULT_CARD_PATTERN_BANK,
   buildCardRuntimeConfig,
+  normalizeCardKaleidoscopeMappings,
   normalizeCardRuntimeConfig,
   makeCardRuntimePackage,
   normalizeInclusiveRange,
@@ -684,6 +686,172 @@ assert.deepEqual(compactGalleryPackage.config.patterns.map(pattern => pattern.id
 assert.ok(
   Buffer.byteLength(JSON.stringify(compactGalleryPackage.config), 'utf8') < 3800,
   '453-pixel gallery card config should stay below the firmware NVS string budget',
+);
+
+const runtimeMapping = ({
+  id = 'frame',
+  zoneId = id,
+  pixelCount = 400,
+  pointCount = 4,
+  offsets = Array(pointCount).fill(0),
+  spans = [{ start: 0, count: pixelCount, sourceStart: 0, sourceStep: 1 }],
+} = {}) => ({ id, zoneId, pixelCount, pointCount, startLed: 0, offsets, spans });
+
+assert.equal(CARD_KALEIDOSCOPE_REFLECTION_POINTS_VERSION, 1);
+const canonicalMapping = normalizeCardKaleidoscopeMappings([runtimeMapping()], 400);
+assert.deepEqual(canonicalMapping, [runtimeMapping()]);
+assert.deepEqual(Object.keys(canonicalMapping[0]), [
+  'id', 'zoneId', 'pixelCount', 'pointCount', 'startLed', 'offsets', 'spans',
+]);
+assert.deepEqual(Object.keys(canonicalMapping[0].spans[0]), [
+  'start', 'count', 'sourceStart', 'sourceStep',
+]);
+
+const mappedCompiledRuntime = {
+  ok: true,
+  totalPixels: 400,
+  outputs: [{ id: 'out1', name: 'Output 1', pin: 16, pixels: 400, start: 0, count: 400 }],
+  zones: [{ id: 'frame', label: 'Frame', ranges: [{ start: 0, count: 400 }] }],
+  kaleidoscopeMappings: [runtimeMapping()],
+};
+const mappedProjectPackage = buildCardRuntimePackageFromProject({
+  projectName: 'Mapped frame',
+  strips: [{ id: 'frame', name: 'Frame', pixelCount: 400 }],
+  compiledWiring: mappedCompiledRuntime,
+});
+assert.deepEqual(mappedProjectPackage.config.kaleidoscopeMappings, [runtimeMapping()]);
+
+const legacyProjectPackage = buildCardRuntimePackageFromProject({
+  projectName: 'Legacy frame',
+  strips: [{ id: 'frame', name: 'Frame', pixelCount: 400 }],
+  compiledWiring: { ...mappedCompiledRuntime, kaleidoscopeMappings: [] },
+});
+assert.equal(Object.hasOwn(legacyProjectPackage.config, 'kaleidoscopeMappings'), false);
+assert.equal(Object.hasOwn(normalizeCardRuntimeConfig({ led: { pixels: 44 } }), 'kaleidoscopeMappings'), false);
+assert.equal(Object.hasOwn(normalizeCardRuntimeConfig({ led: { pixels: 44 }, kaleidoscopeMappings: [] }), 'kaleidoscopeMappings'), false);
+
+assert.throws(
+  () => normalizeCardKaleidoscopeMappings([runtimeMapping({ offsets: [0, 0.5, 0, 0] })], 400),
+  /entry 1.*offsets\[1\].*integer/i,
+);
+assert.throws(
+  () => normalizeCardKaleidoscopeMappings([{ ...runtimeMapping(), points: [0, 100, 200, 300] }], 400),
+  /entry 1.*points.*unsupported/i,
+);
+assert.throws(
+  () => normalizeCardKaleidoscopeMappings([runtimeMapping({
+    spans: [{ start: 0, count: 400, sourceStart: 0, sourceStep: 1, runId: 'studio-only' }],
+  })], 400),
+  /entry 1.*spans\[0\].*runId.*unsupported/i,
+);
+assert.throws(
+  () => normalizeCardKaleidoscopeMappings([runtimeMapping({
+    spans: [
+      { start: 0, count: 200, sourceStart: 0, sourceStep: 1 },
+      { start: 200, count: 200, sourceStart: 0, sourceStep: 1 },
+    ],
+  })], 400),
+  /entry 1.*spans.*source coverage/i,
+);
+assert.throws(
+  () => normalizeCardRuntimeConfig({
+    led: { pixels: 400 },
+    zones: [{ id: 'known', ranges: [{ start: 0, count: 400 }] }],
+    kaleidoscopeMappings: [runtimeMapping({ zoneId: 'missing' })],
+  }),
+  /entry 1.*zoneId.*known runtime zone/i,
+);
+assert.throws(
+  () => normalizeCardKaleidoscopeMappings([
+    runtimeMapping({ id: 'outer', zoneId: 'rings' }),
+    runtimeMapping({ id: 'inner', zoneId: 'rings' }),
+  ], 800, [{ id: 'rings', ranges: [{ start: 0, count: 800 }] }]),
+  /entry 2.*overlap.*another mapping|global pixel.*overlap/i,
+);
+const groupedMappings = [
+  runtimeMapping({
+    id: 'outer', zoneId: 'rings', pixelCount: 4, pointCount: 4,
+    offsets: [0, 0, 0, 0],
+    spans: [{ start: 0, count: 4, sourceStart: 0, sourceStep: 1 }],
+  }),
+  runtimeMapping({
+    id: 'inner', zoneId: 'rings', pixelCount: 4, pointCount: 4,
+    offsets: [0, 0, 0, 0],
+    spans: [{ start: 4, count: 4, sourceStart: 0, sourceStep: 1 }],
+  }),
+];
+assert.deepEqual(
+  normalizeCardKaleidoscopeMappings(
+    groupedMappings,
+    8,
+    [{ id: 'rings', ranges: [{ start: 0, count: 4 }, { start: 4, count: 4 }] }],
+  ),
+  groupedMappings,
+);
+const discontinuousZoneMapping = runtimeMapping({
+  id: 'split', zoneId: 'split-zone', pixelCount: 4, pointCount: 4,
+  offsets: [0, 0, 0, 0],
+  spans: [
+    { start: 0, count: 2, sourceStart: 0, sourceStep: 1 },
+    { start: 4, count: 2, sourceStart: 2, sourceStep: 1 },
+  ],
+});
+assert.deepEqual(
+  normalizeCardKaleidoscopeMappings(
+    [discontinuousZoneMapping],
+    8,
+    [{ id: 'split-zone', ranges: [{ start: 0, count: 2 }, { start: 4, count: 2 }] }],
+  ),
+  [discontinuousZoneMapping],
+);
+assert.throws(
+  () => normalizeCardRuntimeConfig({
+    led: { pixels: 8 },
+    zones: [
+      { id: 'outer', ranges: [{ start: 0, count: 4 }] },
+      { id: 'inner', ranges: [{ start: 4, count: 4 }] },
+    ],
+    kaleidoscopeMappings: [runtimeMapping({
+      id: 'outer-map', zoneId: 'outer', pixelCount: 4, pointCount: 4,
+      offsets: [0, 0, 0, 0],
+      spans: [{ start: 4, count: 4, sourceStart: 0, sourceStep: 1 }],
+    })],
+  }),
+  /entry 1.*span.*declared zone|zone.*range/i,
+);
+assert.throws(
+  () => normalizeCardKaleidoscopeMappings(
+    Array.from({ length: 33 }, (_, index) => runtimeMapping({ id: `mapping-${index + 1}`, zoneId: `mapping-${index + 1}` })),
+    400,
+  ),
+  /at most 32/i,
+);
+assert.throws(
+  () => normalizeCardKaleidoscopeMappings([runtimeMapping({
+    pointCount: 400,
+    offsets: Array(400).fill(0),
+    spans: Array.from({ length: 5 }, (_, index) => ({
+      start: index * 80,
+      count: 80,
+      sourceStart: index * 80,
+      sourceStep: 1,
+    })),
+  })], 400),
+  /entry 1.*spans.*at most 4/i,
+);
+assert.throws(
+  () => normalizeCardKaleidoscopeMappings([
+    runtimeMapping({ id: 'a', zoneId: 'a', pointCount: 400, offsets: Array(400).fill(0) }),
+    runtimeMapping({
+      id: 'b', zoneId: 'b', pointCount: 400, offsets: Array(400).fill(0),
+      spans: [{ start: 400, count: 400, sourceStart: 0, sourceStep: 1 }],
+    }),
+    runtimeMapping({
+      id: 'c', zoneId: 'c', pointCount: 400, offsets: Array(400).fill(0),
+      spans: [{ start: 800, count: 400, sourceStart: 0, sourceStep: 1 }],
+    }),
+  ], 1200),
+  /aggregate.*1024/i,
 );
 
 console.log('card-runtime-contract tests passed');

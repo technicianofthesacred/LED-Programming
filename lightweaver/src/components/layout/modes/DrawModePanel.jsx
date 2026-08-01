@@ -29,6 +29,7 @@ import {
 import { PrimitiveStarter } from './PrimitiveStarter.jsx';
 import { CARD_HARDWARE_CAPABILITIES } from '../../../lib/cardRuntimeContract.js';
 import { activeBoardGpios } from '../../../lib/gpioAssignments.js';
+import { createDefaultKaleidoscope, deriveReflectionPointIndices } from '../../../lib/kaleidoscope.js';
 import '../../../styles/lw-draw.css';
 
 // Metres formatter for the physical readouts: 2 decimals under 10 m, 1 above.
@@ -80,6 +81,16 @@ export function DrawModePanel({
   firstLedError,
   onBeginFirstLedPicker,
   onCancelFirstLedPicker,
+  kaleidoscopeEditor,
+  onToggleKaleidoscope,
+  onChangeKaleidoscopeCount,
+  onNudgeKaleidoscopeSet,
+  onPickKaleidoscopeStart,
+  onSelectKaleidoscopePoint,
+  onNudgeKaleidoscopePoint,
+  kaleidoscopeCalibration,
+  onConnectCard,
+  onOpenConnectionCenter,
 }) {
   const {
     strips, layers, hidden, setHidden,
@@ -123,6 +134,8 @@ export function DrawModePanel({
     // import
     error, setError, fileRef,
     createStarterPrimitive, clearStarterLayout,
+    kaleidoscopeResetNotices,
+    projectWarnings,
   } = state;
   const { wiring, updateWiring, standaloneController, patchBoard, setPatchBoard } = useProject();
 
@@ -133,6 +146,7 @@ export function DrawModePanel({
   const [addChooserOpen, setAddChooserOpen] = useState(false);
   const [addLedCount, setAddLedCount] = useState(60);
   const [addDensity, setAddDensity] = useState(density);
+  const [fineTuneOpenByStrip, setFineTuneOpenByStrip] = useState({});
   const [addLengthM, setAddLengthM] = useState(1);
   const [addLengthDraft, setAddLengthDraft] = useState('1.00');
   const [addGpio, setAddGpio] = useState(16);
@@ -1087,6 +1101,20 @@ export function DrawModePanel({
                 </button>
               </div>
             )}
+            {(projectWarnings || []).filter(warning => warning.scope === 'kaleidoscope').map(warning => {
+              const affected = strips.find(strip => strip.id === warning.stripId);
+              return (
+                <div key={`${warning.stripId}:${warning.code}`} className="lw-legacy-confirm" role="alert">
+                  <span>{warning.message || `${affected?.name || warning.stripId}: Kaleidoscope mapping needs recovery.`}</span>
+                  {affected?.pixelCount >= 2 && (
+                    <button type="button" className="btn" onClick={() => {
+                      setExpandedStrips(current => ({ ...current, [affected.id]: true }));
+                      onToggleKaleidoscope(affected.id, createDefaultKaleidoscope(affected.pixelCount));
+                    }}>Reset and edit</button>
+                  )}
+                </div>
+              );
+            })}
             {selectedStrips.length > 1 && (
               <div className="la-batch">
                 <div className="la-batch-head">
@@ -1191,7 +1219,7 @@ export function DrawModePanel({
                     </div>
                     {isOpen && (
                       <div className="la-strip-detail" onClick={e => e.stopPropagation()}>
-                        <div className="actions" aria-label="Strip actions">
+                        <div className="actions" role="group" aria-label="Strip actions">
                           <div className="la-strip-actions-left">
                             <button className="btn" aria-label="Flip path direction" title="Flip the drawing path so pixel 0 swaps ends"
                                     onClick={() => reverseStrip(s.id)}>↔</button>
@@ -1217,16 +1245,21 @@ export function DrawModePanel({
                                         else onCancelFirstLedPicker();
                                       }}>◎</button>
                             )}
-                            <button className="btn" aria-label={hidden[s.id] ? 'Show strip' : 'Hide strip'}
-                                    title={hidden[s.id] ? 'Show strip' : 'Hide strip'}
-                                    onClick={() => setHidden(h => ({ ...h, [s.id]: !h[s.id] }))}>
-                              {hidden[s.id] ? <EyeOffIcon/> : <EyeIcon/>}
-                            </button>
+                            <button className={`btn${kaleidoscopeEditor?.stripId === s.id ? ' active' : ''}`}
+                                    aria-label="Edit Kaleidoscope reflection points"
+                                    title="Edit Kaleidoscope reflection points"
+                                    disabled={s.pixelCount < 2}
+                                    onClick={() => onToggleKaleidoscope(s.id)}>✦</button>
                           </div>
                           <div className="la-strip-actions-right">
                             <button className="btn" aria-label="Duplicate strip" title="Duplicate strip"
                                     onClick={() => duplicateStrip(s.id)}>
                               <svg aria-hidden="true" viewBox="0 0 16 16"><rect x="5" y="2" width="8" height="9" rx="1"/><path d="M3 5v8a1 1 0 0 0 1 1h6"/></svg>
+                            </button>
+                            <button className="btn" aria-label={hidden[s.id] ? 'Show strip' : 'Hide strip'}
+                                    title={hidden[s.id] ? 'Show strip' : 'Hide strip'}
+                                    onClick={() => setHidden(h => ({ ...h, [s.id]: !h[s.id] }))}>
+                              {hidden[s.id] ? <EyeOffIcon/> : <EyeIcon/>}
                             </button>
                             <button className="btn danger" aria-label="Remove strip" title="Remove strip"
                                     onClick={() => removeStrip(s.id)}>×</button>
@@ -1235,6 +1268,85 @@ export function DrawModePanel({
                         {firstLedError?.stripId === s.id && (
                           <div className="la-gpio-error" role="alert">{firstLedError.message}</div>
                         )}
+                        {kaleidoscopeEditor?.stripId === s.id && s.kaleidoscope && (() => {
+                          const points = deriveReflectionPointIndices(s.kaleidoscope, s.pixelCount);
+                          const customSpacing = s.kaleidoscope.offsets.some(offset => offset !== 0);
+                          return (
+                            <section className="la-kaleidoscope-panel" aria-label="Kaleidoscope reflection points">
+                              <div className="la-kaleidoscope-head">
+                                <strong>Kaleidoscope</strong>
+                                <span data-testid="kaleidoscope-summary">
+                                  {s.kaleidoscope.pointCount} points · start LED {s.kaleidoscope.startLed + 1}
+                                </span>
+                              </div>
+                              <label className="la-kaleidoscope-count">
+                                <span>Points</span>
+                                <input type="number" min="2" max={s.pixelCount} step="1"
+                                       value={s.kaleidoscope.pointCount}
+                                       aria-label="Reflection point count"
+                                       onFocus={event => event.currentTarget.select()}
+                                       onChange={event => onChangeKaleidoscopeCount(s.id, Number(event.target.value))}
+                                       onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }}/>
+                              </label>
+                              <div className="la-kaleidoscope-start" role="group" aria-label="Starting reflection point">
+                                <button className="btn" aria-label="Move all reflection points backward one LED"
+                                        onClick={() => onNudgeKaleidoscopeSet(s.id, -1)}>←</button>
+                                <button className={`btn${kaleidoscopeEditor.mode === 'pick' ? ' active' : ''}`}
+                                        aria-label="Pick starting reflection point on canvas"
+                                        onClick={() => onPickKaleidoscopeStart(s.id)}>
+                                  {kaleidoscopeEditor.mode === 'pick' ? 'Pick a light…' : `Start LED ${s.kaleidoscope.startLed + 1}`}
+                                </button>
+                                <button className="btn" aria-label="Move all reflection points forward one LED"
+                                        onClick={() => onNudgeKaleidoscopeSet(s.id, 1)}>→</button>
+                              </div>
+                              <button type="button" className="btn la-kaleidoscope-disclosure"
+                                      aria-label="Fine-tune LEDs"
+                                      aria-expanded={Boolean(fineTuneOpenByStrip[s.id])}
+                                      onClick={() => setFineTuneOpenByStrip(current => ({ ...current, [s.id]: !current[s.id] }))}>
+                                Fine-tune LEDs {fineTuneOpenByStrip[s.id] ? '▴' : '▾'}
+                              </button>
+                              {fineTuneOpenByStrip[s.id] && <div className="la-kaleidoscope-points" role="list" aria-label="Reflection points">
+                                {points.map((ledIndex, pointIndex) => (
+                                  <span key={pointIndex} role="listitem">
+                                    <button type="button" className={`btn${kaleidoscopeEditor.selectedPointIndex === pointIndex ? ' active' : ''}`}
+                                            aria-label={`Fine-tune reflection point ${pointIndex + 1}`}
+                                            onClick={() => onSelectKaleidoscopePoint(s.id, pointIndex)}>
+                                      {pointIndex + 1}: LED {ledIndex + 1}
+                                    </button>
+                                  </span>
+                                ))}
+                              </div>}
+                              {fineTuneOpenByStrip[s.id] && kaleidoscopeEditor.mode === 'fine' && (
+                                <div className="la-kaleidoscope-fine" role="group" aria-label="Fine tune selected reflection point">
+                                  <button className="btn" aria-label="Move selected reflection point backward one LED"
+                                          onClick={() => onNudgeKaleidoscopePoint(s.id, kaleidoscopeEditor.selectedPointIndex, -1)}>←</button>
+                                  <span>Point {kaleidoscopeEditor.selectedPointIndex + 1}</span>
+                                  <button className="btn" aria-label="Move selected reflection point forward one LED"
+                                          onClick={() => onNudgeKaleidoscopePoint(s.id, kaleidoscopeEditor.selectedPointIndex, 1)}>→</button>
+                                </div>
+                              )}
+                              {customSpacing && <div className="hint">Custom spacing</div>}
+                              {kaleidoscopeResetNotices?.[s.id]?.length > 0 && (
+                                <div className="hint">Count changed; reset point {kaleidoscopeResetNotices[s.id].map(i => i + 1).join(', ')}.</div>
+                              )}
+                              {kaleidoscopeEditor.error && <div className="la-gpio-error" role="alert">{kaleidoscopeEditor.error}</div>}
+                              {kaleidoscopeCalibration?.message && (
+                                <div className={`hint${kaleidoscopeCalibration.physicalDelivered ? '' : ' warn'}`} role="status">
+                                  {kaleidoscopeCalibration.message}
+                                  {!kaleidoscopeCalibration.physicalDelivered && (
+                                    <button type="button" className="btn" onClick={() => {
+                                      if (onOpenConnectionCenter) onOpenConnectionCenter();
+                                      else onConnectCard?.();
+                                    }}>
+                                      Connect card
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                              <div className="hint">Red markers are reflection points. Pick or fine-tune them on the artwork.</div>
+                            </section>
+                          );
+                        })()}
                         {/* Size is physical truth and recounts LEDs; LED count is
                             a direct cut-strip correction that keeps size. */}
                         <div className="row la-strip-physical-row">

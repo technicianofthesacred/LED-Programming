@@ -87,6 +87,8 @@ export function useLayoutState() {
     usbLedConnected,
     usbLedStatus,
     wiring,
+    projectWarnings,
+    updateStripKaleidoscope,
     starterPending,
     replaceLayoutGeometry,
   } = project;
@@ -95,6 +97,7 @@ export function useLayoutState() {
 
   // Per-strip detail expander (ephemeral view state — stays local to the screen)
   const [expandedStrips, setExpandedStrips] = useState({});
+  const [kaleidoscopeResetNotices, setKaleidoscopeResetNotices] = useState({});
 
   // ── Shared refs ────────────────────────────────────────────────────────────
   const svgRef      = useRef(null);
@@ -213,6 +216,8 @@ export function useLayoutState() {
     layerGroups, setLayerGroups,
     layerOrder, setLayerOrder,
     projectRevision,
+    projectWarnings, updateStripKaleidoscope,
+    kaleidoscopeResetNotices, setKaleidoscopeResetNotices,
     patchBoard, setPatchBoard, updatePatchBoard,
     pushLayoutHistory, undoLayout, redoLayout,
     selection,
@@ -286,6 +291,8 @@ export function useLayoutState() {
     clearLayoutSelection, renameLayoutSelection,
     layoutHistLen, layoutFutLen,
     usbLedConnected,
+    projectWarnings, updateStripKaleidoscope,
+    kaleidoscopeResetNotices, setKaleidoscopeResetNotices,
 
     // composer-level derived + shared
     doUndo, doRedo,

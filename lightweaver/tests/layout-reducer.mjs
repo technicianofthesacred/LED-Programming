@@ -192,3 +192,42 @@ test('selection actions replace and clear each other', () => {
   state = layoutReducer(state, layoutActions.selectStrips([]));
   assert.equal(state.selection.kind, 'none');
 });
+
+test('Kaleidoscope metadata edits are undoable, clear warnings, duplicate deeply, and reverse physically', async () => {
+  const mapping = { enabled: true, pointCount: 4, startLed: 1, offsets: [0, 0, 1, -1] };
+  let state = createLayoutState({
+    strips: [makeStrip('strip-1', 12)],
+    projectWarnings: [{ scope: 'kaleidoscope', stripId: 'strip-1', code: 'old', message: 'old' }],
+  });
+  let history = createLayoutHistory();
+  ({ history, state } = commitLayout(history, state, layoutActions.updateKaleidoscope('strip-1', mapping)));
+  assert.deepEqual(state.strips[0].kaleidoscope, mapping);
+  assert.deepEqual(state.projectWarnings, []);
+  assert.equal(history.past.length, 1);
+
+  state = layoutReducer(state, layoutActions.duplicateStrip('strip-1'));
+  assert.deepEqual(state.strips[1].kaleidoscope, mapping);
+  assert.notEqual(state.strips[1].kaleidoscope.offsets, state.strips[0].kaleidoscope.offsets);
+  state.strips[1].kaleidoscope.offsets[0] = 5;
+  assert.equal(state.strips[0].kaleidoscope.offsets[0], 0);
+
+  const beforePoints = new Set([1, 4, 8, 9].map(index => 11 - index));
+  state = layoutReducer(state, layoutActions.reverseStrip('strip-1'));
+  const reversed = state.strips[0].kaleidoscope;
+  const { deriveReflectionPointIndices } = await import('../src/lib/kaleidoscope.js');
+  assert.deepEqual(new Set(deriveReflectionPointIndices(reversed, 12)), beforePoints);
+});
+
+test('merging strips never inherits one source strips Kaleidoscope mapping', () => {
+  const source = makeStrip('strip-1', 4, {
+    kaleidoscope: { enabled: true, pointCount: 2, startLed: 0, offsets: [0, 0] },
+  });
+  let state = createLayoutState({ strips: [source, makeStrip('strip-2', 4)] });
+  state = layoutReducer(state, layoutActions.mergeStrips(['strip-1', 'strip-2'], {
+    ...source,
+    pixelCount: 8,
+    pixels: pixels(8),
+  }));
+  assert.equal(state.strips.length, 1);
+  assert.equal(state.strips[0].kaleidoscope, undefined);
+});

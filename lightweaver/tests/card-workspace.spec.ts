@@ -1220,12 +1220,13 @@ test('a worker typing the bare domain reaches Batch production from the rail and
 });
 
 test('HTTPS Studio keeps a blank replacement card config-only across an ambiguous WiFi handoff', async ({ page }) => {
+  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   // Serve the real Vite app at its production HTTPS origin. This keeps the
   // browser security boundary realistic while all card traffic remains the
   // postMessage-only local bridge exercised below.
   await page.route('https://led.mandalacodes.com/**', async route => {
     const requested = new URL(route.request().url());
-    const upstream = await page.request.fetch(`http://localhost:9997${requested.pathname}${requested.search}`);
+    const upstream = await page.request.fetch(`http://localhost:${testPort}${requested.pathname}${requested.search}`);
     await route.fulfill({ response: upstream });
   });
   await page.goto('https://led.mandalacodes.com/#screen=card&section=overview', {
@@ -1237,6 +1238,7 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
     const handoff = await import('/src/lib/cardWifiHandoff.js');
     const cardLink = await import('/src/lib/cardLink.js');
     const commissioning = await import('/src/lib/cardCommissioningFlow.js');
+    const cardPushClient = await import('/src/lib/cardPushClient.js');
 
     const priorCard = {
       version: 1,
@@ -1265,10 +1267,25 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
       id: 'browser-blank-project-record',
       updatedAt: 100,
       project: {
-        version: 3,
+        version: 4,
         id: 'browser-blank-project',
         name: 'Browser blank project',
-        layout: { strips: [{ id: 'strip-1', pixelCount: 44 }], wiring: null, patchBoard: null },
+        layout: {
+          strips: [{
+            id: 'strip-1', name: 'Mapped ring', pixelCount: 44,
+            kaleidoscope: { enabled: true, pointCount: 4, startLed: 0, offsets: [0, 0, 0, 0] },
+          }],
+          wiring: {
+            version: 1, locked: true, verified: true, controllerAnchor: null, migrationWarnings: [],
+            outputs: [{ id: 'out1', name: 'Mapped ring', pin: 16, runIds: ['run-strip-1'] }],
+            runs: [{
+              id: 'run-strip-1', type: 'strip', verified: true,
+              source: { stripId: 'strip-1', from: 0, to: 43 },
+              directionPolicy: 'flexible', physicalDirection: 'source-forward', seamLed: null,
+            }],
+          },
+          patchBoard: null,
+        },
         devices: { standaloneController: {} },
       },
     };
@@ -1294,6 +1311,7 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
       knownGoodProject: true,
       commandReady: true,
       outputReady: true,
+      capabilities: { kaleidoscopeReflectionPoints: 1 },
       wifi: {
         transport: 'station',
         transition: 'handoff-ready',
@@ -1360,6 +1378,7 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
             cardId: expectedCard.id,
             firmwareVersion: expectedCard.firmwareVersion,
             buildId: expectedCard.buildId,
+            capabilities: { kaleidoscopeReflectionPoints: 1 },
             ...(configured ? { projectRevision, projectFingerprint } : {}),
           }
           : type === 'status'
@@ -1404,7 +1423,18 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
     }
     const linkAfterFinal = cardLink.getCardLinkState();
     const bridgeAfterFinal = bridge.getCardBridgeState();
-    (window as any).__blankProductionPath = { messageTypes, flowId, replacementFlowId, correlation };
+    (window as any).__blankProductionPath = {
+      messageTypes, flowId, replacementFlowId, correlation,
+      expectedFreshEvidence: structuredClone(status),
+      capturedPush: null,
+    };
+    (window as any).__LW_PUSH_COMMISSIONING_PROJECT_FOR_TEST__ = async (
+      runtimePackage: Record<string, unknown>,
+      options: Record<string, unknown>,
+    ) => {
+      (window as any).__blankProductionPath.capturedPush = structuredClone({ runtimePackage, options });
+      return cardPushClient.pushConfigToCard(runtimePackage, options);
+    };
 
     return {
       protocol: location.protocol,
@@ -1475,6 +1505,8 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
     });
     return {
       types,
+      capturedPush: fixture.capturedPush,
+      expectedFreshEvidence: fixture.expectedFreshEvidence,
       recoveryCleared,
       replacement,
       replacementState,
@@ -1482,6 +1514,8 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
     };
   }, beforeWizardPush);
   expect(productionPath.types.filter(type => type === 'config')).toHaveLength(1);
+  expect(productionPath.capturedPush.runtimePackage.config.kaleidoscopeMappings).toHaveLength(1);
+  expect(productionPath.capturedPush.options.cardEvidence).toEqual(productionPath.expectedFreshEvidence);
   expect(productionPath.types).not.toContain('wiring-candidate');
   const configIndex = productionPath.types.indexOf('config');
   expect(configIndex).toBeGreaterThanOrEqual(0);
@@ -1499,6 +1533,7 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
 });
 
 test('HTTPS Studio reload proves an ambiguous initial config without replaying either mutation', async ({ page }) => {
+  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   await page.addInitScript(() => {
     const stationHost = '192.168.18.92';
     const expectedCard = {
@@ -1576,7 +1611,7 @@ test('HTTPS Studio reload proves an ambiguous initial config without replaying e
   });
   await page.route('https://led.mandalacodes.com/**', async route => {
     const requested = new URL(route.request().url());
-    const upstream = await page.request.fetch(`http://localhost:9997${requested.pathname}${requested.search}`);
+    const upstream = await page.request.fetch(`http://localhost:${testPort}${requested.pathname}${requested.search}`);
     await route.fulfill({ response: upstream });
   });
   await page.goto('https://led.mandalacodes.com/#screen=card&section=install', {

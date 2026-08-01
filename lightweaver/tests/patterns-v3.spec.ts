@@ -4,6 +4,7 @@ import { createDefaultProject } from '../src/lib/projectModel.js';
 import { buildCardRuntimePackageFromProject } from '../src/lib/cardRuntimeProject.js';
 import { prepareCardStoragePayload } from '../src/lib/cardStoragePayload.js';
 import { CARD_PATTERN_BANK } from '../src/lib/cardPatternBank.js';
+import { createDefaultKaleidoscope } from '../src/lib/kaleidoscope.js';
 
 // These specs assert on the EXACT mockup PatternScreen that now ships
 // (src/v3/lw-pattern.jsx). The DOM is the mockup's own: .pm wrapper, .pmcard
@@ -46,6 +47,51 @@ test('v3 patterns mounts the mockup shell with a chip-ready catalog', async ({ p
   // The catalog starts with one exact 24-card batch.
   await expect(page.locator('.pm-cards .pmcard')).toHaveCount(24);
   await expect(page.locator('.sec-h .m').first()).toContainText(`of ${REAL_PATTERNS.length} chip-ready`);
+});
+
+test('Advanced exposes a gentle bounded breathing envelope', async ({ page }) => {
+  await gotoFreshPatterns(page);
+
+  await expect(page.getByTestId('breathe-summary')).toHaveText('Breathe off');
+  await page.locator('.pmx-advanced summary').click();
+  await page.getByLabel('Breathe', { exact: true }).check();
+
+  await expect(page.getByTestId('breathe-lower-slider')).toHaveValue('85');
+  await expect(page.getByTestId('breathe-upper-slider')).toHaveValue('100');
+  await expect(page.getByTestId('breathe-cycle-slider')).toHaveValue('9');
+
+  await setRangeValue(page.getByTestId('breathe-lower-slider'), '78');
+  await setRangeValue(page.getByTestId('breathe-upper-slider'), '96');
+  await setRangeValue(page.getByTestId('breathe-cycle-slider'), '14');
+
+  await expect(page.getByTestId('breathe-summary')).toHaveText('Breathe · 78–96% · 14s');
+  await expect(page.getByTestId('breathe-lower-slider')).toHaveAttribute('max', '96');
+  await expect(page.getByTestId('breathe-upper-slider')).toHaveAttribute('min', '78');
+
+  await setRangeValue(page.getByTestId('breathe-lower-slider'), '92');
+  await setRangeValue(page.getByTestId('breathe-upper-slider'), '92');
+  await expect(page.getByTestId('breathe-summary')).toHaveText('Breathe · 92% steady');
+
+  const sectionTarget = page.locator('[data-testid^="section-target-"]:not([data-testid="section-target-all"])').first();
+  await sectionTarget.click();
+  await page.getByLabel('Breathe', { exact: true }).check();
+  await setRangeValue(page.getByTestId('breathe-lower-slider'), '76');
+  await setRangeValue(page.getByTestId('breathe-upper-slider'), '94');
+  await setRangeValue(page.getByTestId('breathe-cycle-slider'), '12');
+  await page.getByTestId('section-target-all').click();
+  await expect(page.getByTestId('breathe-summary')).toHaveText('Breathe · 92% steady');
+  await sectionTarget.click();
+  await expect(page.getByTestId('breathe-summary')).toHaveText('Breathe · 76–94% · 12s');
+
+  await page.getByTestId('save-current-combo').click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_autosave_v3') || '')).toContain('"breatheLowerPct":92');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('.pmx-advanced summary').click();
+  await page.getByTestId('section-target-all').click();
+  await expect(page.getByTestId('breathe-summary')).toHaveText('Breathe · 92% steady');
+  await page.getByTestId('look-reset').click();
+  await expect(page.getByTestId('breathe-summary')).toHaveText('Breathe off');
+  await expect(page.getByTestId('breathe-lower-slider')).toHaveCount(0);
 });
 
 test('Patterns reports a blocked card-page popup with a recovery action', async ({ page }) => {
@@ -677,11 +723,13 @@ test('setup JSON copy and download use the same compact card payload', async ({ 
   const project = createDefaultProject();
   project.id = 'setup-json-fixture';
   project.name = 'Setup JSON fixture';
+  project.layout.strips[0].kaleidoscope = createDefaultKaleidoscope(project.layout.strips[0].pixelCount);
   const expected = prepareCardStoragePayload(buildCardRuntimePackageFromProject({
     projectId: project.id,
     projectName: project.name,
     strips: project.layout.strips,
     patchBoard: project.layout.patchBoard,
+    wiring: project.layout.wiring,
     standaloneController: project.devices.standaloneController,
   })).json;
   await page.addInitScript(() => {
@@ -711,6 +759,8 @@ test('setup JSON copy and download use the same compact card payload', async ({ 
   expect(copied).toBe(expected);
   expect(copied).not.toContain('\n');
   const config = JSON.parse(copied);
+  expect(config.kaleidoscopeMappings).toHaveLength(1);
+  expect(config.kaleidoscopeMappings[0].id).toBe(project.layout.strips[0].id);
   expect(config.patterns).toBeUndefined();
   expect(config.controls?.encoder?.patternCycleIds).toBeUndefined();
 });

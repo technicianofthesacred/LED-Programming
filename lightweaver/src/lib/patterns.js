@@ -254,6 +254,8 @@ export function compile(code) {
     const rawFn = new Function(
       'index', 'x', 'y', 't', 'time', 'pixelCount', 'palette', 'beat', 'beatSin', 'params',
       'stripId', 'stripProgress', 'bass', 'mid', 'hi',
+      'reflectionProgress', 'kaleidoscopeProgress', 'reflectionDistance',
+      'reflectionSegment', 'reflectionPoint', 'isReflectionPoint',
       // Trailing shadow params: the body sees these names as the `undefined`
       // arguments we forward in the wrapper below, not the page globals.
       ...SHADOWED_GLOBALS,
@@ -261,7 +263,7 @@ export function compile(code) {
     );
     // Call the compiled function with `undefined` for every shadow param so the
     // dangerous globals are unreachable from inside the pattern body.
-    const fn = (...args) => rawFn(...args.slice(0, 15), ...SHADOWED_GLOBALS.map(() => undefined));
+    const fn = (...args) => rawFn(...args.slice(0, 21), ...SHADOWED_GLOBALS.map(() => undefined));
     return { fn, error: null };
   } catch (e) {
     return { fn: null, error: e.message };
@@ -286,9 +288,18 @@ export function compile(code) {
  * @param {number}    stripProgress 0–1 position along this strip only
  * @returns {{ r: number, g: number, b: number }}
  */
-export function evalPixel(fn, index, x, y, t, time, pixelCount, palette, beat, beatSin, params, stripId, stripProgress, bass = 0, mid = 0, hi = 0) {
+export function evalPixel(fn, index, x, y, t, time, pixelCount, palette, beat, beatSin, params, stripId, stripProgress, bass = 0, mid = 0, hi = 0, reflection = {}) {
   try {
-    const result = fn(index, x, y, t, time, pixelCount, palette, beat, beatSin, params, stripId || 0, stripProgress || 0, bass, mid, hi);
+    const result = fn(
+      index, x, y, t, time, pixelCount, palette, beat, beatSin, params,
+      stripId || 0, stripProgress || 0, bass, mid, hi,
+      reflection.reflectionProgress ?? stripProgress ?? 0,
+      reflection.kaleidoscopeProgress ?? stripProgress ?? 0,
+      reflection.reflectionDistance ?? 1,
+      reflection.reflectionSegment ?? 0,
+      reflection.reflectionPoint ?? null,
+      reflection.isReflectionPoint === true,
+    );
     if (Array.isArray(result)) {
       const scale = result.some(v => Math.abs(v) > 1) ? 1 : 255;
       return {

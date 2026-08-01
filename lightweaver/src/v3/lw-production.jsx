@@ -840,8 +840,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       const verifyingRun = await advance('verify-card', { usbReleased: true }, runLease);
       mutationRunLease = Object.freeze(correlation(verifyingRun));
       mutationIntentPersisted = true;
-      if (driver?.restore) await driver.restore(job.configuration);
-      else await pushConfigToCard(job.configuration, {
+      const pushOptions = {
         host: lease.host,
         transport: lease.transport,
         autoDiscover: false,
@@ -849,8 +848,11 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
         allowProjectChange: true,
         allowLayoutChange: true,
         commissioningFlowId: lease.commissioningFlowId,
-          factoryBlank: blankConfig,
-        });
+        factoryBlank: blankConfig,
+        cardEvidence: binding,
+      };
+      if (driver?.restore) await driver.restore(job.configuration, pushOptions);
+      else await pushConfigToCard(job.configuration, pushOptions);
       assertActiveRunLease(mutationRunLease);
       // Applying first wiring may restart the card or replace the bridge page.
       // The old lease is expected to die. The next step uses a new, exact

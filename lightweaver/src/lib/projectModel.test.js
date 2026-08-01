@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createDefaultProject, migrateProject } from './projectModel.js';
+import { createDefaultProject, migrateProject, toLegacyProject } from './projectModel.js';
 
 test('new projects start with one explicit physical data wire', () => {
   const project = createDefaultProject();
@@ -101,4 +101,41 @@ test('current-format imports reject duplicate strip ids before reference maps ca
   };
 
   assert.equal(migrateProject(saved), null);
+});
+
+test('migration keeps valid Kaleidoscope metadata and warns while disabling malformed mappings', () => {
+  const saved = createDefaultProject();
+  saved.layout.strips[0].kaleidoscope = {
+    enabled: true, pointCount: 4, startLed: 1, offsets: [0, 0, 0, 0],
+  };
+  saved.layout.strips[1].kaleidoscope = {
+    enabled: true, pointCount: 4.5, startLed: 0, offsets: [0, 0, 0, 0],
+  };
+
+  const migrated = migrateProject(saved);
+
+  assert.deepEqual(migrated.layout.strips[0].kaleidoscope, saved.layout.strips[0].kaleidoscope);
+  assert.equal(migrated.layout.strips[1].kaleidoscope, undefined);
+  assert.deepEqual(migrated.layout.projectWarnings.map(({ scope, stripId, code }) => ({ scope, stripId, code })), [{
+    scope: 'kaleidoscope',
+    stripId: saved.layout.strips[1].id,
+    code: 'point-count',
+  }]);
+  assert.deepEqual(
+    migrateProject(migrated).layout.projectWarnings,
+    migrated.layout.projectWarnings,
+    'startup validation and application may migrate the same project twice',
+  );
+});
+
+test('old projects load without Kaleidoscope fields and legacy export strips new metadata', () => {
+  const saved = createDefaultProject();
+  assert.equal(migrateProject(saved).layout.strips.some(strip => 'kaleidoscope' in strip), false);
+  saved.layout.strips[0].kaleidoscope = {
+    enabled: true, pointCount: 4, startLed: 0, offsets: [0, 0, 0, 0],
+  };
+  saved.layout.projectWarnings = [{ scope: 'kaleidoscope', stripId: saved.layout.strips[0].id, code: 'x', message: 'x' }];
+  const legacy = toLegacyProject(saved);
+  assert.equal(legacy.strips.some(strip => 'kaleidoscope' in strip), false);
+  assert.equal('projectWarnings' in legacy, false);
 });

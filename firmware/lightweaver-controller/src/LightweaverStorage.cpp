@@ -3,6 +3,7 @@
 #include "LightweaverOutputColorParser.h"
 #include "LightweaverRecipe.h"
 #include "LightweaverLookModePolicy.h"
+#include <cstring>
 #include <new>
 #include <esp_system.h>
 #include <mbedtls/sha256.h>
@@ -136,6 +137,9 @@ void resetLookZone(LookZoneConfig& zone) {
   zone.customHue = 32;
   zone.customSaturation = 230;
   zone.customBreathe = false;
+  zone.breatheLowerPct = 85;
+  zone.breatheUpperPct = 100;
+  zone.breatheCycleSeconds = 9;
   zone.customDrift = false;
   zone.blackout = false;
 }
@@ -196,10 +200,26 @@ void resetZone(ZoneConfig& zone) {
   zone.customHue = 32;
   zone.customSaturation = 230;
   zone.customBreathe = false;
+  zone.breatheLowerPct = 85;
+  zone.breatheUpperPct = 100;
+  zone.breatheCycleSeconds = 9;
   zone.customDrift = false;
   zone.driftHueMin = 0;
   zone.driftHueMax = 255;
   zone.blackout = false;
+}
+
+void resetKaleidoscopeMapping(KaleidoscopeMappingConfig& mapping) {
+  mapping.id = "";
+  mapping.zoneId = "";
+  mapping.pixelCount = 0;
+  mapping.startLed = 0;
+  mapping.pointCount = 0;
+  mapping.pointPoolStart = 0;
+  mapping.spanCount = 0;
+  for (uint8_t index = 0; index < LW_MAX_KALEIDOSCOPE_SPANS; index++) {
+    mapping.spans[index] = KaleidoscopeSpan{};
+  }
 }
 
 void resetConfig(RuntimeConfig& config) {
@@ -234,6 +254,15 @@ void resetConfig(RuntimeConfig& config) {
   config.activeHostname = "";
   for (uint8_t i = 0; i < LW_MAX_ZONES; i++) resetZone(config.zones[i]);
   config.zoneCount = 0;
+  for (uint16_t i = 0; i < LW_MAX_KALEIDOSCOPE_OFFSETS; i++) {
+    config.kaleidoscopeOffsets[i] = 0;
+    config.kaleidoscopeOrderedPoints[i] = 0;
+  }
+  config.kaleidoscopePointPoolCount = 0;
+  for (uint8_t i = 0; i < LW_MAX_KALEIDOSCOPE_MAPPINGS; i++) {
+    resetKaleidoscopeMapping(config.kaleidoscopeMappings[i]);
+  }
+  config.kaleidoscopeMappingCount = 0;
   config.syncZones = true;
 }
 
@@ -358,6 +387,9 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
         zone.customHue = clampByte(zoneJson["customHue"] | 32, 32);
         zone.customSaturation = clampByte(zoneJson["customSaturation"] | 230, 230);
         zone.customBreathe = zoneJson["customBreathe"] | false;
+        zone.breatheLowerPct = constrain(int(zoneJson["breatheLowerPct"] | 85), 0, 100);
+        zone.breatheUpperPct = constrain(int(zoneJson["breatheUpperPct"] | 100), zone.breatheLowerPct, 100);
+        zone.breatheCycleSeconds = constrain(int(zoneJson["breatheCycleSeconds"] | 9), 4, 30);
         zone.customDrift = zoneJson["customDrift"] | false;
         zone.blackout = zoneJson["blackout"] | false;
         if (zone.id.length() > 0 && zone.patternId.length() > 0) look.zoneCount++;
@@ -386,6 +418,9 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
       zone.customHue = clampByte(zoneJson["customHue"] | 32, 32);
       zone.customSaturation = clampByte(zoneJson["customSaturation"] | 230, 230);
       zone.customBreathe = zoneJson["customBreathe"] | false;
+      zone.breatheLowerPct = constrain(int(zoneJson["breatheLowerPct"] | 85), 0, 100);
+      zone.breatheUpperPct = constrain(int(zoneJson["breatheUpperPct"] | 100), zone.breatheLowerPct, 100);
+      zone.breatheCycleSeconds = constrain(int(zoneJson["breatheCycleSeconds"] | 9), 4, 30);
       zone.customDrift = zoneJson["customDrift"] | false;
       zone.driftHueMin = zoneJson["driftHueMin"] | 0;
       zone.driftHueMax = zoneJson["driftHueMax"] | 255;
@@ -535,6 +570,177 @@ bool isSafeProductionJobId(const String& value) {
                         (c >= 'a' && c <= 'z');
     if (!alphanumeric && c != '.' && c != '_' && c != ':' && c != '-') return false;
     if (i == 0 && !alphanumeric) return false;
+  }
+  return true;
+}
+
+bool exactJsonInteger(JsonVariantConst value, int32_t minimum, int32_t maximum,
+                      int32_t& result) {
+  if (value.isNull() || !value.is<int32_t>()) return false;
+  result = value.as<int32_t>();
+  return result >= minimum && result <= maximum;
+}
+
+bool validateKaleidoscopeMappingsStrict(JsonDocument& doc,
+                                        uint16_t totalPixels,
+                                        RuntimeConfig& parsed,
+                                        String& message) {
+  parsed.kaleidoscopeMappingCount = 0;
+  parsed.kaleidoscopePointPoolCount = 0;
+  JsonVariantConst mappingsValue = doc["kaleidoscopeMappings"];
+  if (mappingsValue.isNull()) return true;
+  if (!mappingsValue.is<JsonArrayConst>()) {
+    message = "kaleidoscopeMappings must be an array";
+    return false;
+  }
+  JsonArrayConst mappings = mappingsValue.as<JsonArrayConst>();
+  if (mappings.size() > LW_MAX_KALEIDOSCOPE_MAPPINGS) {
+    message = "kaleidoscope mapping count exceeds limit";
+    return false;
+  }
+
+  uint16_t aggregateOffsets = 0;
+  for (JsonVariantConst mappingValue : mappings) {
+    const uint8_t mappingIndex = parsed.kaleidoscopeMappingCount;
+    if (!mappingValue.is<JsonObjectConst>()) {
+      message = String("kaleidoscope mapping ") + mappingIndex + " must be an object";
+      return false;
+    }
+    JsonObjectConst mappingJson = mappingValue.as<JsonObjectConst>();
+    if (mappingJson.size() != 7 || !mappingJson["id"].is<const char*>() ||
+        !mappingJson["zoneId"].is<const char*>()) {
+      message = String("kaleidoscope mapping ") + mappingIndex + " has invalid fields";
+      return false;
+    }
+    const String id = String(mappingJson["id"].as<const char*>());
+    const String zoneId = String(mappingJson["zoneId"].as<const char*>());
+    if (!id.length() || !zoneId.length()) {
+      message = String("kaleidoscope mapping ") + mappingIndex + " requires id and zoneId";
+      return false;
+    }
+    for (uint8_t previous = 0; previous < mappingIndex; previous++) {
+      if (parsed.kaleidoscopeMappings[previous].id == id) {
+        message = String("duplicate kaleidoscope mapping id ") + id;
+        return false;
+      }
+    }
+    const ZoneConfig* owningZone = nullptr;
+    for (uint8_t zoneIndex = 0; zoneIndex < parsed.zoneCount; zoneIndex++) {
+      if (parsed.zones[zoneIndex].id == zoneId) owningZone = &parsed.zones[zoneIndex];
+    }
+    if (!owningZone) {
+      message = String("unknown kaleidoscope zone ") + zoneId;
+      return false;
+    }
+
+    int32_t pixelCountValue = 0;
+    int32_t pointCountValue = 0;
+    int32_t startLedValue = 0;
+    if (!exactJsonInteger(mappingJson["pixelCount"], 2, LW_MAX_PIXELS, pixelCountValue) ||
+        pixelCountValue > totalPixels ||
+        !exactJsonInteger(mappingJson["pointCount"], 2, pixelCountValue, pointCountValue) ||
+        !exactJsonInteger(mappingJson["startLed"], 0, pixelCountValue - 1, startLedValue)) {
+      message = String("kaleidoscope mapping ") + id + " has invalid pixel or point fields";
+      return false;
+    }
+    if (!mappingJson["offsets"].is<JsonArrayConst>()) {
+      message = String("kaleidoscope mapping ") + id + " offsets must be an array";
+      return false;
+    }
+    JsonArrayConst offsets = mappingJson["offsets"].as<JsonArrayConst>();
+    if (offsets.size() != static_cast<size_t>(pointCountValue) ||
+        aggregateOffsets + offsets.size() > LW_MAX_KALEIDOSCOPE_OFFSETS) {
+      message = String("kaleidoscope mapping ") + id + " offsets exceed limits";
+      return false;
+    }
+
+    KaleidoscopeMappingConfig& destination = parsed.kaleidoscopeMappings[mappingIndex];
+    resetKaleidoscopeMapping(destination);
+    destination.id = id;
+    destination.zoneId = zoneId;
+    destination.pixelCount = static_cast<uint16_t>(pixelCountValue);
+    destination.pointCount = static_cast<uint16_t>(pointCountValue);
+    destination.startLed = static_cast<uint16_t>(startLedValue);
+    destination.pointPoolStart = aggregateOffsets;
+    for (JsonVariantConst offsetValue : offsets) {
+      int32_t offset = 0;
+      if (!exactJsonInteger(offsetValue, -(pixelCountValue - 1), pixelCountValue - 1, offset)) {
+        message = String("kaleidoscope mapping ") + id + " has invalid offset";
+        return false;
+      }
+      parsed.kaleidoscopeOffsets[aggregateOffsets++] = static_cast<int16_t>(offset);
+    }
+
+    if (!mappingJson["spans"].is<JsonArrayConst>()) {
+      message = String("kaleidoscope mapping ") + id + " spans must be an array";
+      return false;
+    }
+    JsonArrayConst spans = mappingJson["spans"].as<JsonArrayConst>();
+    if (spans.size() == 0 || spans.size() > LW_MAX_KALEIDOSCOPE_SPANS) {
+      message = String("kaleidoscope mapping ") + id + " span count exceeds limits";
+      return false;
+    }
+    for (JsonVariantConst spanValue : spans) {
+      if (!spanValue.is<JsonObjectConst>()) {
+        message = String("kaleidoscope mapping ") + id + " span must be an object";
+        return false;
+      }
+      JsonObjectConst spanJson = spanValue.as<JsonObjectConst>();
+      if (spanJson.size() != 4) {
+        message = String("kaleidoscope mapping ") + id + " span has invalid fields";
+        return false;
+      }
+      int32_t start = 0;
+      int32_t count = 0;
+      int32_t sourceStart = 0;
+      int32_t sourceStep = 0;
+      if (!exactJsonInteger(spanJson["start"], 0, totalPixels - 1, start) ||
+          !exactJsonInteger(spanJson["count"], 1, totalPixels, count) ||
+          static_cast<uint32_t>(start) + count > totalPixels ||
+          !exactJsonInteger(spanJson["sourceStart"], 0, pixelCountValue - 1, sourceStart) ||
+          !exactJsonInteger(spanJson["sourceStep"], -1, 1, sourceStep) ||
+          sourceStep == 0) {
+        message = String("kaleidoscope mapping ") + id + " has invalid span";
+        return false;
+      }
+      KaleidoscopeSpan& span = destination.spans[destination.spanCount++];
+      span.start = static_cast<uint16_t>(start);
+      span.count = static_cast<uint16_t>(count);
+      span.sourceStart = static_cast<uint16_t>(sourceStart);
+      span.sourceStep = static_cast<int8_t>(sourceStep);
+    }
+    if (!validateKaleidoscopeSpans(destination.spans, destination.spanCount,
+                                  destination.pixelCount, totalPixels)) {
+      message = String("kaleidoscope mapping ") + id +
+          " spans wrap, overlap, or do not exactly cover source LEDs";
+      return false;
+    }
+    for (uint8_t spanIndex = 0; spanIndex < destination.spanCount; spanIndex++) {
+      if (!kaleidoscopeSpanWithinRanges(
+              destination.spans[spanIndex], owningZone->ranges, owningZone->rangeCount)) {
+        message = String("kaleidoscope mapping ") + id +
+            " contains pixels outside its declared zone ranges";
+        return false;
+      }
+    }
+    for (uint8_t previous = 0; previous < mappingIndex; previous++) {
+      const KaleidoscopeMappingConfig& prior = parsed.kaleidoscopeMappings[previous];
+      if (kaleidoscopeSpansOverlapGlobal(destination.spans, destination.spanCount,
+                                         prior.spans, prior.spanCount)) {
+        message = String("kaleidoscope mapping ") + id +
+            " overlaps global pixels from another mapping";
+        return false;
+      }
+    }
+    if (!deriveKaleidoscopePoints(
+            destination.pixelCount, destination.pointCount, destination.startLed,
+            parsed.kaleidoscopeOffsets + destination.pointPoolStart,
+            parsed.kaleidoscopeOrderedPoints + destination.pointPoolStart)) {
+      message = String("kaleidoscope mapping ") + id + " reflection points collide or cross";
+      return false;
+    }
+    parsed.kaleidoscopePointPoolCount = aggregateOffsets;
+    parsed.kaleidoscopeMappingCount++;
   }
   return true;
 }
@@ -810,6 +1016,17 @@ bool validateRuntimeConfigJsonStrict(const String& json,
     }
     for (JsonVariant value : zones) {
       JsonObject zone = value.as<JsonObject>();
+      int breatheLower = zone["breatheLowerPct"] | 85;
+      int breatheUpper = zone["breatheUpperPct"] | 100;
+      int breatheCycle = zone["breatheCycleSeconds"] | 9;
+      if ((!zone["breatheLowerPct"].isNull() && !zone["breatheLowerPct"].is<int>()) ||
+          (!zone["breatheUpperPct"].isNull() && !zone["breatheUpperPct"].is<int>()) ||
+          (!zone["breatheCycleSeconds"].isNull() && !zone["breatheCycleSeconds"].is<int>()) ||
+          breatheLower < 0 || breatheLower > 100 || breatheUpper < breatheLower || breatheUpper > 100 ||
+          breatheCycle < 4 || breatheCycle > 30) {
+        message = "invalid breathe settings";
+        return false;
+      }
       String id = String(zone["id"] | "");
       if (!id.length()) {
         message = "zone id missing";
@@ -842,6 +1059,18 @@ bool validateRuntimeConfigJsonStrict(const String& json,
   for (JsonVariant value : looks) {
     JsonArray lookZones = value["zones"].as<JsonArray>();
     for (JsonVariant zoneValue : lookZones) {
+      JsonObject lookZone = zoneValue.as<JsonObject>();
+      int breatheLower = lookZone["breatheLowerPct"] | 85;
+      int breatheUpper = lookZone["breatheUpperPct"] | 100;
+      int breatheCycle = lookZone["breatheCycleSeconds"] | 9;
+      if ((!lookZone["breatheLowerPct"].isNull() && !lookZone["breatheLowerPct"].is<int>()) ||
+          (!lookZone["breatheUpperPct"].isNull() && !lookZone["breatheUpperPct"].is<int>()) ||
+          (!lookZone["breatheCycleSeconds"].isNull() && !lookZone["breatheCycleSeconds"].is<int>()) ||
+          breatheLower < 0 || breatheLower > 100 || breatheUpper < breatheLower || breatheUpper > 100 ||
+          breatheCycle < 4 || breatheCycle > 30) {
+        message = "invalid saved-look breathe settings";
+        return false;
+      }
       String id = String(zoneValue["id"] | "");
       bool found = false;
       for (uint8_t i = 0; i < zoneCount; i++) if (zoneIds[i] == id) found = true;
@@ -852,7 +1081,9 @@ bool validateRuntimeConfigJsonStrict(const String& json,
     }
   }
 
-  return loadJsonString(json, parsed, source, message);
+  if (!loadJsonString(json, parsed, source, message)) return false;
+  return validateKaleidoscopeMappingsStrict(
+      doc, static_cast<uint16_t>(totalPixels), parsed, message);
 }
 
 bool mountRuntimeSd(String& message) {
@@ -1226,6 +1457,9 @@ void ensureDefaultZone(RuntimeConfig& config) {
   z.customHue = 32;
   z.customSaturation = 230;
   z.customBreathe = false;
+  z.breatheLowerPct = 85;
+  z.breatheUpperPct = 100;
+  z.breatheCycleSeconds = 9;
   z.customDrift = false;
   z.blackout = false;
   config.syncZones = true;
@@ -2019,6 +2253,8 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["knownGoodProject"] = config.knownGoodProject;
   doc["configSchemaVersion"] = LW_CONFIG_SCHEMA_VERSION;
   doc["capabilitiesVersion"] = LW_CAPABILITIES_VERSION;
+  doc["capabilities"]["kaleidoscopeReflectionPoints"] =
+      LW_KALEIDOSCOPE_REFLECTION_POINTS_VERSION;
   doc["ok"] = errorCode == ERROR_NONE;
   doc["errorCode"] = uint8_t(errorCode);
   doc["mode"] = config.mode;
@@ -2038,6 +2274,8 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["limits"]["zones"] = LW_MAX_ZONES;
   doc["limits"]["rangesPerZone"] = LW_MAX_RANGES_PER_ZONE;
   doc["limits"]["configStorageBytes"] = NVS_STRING_LIMIT;
+  serializeKaleidoscopeMappings(
+      doc["kaleidoscopeMappings"].to<JsonArray>(), config);
   lightweaver::writeNativeRecipeCapabilities(
       doc["recipeCapabilities"].to<JsonObject>(), LW_FIRMWARE_VERSION, LW_BUILD_ID);
   doc["piece"]["name"] = config.pieceName;

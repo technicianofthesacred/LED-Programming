@@ -7,6 +7,14 @@ import { DrawModePanel } from './layout/modes/DrawModePanel.jsx';
 import { WireModePanel } from './layout/modes/WireModePanel.jsx';
 import { useLayoutState } from './layout/hooks/useLayoutState.js';
 import { useProject } from '../state/ProjectContext.jsx';
+import {
+  createDefaultKaleidoscope,
+  deriveReflectionPointIndices,
+  nudgeKaleidoscopePoint,
+  nudgeKaleidoscopeStart,
+  setKaleidoscopePointCount,
+} from '../lib/kaleidoscope.js';
+import { useKaleidoscopeCalibration } from './layout/hooks/useKaleidoscopeCalibration.js';
 
 // ── Main component ─────────────────────────────────────────────────────────
 // All state, handlers, derived memos and effects live in useLayoutState() and
@@ -15,12 +23,13 @@ import { useProject } from '../state/ProjectContext.jsx';
 // The full useLayoutState() bundle is passed straight through to DrawModePanel
 // as a single `state` prop (that panel references nearly the entire bundle).
 
-export function LayoutScreen({ connected, cardHost }) {
+export function LayoutScreen({ connected, cardHost, onConnectCard, onOpenConnectionCenter }) {
   const state = useLayoutState();
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [firstLedPicker, setFirstLedPicker] = useState(null);
   const [firstLedError, setFirstLedError] = useState(null);
   const [firstLedMarkerRunId, setFirstLedMarkerRunId] = useState(null);
+  const [kaleidoscopeEditor, setKaleidoscopeEditor] = useState(null);
   const { wiring, compiledWiring, updateWiring } = useProject();
   const {
     // context passthroughs + composer-level derived (chrome + canvas only)
@@ -116,6 +125,78 @@ export function LayoutScreen({ connected, cardHost }) {
 
   const markerRun = wiring.runs.find(run => run.id === firstLedMarkerRunId && run.type === 'strip' && run.source.stripId === selStripId);
 
+  const updateKaleidoscope = (stripId, next, options) => {
+    state.updateStripKaleidoscope(stripId, next, options);
+    setKaleidoscopeEditor(current => current?.stripId === stripId
+      ? { ...current, error: null }
+      : current);
+  };
+  const openKaleidoscope = (stripId, replacement = null) => {
+    const strip = strips.find(item => item.id === stripId);
+    if (!strip || strip.pixelCount < 2) return;
+    if (!strip.kaleidoscope) updateKaleidoscope(
+      stripId,
+      replacement || createDefaultKaleidoscope(strip.pixelCount),
+    );
+    selectStrip(stripId);
+    setKaleidoscopeEditor(current => current?.stripId === stripId
+      ? null
+      : { stripId, mode: 'open', selectedPointIndex: 0, error: null });
+  };
+  const changeKaleidoscopeCount = (stripId, count) => {
+    const strip = strips.find(item => item.id === stripId);
+    if (!strip?.kaleidoscope) return;
+    if (count !== strip.kaleidoscope.pointCount
+      && strip.kaleidoscope.offsets.some(offset => offset !== 0)
+      && !window.confirm('Changing the point count resets your fine-tuned LED spacing. Continue?')) return;
+    try {
+      updateKaleidoscope(stripId, setKaleidoscopePointCount(strip.kaleidoscope, strip.pixelCount, count));
+      setKaleidoscopeEditor(current => ({ ...current, selectedPointIndex: 0 }));
+    } catch (error) {
+      setKaleidoscopeEditor(current => ({ ...current, error: error.message }));
+    }
+  };
+  const nudgeKaleidoscopeSet = (stripId, delta) => {
+    const strip = strips.find(item => item.id === stripId);
+    if (!strip?.kaleidoscope) return;
+    updateKaleidoscope(stripId, nudgeKaleidoscopeStart(strip.kaleidoscope, strip.pixelCount, delta));
+  };
+  const moveKaleidoscopePoint = (stripId, pointIndex, ledIndex, { recordHistory = true } = {}) => {
+    const strip = strips.find(item => item.id === stripId);
+    if (!strip?.kaleidoscope) return false;
+    const points = deriveReflectionPointIndices(strip.kaleidoscope, strip.pixelCount);
+    let delta = ledIndex - points[pointIndex];
+    if (delta > strip.pixelCount / 2) delta -= strip.pixelCount;
+    if (delta < -strip.pixelCount / 2) delta += strip.pixelCount;
+    const result = nudgeKaleidoscopePoint(strip.kaleidoscope, strip.pixelCount, pointIndex, delta);
+    if (!result.ok) {
+      setKaleidoscopeEditor(current => ({ ...current, error: result.error?.message || 'That point cannot move there.' }));
+      return false;
+    }
+    updateKaleidoscope(stripId, result.value, { recordHistory });
+    return true;
+  };
+  const pickKaleidoscopeLed = (stripId, ledIndex, pointIndex = null, options) => {
+    const strip = strips.find(item => item.id === stripId);
+    if (!strip?.kaleidoscope || kaleidoscopeEditor?.stripId !== stripId) return false;
+    if (kaleidoscopeEditor.mode === 'pick' && pointIndex == null) {
+      updateKaleidoscope(stripId, { ...strip.kaleidoscope, startLed: ledIndex });
+      setKaleidoscopeEditor(current => ({ ...current, mode: 'open' }));
+      return true;
+    }
+    const selected = pointIndex ?? kaleidoscopeEditor.selectedPointIndex;
+    return moveKaleidoscopePoint(stripId, selected, ledIndex, options);
+  };
+  const kaleidoscopeCalibration = useKaleidoscopeCalibration({
+    editor: kaleidoscopeEditor,
+    strips,
+    compiledWiring,
+    connected,
+    host: cardHost,
+    selectedStripId: selStripId,
+    layoutMode: mode,
+  });
+
   const canvasProps = {
     refs: { svgRef, artworkRef, vpRef, spaceRef, stripDragSuppressClickRef },
     strips: state.starterLayoutActive && mode === 'draw' ? [] : strips, layers, hidden,
@@ -130,6 +211,14 @@ export function LayoutScreen({ connected, cardHost }) {
       wiring, compiledWiring,
       firstLedPicker,
       onFirstLedPick: pickFirstLed,
+      kaleidoscopeEditor,
+      onKaleidoscopeLedPick: pickKaleidoscopeLed,
+      onKaleidoscopeSelectPoint: pointIndex => setKaleidoscopeEditor(current => ({
+        ...current,
+        mode: 'fine',
+        selectedPointIndex: pointIndex,
+        error: null,
+      })),
       selectedWiringRunId: markerRun?.id || wiring.runs.find(run => run.type === 'strip' && run.source.stripId === selStripId)?.id || null,
       onSeamMove: (runId, event) => {
         if (!svgRef.current || wiring.locked) return;
@@ -309,7 +398,21 @@ export function LayoutScreen({ connected, cardHost }) {
                            firstLedPicker={firstLedPicker}
                            firstLedError={firstLedError}
                            onBeginFirstLedPicker={beginFirstLedPicker}
-                           onCancelFirstLedPicker={cancelFirstLedPicker}/>
+                           onCancelFirstLedPicker={cancelFirstLedPicker}
+                           kaleidoscopeEditor={kaleidoscopeEditor}
+                           onToggleKaleidoscope={openKaleidoscope}
+                           onChangeKaleidoscopeCount={changeKaleidoscopeCount}
+                           onNudgeKaleidoscopeSet={nudgeKaleidoscopeSet}
+                           onPickKaleidoscopeStart={stripId => setKaleidoscopeEditor(current => ({ ...current, stripId, mode: 'pick', error: null }))}
+                           onSelectKaleidoscopePoint={(stripId, pointIndex) => setKaleidoscopeEditor({ stripId, mode: 'fine', selectedPointIndex: pointIndex, error: null })}
+                           onNudgeKaleidoscopePoint={(stripId, pointIndex, delta) => {
+                             const strip = strips.find(item => item.id === stripId);
+                             const led = deriveReflectionPointIndices(strip?.kaleidoscope, strip?.pixelCount || 0)[pointIndex];
+                             if (Number.isInteger(led)) moveKaleidoscopePoint(stripId, pointIndex, led + delta);
+                           }}
+                           kaleidoscopeCalibration={kaleidoscopeCalibration}
+                           onConnectCard={onConnectCard}
+                           onOpenConnectionCenter={onOpenConnectionCenter}/>
           )}
           {mode === 'wire' && <WireModePanel state={state} connected={connected} cardHost={cardHost}/>} 
         </div>

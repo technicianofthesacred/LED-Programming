@@ -13,6 +13,9 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
+#include <cerrno>
+#include <climits>
+#include <cstdlib>
 
 namespace {
 WebServer server(80);
@@ -148,6 +151,27 @@ float controlFloat(JsonDocument& doc, const char* key) {
 int controlInt(JsonDocument& doc, const char* key) {
   if (!doc[key].isNull()) return doc[key].as<int>();
   return server.arg(key).toInt();
+}
+
+bool parseControlIntStrict(JsonDocument& doc, const char* key, int& value) {
+  if (!doc[key].isNull()) {
+    if (!doc[key].is<int>()) return false;
+    value = doc[key].as<int>();
+    return true;
+  }
+  if (!server.hasArg(key)) return false;
+  const String raw = server.arg(key);
+  if (!raw.length()) return false;
+  for (size_t index = 0; index < raw.length(); index++) {
+    if (raw[index] < '0' || raw[index] > '9') return false;
+  }
+  char* end = nullptr;
+  errno = 0;
+  const long parsed = strtol(raw.c_str(), &end, 10);
+  if (errno == ERANGE || end == raw.c_str() || *end != '\0' ||
+      parsed < INT_MIN || parsed > INT_MAX) return false;
+  value = static_cast<int>(parsed);
+  return true;
 }
 
 bool controlBool(JsonDocument& doc, const char* key) {
@@ -1165,6 +1189,7 @@ void handleConfigPost() {
     server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + message + "\"}");
     return;
   }
+  runtimeApplySavedConfig();
   runtimeMarkRestartPending();
   server.send(200, "application/json", String("{\"ok\":true,\"message\":\"") + message + "\",\"requiresReboot\":true}");
 }
@@ -1740,6 +1765,25 @@ void handleControlPost() {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid color order\"}");
     return;
   }
+  const bool breatheSettingsRequested = hasControlField(doc, "breatheLowerPct") ||
+      hasControlField(doc, "breatheUpperPct") || hasControlField(doc, "breatheCycleSeconds");
+  int requestedBreatheLower = runtimeGetBreatheLowerPctZ(zoneTarget);
+  int requestedBreatheUpper = runtimeGetBreatheUpperPctZ(zoneTarget);
+  int requestedBreatheCycle = runtimeGetBreatheCycleSecondsZ(zoneTarget);
+  const bool breatheLowerValid = !hasControlField(doc, "breatheLowerPct") ||
+      parseControlIntStrict(doc, "breatheLowerPct", requestedBreatheLower);
+  const bool breatheUpperValid = !hasControlField(doc, "breatheUpperPct") ||
+      parseControlIntStrict(doc, "breatheUpperPct", requestedBreatheUpper);
+  const bool breatheCycleValid = !hasControlField(doc, "breatheCycleSeconds") ||
+      parseControlIntStrict(doc, "breatheCycleSeconds", requestedBreatheCycle);
+  if (breatheSettingsRequested &&
+      (!breatheLowerValid || !breatheUpperValid || !breatheCycleValid ||
+       requestedBreatheLower < 0 || requestedBreatheLower > 100 ||
+       requestedBreatheUpper < requestedBreatheLower || requestedBreatheUpper > 100 ||
+       requestedBreatheCycle < 4 || requestedBreatheCycle > 30)) {
+    server.send(422, "application/json", "{\"ok\":false,\"error\":\"invalid breathe settings\"}");
+    return;
+  }
   bool hasRevision = hasControlField(doc, "revision");
   uint32_t confirmedRevision = 0;
   if (hasRevision) {
@@ -1804,6 +1848,9 @@ void handleControlPost() {
       hasControlField(doc, "hue") ||
       hasControlField(doc, "saturation") ||
       hasControlField(doc, "breathe") ||
+      hasControlField(doc, "breatheLowerPct") ||
+      hasControlField(doc, "breatheUpperPct") ||
+      hasControlField(doc, "breatheCycleSeconds") ||
       hasControlField(doc, "drift") ||
       hasControlField(doc, "driftMin") ||
       hasControlField(doc, "driftMax");
@@ -1851,6 +1898,9 @@ void handleControlPost() {
         if (hasControlField(doc, "hue")) runtimeSetCustomHueZ(zoneTarget, uint8_t(controlInt(doc, "hue") & 0xff));
         if (hasControlField(doc, "saturation")) runtimeSetCustomSaturationZ(zoneTarget, uint8_t(controlInt(doc, "saturation") & 0xff));
         if (hasControlField(doc, "breathe")) runtimeSetCustomBreatheZ(zoneTarget, controlBool(doc, "breathe"));
+        if (hasControlField(doc, "breatheLowerPct") || hasControlField(doc, "breatheUpperPct") || hasControlField(doc, "breatheCycleSeconds")) {
+          runtimeSetBreatheSettingsZ(zoneTarget, uint8_t(requestedBreatheLower), uint8_t(requestedBreatheUpper), uint8_t(requestedBreatheCycle));
+        }
         if (hasControlField(doc, "drift")) runtimeSetCustomDriftZ(zoneTarget, controlBool(doc, "drift"));
         if (hasControlField(doc, "driftMin") || hasControlField(doc, "driftMax")) {
           uint8_t lo = hasControlField(doc, "driftMin") ? uint8_t(controlInt(doc, "driftMin") & 0xff) : runtimeGetDriftHueMin();
@@ -1912,7 +1962,10 @@ void handleControlPost() {
   out["hue"] = runtimeGetCustomHue();
   out["saturation"] = runtimeGetCustomSaturation();
   out["colorOrder"] = runtimeGetLedColorOrder();
-  out["breathe"] = runtimeGetCustomBreathe();
+  out["breathe"] = runtimeGetCustomBreatheZ(zoneTarget);
+  out["breatheLowerPct"] = runtimeGetBreatheLowerPctZ(zoneTarget);
+  out["breatheUpperPct"] = runtimeGetBreatheUpperPctZ(zoneTarget);
+  out["breatheCycleSeconds"] = runtimeGetBreatheCycleSecondsZ(zoneTarget);
   out["drift"] = runtimeGetCustomDrift();
   out["driftMin"] = runtimeGetDriftHueMin();
   out["driftMax"] = runtimeGetDriftHueMax();

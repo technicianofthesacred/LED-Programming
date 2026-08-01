@@ -121,6 +121,161 @@ async function validPackage(overrides) {
   return buildProductionJob(source(overrides), { cryptoImpl: webcrypto });
 }
 
+function withKaleidoscopeSource(offsets = [0, 0, 0, 0]) {
+  const value = source();
+  const snapshot = value.project.restoreSnapshot;
+  snapshot.layout.strips[0].kaleidoscope = {
+    enabled: true,
+    pointCount: 4,
+    startLed: 0,
+    offsets,
+  };
+  value.project.fingerprint = fingerprintCommissioningProject(snapshot);
+  value.configuration = buildCardRuntimePackageFromProject({
+    projectId: value.project.id,
+    projectName: snapshot.name,
+    projectRevision: value.project.revision,
+    projectFingerprint: value.project.fingerprint,
+    productionJobId: value.jobId,
+    productionJobDigest: hex('0', 64),
+    strips: snapshot.layout.strips,
+    patchBoard: snapshot.layout.patchBoard,
+    wiring: snapshot.layout.wiring,
+    standaloneController: snapshot.devices.standaloneController,
+  });
+  return value;
+}
+
+test('production jobs immutably round-trip editable and compiled Kaleidoscope mappings', async () => {
+  const first = await buildProductionJob(withKaleidoscopeSource(), { cryptoImpl: webcrypto });
+  const parsed = await parseProductionJobPackage(first, {
+    trust: { kind: 'same-origin-index', expectedDigest: first.digest },
+    cryptoImpl: webcrypto,
+  });
+
+  assert.deepEqual(parsed.project.restoreSnapshot.layout.strips[0].kaleidoscope, {
+    enabled: true,
+    pointCount: 4,
+    startLed: 0,
+    offsets: [0, 0, 0, 0],
+  });
+  assert.deepEqual(parsed.configuration.config.kaleidoscopeMappings, [{
+    id: 'strip-1',
+    zoneId: 'strip-1',
+    pixelCount: 8,
+    pointCount: 4,
+    startLed: 0,
+    offsets: [0, 0, 0, 0],
+    spans: [{ start: 0, count: 8, sourceStart: 0, sourceStep: 1 }],
+  }]);
+
+  const changed = await buildProductionJob(withKaleidoscopeSource([0, 1, 0, 0]), { cryptoImpl: webcrypto });
+  assert.notEqual(changed.digest, first.digest, 'one source offset must change the immutable job digest');
+
+  const legacy = await validPackage();
+  assert.equal(Object.hasOwn(legacy.project.restoreSnapshot.layout.strips[0], 'kaleidoscope'), false);
+  assert.equal(Object.hasOwn(legacy.configuration.config, 'kaleidoscopeMappings'), false);
+});
+
+test('production jobs reject derived, malformed, or irreproducible Kaleidoscope fields', async () => {
+  const derived = withKaleidoscopeSource();
+  derived.project.restoreSnapshot.layout.strips[0].kaleidoscope.points = [0, 2, 4, 6];
+  derived.project.fingerprint = fingerprintCommissioningProject(derived.project.restoreSnapshot);
+  await assert.rejects(buildProductionJob(derived, { cryptoImpl: webcrypto }), /restore snapshot strip.*kaleidoscope|unsupported fields/i);
+
+  const malformed = source();
+  malformed.project.restoreSnapshot.layout.strips[0].kaleidoscope = {
+    enabled: true,
+    pointCount: 4,
+    startLed: 0,
+    offsets: [0, 0.5, 0, 0],
+  };
+  malformed.project.fingerprint = fingerprintCommissioningProject(malformed.project.restoreSnapshot);
+  await assert.rejects(buildProductionJob(malformed, { cryptoImpl: webcrypto }), /kaleidoscope.*offset/i);
+
+  const irreproducible = source();
+  irreproducible.configuration.config.kaleidoscopeMappings = [{
+    id: 'strip-1', zoneId: 'strip-1', pixelCount: 8,
+    pointCount: 4, startLed: 0, offsets: [0, 0, 0, 0],
+    spans: [{ start: 0, count: 8, sourceStart: 0, sourceStep: 1 }],
+  }];
+  await assert.rejects(buildProductionJob(irreproducible, { cryptoImpl: webcrypto }), /compiled runtime.*restore snapshot/i);
+});
+
+test('production jobs round-trip custom breathe settings while legacy looks remain compatible', async () => {
+  const customSource = source();
+  const controller = customSource.project.restoreSnapshot.devices.standaloneController;
+  const breathe = { customBreathe: true, breatheLowerPct: 71, breatheUpperPct: 92, breatheCycleSeconds: 18 };
+  controller.defaultLook = { ...controller.defaultLook, ...breathe };
+  controller.looks = [{
+    id: 'gentle-gallery', type: 'compound-pattern', label: 'Gentle gallery', updatedAt: 0,
+    defaultLook: { ...controller.defaultLook },
+    sectionLooks: { 'strip-1': { ...controller.defaultLook, breatheLowerPct: 76, breatheUpperPct: 94, breatheCycleSeconds: 12 } },
+  }];
+  controller.playlist = [{ id: 'combo-gentle-gallery', type: 'combo', lookId: 'gentle-gallery', label: 'Gentle gallery', enabled: true, createdAt: 0 }];
+  customSource.project.fingerprint = fingerprintCommissioningProject(customSource.project.restoreSnapshot);
+  customSource.configuration = buildCardRuntimePackageFromProject({
+    projectId: customSource.project.id,
+    projectName: customSource.project.restoreSnapshot.name,
+    projectRevision: customSource.project.revision,
+    projectFingerprint: customSource.project.fingerprint,
+    productionJobId: customSource.jobId,
+    productionJobDigest: hex('0', 64),
+    strips: customSource.project.restoreSnapshot.layout.strips,
+    patchBoard: customSource.project.restoreSnapshot.layout.patchBoard,
+    wiring: customSource.project.restoreSnapshot.layout.wiring,
+    standaloneController: controller,
+  });
+  const job = await buildProductionJob(customSource, { cryptoImpl: webcrypto });
+  const restored = await parseProductionJobPackage(job, {
+    trust: { kind: 'same-origin-index', expectedDigest: job.digest },
+    cryptoImpl: webcrypto,
+  });
+  assert.deepEqual({
+    customBreathe: restored.configuration.config.zones[0].customBreathe,
+    breatheLowerPct: restored.configuration.config.zones[0].breatheLowerPct,
+    breatheUpperPct: restored.configuration.config.zones[0].breatheUpperPct,
+    breatheCycleSeconds: restored.configuration.config.zones[0].breatheCycleSeconds,
+  }, breathe);
+  assert.equal(restored.configuration.config.looks[0].zones[0].breatheCycleSeconds, 12);
+
+  const legacy = source();
+  assert.equal(Object.hasOwn(legacy.project.restoreSnapshot.devices.standaloneController.defaultLook, 'breatheLowerPct'), false);
+  for (const field of ['breatheLowerPct', 'breatheUpperPct', 'breatheCycleSeconds']) {
+    for (const zone of legacy.configuration.config.zones) delete zone[field];
+  }
+  await assert.doesNotReject(() => buildProductionJob(legacy, { cryptoImpl: webcrypto }));
+});
+
+test('production jobs reject non-canonical breathe settings in the restore default look', async () => {
+  for (const breathe of [
+    { breatheLowerPct: '71', breatheUpperPct: 92, breatheCycleSeconds: 18 },
+    { breatheLowerPct: 93, breatheUpperPct: 71, breatheCycleSeconds: 18 },
+    { breatheLowerPct: 71, breatheUpperPct: 92, breatheCycleSeconds: 18.5 },
+  ]) {
+    const invalid = source();
+    const controller = invalid.project.restoreSnapshot.devices.standaloneController;
+    controller.defaultLook = { ...controller.defaultLook, customBreathe: true, ...breathe };
+    invalid.project.fingerprint = fingerprintCommissioningProject(invalid.project.restoreSnapshot);
+    invalid.configuration = buildCardRuntimePackageFromProject({
+      projectId: invalid.project.id,
+      projectName: invalid.project.restoreSnapshot.name,
+      projectRevision: invalid.project.revision,
+      projectFingerprint: invalid.project.fingerprint,
+      productionJobId: invalid.jobId,
+      productionJobDigest: hex('0', 64),
+      strips: invalid.project.restoreSnapshot.layout.strips,
+      patchBoard: invalid.project.restoreSnapshot.layout.patchBoard,
+      wiring: invalid.project.restoreSnapshot.layout.wiring,
+      standaloneController: controller,
+    });
+    await assert.rejects(
+      buildProductionJob(invalid, { cryptoImpl: webcrypto }),
+      /restore snapshot default look breathe settings/i,
+    );
+  }
+});
+
 function sourceWithStripRuns(runCount, pixelsPerRun = 2) {
   const value = source();
   const snapshot = value.project.restoreSnapshot;
@@ -396,6 +551,10 @@ test('verifies the pinned production-job key against its immutable signed fixtur
   delete job.configuration.config.led.calibration;
   delete job.configuration.config.led.type;
   delete job.configuration.config.led.maxMilliamps;
+  for (const field of ['breatheLowerPct', 'breatheUpperPct', 'breatheCycleSeconds']) {
+    delete job.project.restoreSnapshot.devices.standaloneController.defaultLook[field];
+    for (const zone of job.configuration.config.zones) delete zone[field];
+  }
   delete job.configuration.config.wiringRevision;
   delete job.configuration.config.wiringDigest;
   job.configuration.config.productionJobDigest = '0'.repeat(64);
@@ -483,6 +642,8 @@ test('published schema is nested-strict and accepts exactly the runtime-valid pa
     schema.properties.configuration.properties.config.properties.led.properties.calibration,
     deref(schema.properties.configuration.properties.config.properties.looks.items).properties.zones.items,
     schema.properties.configuration.properties.config.properties.zones.items,
+    schema.properties.project.properties.restoreSnapshot.properties.layout.properties.strips.items,
+    schema.properties.configuration.properties.config.properties.kaleidoscopeMappings.items,
   ];
   for (const nested of strictPaths) assert.equal(deref(nested)?.additionalProperties, false);
   for (const runVariant of deref(deref(schema.properties.project.properties.restoreSnapshot.properties.layout.properties.wiring).properties.runs.items).oneOf) {
@@ -496,6 +657,7 @@ test('published schema is nested-strict and accepts exactly the runtime-valid pa
     value => { value.configuration.config.led.outputGammaValue = 3.01; },
     value => { value.configuration.config.led.calibration.red = '0.8'; },
     value => { value.configuration.config.looks[0].zones = [{ id: 'z', unknown: true }]; },
+    value => { value.project.restoreSnapshot.layout.strips[0].kaleidoscope = { enabled: true, pointCount: 4, startLed: 0, offsets: [0, 0, 0, 0], points: [0, 2, 4, 6] }; },
   ]) {
     const invalid = structuredClone(job);
     mutate(invalid);

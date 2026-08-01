@@ -14,6 +14,7 @@
 
 import { createDefaultPatchBoard, normalizePatchBoard } from '../lib/patchBoard.js';
 import { stripSourceKey } from '../lib/layoutGeometry.js';
+import { reverseKaleidoscope } from '../lib/kaleidoscope.js';
 
 // The layout state slice. `selection` is the single selection model that replaces
 // the scattered selLayerId / selStripId / selectedStripIds / pathSel booleans.
@@ -55,6 +56,7 @@ export function createLayoutState(init = {}) {
     // strip was cut from. Strips without an entry follow the global `density`.
     stripDensities: init.stripDensities || {},
     hidden: init.hidden || {},
+    projectWarnings: Array.isArray(init.projectWarnings) ? init.projectWarnings : [],
     svgText: init.svgText ?? null,
     viewBox: init.viewBox || DEFAULT_VIEWBOX,
     density: Number.isFinite(init.density) ? init.density : DEFAULT_DENSITY,
@@ -78,6 +80,7 @@ export const LayoutActions = Object.freeze({
   MERGE_STRIPS: 'layout/mergeStrips',
   GROUP_STRIPS: 'layout/groupStrips',
   UPDATE_STRIP: 'layout/updateStrip',
+  UPDATE_KALEIDOSCOPE: 'layout/updateKaleidoscope',
   SET_STRIP_OFFSET: 'layout/setStripOffset',
   SET_STRIP_COUNT_OVERRIDES: 'layout/setStripCountOverrides',
   // Layers
@@ -132,6 +135,7 @@ export const layoutActions = {
   mergeStrips: (ids, merged) => ({ type: LayoutActions.MERGE_STRIPS, ids, merged }),
   groupStrips: (ids, groupId, name = '') => ({ type: LayoutActions.GROUP_STRIPS, ids, groupId, name }),
   updateStrip: (id, patch) => ({ type: LayoutActions.UPDATE_STRIP, id, patch }),
+  updateKaleidoscope: (id, kaleidoscope) => ({ type: LayoutActions.UPDATE_KALEIDOSCOPE, id, kaleidoscope }),
   setStripOffset: (id, x, y, pixels = null) => ({ type: LayoutActions.SET_STRIP_OFFSET, id, x, y, pixels }),
   setStripCountOverrides: overrides => ({ type: LayoutActions.SET_STRIP_COUNT_OVERRIDES, overrides }),
   setArtwork: payload => ({ type: LayoutActions.SET_ARTWORK, ...payload }),
@@ -275,6 +279,7 @@ export function layoutReducer(state, action) {
         ...s,
         reversed: !s.reversed,
         pixels: (s.pixels || []).slice().reverse(),
+        ...(s.kaleidoscope ? { kaleidoscope: reverseKaleidoscope(s.kaleidoscope, s.pixelCount) } : {}),
       });
       return { ...state, strips };
     }
@@ -290,6 +295,9 @@ export function layoutReducer(state, action) {
         sourceLayerId: null,
         sourcePathId: null,
         pixels: (source.pixels || []).slice(),
+        ...(source.kaleidoscope ? {
+          kaleidoscope: { ...source.kaleidoscope, offsets: [...source.kaleidoscope.offsets] },
+        } : {}),
       };
       const strips = state.strips.flatMap(s => s.id === action.id ? [s, dup] : [s]);
       return {
@@ -307,6 +315,7 @@ export function layoutReducer(state, action) {
       if (members.length < 2) return state;
       const id = `strip-${state.nextStripSeq}`;
       const merged = { ...action.merged, id, sourceLayerId: null, sourcePathId: null };
+      delete merged.kaleidoscope;
       const insertAt = state.strips.findIndex(s => picked.has(s.id));
       const remaining = state.strips.filter(s => !picked.has(s.id));
       const strips = [...remaining];
@@ -348,6 +357,30 @@ export function layoutReducer(state, action) {
     case LayoutActions.UPDATE_STRIP: {
       const strips = state.strips.map(s => s.id === action.id ? { ...s, ...action.patch } : s);
       return { ...state, strips };
+    }
+
+    case LayoutActions.UPDATE_KALEIDOSCOPE: {
+      const strips = state.strips.map(strip => {
+        if (strip.id !== action.id) return strip;
+        if (!action.kaleidoscope) {
+          const { kaleidoscope: _removed, ...clean } = strip;
+          return clean;
+        }
+        return {
+          ...strip,
+          kaleidoscope: {
+            ...action.kaleidoscope,
+            offsets: [...action.kaleidoscope.offsets],
+          },
+        };
+      });
+      return {
+        ...state,
+        strips,
+        projectWarnings: state.projectWarnings.filter(warning => (
+          warning?.scope !== 'kaleidoscope' || warning?.stripId !== action.id
+        )),
+      };
     }
 
     case LayoutActions.SET_STRIP_OFFSET: {
@@ -522,6 +555,7 @@ export function makeLayoutSnapshot(state) {
     stripCountOverrides: state.stripCountOverrides,
     stripDensities: state.stripDensities,
     hidden: state.hidden,
+    projectWarnings: state.projectWarnings,
     svgText: state.svgText,
     viewBox: state.viewBox,
     density: state.density,
@@ -549,6 +583,7 @@ export function applyLayoutSnapshot(state, snap, rebuild = identityRebuild) {
     stripCountOverrides: snap.stripCountOverrides,
     stripDensities: snap.stripDensities || {},
     hidden: snap.hidden,
+    projectWarnings: snap.projectWarnings || [],
     svgText: snap.svgText,
     viewBox: snap.viewBox,
     density: snap.density,

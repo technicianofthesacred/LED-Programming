@@ -129,6 +129,14 @@ test('generates exact Art-Net setup notes from the same fixture addresses', () =
   assert.equal(createArtNetSetupNotes(fixture()), expected);
 });
 
+test('MADRIX output ignores optional Kaleidoscope metadata byte-for-byte', () => {
+  const plain = fixture();
+  const mapped = fixture();
+  mapped.strips[0].kaleidoscope = { enabled: true, pointCount: 2, startLed: 1, offsets: [0, 0] };
+  assert.equal(toMadrixFixtureCsv(mapped), toMadrixFixtureCsv(plain));
+  assert.equal(createArtNetSetupNotes(mapped), createArtNetSetupNotes(plain));
+});
+
 test('MADRIX export validates addressing bounds and fails closed for unknown wiring', () => {
   const valid = fixture();
   assert.throws(() => toMadrixFixtureCsv({ ...valid, wiring: null }), /wiring/i);

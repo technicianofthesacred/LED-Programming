@@ -41,6 +41,63 @@ test('renders mapped frames through the bounded module worker', async ({ page })
   await page.getByRole('button', { name: 'Pause', exact: true }).click();
 });
 
+test('Kaleidoscope multilayer direct and worker bakes are byte-identical in physical order', async ({ page }) => {
+  const result = await page.evaluate(async () => {
+    const { bakePatternLabRecipe } = await import('/src/lib/lwseqBake.js');
+    const { recipeFromPattern } = await import('/src/lib/patternLabPatternAdapter.js');
+    const nativeWorker = globalThis.Worker;
+    const recipe = recipeFromPattern('meteor', { palette: ['#000000', '#ff0000'] });
+    recipe.evolution.durationSeconds = 1;
+    recipe.base.params = { speed: 1, tailLen: 0.8 };
+    recipe.layers = [
+      { generator: { kind: 'lightweaver-pattern', patternId: 'scanner', params: { width: 0.4, hue: 0.1 } }, opacity: 0.4, blendMode: 'screen', mask: { kind: 'none' } },
+      { generator: { kind: 'lightweaver-pattern', patternId: 'neon', params: { rate: 3 } }, opacity: 0.3, blendMode: 'multiply', mask: { kind: 'none' } },
+    ];
+    const input = {
+      recipe,
+      strips: [{
+        id: 'ring', name: 'Ring', brightness: 1, speed: 1, hueShift: 0,
+        pixels: Array.from({ length: 8 }, (_, index) => ({ x: index, y: index % 2 })),
+        kaleidoscope: { enabled: true, pointCount: 4, startLed: 0, offsets: [0, 0, 0, 0] },
+      }],
+      groups: [],
+      wiring: {
+        version: 1, locked: true, verified: true,
+        outputs: [{ id: 'out-1', name: 'Output 1', pin: 16, runIds: ['ring-run'] }],
+        runs: [{
+          id: 'ring-run', type: 'strip', verified: true,
+          source: { stripId: 'ring', from: 0, to: 7 },
+          directionPolicy: 'fixed', physicalDirection: 'source-reverse', seamLed: null,
+        }],
+      },
+      hidden: {},
+      render: {
+        bpm: 120,
+        gammaEnabled: false,
+        gammaValue: 2.2,
+        symSettings: {
+          enabled: true,
+          type: 'guide-mirror',
+          guide: { mode: 'fold', axis: { x1: 0, y1: 0, x2: 1, y2: 0 } },
+        },
+      },
+      fps: 1,
+    };
+    Object.defineProperty(globalThis, 'Worker', { configurable: true, value: undefined });
+    const direct = await bakePatternLabRecipe(input);
+    Object.defineProperty(globalThis, 'Worker', { configurable: true, value: nativeWorker });
+    const worker = await bakePatternLabRecipe(input);
+    return {
+      direct: [...direct.bytes],
+      worker: [...worker.bytes],
+      directHash: direct.sidecar.lwseqSha256,
+      workerHash: worker.sidecar.lwseqSha256,
+    };
+  });
+  expect(result.worker).toEqual(result.direct);
+  expect(result.workerHash).toBe(result.directHash);
+});
+
 test('initializes one compact transferable geometry snapshot and keeps render messages small', async ({ page }) => {
   await page.addInitScript(() => {
     const NativeWorker = window.Worker;
@@ -85,7 +142,7 @@ test('initializes one compact transferable geometry snapshot and keeps render me
   expect(initializes.length).toBeGreaterThan(0);
   expect(initializes.every(message => message.hasGeometry
     && message.coordinates === '[object Float64Array]'
-    && Number(message.transferCount) === 2)).toBe(true);
+    && Number(message.transferCount) === 8)).toBe(true);
   expect(renders.length).toBeGreaterThan(0);
   expect(renders.every(message => !message.hasGeometry)).toBe(true);
   expect(renders.every(message => [

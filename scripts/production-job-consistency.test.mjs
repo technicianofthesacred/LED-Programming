@@ -77,6 +77,24 @@ test('production schema accepts only optional supported runtime LED protocols', 
   assert.equal(runtimeLed.required.includes('type'), false, 'legacy production jobs may omit the LED protocol');
 });
 
+test('production schema makes source and runtime Kaleidoscope mappings optional and strict', async () => {
+  const schema = await readJson('release/production-job.schema.json');
+  const strip = schema.$defs.strip;
+  const runtimeConfig = schema.properties.configuration.properties.config;
+  assert.equal(strip.required.includes('kaleidoscope'), false);
+  assert.equal(runtimeConfig.required.includes('kaleidoscopeMappings'), false);
+  assert.equal(strip.properties.kaleidoscope.$ref, '#/$defs/kaleidoscope');
+  assert.equal(runtimeConfig.properties.kaleidoscopeMappings.items.$ref, '#/$defs/runtimeKaleidoscopeMapping');
+  assert.equal(schema.$defs.kaleidoscope.additionalProperties, false);
+  assert.equal(schema.$defs.runtimeKaleidoscopeMapping.additionalProperties, false);
+
+  const index = await readJson('lightweaver/public/production/jobs/index.json');
+  const entry = index.jobs.find(job => job.jobId === 'bench-fixture-44');
+  const artifact = await readJson(`lightweaver/public${entry.url}`);
+  assert.equal(Object.hasOwn(artifact.project.restoreSnapshot.layout.strips[0], 'kaleidoscope'), false);
+  assert.equal(Object.hasOwn(artifact.configuration.config, 'kaleidoscopeMappings'), false);
+});
+
 test('published bench artifact and index match the canonical source', async () => {
   const index = await readJson('lightweaver/public/production/jobs/index.json');
   const entry = index.jobs.find(job => job.jobId === 'bench-fixture-44');
