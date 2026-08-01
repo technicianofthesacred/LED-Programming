@@ -54,6 +54,15 @@ export function LayoutCanvas({
       : selectedPhysicalRun?.source?.from);
   const selectedSeamPoint = selectedPhysicalStrip?.pixels?.[selectedSeamLed];
   const { mode, drawMode, waypoints, ghostPt, ghostD } = draw;
+  const baseBounds = parsedVb(viewBox);
+  const renderedBounds = parsedVb(computedViewBox);
+  // The base viewBox scale keeps overlay dimensions tied to artwork units;
+  // compensate for the current camera bounds so selection affordances retain
+  // their intended screen weight when zooming out.
+  const selectionVbScale = vbScale * Math.max(
+    renderedBounds.w / baseBounds.w,
+    renderedBounds.h / baseBounds.h,
+  );
   const {
     isEditingGesture, isPanning, rubberBand, movingStripIds,
     dragOver, cursorSvgPt, zoom, hoveredSubPathId,
@@ -326,7 +335,7 @@ export function LayoutCanvas({
                         strokeWidth="18"
                         strokeLinecap="round"
                         pointerEvents="visibleStroke"
-                        style={{ cursor: isMoving ? 'grabbing' : 'grab' }}
+                        style={{ cursor: isMoving ? 'grabbing' : isSel && mode === 'draw' ? 'grab' : 'pointer' }}
                         onPointerDown={e => {
                           if (wireOverlayMode === 'chop') {
                             e.preventDefault();
@@ -357,6 +366,31 @@ export function LayoutCanvas({
                         pointerEvents="none"
                         opacity={isHid ? 0.25 : isMoving ? 0.95 : isSel ? 0.9 : 0.55}
                         style={{ filter: isSel && !isEditingGesture ? `drop-shadow(0 0 3px ${stripColor})` : 'none' }}/>
+                  {isSel && !isHid && (
+                    <>
+                      <path
+                        data-testid="selected-strip-halo"
+                        d={s.pathData}
+                        fill="none"
+                        stroke="oklch(0.78 0.16 205)"
+                        strokeWidth={selectionVbScale * 10}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        pointerEvents="none"
+                        opacity={0.9}
+                      />
+                      <path
+                        data-testid="selected-strip-core"
+                        d={s.pathData}
+                        fill="none"
+                        stroke="white"
+                        strokeWidth={selectionVbScale * 2.25}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        pointerEvents="none"
+                      />
+                    </>
+                  )}
                 </g>
               );
             })}
@@ -582,20 +616,59 @@ export function LayoutCanvas({
               </g>
             )}
 
-            {/* ── Strip mid-path labels (selected strip only) ── */}
+            {/* ── Strip mid-path badge (selected strip only) ── */}
             {!isEditingGesture && strips.filter(s => !hidden[s.id] && s.pixels?.length > 0 && s.id === selStripId).map(s => {
               const mid = s.pixels[Math.floor(s.pixels.length / 2)];
+              const label = `${s.name} · ${s.pixelCount} LEDs`;
+              const labelSuffix = ` · ${s.pixelCount} LEDs`;
+              const badgeCameraScale = selectionVbScale / vbScale;
+              const badgeFontSize = vbScale * 10;
+              const badgePaddingX = vbScale * 9;
+              const badgeHeight = vbScale * 20;
+              const badgeMinWidth = vbScale * 72;
+              const badgeMaxWidth = vbScale * 152;
+              const approximateCharacterWidth = badgeFontSize * 0.62;
+              const availableNameWidth = badgeMaxWidth - badgePaddingX * 2 - labelSuffix.length * approximateCharacterWidth;
+              const maximumNameCharacters = Math.max(1, Math.floor(availableNameWidth / approximateCharacterWidth) - 1);
+              const displayName = s.name.length > maximumNameCharacters
+                ? `${s.name.slice(0, maximumNameCharacters).trimEnd()}…`
+                : s.name;
+              const displayLabel = `${displayName}${labelSuffix}`;
+              const badgeWidth = Math.min(
+                badgeMaxWidth,
+                Math.max(badgeMinWidth, displayLabel.length * approximateCharacterWidth + badgePaddingX * 2),
+              );
+              const badgeOffset = vbScale * 25;
               return (
-                <text key={s.id + '-lbl'}
-                      x={mid.x} y={mid.y - vbScale * 14}
-                      textAnchor="middle"
-                      fill={s.color}
-                      fontSize={vbScale * 10}
-                      fontFamily="var(--ui-font, monospace)"
-                      opacity={1}
-                      style={{ pointerEvents: 'none', userSelect: 'none' }}>
-                  {s.name} · {s.pixelCount} LEDs
-                </text>
+                <g
+                  key={s.id + '-badge'}
+                  data-testid="selected-strip-badge"
+                  aria-label={label}
+                  transform={`translate(${mid.x} ${mid.y}) scale(${badgeCameraScale})`}
+                  style={{ pointerEvents: 'none', userSelect: 'none' }}>
+                  <title>{label}</title>
+                  <rect
+                    x={-badgeWidth / 2}
+                    y={-badgeOffset - badgeHeight}
+                    width={badgeWidth}
+                    height={badgeHeight}
+                    rx={vbScale * 5}
+                    fill="oklch(0.18 0.02 220 / 0.88)"
+                    stroke="oklch(0.78 0.16 205)"
+                    strokeWidth={vbScale * 1.25}
+                  />
+                  <text
+                    x="0"
+                    y={-badgeOffset - badgeHeight / 2}
+                    textAnchor="middle"
+                    dominantBaseline="central"
+                    fill="white"
+                    fontSize={badgeFontSize}
+                    fontFamily="var(--ui-font, monospace)"
+                    fontWeight="600">
+                    {displayLabel}
+                  </text>
+                </g>
               );
             })}
 
