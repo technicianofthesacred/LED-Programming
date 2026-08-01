@@ -8,6 +8,7 @@ import {
   validateProjectTitle,
   validateWorkspaceAsset,
 } from './validation.js';
+import { AccountStoreError } from './accountStore.js';
 
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 const SAFE_STORE_ERRORS = {
@@ -100,7 +101,10 @@ async function readJson(request, maxBytes) {
 }
 
 function mutationContext(identity, requestId) {
-  return { actor: identity, idempotencyKey: requestId };
+  const actor = isNativeIdentity(identity)
+    ? { ...identity, email: `${identity.displayName} (${identity.username})` }
+    : identity;
+  return { actor, idempotencyKey: requestId };
 }
 
 function parsePath(request) {
@@ -114,17 +118,47 @@ function parsePath(request) {
   }
 }
 
-function isIdentity(identity) {
+function isAccessIdentity(identity) {
   return identity
     && typeof identity.email === 'string'
     && typeof identity.subject === 'string'
     && (identity.role === 'owner' || identity.role === 'worker');
 }
 
+function isNativeIdentity(identity) {
+  return identity
+    && typeof identity.accountId === 'string'
+    && typeof identity.username === 'string'
+    && typeof identity.displayName === 'string'
+    && typeof identity.subject === 'string'
+    && typeof identity.mustChangePassword === 'boolean'
+    && (identity.role === 'owner' || identity.role === 'worker' || identity.role === 'customer');
+}
+
+function isIdentity(identity) {
+  return isAccessIdentity(identity) || isNativeIdentity(identity);
+}
+
+function publicSession(identity) {
+  return isNativeIdentity(identity)
+    ? {
+        username: identity.username,
+        displayName: identity.displayName,
+        role: identity.role,
+        mustChangePassword: identity.mustChangePassword,
+      }
+    : { email: identity.email, role: identity.role };
+}
+
+function requireSameOrigin(request) {
+  return request.headers.get('origin') === new URL(request.url).origin;
+}
+
 export async function handleLibraryRequest({
   request,
   identity,
   store,
+  accountStore,
   maxBytes = DEFAULT_MAX_BYTES,
   maxBackupBytes = DEFAULT_MAX_BACKUP_BYTES,
 }) {
@@ -138,17 +172,109 @@ export async function handleLibraryRequest({
     if (!segments) return errorResponse(404, 'not_found', 'The requested library route was not found.', requestId);
     const { method } = request;
 
+    if (segments.length === 1 && segments[0] === 'session') {
+      if (method !== 'GET') return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);
+      if (isAccessIdentity(identity) && !store) {
+        return errorResponse(503, 'library_unavailable', 'The project library is unavailable.', requestId);
+      }
+      return jsonResponse({ session: publicSession(identity) });
+    }
+
+    if (isNativeIdentity(identity) && identity.mustChangePassword) {
+      return errorResponse(
+        403,
+        'password_change_required',
+        'Change the temporary password before using the project library.',
+        requestId,
+      );
+    }
+
     if (segments.length === 1 && segments[0] === 'login') {
       if (method !== 'GET') return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);
       return redirectResponse(sanitizedStudioReturnPath(request));
     }
 
-    if (!store) return errorResponse(503, 'library_unavailable', 'The project library is unavailable.', requestId);
+    if (segments.length >= 1 && segments[0] === 'accounts') {
+      if (!accountStore) {
+        return errorResponse(503, 'account_unavailable', 'Account access is unavailable.', requestId);
+      }
 
-    if (segments.length === 1 && segments[0] === 'session') {
-      if (method !== 'GET') return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);
-      return jsonResponse({ session: { email: identity.email, role: identity.role } });
+      if (segments.length === 2 && segments[1] === 'bootstrap') {
+        if (method !== 'POST') {
+          return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);
+        }
+        if (!isAccessIdentity(identity) || identity.role !== 'owner') {
+          return errorResponse(403, 'forbidden', 'Only the verified Access owner may create the first native owner.', requestId);
+        }
+        if (!requireSameOrigin(request)) {
+          return errorResponse(403, 'invalid_origin', 'The request origin is not allowed.', requestId);
+        }
+        const body = await readJson(request, maxBytes);
+        const account = await accountStore.bootstrapOwner({
+          username: body.username,
+          displayName: body.displayName,
+          temporaryPassword: body.temporaryPassword,
+        });
+        return jsonResponse({ account }, 201);
+      }
+
+      if (!isNativeIdentity(identity) || identity.role !== 'owner') {
+        return errorResponse(403, 'forbidden', 'Only a native owner may manage accounts.', requestId);
+      }
+
+      if (segments.length === 1) {
+        if (method === 'GET') {
+          return jsonResponse({ accounts: await accountStore.listAccounts() });
+        }
+        if (method === 'POST') {
+          if (!requireSameOrigin(request)) {
+            return errorResponse(403, 'invalid_origin', 'The request origin is not allowed.', requestId);
+          }
+          const body = await readJson(request, maxBytes);
+          const account = await accountStore.createAccount({
+            username: body.username,
+            displayName: body.displayName,
+            role: body.role,
+            temporaryPassword: body.temporaryPassword,
+          });
+          return jsonResponse({ account }, 201);
+        }
+        return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);
+      }
+
+      if (segments.length === 3) {
+        if (method !== 'POST') {
+          return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);
+        }
+        if (!requireSameOrigin(request)) {
+          return errorResponse(403, 'invalid_origin', 'The request origin is not allowed.', requestId);
+        }
+        const body = await readJson(request, maxBytes);
+        const id = segments[1];
+        let account;
+        if (segments[2] === 'reset') {
+          account = await accountStore.resetPassword({
+            id,
+            temporaryPassword: body.temporaryPassword,
+          });
+        } else if (segments[2] === 'status') {
+          account = await accountStore.setAccountStatus({ id, status: body.status });
+        } else if (segments[2] === 'role') {
+          account = await accountStore.setAccountRole({ id, role: body.role });
+        } else {
+          return errorResponse(404, 'not_found', 'The requested library route was not found.', requestId);
+        }
+        return jsonResponse({ account });
+      }
+
+      return errorResponse(404, 'not_found', 'The requested library route was not found.', requestId);
     }
+
+    if (isNativeIdentity(identity) && identity.role === 'customer') {
+      return errorResponse(403, 'forbidden', 'Customers may only use assigned project drafts.', requestId);
+    }
+
+    if (!store) return errorResponse(503, 'library_unavailable', 'The project library is unavailable.', requestId);
 
     if (segments.length === 1 && segments[0] === 'projects') {
       if (method === 'GET') {
@@ -296,6 +422,9 @@ export async function handleLibraryRequest({
     if (Object.hasOwn(SAFE_STORE_ERRORS, error?.code)) {
       const [status, message] = SAFE_STORE_ERRORS[error.code];
       return errorResponse(status, error.code, message, requestId);
+    }
+    if (error instanceof AccountStoreError) {
+      return errorResponse(error.status || 400, error.code || 'invalid_request', error.message, requestId);
     }
     return errorResponse(500, 'internal_error', 'The project library request could not be completed.', requestId);
   }

@@ -21,6 +21,7 @@ import {
   authenticateAccessRequest,
   isLocalAccessJwksRequest,
 } from '../functions/api/library/_shared/auth.js';
+import { createD1AccountStore } from '../functions/api/library/_shared/accountStore.js';
 import {
   createD1R2LibraryStore,
 } from '../functions/api/library/_shared/store.js';
@@ -267,6 +268,95 @@ test('Pages adapter authenticates a signed worker for a local D1/R2 round-trip a
   assert.equal(denied.payload.error.code, 'forbidden');
 });
 
+test('Pages adapter prefers a native session and narrows Access fallback after owner bootstrap', async t => {
+  const fixture = await accessFixture();
+  const { mf, db, bucket } = await localBindings();
+  t.after(() => mf.dispose());
+  const accountStore = createD1AccountStore({ PROJECTS_DB: db }, {
+    passwordIterations: 1,
+    now: () => '2026-08-01T00:00:00.000Z',
+  });
+  const worker = await accountStore.createAccount({
+    username: 'workshop',
+    displayName: 'Workshop',
+    role: 'worker',
+    temporaryPassword: 'temporary-passphrase',
+  });
+  await accountStore.changePassword({
+    accountId: worker.id,
+    newPassword: 'personal-passphrase-456',
+  });
+  const verified = await accountStore.verifyLogin({
+    username: worker.username,
+    password: 'personal-passphrase-456',
+  });
+  const nativeSession = await accountStore.createSession(worker.id, {
+    expectedGeneration: verified.observedGeneration,
+  });
+  const env = { ...ACCESS_ENV, PROJECTS_DB: db, PROJECT_BLOBS: bucket };
+  const accessOwnerJwt = await fixture.token({ email: 'owner@example.test' });
+
+  const native = await handleLibraryPagesRequest({
+    request: new Request('https://led.mandalacodes.com/api/library/session', {
+      headers: {
+        cookie: `__Host-lightweaver_session=${nativeSession.token}`,
+        'Cf-Access-Jwt-Assertion': accessOwnerJwt,
+      },
+    }),
+    env,
+    params: {},
+  }, { accountStore, jwks: fixture.jwks });
+  assert.equal(native.status, 200);
+  assert.deepEqual((await native.json()).session, {
+    username: 'workshop',
+    displayName: 'Workshop',
+    role: 'worker',
+    mustChangePassword: false,
+  });
+
+  const bootstrap = await handleLibraryPagesRequest({
+    request: new Request('https://led.mandalacodes.com/api/library/accounts/bootstrap', {
+      method: 'POST',
+      headers: {
+        origin: 'https://led.mandalacodes.com',
+        'content-type': 'application/json',
+        'Cf-Access-Jwt-Assertion': accessOwnerJwt,
+      },
+      body: JSON.stringify({
+        username: 'owner',
+        displayName: 'Studio Owner',
+        temporaryPassword: 'temporary-passphrase',
+      }),
+    }),
+    env,
+    params: {},
+  }, { accountStore, jwks: fixture.jwks });
+  assert.equal(bootstrap.status, 201);
+  assert.equal((await bootstrap.json()).account.role, 'owner');
+
+  const legacyWorker = await handleLibraryPagesRequest({
+    request: new Request('https://led.mandalacodes.com/api/library/session', {
+      headers: { 'Cf-Access-Jwt-Assertion': await fixture.token() },
+    }),
+    env,
+    params: {},
+  }, { accountStore, jwks: fixture.jwks });
+  assert.equal(legacyWorker.status, 401);
+
+  const legacyOwner = await handleLibraryPagesRequest({
+    request: new Request('https://led.mandalacodes.com/api/library/session', {
+      headers: { 'Cf-Access-Jwt-Assertion': accessOwnerJwt },
+    }),
+    env,
+    params: {},
+  }, { accountStore, jwks: fixture.jwks });
+  assert.equal(legacyOwner.status, 200);
+  assert.deepEqual((await legacyOwner.json()).session, {
+    email: 'owner@example.test',
+    role: 'owner',
+  });
+});
+
 function wrapStatement(statement, sql, prepared) {
   return {
     __statement: statement,
@@ -335,9 +425,15 @@ async function localBindings() {
   });
   const db = await mf.getD1Database('PROJECTS_DB');
   const bucket = await mf.getR2Bucket('PROJECT_BLOBS');
-  const migration = await readFile(new URL('../migrations/0001_cloud_project_library.sql', import.meta.url), 'utf8');
-  for (const statement of migration.split(';').map(value => value.trim()).filter(Boolean)) {
-    await db.prepare(statement).run();
+  for (const migrationName of [
+    '0001_cloud_project_library.sql',
+    '0002_account_access.sql',
+    '0003_account_session_generation.sql',
+  ]) {
+    const migration = await readFile(new URL(`../migrations/${migrationName}`, import.meta.url), 'utf8');
+    for (const statement of migration.split(';').map(value => value.trim()).filter(Boolean)) {
+      await db.prepare(statement).run();
+    }
   }
   return { mf, db, bucket };
 }

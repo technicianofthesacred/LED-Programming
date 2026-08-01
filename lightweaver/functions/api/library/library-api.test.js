@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { handleAccountPagesRequest } from '../account/[[path]].js';
 import {
   LIBRARY_BACKUP_FORMAT,
   LIBRARY_BACKUP_VERSION,
 } from './_shared/backup.js';
+import {
+  createAccountStore,
+  createMemoryAccountRepository,
+} from './_shared/accountStore.js';
 import { createMemoryLibraryStore } from './_shared/memoryStore.js';
 import { handleLibraryRequest } from './_shared/router.js';
 import {
@@ -13,6 +18,175 @@ import {
 } from './_shared/validation.js';
 
 const MAX_BYTES = 1024 * 1024;
+
+function createAccountFixture() {
+  const repository = createMemoryAccountRepository();
+  const accountStore = createAccountStore(repository, {
+    passwordIterations: 1,
+    now: () => '2026-08-01T00:00:00.000Z',
+  });
+  return { accountStore, repository };
+}
+
+async function callAccount(accountStore, path, {
+  method = 'GET',
+  body,
+  cookie,
+  contentType = body === undefined ? null : 'application/json',
+  origin = 'https://led.mandalacodes.com',
+} = {}) {
+  const headers = new Headers();
+  if (origin !== null) headers.set('origin', origin);
+  if (cookie) headers.set('cookie', cookie);
+  if (contentType) headers.set('content-type', contentType);
+  const response = await handleAccountPagesRequest({
+    request: new Request(`https://led.mandalacodes.com/api/account${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }),
+    env: {},
+    params: {},
+  }, { accountStore });
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  return { response, payload: await response.json() };
+}
+
+function cookiePair(response) {
+  return response.headers.get('set-cookie').split(';', 1)[0];
+}
+
+test('account login verifies credentials and issues a strict host-only session cookie', async () => {
+  const { accountStore } = createAccountFixture();
+  await accountStore.createAccount({
+    username: 'workshop',
+    displayName: 'Workshop',
+    role: 'worker',
+    temporaryPassword: 'temporary-passphrase',
+  });
+
+  const { response, payload } = await callAccount(accountStore, '/login', {
+    method: 'POST',
+    body: { username: 'workshop', password: 'temporary-passphrase' },
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(payload.session, {
+    username: 'workshop',
+    displayName: 'Workshop',
+    role: 'worker',
+    mustChangePassword: true,
+  });
+  assert.match(
+    response.headers.get('set-cookie'),
+    /^__Host-lightweaver_session=[A-Za-z0-9_-]{43}; Path=\/; Secure; HttpOnly; SameSite=Strict; Max-Age=604800$/,
+  );
+});
+
+test('account login keeps credential failures generic and requires exact same-origin JSON', async () => {
+  const { accountStore } = createAccountFixture();
+  await accountStore.createAccount({
+    username: 'workshop',
+    displayName: 'Workshop',
+    role: 'worker',
+    temporaryPassword: 'temporary-passphrase',
+  });
+
+  const unknown = await callAccount(accountStore, '/login', {
+    method: 'POST',
+    body: { username: 'missing', password: 'wrong-passphrase' },
+  });
+  const incorrect = await callAccount(accountStore, '/login', {
+    method: 'POST',
+    body: { username: 'workshop', password: 'wrong-passphrase' },
+  });
+  assert.equal(unknown.response.status, 401);
+  assert.deepEqual(unknown.payload, incorrect.payload);
+
+  for (const origin of [null, 'https://evil.example', 'https://led.mandalacodes.com:443']) {
+    const denied = await callAccount(accountStore, '/login', {
+      method: 'POST',
+      body: { username: 'workshop', password: 'temporary-passphrase' },
+      origin,
+    });
+    assert.equal(denied.response.status, 403);
+    assert.equal(denied.payload.error.code, 'invalid_origin');
+  }
+
+  const wrongType = await callAccount(accountStore, '/login', {
+    method: 'POST',
+    body: { username: 'workshop', password: 'temporary-passphrase' },
+    contentType: 'text/plain',
+  });
+  assert.equal(wrongType.response.status, 415);
+  assert.equal(wrongType.payload.error.code, 'invalid_request');
+});
+
+test('account session, password change, and logout rotate then revoke the cookie session', async () => {
+  const { accountStore } = createAccountFixture();
+  await accountStore.createAccount({
+    username: 'workshop',
+    displayName: 'Workshop',
+    role: 'worker',
+    temporaryPassword: 'temporary-passphrase',
+  });
+  const login = await callAccount(accountStore, '/login', {
+    method: 'POST',
+    body: { username: 'workshop', password: 'temporary-passphrase' },
+  });
+  const initialCookie = cookiePair(login.response);
+
+  for (const path of ['/password', '/logout']) {
+    const denied = await callAccount(accountStore, path, {
+      method: 'POST',
+      cookie: initialCookie,
+      body: path === '/password' ? { password: 'personal-passphrase-456' } : {},
+      origin: null,
+    });
+    assert.equal(denied.response.status, 403);
+    assert.equal(denied.payload.error.code, 'invalid_origin');
+  }
+
+  const forced = await callAccount(accountStore, '/session', { cookie: initialCookie });
+  assert.equal(forced.response.status, 200);
+  assert.deepEqual(forced.payload.session, {
+    username: 'workshop',
+    displayName: 'Workshop',
+    role: 'worker',
+    mustChangePassword: true,
+  });
+
+  const changed = await callAccount(accountStore, '/password', {
+    method: 'POST',
+    cookie: initialCookie,
+    body: { password: 'personal-passphrase-456' },
+  });
+  assert.equal(changed.response.status, 200);
+  assert.equal(changed.payload.session.mustChangePassword, false);
+  const replacementCookie = cookiePair(changed.response);
+  assert.notEqual(replacementCookie, initialCookie);
+  assert.equal((await callAccount(accountStore, '/session', {
+    cookie: initialCookie,
+  })).response.status, 401);
+  assert.equal((await callAccount(accountStore, '/session', {
+    cookie: replacementCookie,
+  })).payload.session.mustChangePassword, false);
+
+  const loggedOut = await callAccount(accountStore, '/logout', {
+    method: 'POST',
+    cookie: replacementCookie,
+    body: {},
+  });
+  assert.equal(loggedOut.response.status, 200);
+  assert.deepEqual(loggedOut.payload, { loggedOut: true });
+  assert.equal(
+    loggedOut.response.headers.get('set-cookie'),
+    '__Host-lightweaver_session=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0',
+  );
+  assert.equal((await callAccount(accountStore, '/session', {
+    cookie: replacementCookie,
+  })).response.status, 401);
+});
 
 function portableProject({ id = 'lwproj-contract', name = 'Contract Project', brightness = 1 } = {}) {
   return {
@@ -37,24 +211,31 @@ function portableProject({ id = 'lwproj-contract', name = 'Contract Project', br
 async function call(store, {
   role = 'worker',
   email = 'worker@example.test',
+  identity,
   method = 'GET',
   path = '/projects',
   body,
+  origin = 'https://led.mandalacodes.com',
   requestId = crypto.randomUUID(),
   maxBytes = MAX_BYTES,
   maxBackupBytes,
+  accountStore,
 } = {}) {
   const hasBody = body !== undefined;
+  const headers = new Headers({ 'x-lightweaver-request': requestId });
+  if (hasBody) headers.set('content-type', 'application/json');
+  if (origin !== null) headers.set('origin', origin);
   const response = await handleLibraryRequest({
     request: new Request(`https://led.mandalacodes.com/api/library${path}`, {
       method,
-      headers: hasBody
-        ? { 'content-type': 'application/json', 'x-lightweaver-request': requestId }
-        : { 'x-lightweaver-request': requestId },
+      headers,
       body: hasBody ? JSON.stringify(body) : undefined,
     }),
-    identity: role ? { email, role, subject: `${role}-subject` } : null,
+    identity: identity === undefined
+      ? role ? { email, role, subject: `${role}-subject` } : null
+      : identity,
     store,
+    accountStore,
     maxBytes,
     maxBackupBytes,
   });
@@ -64,6 +245,280 @@ async function call(store, {
   assert.equal(response.headers.get('cache-control'), 'no-store');
   return { response, payload };
 }
+
+async function activeNativeIdentity(accountStore, account, password) {
+  const changed = await accountStore.changePassword({
+    accountId: account.id,
+    newPassword: password,
+  });
+  return {
+    accountId: changed.id,
+    username: changed.username,
+    displayName: changed.displayName,
+    role: changed.role,
+    mustChangePassword: changed.mustChangePassword,
+    subject: `account:${changed.id}`,
+  };
+}
+
+test('forced-change native sessions can inspect session but cannot use the library', async () => {
+  const { accountStore } = createAccountFixture();
+  const owner = await accountStore.createAccount({
+    username: 'owner',
+    displayName: 'Studio Owner',
+    role: 'owner',
+    temporaryPassword: 'temporary-passphrase',
+  });
+  const identity = {
+    accountId: owner.id,
+    username: owner.username,
+    displayName: owner.displayName,
+    role: owner.role,
+    mustChangePassword: true,
+    subject: `account:${owner.id}`,
+  };
+
+  const session = await call(createMemoryLibraryStore(), {
+    identity,
+    path: '/session',
+    accountStore,
+  });
+  assert.equal(session.response.status, 200);
+  assert.deepEqual(session.payload.session, {
+    username: 'owner',
+    displayName: 'Studio Owner',
+    role: 'owner',
+    mustChangePassword: true,
+  });
+
+  for (const path of ['/login', '/projects', '/accounts']) {
+    const denied = await call(createMemoryLibraryStore(), { identity, path, accountStore });
+    assert.equal(denied.response.status, 403);
+    assert.equal(denied.payload.error.code, 'password_change_required');
+  }
+});
+
+test('native library mutations use the display name and username as the audit label', async () => {
+  const { accountStore } = createAccountFixture();
+  const workerAccount = await accountStore.createAccount({
+    username: 'workshop',
+    displayName: 'Workshop Team',
+    role: 'worker',
+    temporaryPassword: 'temporary-passphrase',
+  });
+  const worker = await activeNativeIdentity(
+    accountStore,
+    workerAccount,
+    'personal-passphrase-456',
+  );
+  const created = await call(createMemoryLibraryStore(), {
+    identity: worker,
+    accountStore,
+    method: 'POST',
+    path: '/projects',
+    body: { title: 'Native audit', project: portableProject({ id: 'native-audit' }) },
+  });
+
+  assert.equal(created.response.status, 201);
+  assert.equal(created.payload.project.createdBy, 'Workshop Team (workshop)');
+});
+
+test('owner account administration creates, lists, resets, disables, and changes roles without secrets', async () => {
+  const { accountStore, repository } = createAccountFixture();
+  const ownerAccount = await accountStore.createAccount({
+    username: 'owner',
+    displayName: 'Studio Owner',
+    role: 'owner',
+    temporaryPassword: 'temporary-passphrase',
+  });
+  const owner = await activeNativeIdentity(accountStore, ownerAccount, 'owner-passphrase-456');
+
+  const wrongOrigin = await call(null, {
+    identity: owner,
+    accountStore,
+    method: 'POST',
+    path: '/accounts',
+    origin: 'https://evil.example',
+    body: {
+      username: 'blocked',
+      displayName: 'Blocked',
+      role: 'worker',
+      temporaryPassword: 'temporary-passphrase',
+    },
+  });
+  assert.equal(wrongOrigin.response.status, 403);
+  assert.equal(wrongOrigin.payload.error.code, 'invalid_origin');
+
+  const created = await call(null, {
+    identity: owner,
+    accountStore,
+    method: 'POST',
+    path: '/accounts',
+    body: {
+      username: 'workshop',
+      displayName: 'Workshop',
+      role: 'worker',
+      temporaryPassword: 'temporary-passphrase',
+    },
+  });
+  assert.equal(created.response.status, 201);
+  assert.equal(created.payload.account.mustChangePassword, true);
+  assert.doesNotMatch(JSON.stringify(created.payload), /temporary-passphrase|password_hash|passwordHash/i);
+  const workerId = created.payload.account.id;
+
+  const workerLogin = await accountStore.verifyLogin({
+    username: 'workshop',
+    password: 'temporary-passphrase',
+  });
+  const workerSession = await accountStore.createSession(workerId, {
+    expectedGeneration: workerLogin.observedGeneration,
+  });
+
+  const roleChanged = await call(null, {
+    identity: owner,
+    accountStore,
+    method: 'POST',
+    path: `/accounts/${workerId}/role`,
+    body: { role: 'customer' },
+  });
+  assert.equal(roleChanged.response.status, 200);
+  assert.equal(roleChanged.payload.account.role, 'customer');
+  assert.equal(await accountStore.authenticateSession(workerSession.token), null);
+
+  const reset = await call(null, {
+    identity: owner,
+    accountStore,
+    method: 'POST',
+    path: `/accounts/${workerId}/reset`,
+    body: { temporaryPassword: 'replacement-passphrase' },
+  });
+  assert.equal(reset.response.status, 200);
+  assert.equal(reset.payload.account.mustChangePassword, true);
+
+  const disabled = await call(null, {
+    identity: owner,
+    accountStore,
+    method: 'POST',
+    path: `/accounts/${workerId}/status`,
+    body: { status: 'disabled' },
+  });
+  assert.equal(disabled.response.status, 200);
+  assert.equal(disabled.payload.account.status, 'disabled');
+
+  const listed = await call(null, {
+    identity: owner,
+    accountStore,
+    path: '/accounts',
+  });
+  assert.equal(listed.response.status, 200);
+  assert.deepEqual(
+    listed.payload.accounts.map(account => account.username).sort(),
+    ['owner', 'workshop'],
+  );
+  for (const account of listed.payload.accounts) {
+    assert.deepEqual(Object.keys(account).sort(), [
+      'createdAt',
+      'displayName',
+      'id',
+      'mustChangePassword',
+      'role',
+      'status',
+      'updatedAt',
+      'username',
+    ]);
+  }
+  assert.equal(repository.snapshot().accounts.length, 2);
+});
+
+test('workers and customers receive forbidden for every owner account administration route', async () => {
+  const { accountStore } = createAccountFixture();
+  const identities = ['worker', 'customer'].map(role => ({
+    accountId: `${role}-id`,
+    username: role,
+    displayName: role === 'worker' ? 'Workshop' : 'Customer',
+    role,
+    mustChangePassword: false,
+    subject: `account:${role}-id`,
+  }));
+  const routes = [
+    ['GET', '/accounts', undefined],
+    ['POST', '/accounts', {
+      username: 'someone', displayName: 'Someone', role: 'worker', temporaryPassword: 'temporary-passphrase',
+    }],
+    ['POST', '/accounts/account-id/reset', { temporaryPassword: 'replacement-passphrase' }],
+    ['POST', '/accounts/account-id/status', { status: 'disabled' }],
+    ['POST', '/accounts/account-id/role', { role: 'owner' }],
+  ];
+
+  for (const identity of identities) {
+    for (const [method, path, body] of routes) {
+      const denied = await call(null, { identity, accountStore, method, path, body });
+      assert.equal(denied.response.status, 403, `${identity.role} ${method} ${path}`);
+      assert.equal(denied.payload.error.code, 'forbidden');
+    }
+  }
+});
+
+test('bootstrap creates exactly one first owner from verified Access owner identity', async () => {
+  const accessOwner = {
+    email: 'owner@example.test',
+    role: 'owner',
+    subject: 'access-owner',
+  };
+  const body = {
+    username: 'owner',
+    displayName: 'Studio Owner',
+    temporaryPassword: 'temporary-passphrase',
+  };
+  const firstFixture = createAccountFixture();
+  const created = await call(null, {
+    identity: accessOwner,
+    accountStore: firstFixture.accountStore,
+    method: 'POST',
+    path: '/accounts/bootstrap',
+    body,
+  });
+  assert.equal(created.response.status, 201);
+  assert.equal(created.payload.account.role, 'owner');
+  assert.equal(created.payload.account.mustChangePassword, true);
+
+  const repeated = await call(null, {
+    identity: accessOwner,
+    accountStore: firstFixture.accountStore,
+    method: 'POST',
+    path: '/accounts/bootstrap',
+    body: { ...body, username: 'other-owner' },
+  });
+  assert.equal(repeated.response.status, 409);
+  assert.equal(repeated.payload.error.code, 'bootstrap_already_completed');
+  assert.equal(firstFixture.repository.snapshot().accounts.length, 1);
+
+  const deniedIdentities = [
+    null,
+    { email: 'worker@example.test', role: 'worker', subject: 'access-worker' },
+    {
+      accountId: 'native-owner',
+      username: 'native-owner',
+      displayName: 'Native Owner',
+      role: 'owner',
+      mustChangePassword: false,
+      subject: 'account:native-owner',
+    },
+  ];
+  for (const identity of deniedIdentities) {
+    const fixture = createAccountFixture();
+    const denied = await call(null, {
+      identity,
+      role: null,
+      accountStore: fixture.accountStore,
+      method: 'POST',
+      path: '/accounts/bootstrap',
+      body,
+    });
+    assert.equal(denied.response.status, identity ? 403 : 401);
+    assert.equal(fixture.repository.snapshot().accounts.length, 0);
+  }
+});
 
 async function createRemoteProject(store, overrides = {}) {
   const result = await call(store, {

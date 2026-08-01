@@ -166,10 +166,10 @@ export function createAccountStore(repository, options = {}) {
     return account;
   }
 
-  async function createAccount({ username, displayName, role, temporaryPassword }) {
+  async function newAccountRow({ username, displayName, role, temporaryPassword }) {
     const normalizedUsername = normalizeUsername(username);
     const createdAt = timestamp();
-    const row = {
+    return {
       id: crypto.randomUUID(),
       username: normalizedUsername,
       normalized_username: normalizedUsername,
@@ -185,8 +185,37 @@ export function createAccountStore(repository, options = {}) {
       created_at: createdAt,
       updated_at: createdAt,
     };
+  }
+
+  async function createAccount(values) {
+    const row = await newAccountRow(values);
     try {
       await repository.insertAccount(row);
+    } catch (error) {
+      if (repositoryConflict(error)) {
+        fail('username_taken', 'That username is already in use.', 409);
+      }
+      throw error;
+    }
+    return publicAccount(row);
+  }
+
+  async function bootstrapOwner({ username, displayName, temporaryPassword }) {
+    const row = await newAccountRow({
+      username,
+      displayName,
+      role: 'owner',
+      temporaryPassword,
+    });
+    try {
+      const inserted = await repository.insertOwnerIfNone(row);
+      if (!inserted) {
+        fail(
+          'bootstrap_already_completed',
+          'The first native owner account has already been created.',
+          409,
+        );
+      }
     } catch (error) {
       if (repositoryConflict(error)) {
         fail('username_taken', 'That username is already in use.', 409);
@@ -347,6 +376,7 @@ export function createAccountStore(repository, options = {}) {
 
   return {
     authenticateSession,
+    bootstrapOwner,
     changePassword,
     createAccount,
     createSession,
@@ -384,6 +414,33 @@ export function createD1AccountRepository(db) {
         row.created_at,
         row.updated_at,
       ).run();
+    },
+    async insertOwnerIfNone(row) {
+      const result = await db.prepare(`
+        INSERT INTO accounts (
+          id, username, normalized_username, display_name, role, status, password_hash,
+          must_change_password, failed_login_attempts, last_failed_login_at, locked_until,
+          session_generation, created_at, updated_at
+        )
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        WHERE NOT EXISTS (SELECT 1 FROM accounts WHERE role = 'owner')
+      `).bind(
+        row.id,
+        row.username,
+        row.normalized_username,
+        row.display_name,
+        row.role,
+        row.status,
+        row.password_hash,
+        row.must_change_password,
+        row.failed_login_attempts,
+        row.last_failed_login_at,
+        row.locked_until,
+        row.session_generation,
+        row.created_at,
+        row.updated_at,
+      ).run();
+      return (result?.meta?.changes || 0) > 0;
     },
     async listAccounts() {
       const { results } = await db.prepare(
@@ -582,6 +639,16 @@ export function createMemoryAccountRepository(seed = {}) {
         throw error;
       }
       accounts.set(row.id, structuredClone(row));
+    },
+    async insertOwnerIfNone(row) {
+      if ([...accounts.values()].some(value => value.role === 'owner')) return false;
+      if ([...accounts.values()].some(value => value.normalized_username === row.normalized_username)) {
+        const error = new Error('UNIQUE constraint failed: accounts.normalized_username');
+        error.code = 'username_taken';
+        throw error;
+      }
+      accounts.set(row.id, structuredClone(row));
+      return true;
     },
     async listAccounts() {
       return [...accounts.values()]
