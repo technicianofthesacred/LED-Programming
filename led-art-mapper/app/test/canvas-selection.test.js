@@ -13,7 +13,7 @@ test.before(async () => {
   server = await createServer({
     root: appRoot,
     logLevel: 'silent',
-    server: { host: '127.0.0.1', port: 0 },
+    server: { host: '127.0.0.1', port: 0, strictPort: false },
   });
   await server.listen();
   const address = server.httpServer.address();
