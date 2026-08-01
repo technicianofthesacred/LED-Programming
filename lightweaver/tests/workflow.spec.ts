@@ -63,8 +63,7 @@ async function mockLocalCard(page: any, options: any = {}) {
           projectFingerprint: card.savedConfig?.projectFingerprint ?? '',
           pixels: 44,
           outputs: [
-            { id: 'out1', pin: 16, pixels: 27 },
-            { id: 'out2', pin: 17, pixels: 17 },
+            { id: 'out1', pin: 16, pixels: 44 },
           ],
         },
       });
@@ -329,8 +328,8 @@ test('complete playlist sync writes and verifies all card sections', async ({ pa
   await expect.poll(() => card.operations).toEqual(['config', 'zones']);
 
   expect(card.savedConfig.zones.map((zone: any) => zone.id)).toEqual([
-    'patch-default-outer-circle',
-    'patch-default-inner-circle',
+    'default-outer-circle',
+    'default-inner-circle',
   ]);
   await expect(page.getByTestId('playlist-zone-fallback-note')).toHaveCount(0);
   await expect(page.getByTestId('playlist-card-status')).toContainText('Playlist installed on card.');
