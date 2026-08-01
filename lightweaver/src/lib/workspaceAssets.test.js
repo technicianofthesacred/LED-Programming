@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   CUSTOM_PATTERNS_KEY,
   CUSTOM_PATTERN_REVISIONS_KEY,
+  deleteCustomPattern,
   saveCustomPattern,
   updateCustomPattern,
 } from './customPatterns.js';
@@ -11,6 +12,7 @@ import { createPatternLabRecipe } from './patternLabRecipe.js';
 import {
   PATTERN_LAB_DRAFTS_BACKUP_KEY,
   PATTERN_LAB_DRAFTS_KEY,
+  deletePatternLabDraft,
   savePatternLabDraft,
 } from './patternLabStorage.js';
 import {
@@ -176,6 +178,51 @@ test('legacy mirror failures after the pointer switch do not invalidate the comm
   );
   assert.deepEqual(readWorkspaceAssets(legacyFailingStorage), replacement);
   assert.equal(JSON.parse(storage.getItem(CUSTOM_PATTERNS_KEY))[0].name, 'Original');
+});
+
+test('custom-pattern mutations update the authoritative workspace snapshot and revisions', () => {
+  const storage = memoryStorage();
+  writeWorkspaceAssets(completeSnapshot(), storage, { dispatch: false });
+
+  saveCustomPattern({
+    id: 'custom-rain',
+    name: 'Rain',
+    code: 'return hsv(.6, 1, 1);',
+  }, { storage, dispatch: false });
+  assert.deepEqual(
+    readWorkspaceAssets(storage).customPatterns.map(pattern => pattern.id),
+    ['custom-rain', 'custom-clouds'],
+  );
+
+  updateCustomPattern('custom-rain', { code: 'return hsv(.7, 1, 1);' }, { storage, dispatch: false });
+  let snapshot = readWorkspaceAssets(storage);
+  assert.equal(snapshot.customPatterns[0].code, 'return hsv(.7, 1, 1);');
+  assert.equal(snapshot.customPatternRevisions['custom-rain'][0].code, 'return hsv(.6, 1, 1);');
+
+  deleteCustomPattern('custom-rain', { storage, dispatch: false });
+  snapshot = readWorkspaceAssets(storage);
+  assert.deepEqual(snapshot.customPatterns.map(pattern => pattern.id), ['custom-clouds']);
+  assert.equal(snapshot.customPatternRevisions['custom-rain'].length, 1);
+});
+
+test('Pattern Lab mutations update the authoritative workspace snapshot', () => {
+  const storage = memoryStorage();
+  writeWorkspaceAssets(completeSnapshot(), storage, { dispatch: false });
+
+  savePatternLabDraft(createPatternLabRecipe({ id: 'draft-rain', name: 'Rain study' }), {
+    storage,
+    dispatch: false,
+  });
+  assert.deepEqual(
+    readWorkspaceAssets(storage).patternLabDrafts.map(draft => draft.id),
+    ['draft-rain', 'draft-clouds'],
+  );
+
+  assert.equal(deletePatternLabDraft('draft-rain', { storage, dispatch: false }), true);
+  assert.deepEqual(
+    readWorkspaceAssets(storage).patternLabDrafts.map(draft => draft.id),
+    ['draft-clouds'],
+  );
 });
 
 test('custom-pattern and Pattern Lab mutations each dispatch one workspace change event', () => {

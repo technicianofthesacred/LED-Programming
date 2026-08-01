@@ -11,12 +11,20 @@ import {
   PATTERN_LAB_DRAFTS_BACKUP_KEY,
   PATTERN_LAB_DRAFTS_KEY,
 } from './patternLabStorage.js';
+import {
+  WORKSPACE_ASSETS_POINTER_KEY,
+  WORKSPACE_ASSETS_SNAPSHOT_PREFIX,
+  WORKSPACE_ASSETS_VERSION,
+  commitWorkspaceSnapshot,
+  readCommittedWorkspaceSnapshot,
+} from './workspaceAssetsStorage.js';
 
-export const WORKSPACE_ASSETS_VERSION = 1;
 export const WORKSPACE_ASSETS_EVENT = 'lw:workspace-assets-changed';
-export const WORKSPACE_ASSETS_POINTER_KEY = 'lw_workspace_assets_current_v1';
-export const WORKSPACE_ASSETS_SNAPSHOT_PREFIX = 'lw_workspace_assets_snapshot_v1:';
-const WORKSPACE_ASSETS_FORMAT = 'lightweaver.workspace-assets';
+export {
+  WORKSPACE_ASSETS_POINTER_KEY,
+  WORKSPACE_ASSETS_SNAPSHOT_PREFIX,
+  WORKSPACE_ASSETS_VERSION,
+};
 
 function defaultStorage() {
   try {
@@ -152,35 +160,6 @@ function dispatchWorkspaceAssetsEvent(options = {}) {
   } catch {}
 }
 
-function snapshotStorageKey() {
-  const id = typeof globalThis.crypto?.randomUUID === 'function'
-    ? globalThis.crypto.randomUUID()
-    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-  return `${WORKSPACE_ASSETS_SNAPSHOT_PREFIX}${id}`;
-}
-
-function readCommittedSnapshot(storage) {
-  const pointer = storage.getItem(WORKSPACE_ASSETS_POINTER_KEY);
-  if (!pointer) return null;
-  if (!pointer.startsWith(WORKSPACE_ASSETS_SNAPSHOT_PREFIX)) {
-    throw new TypeError('Workspace asset snapshot pointer is invalid.');
-  }
-  const raw = storage.getItem(pointer);
-  if (!raw) throw new TypeError('Committed workspace asset snapshot is missing.');
-  let envelope;
-  try {
-    envelope = JSON.parse(raw);
-  } catch {
-    throw new TypeError('Committed workspace asset snapshot is not valid JSON.');
-  }
-  if (!isRecord(envelope)
-    || envelope.format !== WORKSPACE_ASSETS_FORMAT
-    || envelope.version !== WORKSPACE_ASSETS_VERSION) {
-    throw new TypeError('Committed workspace asset snapshot is unsupported.');
-  }
-  return normalizeSnapshot(envelope.snapshot);
-}
-
 export function readWorkspaceAssets(storage) {
   const target = resolveStorage(storage);
   if (!target) {
@@ -191,8 +170,8 @@ export function readWorkspaceAssets(storage) {
       patternLabDrafts: [],
     };
   }
-  const committed = readCommittedSnapshot(target);
-  if (committed) return committed;
+  const committed = readCommittedWorkspaceSnapshot(target);
+  if (committed) return normalizeSnapshot(committed);
   return normalizeSnapshot({
     version: WORKSPACE_ASSETS_VERSION,
     customPatterns: parseStored(target, CUSTOM_PATTERNS_KEY, [], 'Custom pattern'),
@@ -216,21 +195,7 @@ export function writeWorkspaceAssets(snapshot, storage, options = {}) {
     [PATTERN_LAB_DRAFTS_KEY, patternLabEnvelope],
     [PATTERN_LAB_DRAFTS_BACKUP_KEY, patternLabEnvelope],
   ]);
-  const previousPointer = target.getItem(WORKSPACE_ASSETS_POINTER_KEY);
-  const nextPointer = snapshotStorageKey();
-  const envelope = JSON.stringify({
-    format: WORKSPACE_ASSETS_FORMAT,
-    version: WORKSPACE_ASSETS_VERSION,
-    snapshot: normalized,
-  });
-
-  target.setItem(nextPointer, envelope);
-  try {
-    target.setItem(WORKSPACE_ASSETS_POINTER_KEY, nextPointer);
-  } catch (error) {
-    try { target.removeItem(nextPointer); } catch {}
-    throw error;
-  }
+  commitWorkspaceSnapshot(normalized, target);
 
   // Existing custom-pattern and Pattern Lab readers remain compatible. These
   // mirrors are non-authoritative, so a quota failure cannot create a hybrid
@@ -238,10 +203,6 @@ export function writeWorkspaceAssets(snapshot, storage, options = {}) {
   for (const [key, text] of legacyWrites) {
     try { target.setItem(key, text); } catch {}
   }
-  if (previousPointer && previousPointer !== nextPointer) {
-    try { target.removeItem(previousPointer); } catch {}
-  }
-
   dispatchWorkspaceAssetsEvent(options);
   return normalized;
 }
