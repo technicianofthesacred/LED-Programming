@@ -21,8 +21,47 @@ async function stripDetails(page: any, stripId: string) {
   }, stripId);
 }
 
-async function screenStrokeHeight(locator: any) {
-  return locator.evaluate((node: SVGGraphicsElement) => node.getBoundingClientRect().height);
+async function screenStrokeWidth(locator: any) {
+  return locator.evaluate((node: SVGGraphicsElement) => {
+    const ctm = node.getScreenCTM();
+    if (!ctm) throw new Error('Selected strip has no screen transform.');
+    return parseFloat(getComputedStyle(node).strokeWidth) * Math.hypot(ctm.a, ctm.b);
+  });
+}
+
+async function screenBadgeTextSize(locator: any) {
+  return locator.evaluate((node: SVGGraphicsElement) => {
+    const text = node.matches('text') ? node : node.querySelector('text');
+    if (!text) throw new Error('Selected strip badge has no text.');
+    const ctm = text.getScreenCTM();
+    if (!ctm) throw new Error('Selected strip badge has no screen transform.');
+    const fontSize = parseFloat(getComputedStyle(text).fontSize) * Math.hypot(ctm.a, ctm.b);
+    return Math.max(fontSize, text.getBoundingClientRect().height);
+  });
+}
+
+async function zoomToMinimum(page: any) {
+  const svg = page.locator('.lw-viewport svg');
+  const zoomOut = page.getByTitle('Zoom out (-)');
+  for (let index = 0; index < 80; index += 1) {
+    const previousViewBox = await svg.getAttribute('viewBox');
+    await zoomOut.click();
+    try {
+      await expect.poll(() => svg.getAttribute('viewBox'), {
+        timeout: 1000,
+        intervals: [50, 100, 200],
+      }).not.toBe(previousViewBox);
+    } catch {
+      // A clamp is terminal only after the post-click value is confirmed
+      // unchanged, rather than treating a render race as the minimum zoom.
+      await expect.poll(() => svg.getAttribute('viewBox'), {
+        timeout: 500,
+        intervals: [50, 100, 200],
+      }).toBe(previousViewBox);
+      return previousViewBox;
+    }
+  }
+  throw new Error('Zoom out did not reach its terminal clamp within 80 clicks.');
 }
 
 test('selected Draw strip has a clear, non-blocking visual identity that remains legible at minimum zoom', async ({ page }) => {
@@ -58,24 +97,26 @@ test('selected Draw strip has a clear, non-blocking visual identity that remains
 
   // Selection weight is intentionally screen-legible rather than shrinking
   // away with the drawing as the maker zooms out to the supported minimum.
-  const normalHaloHeight = await screenStrokeHeight(halo);
-  const normalCoreHeight = await screenStrokeHeight(core);
-  expect(normalHaloHeight).toBeGreaterThanOrEqual(3);
-  expect(normalCoreHeight).toBeGreaterThanOrEqual(2);
+  const normalHaloWidth = await screenStrokeWidth(halo);
+  const normalCoreWidth = await screenStrokeWidth(core);
+  const normalBadgeSize = await screenBadgeTextSize(badge);
+  expect(normalHaloWidth).toBeGreaterThanOrEqual(3);
+  expect(normalCoreWidth).toBeGreaterThanOrEqual(2);
+  expect(normalBadgeSize).toBeGreaterThanOrEqual(8);
 
-  const zoomOut = page.getByTitle('Zoom out (-)');
-  let previousViewBox = await page.locator('.lw-viewport svg').getAttribute('viewBox');
-  for (let index = 0; index < 30; index += 1) {
-    await zoomOut.click();
-    const nextViewBox = await page.locator('.lw-viewport svg').getAttribute('viewBox');
-    if (nextViewBox === previousViewBox) break;
-    previousViewBox = nextViewBox;
-  }
+  const terminalViewBox = await zoomToMinimum(page);
+  const terminalWidth = Number(terminalViewBox?.trim().split(/\s+/)[2]);
+  // Fresh layouts have a 640-unit viewBox; the terminal width demonstrates
+  // that the zoom clamp, rather than an intermediate render, was reached.
+  expect(terminalWidth).toBeGreaterThanOrEqual(640 / 1e-6);
 
-  const minHaloHeight = await screenStrokeHeight(halo);
-  const minCoreHeight = await screenStrokeHeight(core);
-  expect(minHaloHeight).toBeGreaterThanOrEqual(3);
-  expect(minCoreHeight).toBeGreaterThanOrEqual(2);
-  expect(minHaloHeight / normalHaloHeight).toBeGreaterThanOrEqual(0.75);
-  expect(minCoreHeight / normalCoreHeight).toBeGreaterThanOrEqual(0.75);
+  const minHaloWidth = await screenStrokeWidth(halo);
+  const minCoreWidth = await screenStrokeWidth(core);
+  const minBadgeSize = await screenBadgeTextSize(badge);
+  expect(minHaloWidth).toBeGreaterThanOrEqual(3);
+  expect(minCoreWidth).toBeGreaterThanOrEqual(2);
+  expect(minBadgeSize).toBeGreaterThanOrEqual(8);
+  expect(minHaloWidth / normalHaloWidth).toBeGreaterThanOrEqual(0.75);
+  expect(minCoreWidth / normalCoreWidth).toBeGreaterThanOrEqual(0.75);
+  expect(minBadgeSize / normalBadgeSize).toBeGreaterThanOrEqual(0.75);
 });
