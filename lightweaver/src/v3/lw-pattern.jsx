@@ -610,8 +610,6 @@ import { PatternPreview } from './PatternPreview.jsx';
     const canRemoveDuplicateAlternatePress = hardwareConfigurationIssue
       && Number(encoderPins.press) >= 0
       && Number(encoderPins.press) === Number(encoderPins.alternatePress);
-    const runtimePixelCount = runtimePackage?.config?.led?.pixels
-      ?? strips.reduce((sum, strip) => sum + (strip.pixelCount || strip.pixels?.length || 0), 0);
     const safeProjectName = (projectName || 'lightweaver-piece').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
 
     const updateController = (patch) => {
@@ -1633,8 +1631,11 @@ import { PatternPreview } from './PatternPreview.jsx';
               {/* ASIDE */}
               <aside className="pm-aside">
                 <div className="card pm-pane pm-preview-pane">
-                  <div className="sec-h"><span className="t">Preview</span><span className="m">{previewTargetName} · {sel.label}</span></div>
                   <div className="pm-preview-controls" aria-label="Pattern preview controls">
+                    <div className="pm-preview-meta" data-testid="pattern-preview-meta" title={`${previewTargetName} · ${sel.label}`}>
+                      <span className="t">Preview</span>
+                      <span className="m">{sel.label}</span>
+                    </div>
                     <button
                       type="button"
                       className="pm-preview-step"
@@ -1825,19 +1826,6 @@ import { PatternPreview } from './PatternPreview.jsx';
                   </div>
                 </div>
 
-                <div className="card pm-pane">
-                  <div className="sec-h"><span className="t">Card</span><span className="m">{runtimePixelCount} pixels</span></div>
-                  <div className="pmx-cardsummary">
-                    <span>Live preview</span><strong data-testid="card-live-preview-label">{sel.label}</strong>
-                    <span>Editing</span><strong data-testid="card-target-label">{selectedTargetName}</strong>
-                    <span>Starts with</span><strong data-testid="card-startup-label">{getCardPatternById(savedGlobalLook.patternId)?.label || savedGlobalLook.patternId}</strong>
-                    <span>Playlist</span><strong data-testid="card-knob-cycle-label">{derivePlaylistLookIds(playlist).join(', ')}</strong>
-                    <div className="pmx-cardhost">
-                      <input className="pm-input" value={cardHost} onChange={(e) => { setCardHost(e.target.value); writeStoredCardHost(e.target.value); }} spellCheck={false} autoCapitalize="off" autoCorrect="off" placeholder="lightweaver.local" aria-label="Card local page host" />
-                      <button className="btn ghost-sm" onClick={openCardPage}>Open</button>
-                    </div>
-                  </div>
-                </div>
               </aside>
             </div>
           </div>
