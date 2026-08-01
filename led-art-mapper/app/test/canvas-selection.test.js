@@ -157,7 +157,7 @@ test('mapper zoom controls report the applied zoom to CanvasManager', async () =
     };
   });
 
-  await page.dispatchEvent('.canvas-wrapper', 'wheel', { deltaY: -100 });
+  await page.dispatchEvent('#btn-zoom-in', 'click');
   const calls = await page.evaluate(() => window.__selectionZoomCalls);
 
   assert.equal(canvasOverflow, 'visible');
