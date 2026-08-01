@@ -194,6 +194,9 @@ function lookFromPatchPlayback(playback = {}, fallbackLook = {}) {
     ...(hasExplicit(playback.customHue) ? { customHue: playback.customHue } : {}),
     ...(hasExplicit(playback.customSaturation) ? { customSaturation: playback.customSaturation } : {}),
     ...(hasExplicit(playback.customBreathe) ? { customBreathe: playback.customBreathe } : {}),
+    ...(hasExplicit(playback.breatheLowerPct) ? { breatheLowerPct: playback.breatheLowerPct } : {}),
+    ...(hasExplicit(playback.breatheUpperPct) ? { breatheUpperPct: playback.breatheUpperPct } : {}),
+    ...(hasExplicit(playback.breatheCycleSeconds) ? { breatheCycleSeconds: playback.breatheCycleSeconds } : {}),
     ...(hasExplicit(playback.customDrift) ? { customDrift: playback.customDrift } : {}),
   });
 }
@@ -208,6 +211,9 @@ function lookToPlayback(look, previous = {}) {
     customHue: look.customHue,
     customSaturation: look.customSaturation,
     customBreathe: look.customBreathe,
+    breatheLowerPct: look.breatheLowerPct,
+    breatheUpperPct: look.breatheUpperPct,
+    breatheCycleSeconds: look.breatheCycleSeconds,
     customDrift: look.customDrift,
   };
 }

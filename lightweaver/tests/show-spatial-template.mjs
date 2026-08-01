@@ -22,6 +22,14 @@ const SAMPLE_KEYS = [
   'radius',
   'angle',
 ];
+const REFLECTION_KEYS = [
+  'reflectionProgress',
+  'kaleidoscopeProgress',
+  'reflectionDistance',
+  'reflectionSegment',
+  'reflectionPoint',
+  'isReflectionPoint',
+];
 
 function assertClose(actual, expected, message) {
   assert.ok(Math.abs(actual - expected) < 1e-6, `${message}: expected ${expected}, got ${actual}`);
@@ -75,7 +83,7 @@ assert.deepEqual(connected.map(({ x, y }) => [x, y]), [
   [-0.5, 0.25],
   [0.5, 0.25],
 ], 'the longer dimension fills [-1, 1] and the shorter one remains centered without distortion');
-assert.deepEqual(Object.keys(connected[0]), SAMPLE_KEYS);
+assert.deepEqual(Object.keys(connected[0]), [...SAMPLE_KEYS.slice(0, 4), ...REFLECTION_KEYS, ...SAMPLE_KEYS.slice(4)]);
 assertClose(connected[2].radius, Math.hypot(-0.5, 0.25), 'connected radius');
 assertClose(connected[2].angle, Math.atan2(0.25, -0.5), 'connected angle');
 
@@ -102,6 +110,20 @@ assert.equal(physical.length, 9, 'hidden and off physical addresses remain reser
 assert.deepEqual(physical.map(sample => sample.outputIndex), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
 assert.deepEqual(physical.map(sample => sample.stripId), [null, null, null, null, null, 'a', 'a', 'a', 'a']);
 assert.deepEqual(physical.slice(5).map(sample => sample.stripProgress), [1, 2 / 3, 0, 1 / 3]);
+
+const kaleidoscopePhysical = createConnectedSpatialTemplate({
+  strips: [{
+    id: 'ring',
+    pixels: Array.from({ length: 8 }, (_, index) => ({ x: index, y: 0 })),
+    kaleidoscope: { enabled: true, pointCount: 4, startLed: 0, offsets: [0, 0, 0, 0] },
+  }],
+  patchBoard: {
+    chains: [{ id: 'main', rowIds: ['reverse'] }], groups: [],
+    patches: [{ id: 'reverse', source: { type: 'strip', stripId: 'ring', startLed: 7, endLed: 0 }, output: { mode: 'normal' } }],
+  },
+});
+assert.deepEqual(kaleidoscopePhysical.map(sample => sample.stripProgress), [0.5, 1, 0.5, 0, 0.5, 1, 0.5, 0]);
+assert.deepEqual(kaleidoscopePhysical.map(sample => sample.isReflectionPoint), [false, true, false, true, false, true, false, true]);
 
 const inlineHiddenPhysical = createConnectedSpatialTemplate({
   strips: [{ id: 'inline-hidden', hidden: true, pixels: [{ x: 4, y: 5 }, { x: 6, y: 7 }] }],
@@ -139,6 +161,22 @@ assert.equal(hasUsableConnectedLayout([
 ], { hidden: true }), false);
 assert.equal(hasUsableConnectedLayout([{ id: 'valid', pixels: [{ x: -1, y: 2 }] }]), true);
 assert.equal(hasUsableConnectedLayout(), false);
+
+const largePixels = Array.from({ length: 5000 }, (_, sourceLed) => ({
+  x: sourceLed,
+  y: sourceLed % 17,
+}));
+largePixels.indexOf = () => { throw new Error('non-physical Show mapping must preserve source indices'); };
+const largeConnected = createConnectedSpatialTemplate({
+  strips: [{
+    id: 'large',
+    pixels: largePixels,
+    kaleidoscope: { enabled: true, pointCount: 4, startLed: 0, offsets: [0, 0, 0, 0] },
+  }],
+});
+assert.equal(largeConnected.length, 5000);
+assert.equal(largeConnected[4999].stripId, 'large');
+assertClose(largeConnected[4999].kaleidoscopeProgress, 1 / 1250, 'large geometry source index');
 
 // Degenerate bounds stay finite and center collapsed dimensions without division by zero.
 const vertical = createConnectedSpatialTemplate({

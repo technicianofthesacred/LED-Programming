@@ -114,6 +114,21 @@ test('same canonical inputs produce byte-identical physical LWSEQ and hashes', a
   assert.deepEqual(JSON.parse(first.sidecarJson), first.sidecar);
 });
 
+test('Kaleidoscope mapping participates deterministically in direct bake output and hashes', async () => {
+  const input = fixture();
+  input.recipe.base = { kind: 'lightweaver-pattern', patternId: 'meteor', params: { speed: 1, tailLen: 0.6 } };
+  input.strips[0].kaleidoscope = { enabled: true, pointCount: 2, startLed: 0, offsets: [0, 0] };
+  const first = await bakePatternLabRecipe({ ...input, fps: 1 });
+  const same = await bakePatternLabRecipe({ ...input, fps: 1 });
+  assert.deepEqual(first.bytes, same.bytes);
+  assert.equal(first.sidecar.layoutPhysicalOrderSha256, same.sidecar.layoutPhysicalOrderSha256);
+
+  input.strips[0].kaleidoscope = { enabled: true, pointCount: 2, startLed: 1, offsets: [0, 0] };
+  const changed = await bakePatternLabRecipe({ ...input, fps: 1 });
+  assert.notEqual(changed.sidecar.layoutPhysicalOrderSha256, first.sidecar.layoutPhysicalOrderSha256);
+  assert.notDeepEqual(changed.bytes, first.bytes);
+});
+
 test('direct bake applies half brightness exactly once', async () => {
   const input = fixture();
   input.recipe = {

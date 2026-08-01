@@ -5,6 +5,7 @@ import {
   svgPathLength,
 } from '../../../lib/layoutGeometry.js';
 import { scaleStripGeometry } from '../../../lib/stripScale.js';
+import { reprojectStripKaleidoscope } from '../../../lib/kaleidoscope.js';
 
 // Geometry clamps — keep in lockstep with useLayoutStrips.js (scaleStrip),
 // which owns the same bounds for the Draw-mode − / + resize control.
@@ -25,7 +26,33 @@ export function useLayoutSize(ctx) {
     pxPerMm, setPxPerMm,
     pushLayoutHistory,
     rebuildStrip,
+    setKaleidoscopeResetNotices,
   } = ctx;
+
+  const rebuildWithCount = useCallback((strip, count) => {
+    const projected = reprojectStripKaleidoscope(strip, count);
+    if (projected.resetPointIndices.length) {
+      setKaleidoscopeResetNotices?.(current => ({
+        ...current,
+        [strip.id]: projected.resetPointIndices,
+      }));
+    }
+    return rebuildStrip(projected.strip);
+  }, [rebuildStrip, setKaleidoscopeResetNotices]);
+
+  const recountWithKaleidoscope = useCallback((previous, nextPxPerMm, nextDensity) => {
+    const recounted = recountStrips(previous, nextPxPerMm, nextDensity, stripCountOverrides, stripDensities);
+    const beforeById = new Map(previous.map(strip => [strip.id, strip]));
+    return recounted.map(strip => {
+      const before = beforeById.get(strip.id);
+      if (!before || before.pixelCount === strip.pixelCount) return strip;
+      const projected = reprojectStripKaleidoscope(before, strip.pixelCount);
+      if (projected.resetPointIndices.length) {
+        setKaleidoscopeResetNotices?.(current => ({ ...current, [strip.id]: projected.resetPointIndices }));
+      }
+      return { ...strip, kaleidoscope: projected.strip.kaleidoscope };
+    });
+  }, [stripCountOverrides, stripDensities, setKaleidoscopeResetNotices]);
 
   // 'cm' | 'in' — display unit for the drawing-scale control
   const [scaleUnit, setScaleUnit] = useState('cm');
@@ -54,8 +81,8 @@ export function useLayoutSize(ctx) {
   // the per-layer inspector (whose manual counts ride in `editCounts`, not the
   // per-strip override map).
   const resampleStrip = useCallback((id, newCount) => {
-    setStrips(prev => prev.map(s => s.id === id ? rebuildStrip({ ...s, pixelCount: newCount }) : s));
-  }, [setStrips, rebuildStrip]);
+    setStrips(prev => prev.map(s => s.id === id ? rebuildWithCount(s, newCount) : s));
+  }, [setStrips, rebuildWithCount]);
 
   // Manual per-strip count: re-sample the strip AND flag it overridden so that
   // density / scale / calibrate rescales leave its count alone. This is the
@@ -72,14 +99,14 @@ export function useLayoutSize(ctx) {
     if (!counts.size) return;
     if (recordHistory) pushLayoutHistory();
     setStrips(prev => prev.map(strip => counts.has(strip.id)
-      ? rebuildStrip({ ...strip, pixelCount: counts.get(strip.id) })
+      ? rebuildWithCount(strip, counts.get(strip.id))
       : strip));
     setStripCountOverrides(prev => {
       const next = { ...prev };
       for (const id of counts.keys()) next[id] = true;
       return next;
     });
-  }, [pushLayoutHistory, setStrips, rebuildStrip, setStripCountOverrides]);
+  }, [pushLayoutHistory, setStrips, rebuildWithCount, setStripCountOverrides]);
 
   // Clear a strip's override and recompute its count from its density + scale.
   const resetStripCount = useCallback((id) => {
@@ -93,9 +120,9 @@ export function useLayoutSize(ctx) {
     setStrips(prev => prev.map(s => {
       if (s.id !== id) return s;
       const { len, count } = computeStripCount(s);
-      return rebuildStrip({ ...s, svgLength: len, pixelCount: count });
+      return rebuildWithCount({ ...s, svgLength: len }, count);
     }));
-  }, [setStrips, setStripCountOverrides, rebuildStrip, computeStripCount, pushLayoutHistory]);
+  }, [setStrips, setStripCountOverrides, rebuildWithCount, computeStripCount, pushLayoutHistory]);
 
   // ── The inverted sizing model ─────────────────────────────────────────────
   // Declare a strip's physical truth: how long the purchased strip is
@@ -132,26 +159,26 @@ export function useLayoutSize(ctx) {
       const scaled = factor !== 1
         ? scaleStripGeometry({ ...s, svgLength: len }, factor)
         : { ...s, svgLength: len };
-      return rebuildStrip({ ...scaled, pixelCount: count });
+      return rebuildWithCount(scaled, count);
     }));
     // The physical declaration IS the count's source of truth — ride the
     // override path so global density / scale changes leave it alone.
     setStripCountOverrides(prev => (prev[id] ? prev : { ...prev, [id]: true }));
-  }, [strips, pxPerMm, viewBox, stripDensity, pushLayoutHistory, setStripDensities, setStrips, rebuildStrip, setStripCountOverrides]);
+  }, [strips, pxPerMm, viewBox, stripDensity, pushLayoutHistory, setStripDensities, setStrips, rebuildWithCount, setStripCountOverrides]);
 
   const handleDensityChange = useCallback((newDensity) => {
     pushLayoutHistory();
-    setStrips(prev => recountStrips(prev, pxPerMm, newDensity, stripCountOverrides, stripDensities));
+    setStrips(prev => recountWithKaleidoscope(prev, pxPerMm, newDensity));
     setEditCounts({});
     setDensity(newDensity);
-  }, [pxPerMm, stripCountOverrides, stripDensities, setStrips, setEditCounts, setDensity, pushLayoutHistory]);
+  }, [pxPerMm, setStrips, setEditCounts, setDensity, pushLayoutHistory, recountWithKaleidoscope]);
 
   const handleScaleChange = useCallback((nextPxPerMm) => {
     pushLayoutHistory();
-    setStrips(prev => recountStrips(prev, nextPxPerMm, density, stripCountOverrides, stripDensities));
+    setStrips(prev => recountWithKaleidoscope(prev, nextPxPerMm, density));
     setEditCounts({});
     setPxPerMm(nextPxPerMm);
-  }, [density, stripCountOverrides, stripDensities, setStrips, setEditCounts, setPxPerMm, pushLayoutHistory]);
+  }, [density, setStrips, setEditCounts, setPxPerMm, pushLayoutHistory, recountWithKaleidoscope]);
 
   // Calibrate the whole piece's scale from one strip's counted LEDs. The
   // calibrating strip is NOT marked overridden: pxPerMm is back-solved so this
@@ -172,10 +199,10 @@ export function useLayoutSize(ctx) {
     const nextPxPerMm = (len * stripDensity(stripId)) / (count * 1000);
     if (!Number.isFinite(nextPxPerMm) || nextPxPerMm <= 0) return;
     pushLayoutHistory();
-    setStrips(prev => recountStrips(prev, nextPxPerMm, density, stripCountOverrides, stripDensities));
+    setStrips(prev => recountWithKaleidoscope(prev, nextPxPerMm, density));
     setPxPerMm(nextPxPerMm);
     setEditCounts({});
-  }, [strips, density, stripDensity, stripCountOverrides, stripDensities, setStrips, setPxPerMm, setEditCounts, pushLayoutHistory]);
+  }, [strips, density, stripDensity, setStrips, setPxPerMm, setEditCounts, pushLayoutHistory, recountWithKaleidoscope]);
 
   return {
     scaleUnit, setScaleUnit,

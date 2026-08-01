@@ -93,6 +93,31 @@ test('accepts only the canonical blank project identity pair from factory firmwa
   }), /invalid project revision/i);
 });
 
+test('preserves bounded Kaleidoscope capability and exact applied mapping evidence', () => {
+  const mapping = {
+    id: 'outer', zoneId: 'outer', pixelCount: 8,
+    pointCount: 4, startLed: 0, offsets: [0, 0, 0, 0],
+    spans: [{ start: 0, count: 8, sourceStart: 0, sourceStep: 1 }],
+  };
+  const evidence = normalizeCardProjectEvidence({
+    app: 'Lightweaver', cardId: 'lw-aabbccddeeff',
+    firmwareVersion: '2.0.0', buildId: 'build-kaleidoscope',
+    outputs: [{ id: 'out1', pin: 16, pixels: 8 }],
+    capabilities: { kaleidoscopeReflectionPoints: 1, futureCapability: 999 },
+    kaleidoscopeMappings: [mapping],
+  });
+
+  assert.deepEqual(evidence.capabilities, { kaleidoscopeReflectionPoints: 1 });
+  assert.deepEqual(evidence.kaleidoscopeMappings, [mapping]);
+  assert.throws(() => normalizeCardProjectEvidence({
+    app: 'Lightweaver', cardId: 'lw-aabbccddeeff',
+    firmwareVersion: '2.0.0', buildId: 'build-kaleidoscope',
+    outputs: [{ pin: 16, pixels: 8 }],
+    capabilities: { kaleidoscopeReflectionPoints: 1 },
+    kaleidoscopeMappings: Array.from({ length: 33 }, (_, index) => ({ ...mapping, id: `outer-${index}` })),
+  }), /at most 32/i);
+});
+
 test('persists only stable nonsecret identity and connection hints under a versioned key', () => {
   const values = new Map();
   const storage = {

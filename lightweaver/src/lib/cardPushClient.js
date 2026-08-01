@@ -26,6 +26,7 @@ import {
 } from './cardStoragePayload.js';
 import { classifyCardReadiness } from './cardReadiness.js';
 import { stageCardWiringCandidate } from './cardWiringSafety.js';
+import { runtimeConfigUsesKaleidoscope } from './cardKaleidoscope.js';
 
 export function getCardHostname() {
   return readStoredCardHost();
@@ -78,6 +79,17 @@ export class CardPushError extends Error {
     this.reason = reason; // 'mixed-content' | 'offline' | 'http' | 'unknown'
     if (cause instanceof Error) this.cause = cause;
   }
+}
+
+export function assertCardKaleidoscopeSupport(runtimePackage, evidence) {
+  if (!runtimeConfigUsesKaleidoscope(runtimePackage?.config || runtimePackage)) return true;
+  if (!(Number(evidence?.capabilities?.kaleidoscopeReflectionPoints) >= 1)) {
+    throw new CardPushError(
+      'kaleidoscope-unsupported',
+      'This card can preview streamed calibration frames, but its firmware cannot install standalone Kaleidoscope reflection points. Update the card firmware, then retry.',
+    );
+  }
+  return true;
 }
 
 function isMixedContentBlocked() {
@@ -327,6 +339,7 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
   // firmware-info preflight and no wiring candidate can intervene between the
   // proof and the complete first project.
   if (initialBridgeConfig) {
+    assertCardKaleidoscopeSupport(runtimePackage, options.cardEvidence);
     try {
       return await bridgeRequest('config', preparedPayload.config, {
         host,
@@ -345,8 +358,9 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
       );
     }
   }
+  let exactIdentity = null;
   if (!useBridge) {
-    const exactIdentity = await guardDirectCardMutation(host, {
+    exactIdentity = await guardDirectCardMutation(host, {
       fetchImpl: options.fetchImpl,
       timeoutMs: Math.min(options.timeoutMs || 6000, 1500),
     });
@@ -356,6 +370,18 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
           'blank-authority',
           'Stopped before saving: Studio could not prove the exact paired card and firmware for this blank-card write.',
         );
+      }
+      if (runtimeConfigUsesKaleidoscope(runtimePackage)) {
+        const capabilityEvidence = options.cardEvidence || await readCardProjectEvidence({
+          host,
+          transport: 'direct',
+          timeoutMs: Math.min(options.timeoutMs || 6000, 1500),
+          fetchImpl: options.fetchImpl || globalThis.fetch,
+        });
+        if (capabilityEvidence.cardId !== exactIdentity.id) {
+          throw new CardPushError('wrong-card', 'The card capability evidence did not match the exact paired card.');
+        }
+        assertCardKaleidoscopeSupport(runtimePackage, capabilityEvidence);
       }
       const status = await readCardStatusEnvelope({
         host,
@@ -382,6 +408,7 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
     }
   }
   const rebootPlan = await resolveConfigRebootForCard(host, runtimePackage, options);
+  assertFreshKaleidoscopeEvidence(runtimePackage, rebootPlan.current, exactIdentity);
   if (rebootPlan.projectChanged && options.allowProjectChange !== true) {
     throw projectMismatchError(rebootPlan.current, runtimePackage);
   }
@@ -445,6 +472,7 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
         try {
           await guardDirectCardMutation(found.host, { fetchImpl: options.fetchImpl, timeoutMs: Math.min(options.timeoutMs || 6000, 1500) });
           const retryRebootPlan = await resolveConfigRebootForCard(found.host, runtimePackage, options);
+          assertFreshKaleidoscopeEvidence(runtimePackage, retryRebootPlan.current);
           if (retryRebootPlan.projectChanged && options.allowProjectChange !== true) {
             throw projectMismatchError(retryRebootPlan.current, runtimePackage);
           }
@@ -465,4 +493,18 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
     }
     throw normalizeConfigPushError(host, err, transport);
   }
+}
+
+function assertFreshKaleidoscopeEvidence(runtimePackage, rawEvidence, expectedIdentity = null) {
+  if (!runtimeConfigUsesKaleidoscope(runtimePackage)) return true;
+  let evidence;
+  try {
+    evidence = normalizeCardProjectEvidence(rawEvidence);
+  } catch {
+    assertCardKaleidoscopeSupport(runtimePackage, null);
+  }
+  if (expectedIdentity?.id && evidence.cardId !== expectedIdentity.id) {
+    throw new CardPushError('wrong-card', 'The card capability evidence did not match the exact paired card.');
+  }
+  return assertCardKaleidoscopeSupport(runtimePackage, evidence);
 }

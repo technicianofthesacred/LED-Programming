@@ -1,4 +1,6 @@
 import { buildCardRuntimePackageFromProject } from './cardRuntimeProject.js';
+import { runtimeConfigUsesKaleidoscope } from './cardKaleidoscope.js';
+import { normalizeCardKaleidoscopeMappings } from './cardRuntimeContract.js';
 
 export function prepareCardDeployment(project = {}, cardEvidence = {}) {
   const needsFingerprint = Number.isSafeInteger(project.projectRevision) && project.projectRevision >= 0 && !project.projectFingerprint;
@@ -96,6 +98,21 @@ export function verifyCardDeployment(prepared, readBack = {}) {
     readBack.projectRevision !== prepared.config.projectRevision ||
     readBack.projectFingerprint !== prepared.config.projectFingerprint
   )) return { ok: false, reason: 'read-back-mismatch' };
+  if (runtimeConfigUsesKaleidoscope(prepared.config)) {
+    const appliedMappings = readBack.config?.kaleidoscopeMappings ?? readBack.kaleidoscopeMappings;
+    if (!Array.isArray(appliedMappings)) return { ok: false, reason: 'read-back-mismatch' };
+    try {
+      const totalPixels = prepared.config.led?.pixels;
+      const zones = prepared.config.zones;
+      const expected = normalizeCardKaleidoscopeMappings(
+        prepared.config.kaleidoscopeMappings, totalPixels, zones,
+      );
+      const actual = normalizeCardKaleidoscopeMappings(appliedMappings, totalPixels, zones);
+      if (stableJson(actual) !== stableJson(expected)) return { ok: false, reason: 'read-back-mismatch' };
+    } catch {
+      return { ok: false, reason: 'read-back-mismatch' };
+    }
+  }
   return { ok: true, cardId: prepared.cardId, fingerprint: prepared.fingerprint };
 }
 

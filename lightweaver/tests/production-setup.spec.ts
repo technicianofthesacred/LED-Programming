@@ -7,7 +7,7 @@ import { buildCardRuntimePackageFromProject } from '../src/lib/cardRuntimeProjec
 
 const signedRelease = JSON.parse(await readFile(new URL('../public/firmware/release-manifest.json', import.meta.url), 'utf8'));
 
-async function productionJob() {
+async function productionJob({ mapped = false } = {}) {
   const standaloneController = {
     outputs: [{ id: 'out1', name: 'Outer ring', pin: 16, pixels: 8 }],
     led: { type: 'WS2815', colorOrder: 'GRB', brightnessLimit: 0.35 },
@@ -22,7 +22,10 @@ async function productionJob() {
   const restoreSnapshot = {
     version: 4, id: 'moon-01', name: 'Moon',
     layout: {
-      strips: [{ id: 'strip-1', name: 'Outer ring', pixelCount: 5 }, { id: 'strip-2', name: 'Inner ring', pixelCount: 3 }], patchBoard: null,
+      strips: [{
+        id: 'strip-1', name: 'Outer ring', pixelCount: 5,
+        ...(mapped ? { kaleidoscope: { enabled: true, pointCount: 2, startLed: 0, offsets: [0, 0] } } : {}),
+      }, { id: 'strip-2', name: 'Inner ring', pixelCount: 3 }], patchBoard: null,
       wiring: {
         version: 1, locked: true, verified: true, controllerAnchor: null, migrationWarnings: [],
         outputs: [{ id: 'out1', name: 'Two rings', pin: 16, runIds: ['run-strip-1', 'run-strip-2'] }],
@@ -53,8 +56,8 @@ async function productionJob() {
   });
 }
 
-async function serveJob(page, { artifactDelayMs = 0, onArtifactRequest = () => {} } = {}) {
-  const job = await productionJob();
+async function serveJob(page, { artifactDelayMs = 0, onArtifactRequest = () => {}, mapped = false } = {}) {
+  const job = await productionJob({ mapped });
   const bytes = canonicalProductionJobBytes(job);
   const artifactSha256 = createHash('sha256').update(bytes).digest('hex');
   await page.route('**/production/jobs/index.json', route => route.fulfill({ json: { schemaVersion: 1, jobs: [{ jobId: job.jobId, label: job.label, digest: job.digest, artifactSha256, size: bytes.byteLength, url: `/production/jobs/${job.digest}.lwjob.json` }] } }));
@@ -88,9 +91,9 @@ async function installDriver(page, {
   candidateEvidenceMismatch = false, physicalIdentityMismatch = false, physicalFirmwareMismatch = false,
   activationFailure = false, activationLifecycleChange = false, rollbackFailure = false, rollbackRebootReads = 0, physicalDeliveryFailure = false, physicalDeliveryFailureOnce = false, physicalDeliveryDelayMs = 0, linkLossDuringPhysical = false,
   connectErrorOnce = '',
-  disconnectFailureAt = 0, disconnectDelayMs = 0, restartThrows = false, stationPreflight = false, handoffPreflight = false, stationAfterConnect = false, secondUsbWrong = false, installThrows = false, reconnectFirmwareMismatch = false, reconnectThrows = false,
+  disconnectFailureAt = 0, disconnectDelayMs = 0, restartThrows = false, stationPreflight = false, handoffPreflight = false, stationAfterConnect = false, secondUsbWrong = false, installThrows = false, reconnectFirmwareMismatch = false, reconnectThrows = false, mappedRestore = false,
 } = {}) {
-  await page.addInitScript(({ firmwareVersion, firmwareBuildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, connectErrorOnce, disconnectFailureAt, disconnectDelayMs, restartThrows, stationPreflight, handoffPreflight, stationAfterConnect, secondUsbWrong, installThrows, reconnectFirmwareMismatch, reconnectThrows }) => {
+  await page.addInitScript(({ firmwareVersion, firmwareBuildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, connectErrorOnce, disconnectFailureAt, disconnectDelayMs, restartThrows, stationPreflight, handoffPreflight, stationAfterConnect, secondUsbWrong, installThrows, reconnectFirmwareMismatch, reconnectThrows, mappedRestore }) => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
     const evidence = {
       cardId: 'lw-aabbccddeeff', firmwareVersion,
@@ -242,8 +245,21 @@ async function installDriver(page, {
         if (rollbackRebootReads) localStorage.setItem('lw_test_rollback_reboot_reads', String(rollbackRebootReads));
         return { state: 'rolled-back', activationId };
       },
-      restore: async configuration => {
+      restore: async (configuration, pushOptions = {}) => {
         localStorage.setItem('lw_test_restore_count', String(Number(localStorage.getItem('lw_test_restore_count') || 0) + 1));
+        if (mappedRestore) {
+          const { pushConfigToCard } = await import('/src/lib/cardPushClient.js');
+          await pushConfigToCard(configuration, {
+            ...pushOptions,
+            initialConfigAuthorityImpl: () => true,
+            bridgeRequestImpl: async (type, payload) => {
+              localStorage.setItem('lw_test_mapped_bridge_type', type);
+              localStorage.setItem('lw_test_mapped_bridge_payload', JSON.stringify(payload));
+              return { ok: true, saved: true };
+            },
+          });
+          localStorage.setItem('lw_test_mapped_card_evidence', JSON.stringify(pushOptions.cardEvidence || null));
+        }
         if (restoreDelayMs) await new Promise(resolve => setTimeout(resolve, restoreDelayMs));
         if (linkLossDuringRestore) {
           localStorage.setItem('lw_test_card_link_state', 'revalidating');
@@ -282,7 +298,12 @@ async function installDriver(page, {
           if (reconnectThrows) throw new Error('The exact card did not complete WiFi setup before the bounded setup wait ended.');
           return { ...evidence, cardId: wrongReconnect ? 'lw-wrong-card' : evidence.cardId, firmwareVersion: reconnectFirmwareMismatch ? '0.8.0' : evidence.firmwareVersion, buildId: reconnectFirmwareMismatch ? '0'.repeat(40) : evidence.buildId, projectRevision: 0, projectFingerprint: '', productionJobId: '', productionJobDigest: '' };
         }
-        if (phase === 'before-restore') return { ...evidence, cardId: wrongBeforeRestore ? 'lw-wrong-before-restore' : evidence.cardId, projectRevision: 0, projectFingerprint: '', productionJobId: '', productionJobDigest: '' };
+        if (phase === 'before-restore') return {
+          ...evidence,
+          cardId: wrongBeforeRestore ? 'lw-wrong-before-restore' : evidence.cardId,
+          capabilities: { kaleidoscopeReflectionPoints: 1 },
+          projectRevision: 0, projectFingerprint: '', productionJobId: '', productionJobDigest: '',
+        };
         if (phase === 'physical') {
           const current = JSON.parse(localStorage.getItem('lw_test_current_config') || '{}');
           return {
@@ -303,7 +324,7 @@ async function installDriver(page, {
       }, 50);
       return { closed: false, focus() {}, postMessage() {} };
     };
-  }, { firmwareVersion: signedRelease.firmwareVersion, firmwareBuildId: signedRelease.buildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, connectErrorOnce, disconnectFailureAt, disconnectDelayMs, restartThrows, stationPreflight, handoffPreflight, stationAfterConnect, secondUsbWrong, installThrows, reconnectFirmwareMismatch, reconnectThrows });
+  }, { firmwareVersion: signedRelease.firmwareVersion, firmwareBuildId: signedRelease.buildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, connectErrorOnce, disconnectFailureAt, disconnectDelayMs, restartThrows, stationPreflight, handoffPreflight, stationAfterConnect, secondUsbWrong, installThrows, reconnectFirmwareMismatch, reconnectThrows, mappedRestore });
 }
 
 test('production fixture tracks the exact currently signed firmware release', async () => {
@@ -1827,6 +1848,26 @@ test('missing LAN identity can retry the card-page handoff and exact evidence sa
   await page.getByRole('button', { name: 'Reconnect the expected card page' }).click();
   await expect(page.getByRole('button', { name: 'Load verified artwork' })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('lw_test_install_count'))).toBeNull();
+});
+
+test('mapped blank-card production restore forwards fresh capability evidence into the real bridge push', async ({ page }) => {
+  await serveJob(page, { mapped: true });
+  await installDriver(page, { preflightCurrent: true, mappedRestore: true });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await page.getByRole('button', { name: 'Load verified artwork' }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_test_mapped_bridge_type'))).toBe('config');
+  const result = await page.evaluate(() => ({
+    evidence: JSON.parse(localStorage.getItem('lw_test_mapped_card_evidence') || 'null'),
+    payload: JSON.parse(localStorage.getItem('lw_test_mapped_bridge_payload') || 'null'),
+  }));
+  expect(result.evidence).toMatchObject({
+    cardId: 'lw-aabbccddeeff',
+    capabilities: { kaleidoscopeReflectionPoints: 1 },
+  });
+  expect(result.payload.kaleidoscopeMappings).toHaveLength(1);
 });
 
 test('accepted restore with a lost response resumes verify-only and retry unlocks only after explicit evidence', async ({ page }) => {

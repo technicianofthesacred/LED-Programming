@@ -1,5 +1,10 @@
 import { EXPECTED_FIRMWARE_TARGET, MINIMUM_PRODUCTION_FIRMWARE_VERSION } from './firmwareRelease.js';
-import { CARD_HARDWARE_CAPABILITIES, MAX_PRODUCTION_MAX_MILLIAMPS, MIN_PRODUCTION_MAX_MILLIAMPS } from './cardRuntimeContract.js';
+import {
+  CARD_HARDWARE_CAPABILITIES,
+  MAX_PRODUCTION_MAX_MILLIAMPS,
+  MIN_PRODUCTION_MAX_MILLIAMPS,
+  normalizeCardKaleidoscopeMappings,
+} from './cardRuntimeContract.js';
 import { prepareCardStoragePayload } from './cardStoragePayload.js';
 import { fingerprintCommissioningProject } from './cardCommissioningFlow.js';
 import { buildCardRuntimePackageFromProject } from './cardRuntimeProject.js';
@@ -8,6 +13,7 @@ import { normalizeSavedLooks } from './sectionLookModel.js';
 import { normalizeCardPlaylist } from './cardPlaylist.js';
 import { MAX_PRODUCTION_PHYSICAL_BOUNDARIES } from './productionLimits.js';
 import { assignProductionWiringIdentity, productionWiringDigest } from './productionWiringIdentity.js';
+import { validateKaleidoscope } from './kaleidoscope.js';
 
 export const PRODUCTION_JOB_SCHEMA_VERSION = 1;
 export const PRODUCTION_JOB_FORMAT = 'lightweaver-production-job';
@@ -38,7 +44,8 @@ const SOURCE_TOP_KEYS = TOP_KEYS.filter(key => key !== 'digest');
 const FIRMWARE_KEYS = ['buildId', 'minimumVersion', 'target', 'version'];
 const PROJECT_KEYS = ['fingerprint', 'id', 'restoreSnapshot', 'revision'];
 const PACKAGE_KEYS = ['app', 'config', 'format', 'version'];
-const CONFIG_KEYS = ['controls', 'led', 'looks', 'mode', 'patterns', 'piece', 'productionJobDigest', 'productionJobId', 'projectFingerprint', 'projectRevision', 'startupPatternId', 'syncZones', 'version', 'wiringDigest', 'wiringRevision', 'zones'];
+const CONFIG_REQUIRED_KEYS = ['controls', 'led', 'looks', 'mode', 'patterns', 'piece', 'productionJobDigest', 'productionJobId', 'projectFingerprint', 'projectRevision', 'startupPatternId', 'syncZones', 'version', 'wiringDigest', 'wiringRevision', 'zones'];
+const CONFIG_OPTIONAL_KEYS = ['kaleidoscopeMappings'];
 const OUTPUT_KEYS = ['colorOrder', 'direction', 'id', 'label', 'pin', 'pixels'];
 const LED_KEYS = ['brightnessLimit', 'colorOrder', 'maxMilliamps', 'outputs', 'pixels'];
 const OUTPUT_COLOR_KEYS = ['calibration', 'outputGammaEnabled', 'outputGammaValue'];
@@ -56,15 +63,17 @@ const SNAPSHOT_KEYS = ['devices', 'id', 'layout', 'name', 'version'];
 const SNAPSHOT_LAYOUT_KEYS = ['patchBoard', 'strips', 'wiring'];
 const SNAPSHOT_DEVICES_KEYS = ['standaloneController'];
 const STRIP_REQUIRED_KEYS = ['id', 'name', 'pixelCount'];
-const STRIP_OPTIONAL_KEYS = ['angle', 'brightness', 'closed', 'color', 'emit', 'generatedLayout', 'hueShift', 'layoutRole', 'pathData', 'patternId', 'pixels', 'reversed', 'sourceLayerId', 'sourcePathId', 'speed', 'svgLength', 'visible', 'x', 'y'];
+const STRIP_OPTIONAL_KEYS = ['angle', 'brightness', 'closed', 'color', 'emit', 'generatedLayout', 'hueShift', 'kaleidoscope', 'layoutRole', 'pathData', 'patternId', 'pixels', 'reversed', 'sourceLayerId', 'sourcePathId', 'speed', 'svgLength', 'visible', 'x', 'y'];
 const STANDALONE_KEYS = ['activeLookId', 'controls', 'defaultLook', 'led', 'looks', 'outputs', 'playlist', 'runtimeMode'];
 const STANDALONE_OPTIONAL_KEYS = ['activeLookId', 'looks', 'runtimeMode'];
 const STANDALONE_REQUIRED_KEYS = STANDALONE_KEYS.filter(key => !STANDALONE_OPTIONAL_KEYS.includes(key));
 const STANDALONE_LED_REQUIRED_KEYS = ['brightnessLimit', 'colorOrder', 'type'];
 const STANDALONE_LED_OPTIONAL_KEYS = ['maxMilliamps', ...OUTPUT_COLOR_KEYS];
-const VISUAL_LOOK_KEYS = ['brightness', 'customBreathe', 'customDrift', 'customHue', 'customSaturation', 'hueShift', 'patternId', 'speed'];
+const VISUAL_LOOK_REQUIRED_KEYS = ['brightness', 'customBreathe', 'customDrift', 'customHue', 'customSaturation', 'hueShift', 'patternId', 'speed'];
+const VISUAL_LOOK_OPTIONAL_KEYS = ['breatheCycleSeconds', 'breatheLowerPct', 'breatheUpperPct'];
 const PLAYLIST_PATTERN_KEYS = ['createdAt', 'enabled', 'id', 'label', 'patternId', 'type'];
 const PLAYLIST_COMBO_KEYS = ['createdAt', 'enabled', 'id', 'label', 'lookId', 'type'];
+const KALEIDOSCOPE_KEYS = ['enabled', 'offsets', 'pointCount', 'startLed'];
 
 function isObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value) && !ArrayBuffer.isView(value) && !(value instanceof ArrayBuffer);
@@ -139,6 +148,39 @@ function exactRequiredAndOptionalKeys(value, required, optional, label) {
   }
 }
 
+function normalizeSavedLooksForValidation(looks) {
+  const normalized = normalizeSavedLooks(looks);
+  normalized.forEach((look, index) => {
+    const source = looks[index] || {};
+    for (const field of VISUAL_LOOK_OPTIONAL_KEYS) {
+      if (!Object.hasOwn(source.defaultLook || {}, field)) delete look.defaultLook[field];
+    }
+    for (const [sectionId, sectionLook] of Object.entries(look.sectionLooks || {})) {
+      const sourceSection = source.sectionLooks?.[sectionId] || {};
+      for (const field of VISUAL_LOOK_OPTIONAL_KEYS) {
+        if (!Object.hasOwn(sourceSection, field)) delete sectionLook[field];
+      }
+    }
+  });
+  return normalized;
+}
+
+function validateBreatheSettingsExact(look, label) {
+  const supplied = VISUAL_LOOK_OPTIONAL_KEYS.some(field => Object.hasOwn(look, field));
+  if (!supplied) return;
+  for (const field of VISUAL_LOOK_OPTIONAL_KEYS) {
+    if (Object.hasOwn(look, field) && !Number.isSafeInteger(look[field])) {
+      throw new Error(`${label} breathe settings must be exact integers`);
+    }
+  }
+  const lower = look.breatheLowerPct ?? 85;
+  const upper = look.breatheUpperPct ?? 100;
+  const cycle = look.breatheCycleSeconds ?? 9;
+  if (lower < 0 || lower > 100 || upper < lower || upper > 100 || cycle < 4 || cycle > 30) {
+    throw new Error(`${label} breathe settings are out of range or inverted`);
+  }
+}
+
 function parseSemver(value, label) {
   const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(value);
   if (!match) throw new Error(`${label} must be a semantic version`);
@@ -195,6 +237,16 @@ function validateRestoreSnapshot(snapshot) {
     requiredText(strip.name, 'Restore strip name', 160);
     if (!Number.isSafeInteger(strip.pixelCount) || strip.pixelCount <= 0) throw new Error('Restore strip pixel count is invalid');
     if (strip.pixels !== undefined && (!Array.isArray(strip.pixels) || strip.pixels.length !== strip.pixelCount)) throw new Error('Restore strip pixels must match pixel count');
+    if (strip.kaleidoscope !== undefined) {
+      exactKeys(strip.kaleidoscope, KALEIDOSCOPE_KEYS, 'restore snapshot strip kaleidoscope');
+      if (typeof strip.kaleidoscope.enabled !== 'boolean') {
+        throw new Error('Restore snapshot strip Kaleidoscope enabled must be a boolean');
+      }
+      const validation = validateKaleidoscope({ ...strip.kaleidoscope, enabled: true }, strip.pixelCount);
+      if (!validation.ok) {
+        throw new Error(`Restore snapshot strip Kaleidoscope is invalid: ${validation.errors[0]?.message || 'invalid mapping'}`);
+      }
+    }
   }
   if (snapshot.layout.patchBoard !== null) throw new Error('Canonical production restore snapshot patch board must be null when exact wiring is present');
   const wiring = snapshot.layout.wiring;
@@ -216,8 +268,9 @@ function validateRestoreSnapshot(snapshot) {
     || standalone.led.maxMilliamps < MIN_PRODUCTION_MAX_MILLIAMPS || standalone.led.maxMilliamps > MAX_PRODUCTION_MAX_MILLIAMPS)) {
     throw new Error('Restore snapshot aggregate current ceiling is invalid');
   }
-  exactKeys(standalone.defaultLook, VISUAL_LOOK_KEYS, 'restore snapshot default look');
-  if (!Array.isArray(standalone.looks || []) || stableJson(normalizeSavedLooks(standalone.looks)) !== stableJson(standalone.looks)) throw new Error('Restore snapshot saved looks contain unsupported fields or non-canonical values');
+  exactRequiredAndOptionalKeys(standalone.defaultLook, VISUAL_LOOK_REQUIRED_KEYS, VISUAL_LOOK_OPTIONAL_KEYS, 'restore snapshot default look');
+  validateBreatheSettingsExact(standalone.defaultLook, 'Restore snapshot default look');
+  if (!Array.isArray(standalone.looks || []) || stableJson(normalizeSavedLooksForValidation(standalone.looks)) !== stableJson(standalone.looks)) throw new Error('Restore snapshot saved looks contain unsupported fields or non-canonical values');
   if (!Array.isArray(standalone.playlist)) throw new Error('Restore snapshot playlist is invalid');
   standalone.playlist.forEach(item => {
     if (item?.type === 'pattern') exactKeys(item, PLAYLIST_PATTERN_KEYS, 'restore snapshot pattern playlist item');
@@ -244,6 +297,25 @@ function rebuildRuntime(job, productionJobDigest) {
   runtime.config.wiringRevision = job.configuration.config.wiringRevision;
   runtime.config.wiringDigest = job.configuration.config.wiringDigest;
   return runtime;
+}
+
+function preserveLegacyRuntimeBreatheOmissions(rebuiltConfig, sourceConfig) {
+  const alignZones = (rebuiltZones = [], sourceZones = []) => {
+    const sourceById = new Map(sourceZones.map(zone => [zone.id, zone]));
+    for (const rebuiltZone of rebuiltZones) {
+      const sourceZone = sourceById.get(rebuiltZone.id);
+      if (!sourceZone) continue;
+      for (const field of VISUAL_LOOK_OPTIONAL_KEYS) {
+        if (!Object.hasOwn(sourceZone, field)) delete rebuiltZone[field];
+      }
+    }
+  };
+
+  alignZones(rebuiltConfig.zones, sourceConfig.zones);
+  const sourceLooksById = new Map((sourceConfig.looks || []).map(look => [look.id, look]));
+  for (const rebuiltLook of rebuiltConfig.looks || []) {
+    alignZones(rebuiltLook.zones, sourceLooksById.get(rebuiltLook.id)?.zones);
+  }
 }
 
 function validateProductionPhysicalBoundaries(snapshot, config) {
@@ -313,7 +385,7 @@ function assertPackageShape(job, { source = false } = {}) {
   }
   const config = job.configuration.config;
   if (!isObject(config)) throw new Error('Complete runtime configuration is required');
-  exactKeys(config, CONFIG_KEYS, 'runtime configuration');
+  exactRequiredAndOptionalKeys(config, CONFIG_REQUIRED_KEYS, CONFIG_OPTIONAL_KEYS, 'runtime configuration');
   if (config.projectRevision !== job.project.revision) throw new Error('Runtime configuration project revision does not match the job');
   if (config.projectFingerprint !== job.project.fingerprint) throw new Error('Runtime configuration project fingerprint does not match the job');
   if (config.productionJobId !== job.jobId) throw new Error('Runtime configuration production job ID does not match the job');
@@ -357,6 +429,21 @@ function assertPackageShape(job, { source = false } = {}) {
   CARD_HARDWARE_CAPABILITIES.assertSupported(config);
   const outputPixelTotal = config.led.outputs.reduce((sum, output) => sum + output.pixels, 0);
   if (outputPixelTotal !== config.led.pixels || outputPixelTotal > CARD_HARDWARE_CAPABILITIES.maxPixels) throw new Error('LED pixels must equal the bounded sum of configured outputs');
+  if (Object.hasOwn(config, 'kaleidoscopeMappings')) {
+    let normalizedMappings;
+    try {
+      normalizedMappings = normalizeCardKaleidoscopeMappings(
+        config.kaleidoscopeMappings,
+        config.led.pixels,
+        config.zones,
+      );
+    } catch (error) {
+      throw new Error(`Runtime Kaleidoscope mappings are invalid: ${error.message}`);
+    }
+    if (normalizedMappings.length === 0 || stableJson(normalizedMappings) !== stableJson(config.kaleidoscopeMappings)) {
+      throw new Error('Runtime Kaleidoscope mappings contain unsupported fields or non-canonical values');
+    }
+  }
   prepareCardStoragePayload(job.configuration);
   const expectedDigest = source ? '0'.repeat(64) : job.digest;
   const rebuiltRuntime = rebuildRuntime(job, expectedDigest);
@@ -364,6 +451,7 @@ function assertPackageShape(job, { source = false } = {}) {
     for (const key of OUTPUT_COLOR_KEYS) delete rebuiltRuntime.config.led[key];
   }
   if (!Object.hasOwn(config.led, 'type')) delete rebuiltRuntime.config.led.type;
+  preserveLegacyRuntimeBreatheOmissions(rebuiltRuntime.config, config);
   if (stableJson(rebuiltRuntime) !== stableJson(job.configuration)) throw new Error('Production job compiled runtime does not exactly match the restore snapshot');
 
   if (!Array.isArray(job.expectedOutputs) || job.expectedOutputs.length !== config.led.outputs.length) {

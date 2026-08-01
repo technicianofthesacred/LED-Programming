@@ -94,7 +94,7 @@ test('saveCurrentLookToController preserves named multi-section looks', () => {
     patchBoard: createDefaultPatchBoard(strips),
     strips,
     targetId: 'patch-default-inner-circle',
-    look: { patternId: 'scanner', customHue: 12, speed: 1.6 },
+    look: { patternId: 'scanner', customHue: 12, speed: 1.6, customBreathe: true, breatheLowerPct: 74, breatheUpperPct: 93, breatheCycleSeconds: 17 },
   });
   const targets = deriveSectionTargets({ strips, patchBoard });
 
@@ -115,6 +115,12 @@ test('saveCurrentLookToController preserves named multi-section looks', () => {
   assert.equal(restored.activeLookId, 'opening-glow');
   assert.equal(restored.looks[0].type, 'compound-pattern');
   assert.equal(restored.looks[0].sectionLooks['patch-default-inner-circle'].speed, 1.6);
+  assert.deepEqual({
+    customBreathe: restored.looks[0].sectionLooks['patch-default-inner-circle'].customBreathe,
+    breatheLowerPct: restored.looks[0].sectionLooks['patch-default-inner-circle'].breatheLowerPct,
+    breatheUpperPct: restored.looks[0].sectionLooks['patch-default-inner-circle'].breatheUpperPct,
+    breatheCycleSeconds: restored.looks[0].sectionLooks['patch-default-inner-circle'].breatheCycleSeconds,
+  }, { customBreathe: true, breatheLowerPct: 74, breatheUpperPct: 93, breatheCycleSeconds: 17 });
 });
 
 test('applySavedLookToPatchBoard restores global and section look assignments', () => {

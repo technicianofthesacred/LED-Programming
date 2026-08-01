@@ -191,6 +191,101 @@ test('never slices arrays while compacting', () => {
   assert.deepEqual(compact.futureArray, config.futureArray);
 });
 
+test('preserves only the bounded Kaleidoscope wire contract while compacting', () => {
+  const mapping = {
+    enabled: true,
+    label: 'Studio-only label',
+    id: 'frame',
+    zoneId: 'frame',
+    pixelCount: 400,
+    pointCount: 4,
+    startLed: 100,
+    offsets: [0, -1, 2, 0],
+    spans: [{ start: 0, count: 400, sourceStart: 0, sourceStep: 1 }],
+  };
+
+  const compact = compactCardStorageConfig({ kaleidoscopeMappings: [mapping] });
+
+  assert.deepEqual(compact.kaleidoscopeMappings, [{
+    id: 'frame',
+    zoneId: 'frame',
+    pixelCount: 400,
+    pointCount: 4,
+    startLed: 100,
+    offsets: [0, -1, 2, 0],
+    spans: [{ start: 0, count: 400, sourceStart: 0, sourceStep: 1 }],
+  }]);
+  assert.equal(mapping.enabled, true, 'caller input must stay immutable');
+  assert.equal(mapping.label, 'Studio-only label');
+});
+
+test('keeps representative 400- and 453-pixel reflection packages within 3968 bytes', () => {
+  for (const pixelCount of [400, 453]) {
+    for (const pointCount of [4, 6, 8]) {
+      const runtimePackage = mappedRuntimePackage({ pixelCount, pointCount });
+      const prepared = prepareCardStoragePayload(runtimePackage);
+      assert.ok(
+        prepared.bytes <= CARD_CONFIG_STORAGE_LIMIT_BYTES,
+        `${pixelCount}/${pointCount} package used ${prepared.bytes} bytes`,
+      );
+      assert.equal(prepared.config.kaleidoscopeMappings[0].pointCount, pointCount);
+    }
+  }
+});
+
+test('rejects a worst valid 453-point package before transport when serialized config exceeds 3968 bytes', () => {
+  const selectedPatterns = CARD_PATTERN_BANK.slice(0, 19);
+  const playlist = selectedPatterns.map((pattern, index) => ({
+    id: pattern.id,
+    type: 'pattern',
+    patternId: pattern.id,
+    label: pattern.label,
+    enabled: true,
+    createdAt: index,
+  }));
+  const pixelCounts = [453, 453, 118];
+  let start = 0;
+  const kaleidoscopeMappings = pixelCounts.map((pixelCount, index) => {
+    const mapping = {
+      id: `frame-${index + 1}`,
+      zoneId: `frame-${index + 1}`,
+      pixelCount,
+      pointCount: pixelCount,
+      startLed: 0,
+      offsets: Array(pixelCount).fill(0),
+      spans: [{ start, count: pixelCount, sourceStart: 0, sourceStep: 1 }],
+    };
+    start += pixelCount;
+    return mapping;
+  });
+  start = 0;
+  const zones = pixelCounts.map((pixelCount, index) => {
+    const zone = { id: `frame-${index + 1}`, label: `Frame ${index + 1}`, ranges: [{ start, count: pixelCount }] };
+    start += pixelCount;
+    return zone;
+  });
+  const runtimePackage = buildCardRuntimePackageFromProject({
+    projectId: 'worst-valid-453-point-package',
+    projectName: 'Worst valid 453-point package',
+    strips: pixelCounts.map((pixelCount, index) => ({ id: `frame-${index + 1}`, pixelCount })),
+    compiledWiring: {
+      ok: true,
+      totalPixels: 1024,
+      outputs: [{ id: 'out1', name: 'Output 1', pin: 16, pixels: 1024, start: 0, count: 1024 }],
+      zones,
+      kaleidoscopeMappings,
+    },
+    standaloneController: { playlist },
+  });
+
+  assert.throws(
+    () => prepareCardStoragePayload(runtimePackage),
+    error => error instanceof CardConfigCapacityError
+      && error.bytes > CARD_CONFIG_STORAGE_LIMIT_BYTES
+      && /Kaleidoscope reflection points/i.test(error.message),
+  );
+});
+
 test('keeps patterns when there are no persisted looks', () => {
   const compact = compactCardStorageConfig({
     patterns: [{ id: 'aurora', label: 'Aurora', mode: 'procedural' }],
@@ -244,12 +339,37 @@ test('throws an exact UTF-8 capacity error for an oversized compact combo', () =
       assert.equal(error.maxBytes, CARD_CONFIG_STORAGE_LIMIT_BYTES);
       assert.equal(
         error.message,
-        `Card configuration is ${expectedBytes} bytes, exceeding the ${CARD_CONFIG_STORAGE_LIMIT_BYTES}-byte flash storage limit. Remove playlist looks or simplify combo zones, then try again.`,
+        `Card configuration is ${expectedBytes} bytes, exceeding the ${CARD_CONFIG_STORAGE_LIMIT_BYTES}-byte flash storage limit. Reduce playlist looks, combo zones, or Kaleidoscope reflection points, then try again.`,
       );
       return true;
     },
   );
 });
+
+function mappedRuntimePackage({ pixelCount, pointCount, playlist = [] }) {
+  const mapping = {
+    id: 'frame',
+    zoneId: 'frame',
+    pixelCount,
+    pointCount,
+    startLed: 0,
+    offsets: Array(pointCount).fill(0),
+    spans: [{ start: 0, count: pixelCount, sourceStart: 0, sourceStep: 1 }],
+  };
+  return buildCardRuntimePackageFromProject({
+    projectId: `mapped-${pixelCount}-${pointCount}`,
+    projectName: `Mapped ${pixelCount}/${pointCount}`,
+    strips: [{ id: 'frame', name: 'Frame', pixelCount }],
+    compiledWiring: {
+      ok: true,
+      totalPixels: pixelCount,
+      outputs: [{ id: 'out1', name: 'Output 1', pin: 16, pixels: pixelCount, start: 0, count: pixelCount }],
+      zones: [{ id: 'frame', label: 'Frame', ranges: [{ start: 0, count: pixelCount }] }],
+      kaleidoscopeMappings: [mapping],
+    },
+    standaloneController: { playlist },
+  });
+}
 
 function reconstructFirmwareLookDefaults(config = {}) {
   return config.looks.map(look => ({

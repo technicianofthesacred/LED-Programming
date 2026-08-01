@@ -6,6 +6,7 @@ import {
   angOf,
 } from './mandalaEngine.js';
 import { expandPatchBoard } from './patchBoard.js';
+import { normalizeProjectRenderStrips } from './renderGeometry.js';
 
 const TAU = Math.PI * 2;
 
@@ -16,9 +17,13 @@ function polarAngle(x, y) {
 
 function validPoints(strip) {
   if (!Array.isArray(strip?.pixels)) return [];
-  return strip.pixels.filter((point) => (
-    Number.isFinite(point?.x) && Number.isFinite(point?.y)
-  ));
+  const points = [];
+  strip.pixels.forEach((point, sourceLed) => {
+    if (Number.isFinite(point?.x) && Number.isFinite(point?.y)) {
+      points.push({ point, sourceLed });
+    }
+  });
+  return points;
 }
 
 function normalizeStrips(strips) {
@@ -27,6 +32,18 @@ function normalizeStrips(strips) {
 
 function normalizeHidden(hidden) {
   return hidden && typeof hidden === 'object' ? hidden : {};
+}
+
+function reflectionFields(point) {
+  if (!point) return {};
+  return {
+    reflectionProgress: point.reflectionProgress,
+    kaleidoscopeProgress: point.kaleidoscopeProgress,
+    reflectionDistance: point.reflectionDistance,
+    reflectionSegment: point.reflectionSegment,
+    reflectionPoint: point.reflectionPoint,
+    isReflectionPoint: point.isReflectionPoint,
+  };
 }
 
 export function createMandalaSpatialTemplate() {
@@ -62,6 +79,10 @@ export function createConnectedSpatialTemplate(options = {}) {
   const strips = normalizeStrips(source.strips);
   const hidden = normalizeHidden(source.hidden);
   const usePhysicalChain = source.patchBoard && typeof source.patchBoard === 'object';
+  const renderContextByStrip = new Map(
+    normalizeProjectRenderStrips(strips, { includeHidden: true })
+      .map(strip => [strip.id, strip.pts]),
+  );
   const physicalStrips = [];
   let minX = Infinity;
   let maxX = -Infinity;
@@ -86,6 +107,7 @@ export function createConnectedSpatialTemplate(options = {}) {
         stripId: pixel.stripId,
         stripIndex: stripIndexById.get(pixel.stripId) ?? 0,
         stripProgress: count > 1 ? pixel.sourceLed / (count - 1) : 0,
+        sourceLed: pixel.sourceLed,
       };
     });
     physicalStrips.push({ physicalPoints: points });
@@ -104,7 +126,7 @@ export function createConnectedSpatialTemplate(options = {}) {
     const points = validPoints(strip);
     if (points.length === 0) continue;
     physicalStrips.push({ strip, stripIndex, points });
-    for (const point of points) {
+    for (const { point } of points) {
       if (point.x < minX) minX = point.x;
       if (point.x > maxX) maxX = point.x;
       if (point.y < minY) minY = point.y;
@@ -128,7 +150,8 @@ export function createConnectedSpatialTemplate(options = {}) {
         outputIndex: samples.length,
         stripId: point.stripId,
         stripIndex: point.stripIndex,
-        stripProgress: point.stripProgress,
+        stripProgress: renderContextByStrip.get(point.stripId)?.[point.sourceLed]?.kaleidoscopeProgress ?? point.stripProgress,
+        ...reflectionFields(renderContextByStrip.get(point.stripId)?.[point.sourceLed]),
         x,
         y,
         radius: Math.hypot(x, y),
@@ -140,14 +163,18 @@ export function createConnectedSpatialTemplate(options = {}) {
 
   for (const { strip, stripIndex, points: stripPoints } of physicalStrips) {
     for (let pixelIndex = 0; pixelIndex < stripPoints.length; pixelIndex += 1) {
-      const point = stripPoints[pixelIndex];
+      const { point, sourceLed } = stripPoints[pixelIndex];
+      const renderPoint = renderContextByStrip.get(strip.id)?.[sourceLed];
       const x = (point.x - centerX) * scale;
       const y = (point.y - centerY) * scale;
       samples.push({
         outputIndex: samples.length,
         stripId: strip.id,
         stripIndex,
-        stripProgress: stripPoints.length > 1 ? pixelIndex / (stripPoints.length - 1) : 0,
+        stripProgress: renderPoint?.hasKaleidoscope
+          ? renderPoint.kaleidoscopeProgress
+          : (stripPoints.length > 1 ? pixelIndex / (stripPoints.length - 1) : 0),
+        ...reflectionFields(renderPoint),
         x,
         y,
         radius: Math.hypot(x, y),

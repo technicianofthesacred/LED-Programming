@@ -178,6 +178,7 @@ const SettingsFieldContext = createContext(null);
       gammaEnabled, setGammaEnabled,
       strips,
       patchBoard,
+      compiledWiring,
       standaloneController, setStandaloneController,
       serializeProject, replaceProject, replaceWithNewProject,
       markProjectPersisted, markProjectInstalled, markCardLookConfirmed,
@@ -209,9 +210,10 @@ const SettingsFieldContext = createContext(null);
         projectRevision: projectLifecycle.editedRevision,
         strips,
         patchBoard: board,
+        compiledWiring,
         standaloneController,
       }),
-      [projectId, projectName, projectLifecycle.editedRevision, strips, board, standaloneController],
+      [projectId, projectName, projectLifecycle.editedRevision, strips, board, compiledWiring, standaloneController],
     );
     const runtimePackage = preparedDeployment.runtimePackage;
     const config = runtimePackage.config;

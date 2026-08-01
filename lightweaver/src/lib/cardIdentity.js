@@ -1,3 +1,5 @@
+import { normalizeCardKaleidoscopeMappings } from './cardRuntimeContract.js';
+
 export const CARD_IDENTITY_STORAGE_KEY = 'lw_card_identity_v1';
 
 function cleanText(value, maxLength = 128) {
@@ -91,6 +93,21 @@ export function normalizeCardProjectEvidence(payload = {}) {
   if (Boolean(productionJobId) !== Boolean(productionJobDigest)) {
     throw cardIdentityError('project-identity-invalid', 'The Lightweaver card returned a partial production job identity.');
   }
+  const capabilities = normalizeEvidenceCapabilities(source.capabilities);
+  const hasMappings = Object.hasOwn(source, 'kaleidoscopeMappings');
+  let kaleidoscopeMappings = [];
+  if (hasMappings) {
+    const totalPixels = identity.pixelCount || maximumMappedPixel(source.kaleidoscopeMappings);
+    try {
+      kaleidoscopeMappings = normalizeCardKaleidoscopeMappings(
+        source.kaleidoscopeMappings,
+        totalPixels,
+        Array.isArray(source.zones) ? source.zones : undefined,
+      );
+    } catch (error) {
+      throw cardIdentityError('project-identity-invalid', `The Lightweaver card returned invalid Kaleidoscope mappings: ${error.message}`);
+    }
+  }
   return {
     app: 'Lightweaver',
     cardId: identity.id,
@@ -100,7 +117,28 @@ export function normalizeCardProjectEvidence(payload = {}) {
     ...(identity.projectFingerprint ? { projectFingerprint: identity.projectFingerprint } : {}),
     ...(identity.productionJobId ? { productionJobId: identity.productionJobId } : {}),
     ...(identity.productionJobDigest ? { productionJobDigest: identity.productionJobDigest } : {}),
+    ...(capabilities ? { capabilities } : {}),
+    ...(hasMappings ? { kaleidoscopeMappings } : {}),
   };
+}
+
+function normalizeEvidenceCapabilities(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (!Object.hasOwn(value, 'kaleidoscopeReflectionPoints')) return {};
+  const capability = Number(value.kaleidoscopeReflectionPoints);
+  return {
+    kaleidoscopeReflectionPoints: Number.isFinite(capability) && capability >= 1 ? 1 : 0,
+  };
+}
+
+function maximumMappedPixel(value) {
+  if (!Array.isArray(value)) return 0;
+  return value.reduce((maximum, mapping) => Math.max(
+    maximum,
+    ...(Array.isArray(mapping?.spans)
+      ? mapping.spans.map(span => Number(span?.start) + Number(span?.count))
+      : [0]),
+  ), 0);
 }
 
 export function compareCardIdentity(expected = {}, actual = {}) {

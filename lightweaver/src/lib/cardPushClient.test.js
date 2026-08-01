@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { pushConfigToCard, readCardProjectEvidence, readCardStatusEnvelope } from './cardPushClient.js';
+import {
+  assertCardKaleidoscopeSupport,
+  pushConfigToCard,
+  readCardProjectEvidence,
+  readCardStatusEnvelope,
+} from './cardPushClient.js';
 
 const runtimePackage = {
   format: 'lightweaver-card-runtime-package',
@@ -13,6 +18,19 @@ const runtimePackage = {
       outputs: [{ id: 'main', pin: 16, pixels: 8 }],
     },
     looks: [],
+  },
+};
+
+const kaleidoscopeRuntimePackage = {
+  ...runtimePackage,
+  config: {
+    ...runtimePackage.config,
+    zones: [{ id: 'frame', ranges: [{ start: 0, count: 8 }] }],
+    kaleidoscopeMappings: [{
+      id: 'frame', zoneId: 'frame', pixelCount: 8,
+      pointCount: 4, startLed: 0, offsets: [0, 0, 0, 0],
+      spans: [{ start: 0, count: 8, sourceStart: 0, sourceStep: 1 }],
+    }],
   },
 };
 
@@ -135,6 +153,121 @@ test('project evidence rejects a partial production job identity', async () => {
         ...partial,
       }) }),
     }), /production job identity/i);
+  }
+});
+
+test('requires Kaleidoscope capability evidence only for packages that use standalone mappings', () => {
+  assert.equal(assertCardKaleidoscopeSupport(runtimePackage, null), true);
+  for (const evidence of [null, {}, { capabilities: {} }, { capabilities: { kaleidoscopeReflectionPoints: 0 } }]) {
+    assert.throws(
+      () => assertCardKaleidoscopeSupport(kaleidoscopeRuntimePackage, evidence),
+      error => error?.reason === 'kaleidoscope-unsupported' && /Update the card firmware/i.test(error.message),
+    );
+  }
+  assert.equal(assertCardKaleidoscopeSupport(
+    kaleidoscopeRuntimePackage,
+    { capabilities: { kaleidoscopeReflectionPoints: 1 } },
+  ), true);
+});
+
+test('blocks direct mapped config, candidate, and reboot mutations before any write', { concurrency: false }, async () => {
+  const originalWindow = globalThis.window;
+  const originalFetch = globalThis.fetch;
+  globalThis.window = browserWithIdentity('http:');
+  globalThis.fetch = async () => { throw new Error('push must use the supplied direct transport'); };
+  try {
+    for (const outputs of [
+      [{ pin: 16, pixels: 8 }],
+      [{ pin: 17, pixels: 8 }],
+    ]) {
+      const calls = [];
+      await assert.rejects(pushConfigToCard(kaleidoscopeRuntimePackage, {
+        host: '192.168.18.70', transport: 'direct', autoDiscover: false,
+        reboot: 'if-needed', allowLayoutChange: true,
+        fetchImpl: async (url, init = {}) => {
+          calls.push({ url: String(url), method: init.method || 'GET' });
+          if (String(url).endsWith('/api/firmware-info')) return response({
+            app: 'Lightweaver', cardId: 'lw-aabbccddeeff',
+            firmwareVersion: '1.2.3', buildId: 'build-123',
+            piece: { id: 'commissioned-piece' }, outputs,
+            capabilities: { kaleidoscopeReflectionPoints: 0 },
+          });
+          throw new Error(`mutation must not run: ${url}`);
+        },
+      }), error => error?.reason === 'kaleidoscope-unsupported');
+      assert.equal(calls.some(call => call.method === 'POST'), false);
+      assert.equal(calls.some(call => /\/api\/(?:config|reboot|wiring\/candidate)/.test(call.url)), false);
+    }
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('blocks bridge mapped mutations and requires verified capability for one-shot blank handoff', { concurrency: false }, async () => {
+  const originalWindow = globalThis.window;
+  const originalFetch = globalThis.fetch;
+  globalThis.window = browserWithIdentity('http:');
+  globalThis.fetch = async () => { throw new Error('direct HTTP must not run'); };
+  try {
+    const ordinaryCalls = [];
+    await assert.rejects(pushConfigToCard(kaleidoscopeRuntimePackage, {
+      host: '192.168.18.70', transport: 'bridge', autoDiscover: false,
+      initialConfigAuthorityImpl: () => false,
+      bridgeRequestImpl: async (type, payload, options) => {
+        ordinaryCalls.push({ type, payload, options });
+        if (type === 'firmware-info') return {
+          app: 'Lightweaver', cardId: 'lw-aabbccddeeff',
+          firmwareVersion: '1.2.3', buildId: 'build-123',
+          piece: { id: 'commissioned-piece' }, outputs: [{ pin: 16, pixels: 8 }],
+        };
+        throw new Error(`bridge mutation must not run: ${type}`);
+      },
+    }), error => error?.reason === 'kaleidoscope-unsupported');
+    assert.deepEqual(ordinaryCalls.map(call => call.type), ['firmware-info']);
+
+    const blankCalls = [];
+    await assert.rejects(pushConfigToCard(kaleidoscopeRuntimePackage, {
+      host: '192.168.18.70', transport: 'bridge', commissioningFlowId: 'flow-1',
+      initialConfigAuthorityImpl: () => true,
+      bridgeRequestImpl: async (...args) => { blankCalls.push(args); return { ok: true }; },
+    }), error => error?.reason === 'kaleidoscope-unsupported');
+    assert.deepEqual(blankCalls, []);
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('installs mapped config when exact card evidence reports capability version 1', { concurrency: false }, async () => {
+  const originalWindow = globalThis.window;
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.window = browserWithIdentity('http:');
+  globalThis.fetch = async () => { throw new Error('push must use the supplied direct transport'); };
+  try {
+    const result = await pushConfigToCard(kaleidoscopeRuntimePackage, {
+      host: '192.168.18.70', transport: 'direct', autoDiscover: false, reboot: false,
+      fetchImpl: async (url, init = {}) => {
+        calls.push({ url: String(url), method: init.method || 'GET' });
+        if (String(url).endsWith('/api/firmware-info')) return response({
+          app: 'Lightweaver', cardId: 'lw-aabbccddeeff',
+          firmwareVersion: '2.0.0', buildId: 'build-kaleidoscope',
+          piece: { id: 'commissioned-piece' }, outputs: [{ pin: 16, pixels: 8 }],
+          capabilities: { kaleidoscopeReflectionPoints: 1 },
+        });
+        if (String(url).endsWith('/api/config')) return response({ ok: true, saved: true });
+        throw new Error(`unexpected request ${url}`);
+      },
+    });
+    assert.equal(result.saved, true);
+    assert.equal(calls.filter(call => call.url.endsWith('/api/config') && call.method === 'POST').length, 1);
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    globalThis.fetch = originalFetch;
   }
 });
 

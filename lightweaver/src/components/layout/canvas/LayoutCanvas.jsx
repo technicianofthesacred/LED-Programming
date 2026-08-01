@@ -2,7 +2,9 @@ import {
   rgbCss,
   pointsAttr,
   parsedVb,
+  svgPt,
 } from '../../../lib/layoutGeometry.js';
+import { deriveReflectionPointIndices } from '../../../lib/kaleidoscope.js';
 import {
   activeLedCoreAlpha,
   ledCssColor,
@@ -42,6 +44,7 @@ export function LayoutCanvas({
     wireOverlayMode, visibleWirePathCanvasSegments, wireRouteJumps, wireCutMarkers,
     wiring, compiledWiring, selectedWiringRunId, onSeamMove,
     firstLedPicker, onFirstLedPick,
+    kaleidoscopeEditor, onKaleidoscopeLedPick, onKaleidoscopeSelectPoint,
   } = wire;
   const selectedPhysicalRun = wiring?.runs?.find(run => run.id === selectedWiringRunId);
   const selectedPhysicalStrip = strips.find(strip => strip.id === selectedPhysicalRun?.source?.stripId);
@@ -445,9 +448,9 @@ export function LayoutCanvas({
             )}
 
             {/* ── LED dots — dim hardware at rest, bright only when pattern is lit ── */}
-            {(showLeds || firstLedPicker) && !isEditingGesture && strips.filter(s => !hidden[s.id]).map(s => (
+            {(showLeds || firstLedPicker || kaleidoscopeEditor) && !isEditingGesture && strips.filter(s => !hidden[s.id]).map(s => (
               effectiveGlowMode === 'dots' ? (
-                <g key={s.id + '-dots'} style={{ pointerEvents: firstLedPicker?.stripId === s.id ? 'all' : 'none' }}>
+                <g key={s.id + '-dots'} style={{ pointerEvents: firstLedPicker?.stripId === s.id || kaleidoscopeEditor?.stripId === s.id ? 'all' : 'none' }}>
                   {s.pixels.map((px, i) => {
                     const ledFrame = layoutPatternFrame.get(s.id)?.leds?.[i];
                     const selected = s.id === selStripId;
@@ -458,12 +461,13 @@ export function LayoutCanvas({
                     const coreOpacity = activeLedCoreAlpha(ledFrame, { selected });
                     return (
                     <g key={i} data-testid={`strip-led-${s.id}-${i}`}
-                       style={{ cursor: firstLedPicker?.stripId === s.id ? 'crosshair' : undefined }}
+                       style={{ cursor: firstLedPicker?.stripId === s.id || kaleidoscopeEditor?.mode === 'pick' ? 'crosshair' : undefined }}
                        onPointerDown={event => {
-                         if (firstLedPicker?.stripId !== s.id) return;
+                         if (firstLedPicker?.stripId !== s.id && !(kaleidoscopeEditor?.stripId === s.id && kaleidoscopeEditor.mode === 'pick')) return;
                          event.preventDefault();
                          event.stopPropagation();
-                         onFirstLedPick(s.id, i);
+                         if (firstLedPicker?.stripId === s.id) onFirstLedPick(s.id, i);
+                         else onKaleidoscopeLedPick(s.id, i);
                        }}>
                       <circle cx={px.x} cy={px.y}
                               r={s.id === selStripId ? vbScale * 5.2 : vbScale * 3.8}
@@ -473,14 +477,14 @@ export function LayoutCanvas({
                                 r={selected ? vbScale * 2.9 : vbScale * 2.25}
                                 fill={ledColor} opacity={coreOpacity}/>
                       )}
-                      {firstLedPicker?.stripId === s.id && <circle cx={px.x} cy={px.y} r={vbScale * 20}
+                      {(firstLedPicker?.stripId === s.id || (kaleidoscopeEditor?.stripId === s.id && kaleidoscopeEditor.mode === 'pick')) && <circle cx={px.x} cy={px.y} r={vbScale * 20}
                                                                   fill="transparent" pointerEvents="all"/>}
                     </g>
                     );
                   })}
                 </g>
               ) : (
-                <g key={s.id + '-dots'} filter="url(#lw-led-bloom)" style={{ pointerEvents: firstLedPicker?.stripId === s.id ? 'all' : 'none' }}>
+                <g key={s.id + '-dots'} filter="url(#lw-led-bloom)" style={{ pointerEvents: firstLedPicker?.stripId === s.id || kaleidoscopeEditor?.stripId === s.id ? 'all' : 'none' }}>
                   {s.pixels.map((px, i) => {
                     const ledFrame = layoutPatternFrame.get(s.id)?.leds?.[i];
                     const selected = s.id === selStripId;
@@ -490,18 +494,19 @@ export function LayoutCanvas({
                     const restOpacity = Math.max(selected ? 0.72 : 0.5, restingLedAlpha(ledFrame, { selected }));
                     return (
                     <g key={i} data-testid={`strip-led-${s.id}-${i}`}
-                       style={{ cursor: firstLedPicker?.stripId === s.id ? 'crosshair' : undefined }}
+                       style={{ cursor: firstLedPicker?.stripId === s.id || kaleidoscopeEditor?.mode === 'pick' ? 'crosshair' : undefined }}
                        onPointerDown={event => {
-                         if (firstLedPicker?.stripId !== s.id) return;
+                         if (firstLedPicker?.stripId !== s.id && !(kaleidoscopeEditor?.stripId === s.id && kaleidoscopeEditor.mode === 'pick')) return;
                          event.preventDefault();
                          event.stopPropagation();
-                         onFirstLedPick(s.id, i);
+                         if (firstLedPicker?.stripId === s.id) onFirstLedPick(s.id, i);
+                         else onKaleidoscopeLedPick(s.id, i);
                        }}>
                       <circle cx={px.x} cy={px.y}
                               r={s.id === selStripId ? vbScale * 2.8 : vbScale * 2.2}
                               fill={ledColor}
                               opacity={Math.max(coreOpacity * (effectiveGlowMode === 'outward' ? 0.58 : 0.74), restOpacity)}/>
-                      {firstLedPicker?.stripId === s.id && <circle cx={px.x} cy={px.y} r={vbScale * 20}
+                      {(firstLedPicker?.stripId === s.id || (kaleidoscopeEditor?.stripId === s.id && kaleidoscopeEditor.mode === 'pick')) && <circle cx={px.x} cy={px.y} r={vbScale * 20}
                                                                   fill="transparent" pointerEvents="all"/>}
                     </g>
                     );
@@ -509,6 +514,66 @@ export function LayoutCanvas({
                 </g>
               )
             ))}
+
+            {kaleidoscopeEditor && !isEditingGesture && (() => {
+              const strip = strips.find(item => item.id === kaleidoscopeEditor.stripId);
+              if (!strip?.kaleidoscope || hidden[strip.id]) return null;
+              const pointIndices = deriveReflectionPointIndices(strip.kaleidoscope, strip.pixelCount);
+              return (
+                <g className="lw-kaleidoscope-markers">
+                  {pointIndices.map((ledIndex, pointIndex) => {
+                    const point = strip.pixels?.[ledIndex];
+                    if (!point) return null;
+                    const selected = pointIndex === kaleidoscopeEditor.selectedPointIndex;
+                    return (
+                      <g key={pointIndex}
+                         data-testid="kaleidoscope-marker"
+                         data-point-index={pointIndex}
+                         role="slider"
+                         tabIndex={0}
+                         aria-label={`Reflection point ${pointIndex + 1}, LED ${ledIndex + 1}`}
+                         aria-valuenow={ledIndex + 1}
+                         transform={`translate(${point.x} ${point.y})`}
+                         className={selected ? 'selected' : ''}
+                         style={{ cursor: 'grab', pointerEvents: 'all' }}
+                         onClick={event => {
+                           event.stopPropagation();
+                           onKaleidoscopeSelectPoint(pointIndex);
+                         }}
+                         onKeyDown={event => {
+                           if (event.key === 'Enter' || event.key === ' ') {
+                             event.preventDefault();
+                             onKaleidoscopeSelectPoint(pointIndex);
+                           }
+                         }}
+                         onPointerDown={event => {
+                           event.preventDefault();
+                           event.stopPropagation();
+                           onKaleidoscopeSelectPoint(pointIndex);
+                           event.currentTarget.dataset.historyPushed = 'false';
+                           event.currentTarget.setPointerCapture?.(event.pointerId);
+                         }}
+                         onPointerMove={event => {
+                           if (!event.currentTarget.hasPointerCapture?.(event.pointerId) || !svgRef.current) return;
+                           const cursor = svgPt(svgRef.current, event.clientX, event.clientY);
+                           let nearest = 0;
+                           strip.pixels.forEach((pixel, index) => {
+                             if (Math.hypot(cursor.x - pixel.x, cursor.y - pixel.y)
+                               < Math.hypot(cursor.x - strip.pixels[nearest].x, cursor.y - strip.pixels[nearest].y)) nearest = index;
+                           });
+                           const recordHistory = event.currentTarget.dataset.historyPushed !== 'true';
+                           const accepted = onKaleidoscopeLedPick(strip.id, nearest, pointIndex, { recordHistory });
+                           if (accepted) event.currentTarget.dataset.historyPushed = 'true';
+                         }}
+                         onPointerUp={event => event.currentTarget.releasePointerCapture?.(event.pointerId)}>
+                        <circle r={vbScale * (selected ? 9 : 7)} />
+                        <text textAnchor="middle" dominantBaseline="central" fontSize={vbScale * 8}>{pointIndex + 1}</text>
+                      </g>
+                    );
+                  })}
+                </g>
+              );
+            })()}
 
             {mode === 'draw' && selectedSeamPoint && (
               <g data-testid="first-led-marker" transform={`translate(${selectedSeamPoint.x} ${selectedSeamPoint.y})`} style={{ pointerEvents: 'none' }}>

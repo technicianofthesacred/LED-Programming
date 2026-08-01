@@ -114,6 +114,15 @@ const configuration = buildCardRuntimePackageFromProject({
   standaloneController,
 });
 
+// This generator is also the reproducibility proof for the already-published
+// legacy fixture. Keep its pre-Gentle-Breathing wire shape byte-for-byte while
+// current/new jobs carry explicit envelope values through the runtime builder.
+for (const zone of configuration.config.zones) {
+  delete zone.breatheLowerPct;
+  delete zone.breatheUpperPct;
+  delete zone.breatheCycleSeconds;
+}
+
 const source = {
   schemaVersion: 1,
   jobId: JOB_ID,

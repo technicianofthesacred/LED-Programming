@@ -10,9 +10,39 @@
       "properties": {
         "id": { "type": "string" }, "name": { "type": "string" }, "pixelCount": { "type": "integer", "minimum": 1, "maximum": 1024 },
         "angle": { "type": "number" }, "brightness": { "type": "number" }, "closed": { "type": "boolean" }, "color": { "type": "string" }, "emit": { "type": "string" },
-        "generatedLayout": { "type": "string" }, "hueShift": { "type": "number" }, "layoutRole": { "type": "string" }, "pathData": { "type": "string" }, "patternId": { "type": ["string", "null"] },
+        "generatedLayout": { "type": "string" }, "hueShift": { "type": "number" }, "kaleidoscope": { "$ref": "#/$defs/kaleidoscope" }, "layoutRole": { "type": "string" }, "pathData": { "type": "string" }, "patternId": { "type": ["string", "null"] },
         "pixels": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["x", "y", "index"], "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "index": { "type": "integer", "minimum": 0 } } } },
         "reversed": { "type": "boolean" }, "sourceLayerId": { "type": "string" }, "sourcePathId": { "type": "string" }, "speed": { "type": "number" }, "svgLength": { "type": "number" }, "visible": { "type": "boolean" }, "x": { "type": "number" }, "y": { "type": "number" }
+      }
+    },
+    "kaleidoscope": {
+      "type": "object", "additionalProperties": false, "required": ["enabled", "pointCount", "startLed", "offsets"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "pointCount": { "type": "integer", "minimum": 2, "maximum": 1024 },
+        "startLed": { "type": "integer", "minimum": 0, "maximum": 1023 },
+        "offsets": { "type": "array", "minItems": 2, "maxItems": 1024, "items": { "type": "integer", "minimum": -1023, "maximum": 1023 } }
+      }
+    },
+    "runtimeKaleidoscopeSpan": {
+      "type": "object", "additionalProperties": false, "required": ["start", "count", "sourceStart", "sourceStep"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0, "maximum": 1023 },
+        "count": { "type": "integer", "minimum": 1, "maximum": 1024 },
+        "sourceStart": { "type": "integer", "minimum": 0, "maximum": 1023 },
+        "sourceStep": { "enum": [-1, 1] }
+      }
+    },
+    "runtimeKaleidoscopeMapping": {
+      "type": "object", "additionalProperties": false, "required": ["id", "zoneId", "pixelCount", "pointCount", "startLed", "offsets", "spans"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "zoneId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "pixelCount": { "type": "integer", "minimum": 2, "maximum": 1024 },
+        "pointCount": { "type": "integer", "minimum": 2, "maximum": 1024 },
+        "startLed": { "type": "integer", "minimum": 0, "maximum": 1023 },
+        "offsets": { "type": "array", "minItems": 2, "maxItems": 1024, "items": { "type": "integer", "minimum": -1023, "maximum": 1023 } },
+        "spans": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "$ref": "#/$defs/runtimeKaleidoscopeSpan" } }
       }
     },
     "wiringOutput": { "type": "object", "additionalProperties": false, "required": ["id", "pin", "runIds"], "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "pin": { "type": "integer", "minimum": 0, "maximum": 48 }, "runIds": { "type": "array", "maxItems": 32, "items": { "type": "string" } } } },
@@ -25,7 +55,7 @@
       "type": "object", "additionalProperties": false, "required": ["version", "locked", "verified", "controllerAnchor", "migrationWarnings", "outputs", "runs"],
       "properties": { "version": { "const": 1 }, "locked": { "type": "boolean" }, "verified": { "type": "boolean" }, "controllerAnchor": { "oneOf": [{ "const": null }, { "type": "object", "additionalProperties": false, "required": ["x", "y"], "properties": { "x": { "type": "number" }, "y": { "type": "number" } } }] }, "migrationWarnings": { "type": "array", "maxItems": 0, "items": false }, "outputs": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "$ref": "#/$defs/wiringOutput" } }, "runs": { "type": "array", "minItems": 1, "maxItems": 128, "items": { "$ref": "#/$defs/wiringRun" } } }
     },
-    "visualLook": { "type": "object", "additionalProperties": false, "required": ["patternId", "brightness", "speed", "hueShift", "customHue", "customSaturation", "customBreathe", "customDrift"], "properties": { "patternId": { "type": "string" }, "brightness": { "type": "number", "minimum": 0, "maximum": 1 }, "speed": { "type": "number" }, "hueShift": { "type": "number" }, "customHue": { "type": "integer" }, "customSaturation": { "type": "integer" }, "customBreathe": { "type": "boolean" }, "customDrift": { "type": "boolean" } } },
+    "visualLook": { "type": "object", "additionalProperties": false, "required": ["patternId", "brightness", "speed", "hueShift", "customHue", "customSaturation", "customBreathe", "customDrift"], "properties": { "patternId": { "type": "string" }, "brightness": { "type": "number", "minimum": 0, "maximum": 1 }, "speed": { "type": "number" }, "hueShift": { "type": "number" }, "customHue": { "type": "integer" }, "customSaturation": { "type": "integer" }, "customBreathe": { "type": "boolean" }, "breatheLowerPct": { "type": "integer", "minimum": 0, "maximum": 100 }, "breatheUpperPct": { "type": "integer", "minimum": 0, "maximum": 100 }, "breatheCycleSeconds": { "type": "integer", "minimum": 4, "maximum": 30 }, "customDrift": { "type": "boolean" } } },
     "outputCalibration": { "type": "object", "additionalProperties": false, "required": ["red", "green", "blue"], "properties": { "red": { "type": "number", "minimum": 0, "maximum": 1 }, "green": { "type": "number", "minimum": 0, "maximum": 1 }, "blue": { "type": "number", "minimum": 0, "maximum": 1 } } },
     "playlistPattern": { "type": "object", "additionalProperties": false, "required": ["id", "type", "patternId", "label", "enabled", "createdAt"], "properties": { "id": { "type": "string" }, "type": { "const": "pattern" }, "patternId": { "type": "string" }, "label": { "type": "string" }, "enabled": { "type": "boolean" }, "createdAt": { "type": "number" } } },
     "playlistCombo": { "type": "object", "additionalProperties": false, "required": ["id", "type", "lookId", "label", "enabled", "createdAt"], "properties": { "id": { "type": "string" }, "type": { "const": "combo" }, "lookId": { "type": "string" }, "label": { "type": "string" }, "enabled": { "type": "boolean" }, "createdAt": { "type": "number" } } },
@@ -45,8 +75,8 @@
     "configuredOutput": { "type": "object", "additionalProperties": false, "required": ["id", "name", "pin", "pixels", "direction", "segments"], "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "pin": { "type": "integer", "minimum": 0, "maximum": 48 }, "pixels": { "type": "integer", "minimum": 1, "maximum": 1024 }, "direction": { "enum": ["forward", "reverse", "mixed"] }, "segments": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/$defs/configuredSegment" } } } },
     "controls": { "type": "object", "additionalProperties": false, "required": ["encoder", "previous", "next", "blackout", "brightness", "statusLed"], "properties": { "encoder": { "type": "object", "additionalProperties": false, "required": ["a", "b", "press", "alternatePress", "rotateDirection", "brightnessStep"], "properties": { "a": { "type": "integer" }, "b": { "type": "integer" }, "press": { "type": "integer" }, "alternatePress": { "type": "integer" }, "rotateDirection": { "enum": ["clockwise-brighter", "clockwise-dimmer"] }, "brightnessStep": { "type": "integer", "minimum": 1, "maximum": 64 }, "patternCycleIds": { "type": "array", "items": { "type": "string" } } } }, "previous": { "type": "integer" }, "next": { "type": "integer" }, "blackout": { "type": "integer" }, "brightness": { "type": "integer" }, "statusLed": { "type": "integer" } } },
     "range": { "type": "object", "additionalProperties": false, "required": ["start", "count"], "properties": { "start": { "type": "integer", "minimum": 0 }, "count": { "type": "integer", "minimum": 1 } } },
-    "zoneLook": { "type": "object", "additionalProperties": false, "required": ["id", "label", "patternId", "brightness", "speed", "hueShift", "customHue", "customSaturation", "customBreathe", "customDrift"], "properties": { "id": { "type": "string" }, "label": { "type": "string" }, "patternId": { "type": "string" }, "brightness": { "type": "number" }, "speed": { "type": "number" }, "hueShift": { "type": "integer" }, "customHue": { "type": "integer" }, "customSaturation": { "type": "integer" }, "customBreathe": { "type": "boolean" }, "customDrift": { "type": "boolean" } } },
-    "zone": { "type": "object", "additionalProperties": false, "required": ["id", "label", "patternId", "brightness", "speed", "hueShift", "customHue", "customSaturation", "customBreathe", "customDrift", "ranges"], "properties": { "id": { "type": "string" }, "label": { "type": "string" }, "patternId": { "type": "string" }, "brightness": { "type": "number" }, "speed": { "type": "number" }, "hueShift": { "type": "integer" }, "customHue": { "type": "integer" }, "customSaturation": { "type": "integer" }, "customBreathe": { "type": "boolean" }, "customDrift": { "type": "boolean" }, "ranges": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "$ref": "#/$defs/range" } } } },
+    "zoneLook": { "type": "object", "additionalProperties": false, "required": ["id", "label", "patternId", "brightness", "speed", "hueShift", "customHue", "customSaturation", "customBreathe", "customDrift"], "properties": { "id": { "type": "string" }, "label": { "type": "string" }, "patternId": { "type": "string" }, "brightness": { "type": "number" }, "speed": { "type": "number" }, "hueShift": { "type": "integer" }, "customHue": { "type": "integer" }, "customSaturation": { "type": "integer" }, "customBreathe": { "type": "boolean" }, "breatheLowerPct": { "type": "integer", "minimum": 0, "maximum": 100 }, "breatheUpperPct": { "type": "integer", "minimum": 0, "maximum": 100 }, "breatheCycleSeconds": { "type": "integer", "minimum": 4, "maximum": 30 }, "customDrift": { "type": "boolean" } } },
+    "zone": { "type": "object", "additionalProperties": false, "required": ["id", "label", "patternId", "brightness", "speed", "hueShift", "customHue", "customSaturation", "customBreathe", "customDrift", "ranges"], "properties": { "id": { "type": "string" }, "label": { "type": "string" }, "patternId": { "type": "string" }, "brightness": { "type": "number" }, "speed": { "type": "number" }, "hueShift": { "type": "integer" }, "customHue": { "type": "integer" }, "customSaturation": { "type": "integer" }, "customBreathe": { "type": "boolean" }, "breatheLowerPct": { "type": "integer", "minimum": 0, "maximum": 100 }, "breatheUpperPct": { "type": "integer", "minimum": 0, "maximum": 100 }, "breatheCycleSeconds": { "type": "integer", "minimum": 4, "maximum": 30 }, "customDrift": { "type": "boolean" }, "ranges": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "$ref": "#/$defs/range" } } } },
     "runtimeLook": { "type": "object", "additionalProperties": false, "required": ["id", "label", "mode", "preset", "fps", "loop", "fadeOutMs", "fadeInMs", "brightness"], "properties": { "id": { "type": "string" }, "label": { "type": "string" }, "mode": { "enum": ["procedural", "preset", "sequence", "combo"] }, "preset": { "type": "string" }, "fps": { "type": "integer" }, "loop": { "type": "boolean" }, "fadeOutMs": { "type": "integer" }, "fadeInMs": { "type": "integer" }, "brightness": { "type": "number" }, "file": { "type": "string" }, "zones": { "type": "array", "items": { "$ref": "#/$defs/zoneLook" } } } }
   },
   "additionalProperties": false,
@@ -127,6 +157,7 @@
             "looks": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/runtimeLook" } },
             "startupPatternId": { "type": "string" },
             "zones": { "type": "array", "items": { "$ref": "#/$defs/zone" } },
+            "kaleidoscopeMappings": { "type": "array", "minItems": 1, "maxItems": 32, "items": { "$ref": "#/$defs/runtimeKaleidoscopeMapping" } },
             "syncZones": { "type": "boolean" }
           }
         }

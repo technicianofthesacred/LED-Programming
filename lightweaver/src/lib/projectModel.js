@@ -35,6 +35,7 @@ import {
   isImplicitDefaultPatternPlaylist,
   normalizeCardPlaylist,
 } from './cardPlaylist.js';
+import { normalizeKaleidoscope } from './kaleidoscope.js';
 
 export const PROJECT_VERSION = 3;
 const FOREIGN_PROJECT_FORMATS = new Set(['lightweaver.mapper-project']);
@@ -303,6 +304,39 @@ function alignChainToStripOrder(project) {
   migrateStripIdNamespace(project);
   const layout = project?.layout;
   if (!layout || !Array.isArray(layout.strips)) return project;
+  const kaleidoscopeWarnings = [];
+  const processedKaleidoscopeStripIds = new Set(
+    layout.strips
+      .filter(strip => Object.prototype.hasOwnProperty.call(strip || {}, 'kaleidoscope'))
+      .map(strip => String(strip.id || '')),
+  );
+  layout.strips = layout.strips.map(strip => {
+    if (!Object.prototype.hasOwnProperty.call(strip || {}, 'kaleidoscope')) return strip;
+    const normalized = normalizeKaleidoscope(strip.kaleidoscope, Number(strip.pixelCount ?? strip.pixels?.length));
+    if (normalized.enabled) return { ...strip, kaleidoscope: normalized.value };
+    const { kaleidoscope: _discarded, ...clean } = strip;
+    if (normalized.errors.length) {
+      const first = normalized.errors[0];
+      kaleidoscopeWarnings.push({
+        scope: 'kaleidoscope',
+        stripId: String(strip.id || ''),
+        code: first.code,
+        message: `${strip.name || strip.id || 'Strip'}: ${first.message}`,
+      });
+    }
+    return clean;
+  });
+  const extantStripIds = new Set(layout.strips.map(strip => String(strip.id || '')));
+  layout.projectWarnings = [
+    ...(Array.isArray(layout.projectWarnings)
+      ? layout.projectWarnings.filter(warning => (
+        warning?.scope !== 'kaleidoscope'
+        || (extantStripIds.has(String(warning.stripId || ''))
+          && !processedKaleidoscopeStripIds.has(String(warning.stripId || '')))
+      ))
+      : []),
+    ...kaleidoscopeWarnings,
+  ];
   const rawPatchBoard = layout.patchBoard;
   const rawDataWireCount = Number(rawPatchBoard?.dataWireCount);
   const hasExplicitDataWireCount = Number.isInteger(rawDataWireCount) && rawDataWireCount >= 1 && rawDataWireCount <= 4;
@@ -478,11 +512,13 @@ export function resolveStartupProject({
 export function toLegacyProject(project) {
   const p = migrateProject(project);
   if (!p) return null;
+  const { projectWarnings: _projectWarnings, strips, ...legacyLayout } = p.layout;
   return {
     version: 2,
     projectId: p.id,
     name: p.name,
-    ...p.layout,
+    ...legacyLayout,
+    strips: strips.map(({ kaleidoscope: _kaleidoscope, ...strip }) => strip),
     activePatternId: p.pattern.activePatternId,
     palette: p.pattern.palette,
     masterSpeed: p.pattern.masterSpeed,
