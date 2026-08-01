@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { isLibraryBackup } from '../../lib/libraryBackup.js';
 import { useCloudLibrary } from '../../state/CloudLibraryContext.jsx';
@@ -44,6 +44,25 @@ export function ProjectLibraryPanel() {
   const masterRestoreRef = useRef(null);
   const deleteDialogRef = useRef(null);
   const deleteCancelRef = useRef(null);
+  const sessionBoundary = `${library.session.status}:${library.session.username || library.session.email || ''}:${library.session.role || ''}:${library.session.mustChangePassword ? 'forced' : 'ready'}`;
+  const nativeOwner = library.session.status === 'authenticated'
+    && library.session.role === 'owner'
+    && Boolean(library.session.username);
+
+  useEffect(() => {
+    setView('active');
+    setQuery('');
+    setNewTitle('');
+    setBusy('');
+    setNotice('');
+    setRename(null);
+    setDeleteTarget(null);
+    setDeleteConfirmation('');
+    setHistoryProject(null);
+    setHistory([]);
+    setHistoryLoading(false);
+    setDraftReview(null);
+  }, [sessionBoundary]);
 
   const sourceProjects = library.session.role === 'customer'
     ? library.activeProjects
@@ -268,15 +287,15 @@ export function ProjectLibraryPanel() {
                   ) : (
                     <button type="button" className="btn ghost-sm" onClick={() => run(`archive-${project.id}`, () => library.archiveProject(project))}>Archive</button>
                   ))}
-                  {library.session.role === 'owner' && !project.archived && <button type="button" className="btn ghost-sm" disabled={busy === `drafts-${project.id}`} onClick={() => reviewDrafts(project)}>Review drafts</button>}
-                  {project.archived && library.session.role === 'owner' && (
+                  {nativeOwner && !project.archived && <button type="button" className="btn ghost-sm" disabled={busy === `drafts-${project.id}`} onClick={() => reviewDrafts(project)}>Review drafts</button>}
+                  {project.archived && nativeOwner && (
                     <button type="button" className="btn ghost-sm danger" onClick={() => { setDeleteTarget(project); setDeleteConfirmation(''); }}>Delete permanently</button>
                   )}
                 </div>
               </article>
             ))}
           </div>
-          {draftReview && (
+          {nativeOwner && draftReview && (
             <section className="cloud-draft-review" aria-label={`Draft review for ${draftReview.project.title}`}>
               <div className="cloud-library-heading"><div><span className="cloud-kicker">Customer drafts</span><h4>{draftReview.project.title}</h4></div><button type="button" className="btn ghost-sm" onClick={() => setDraftReview(null)}>Close review</button></div>
               {draftReview.drafts.length === 0 ? <p>No customer drafts for this project.</p> : draftReview.drafts.map(draft => <div className="cloud-history-row" key={draft.id}><div><strong>{draft.customer?.displayName || 'Customer'} · revision {draft.revision}</strong><span>@{draft.customer?.username || 'customer'} · based on assigned project</span></div><div className="cloud-project-actions"><button type="button" className="btn ghost-sm" onClick={() => run(`open-draft-${draft.id}`, () => library.openProject(draft))}>Open draft</button><button type="button" className="btn primary ghost-sm" disabled={busy === `promote-${draft.id}`} onClick={() => promoteDraft(draft)}>Apply to main as new revision</button></div></div>)}
@@ -286,7 +305,7 @@ export function ProjectLibraryPanel() {
         </>
       )}
 
-      {historyProject && (
+      {library.session.status === 'authenticated' && historyProject && (
         <ProjectHistoryDialog
           project={historyProject}
           revisions={history}
@@ -296,7 +315,7 @@ export function ProjectLibraryPanel() {
         />
       )}
 
-      {deleteTarget && (
+      {nativeOwner && deleteTarget && (
         <CloudLibraryDialogPortal
           dialogRef={deleteDialogRef}
           initialFocusRef={deleteCancelRef}

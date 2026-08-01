@@ -169,7 +169,16 @@ export function AccountAccessPanel() {
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const authenticated = library.session.status === 'authenticated';
+  const sessionBoundary = `${library.session.status}:${library.session.username || library.session.email || ''}:${library.session.role || ''}:${library.session.mustChangePassword ? 'forced' : 'ready'}`;
+  const nativeOwner = authenticated && library.session.role === 'owner' && Boolean(library.session.username);
   const roleLabel = useMemo(() => library.session.role ? `${library.session.role[0].toUpperCase()}${library.session.role.slice(1)}` : '', [library.session.role]);
+
+  useEffect(() => {
+    setLogin({ username: '', password: '' });
+    setBootstrap({ username: '', displayName: '', temporaryPassword: '' });
+    setNotice('');
+    setBusy(false);
+  }, [sessionBoundary]);
 
   const signIn = async event => {
     event.preventDefault();
@@ -192,7 +201,7 @@ export function AccountAccessPanel() {
   };
 
   if (library.session.status === 'loading') return <p role="status">Checking online library access…</p>;
-  if (library.session.status === 'password-change') return <PasswordChange library={library} />;
+  if (library.session.status === 'password-change') return <PasswordChange key={sessionBoundary} library={library} />;
   if (library.session.status === 'bootstrap') return (
     <form className="cloud-account-form cloud-library-guidance" onSubmit={createOwner}>
       <strong>Create owner account</strong><p>Create the first Lightweaver owner login for this library.</p>
@@ -220,7 +229,7 @@ export function AccountAccessPanel() {
         <div className="cloud-identity"><strong>{library.session.displayName}</strong><span>@{library.session.username}</span><span>{roleLabel}</span></div>
         <button type="button" className="btn ghost-sm" onClick={library.logout}>Sign out</button>
       </div>
-      {library.session.role === 'owner' && <OwnerAccounts library={library} />}
+      {nativeOwner && <OwnerAccounts key={sessionBoundary} library={library} />}
     </>
   );
 }

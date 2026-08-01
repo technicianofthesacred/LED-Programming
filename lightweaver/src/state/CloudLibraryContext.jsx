@@ -24,6 +24,12 @@ const WORKSPACE_ASSET_KINDS = ['custom-patterns', 'pattern-lab-drafts'];
 
 const CloudLibraryContext = createContext(null);
 
+function canUseWorkspaceAssets(session) {
+  return session?.status === 'authenticated'
+    && !session.mustChangePassword
+    && (session.role === 'owner' || session.role === 'worker');
+}
+
 function readActiveRemoteAssociation() {
   try {
     const raw = localStorage.getItem(ACTIVE_REMOTE_KEY);
@@ -446,8 +452,8 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   }, []);
 
   const performWorkspaceAssetSync = useCallback(async suppliedOperations => {
-    if (sessionRef.current.role === 'customer') return { ok: false, reason: 'disabled' };
-    if (!workspaceAssetsLoadedRef.current || sessionRef.current.status !== 'authenticated') {
+    if (!canUseWorkspaceAssets(sessionRef.current)) return { ok: false, reason: 'disabled' };
+    if (!workspaceAssetsLoadedRef.current) {
       workspaceAssetQueuedRef.current = true;
       return { ok: false, reason: 'not-ready' };
     }
@@ -507,6 +513,10 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
             baseRevision: operation.baseRevision,
             value: operation.value,
           }, { requestId: operation.requestId });
+          if (!canUseWorkspaceAssets(sessionRef.current)) {
+            pendingWorkspaceAssetOperationsRef.current = null;
+            return { ok: false, reason: 'disabled' };
+          }
           if (operation.epoch === workspaceAssetEpochsRef.current[operation.kind]) {
             workspaceAssetHeadsRef.current[operation.kind] = {
               revision: acknowledged.revision,
@@ -518,6 +528,10 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         } catch (rawError) {
           let error = normalizeError(rawError);
           if (!mountedRef.current) return { ok: false, reason: 'unmounted', error };
+          if (!canUseWorkspaceAssets(sessionRef.current)) {
+            pendingWorkspaceAssetOperationsRef.current = null;
+            return { ok: false, reason: 'disabled' };
+          }
           if (operation.epoch !== workspaceAssetEpochsRef.current[operation.kind]) {
             pendingWorkspaceAssetOperationsRef.current = operations.slice(index + 1);
             continue;
@@ -624,9 +638,9 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   performWorkspaceAssetSyncRef.current = performWorkspaceAssetSync;
 
   const queueWorkspaceAssetSync = useCallback(() => {
-    if (sessionRef.current.role === 'customer') return;
+    if (!canUseWorkspaceAssets(sessionRef.current)) return;
     workspaceAssetQueuedRef.current = true;
-    if (!workspaceAssetsLoadedRef.current || sessionRef.current.status !== 'authenticated') return;
+    if (!workspaceAssetsLoadedRef.current) return;
     if (workspaceAssetConflictsRef.current.size === WORKSPACE_ASSET_KINDS.length) {
       publishWorkspaceAssetConflicts();
       return;
@@ -641,7 +655,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   }, [publishWorkspaceAssetConflicts]);
 
   const loadWorkspaceAssets = useCallback(async ({ force = false, replaceLocal = false } = {}) => {
-    if (sessionRef.current.role === 'customer') return { ok: true, disabled: true };
+    if (!canUseWorkspaceAssets(sessionRef.current)) return { ok: true, disabled: true };
     if (!force && workspaceAssetsLoadedRef.current) return { ok: true, unchanged: true };
     const loadOperation = ++workspaceAssetLoadOperationRef.current;
     setWorkspaceAssetStatus({ status: 'loading', ready: false, error: null });
@@ -662,6 +676,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
           throw error;
         }
       }));
+      if (!canUseWorkspaceAssets(sessionRef.current)) return { ok: true, disabled: true };
       if (!mountedRef.current) return { ok: false, reason: 'unmounted' };
       if (loadOperation !== workspaceAssetLoadOperationRef.current) {
         return { ok: false, reason: 'superseded' };
@@ -785,7 +800,11 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   }, [client, setActiveRemote, setCurrentConflict]);
 
   const loadSession = useCallback(async () => {
-    if (mountedRef.current) setSession(current => ({ ...current, status: 'loading', error: null }));
+    if (mountedRef.current) {
+      const loading = { ...sessionRef.current, status: 'loading', error: null };
+      sessionRef.current = loading;
+      setSession(loading);
+    }
     try {
       let identity;
       try {
@@ -946,12 +965,14 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         setRefreshTick(value => value + 1);
       }
       clearTimeout(workspaceAssetRetryRef.current);
-      if (!workspaceAssetsLoadedRef.current) void loadWorkspaceAssetsRef.current?.({ force: true });
-      else if (pendingWorkspaceAssetOperationsRef.current) {
-        void performWorkspaceAssetSyncRef.current?.(pendingWorkspaceAssetOperationsRef.current);
-      } else if (workspaceAssetQueuedRef.current) {
-        workspaceAssetQueuedRef.current = false;
-        void performWorkspaceAssetSyncRef.current?.();
+      if (canUseWorkspaceAssets(sessionRef.current)) {
+        if (!workspaceAssetsLoadedRef.current) void loadWorkspaceAssetsRef.current?.({ force: true });
+        else if (pendingWorkspaceAssetOperationsRef.current) {
+          void performWorkspaceAssetSyncRef.current?.(pendingWorkspaceAssetOperationsRef.current);
+        } else if (workspaceAssetQueuedRef.current) {
+          workspaceAssetQueuedRef.current = false;
+          void performWorkspaceAssetSyncRef.current?.();
+        }
       }
     };
     const onOffline = () => {

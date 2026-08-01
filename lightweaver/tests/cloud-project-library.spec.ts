@@ -391,6 +391,18 @@ class LibraryFixture {
       }
       const segments = url.pathname.slice('/api/library/'.length).split('/').filter(Boolean);
       const method = request.method();
+      if (segments[0] === 'assets' && segments.length === 2) this.assetRequestCount += 1;
+
+      const currentAccount = this.username ? this.accounts.get(this.username) : null;
+      if (currentAccount?.mustChangePassword && segments[0] !== 'session') {
+        await json(route, {
+          error: {
+            code: 'password_change_required',
+            message: 'Change the temporary password before using the library.',
+          },
+        }, 403);
+        return;
+      }
 
       const publicAccount = (account: NonNullable<ReturnType<typeof this.accounts.get>>) => ({
         id: account.id,
@@ -537,7 +549,6 @@ class LibraryFixture {
         return;
       }
       if (segments[0] === 'assets' && segments.length === 2) {
-        this.assetRequestCount += 1;
         if (this.role === 'customer') {
           await json(route, { error: { code: 'forbidden', message: 'Customers cannot access workspace assets.' } }, 403);
           return;
@@ -932,6 +943,10 @@ test('signs in with native credentials, reports bad credentials generically, and
   await expect(page.getByText('Worker', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page.getByLabel('Username')).toBeVisible();
+  const assetRequestsAfterLogout = fixture.assetRequestCount;
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await page.waitForTimeout(100);
+  expect(fixture.assetRequestCount).toBe(assetRequestsAfterLogout);
 });
 
 test('requires a temporary-password session to choose and confirm a personal password', async ({ page }) => {
@@ -942,6 +957,25 @@ test('requires a temporary-password session to choose and confirm a personal pas
   await expect(page.getByLabel('New password', { exact: true })).toBeVisible();
   await expect(page.getByLabel('Current password')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Create online project' })).toHaveCount(0);
+  expect(fixture.assetRequestCount).toBe(0);
+
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await saveWorkspaceFixture(page, '-forced-password');
+  await page.waitForTimeout(750);
+  expect(fixture.assetRequestCount).toBe(0);
+  await expect(page.getByLabel('New password', { exact: true })).toBeVisible();
+
+  const blocked = await page.evaluate(async () => Promise.all([
+    fetch('/api/library/projects').then(async response => ({ status: response.status, code: (await response.json()).error?.code })),
+    fetch('/api/library/assets/custom-patterns').then(async response => ({ status: response.status, code: (await response.json()).error?.code })),
+    fetch('/api/library/accounts').then(async response => ({ status: response.status, code: (await response.json()).error?.code })),
+  ]));
+  expect(blocked).toEqual([
+    { status: 403, code: 'password_change_required' },
+    { status: 403, code: 'password_change_required' },
+    { status: 403, code: 'password_change_required' },
+  ]);
+  await expect(page.getByLabel('New password', { exact: true })).toBeVisible();
 
   await page.getByLabel('New password', { exact: true }).fill('personal-password-123');
   await page.getByLabel('Confirm new password').fill('different-password');
@@ -998,6 +1032,62 @@ test('owner creates, resets, disables, enables, and changes account roles withou
   await expect(row.getByText('disabled')).toBeVisible();
   await row.getByRole('button', { name: 'Enable' }).click();
   await expect(row.getByText('active')).toBeVisible();
+});
+
+test('clears owner account and draft-review state across logout and same-page role changes', async ({ page }) => {
+  const fixture = new LibraryFixture('owner');
+  fixture.addAccount('studio-worker', 'worker', {
+    displayName: 'Studio Worker',
+    password: 'studio-worker-password',
+    mustChangePassword: false,
+  });
+  fixture.addAccount('client', 'customer', {
+    displayName: 'Client One',
+    password: 'client-password-123',
+    mustChangePassword: false,
+  });
+  const official = fixture.seed('Session boundary installation');
+  fixture.assignCustomer('client', official);
+  await fixture.install(page);
+  await openLibrary(page);
+
+  await page.getByLabel('Temporary password').fill('owner-form-secret');
+  const selfRow = page.getByTestId('account-row').filter({ hasText: '@owner' });
+  await selfRow.getByLabel('Reset password for owner').fill('owner-reset-secret');
+  await page.getByRole('button', { name: 'Review drafts' }).click();
+  const review = page.getByRole('region', { name: 'Draft review for Session boundary installation' });
+  await expect(review.getByText('Client One · revision 1')).toBeVisible();
+  await expect(review.getByRole('button', { name: 'Open draft' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByLabel('Username', { exact: true })).toBeVisible();
+  await expect(page.getByText('Customer drafts')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Open draft' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Apply to main as new revision' })).toHaveCount(0);
+
+  await page.getByLabel('Username', { exact: true }).fill('studio-worker');
+  await page.getByLabel('Password', { exact: true }).fill('studio-worker-password');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByText('@studio-worker')).toBeVisible();
+  await expect(page.getByText('Client One · revision 1')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Open draft' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Sign out' }).click();
+
+  await page.getByLabel('Username', { exact: true }).fill('client');
+  await page.getByLabel('Password', { exact: true }).fill('client-password-123');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByText('@client')).toBeVisible();
+  await expect(page.getByText('Customer drafts')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Apply to main as new revision' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Sign out' }).click();
+
+  await page.getByLabel('Username', { exact: true }).fill('owner');
+  await page.getByLabel('Password', { exact: true }).fill('temporary-password');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByText('@owner').first()).toBeVisible();
+  await expect(page.getByLabel('Temporary password')).toHaveValue('');
+  await expect(page.getByTestId('account-row').filter({ hasText: '@owner' }).getByLabel('Reset password for owner')).toHaveValue('');
+  await expect(page.getByText('Customer drafts')).toHaveCount(0);
 });
 
 test('owner assigns and unassigns official projects while workers have no account or draft-review APIs', async ({ page }) => {
@@ -1088,6 +1178,9 @@ test('owner reviews and promotes the exact customer draft revision and reports c
   await page.getByRole('button', { name: 'Review drafts' }).click();
   const review = page.getByRole('region', { name: 'Draft review for Official installation' });
   await expect(review.getByText('Client One · revision 1')).toBeVisible();
+  draft.document.name = 'Customer draft opened by owner';
+  await review.getByRole('button', { name: 'Open draft' }).click();
+  await expect(page.getByLabel('Project name')).toHaveValue('Customer draft opened by owner');
   page.once('dialog', dialog => dialog.accept());
   await review.getByRole('button', { name: 'Apply to main as new revision' }).click();
   expect(fixture.promotionBodies).toEqual([{ officialBaseRevision: 2, draftBaseRevision: 1 }]);
@@ -1601,6 +1694,7 @@ test('retries transient saves with one request ID, waits exactly, and demotes re
   await fixture.install(page);
   await openLibrary(page);
   await page.getByTestId('cloud-project-row').getByRole('button', { name: 'Open' }).click();
+  await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
 
   fixture.updateFailures.push(503);
   await page.getByLabel('Project name').fill('Retry once');
@@ -1629,6 +1723,7 @@ test('reconnect replays a committed save with its original request ID and reconc
   await fixture.install(page);
   await openLibrary(page);
   await page.getByTestId('cloud-project-row').getByRole('button', { name: 'Open' }).click();
+  await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
 
   fixture.loseNextUpdateResponse = true;
   await page.getByLabel('Project name').fill('Recovered after reconnect');
@@ -1864,11 +1959,13 @@ test('preserves both sides of a conflict with Open latest and Save as copy', asy
 
 test('never offers worker delete and requires an owner to type an archived project title', async ({ page }) => {
   const worker = new LibraryFixture('worker');
-  worker.seed('Archived work', { archived: true });
+  const workerArchive = worker.seed('Archived work', { archived: true });
   await worker.install(page);
   await openLibrary(page);
   await page.getByRole('button', { name: 'Archived projects' }).click();
   await expect(page.getByRole('button', { name: 'Delete permanently' })).toHaveCount(0);
+  const workerDeleteStatus = await page.evaluate(async id => fetch(`/api/library/projects/${id}`, { method: 'DELETE' }).then(response => response.status), workerArchive.id);
+  expect(workerDeleteStatus).toBe(403);
 
   await page.unroute('**/api/library/**');
   const owner = new LibraryFixture('owner');
