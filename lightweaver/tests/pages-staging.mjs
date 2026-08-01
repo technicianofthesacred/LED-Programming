@@ -16,6 +16,11 @@ import { join, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { verifyProductionReleaseSet } from '../src/lib/productionReleaseGate.js';
 import { parseStudioBuildGraph } from '../src/lib/productionDeploymentCheck.js';
+import { productionWranglerToml } from '../scripts/deploy-pages-production.mjs';
+import {
+  ProductionLibraryConfigurationError,
+  readProductionLibraryConfiguration,
+} from '../scripts/require-cloud-library-production.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
@@ -34,6 +39,20 @@ const runtimeRootReferences = [
   readFileSync(resolve(root, 'src/lib/cardPushClient.js'), 'utf8'),
   readFileSync(resolve(root, 'src/v3/lw-flash.jsx'), 'utf8'),
 ].join('\n');
+const productionConfiguration = {
+  LIGHTWEAVER_PRODUCTION_LIBRARY_READY: 'confirmed',
+  PROJECTS_DB_DATABASE_ID: '123e4567-e89b-42d3-a456-426614174000',
+  PROJECTS_DB_DATABASE_NAME: 'lightweaver-projects-production',
+  PROJECT_BLOBS_BUCKET_NAME: 'lightweaver-project-blobs',
+  MAX_LIBRARY_BODY_BYTES: '2097152',
+  MAX_LIBRARY_BACKUP_BYTES: '4194304',
+  MAX_LIBRARY_BACKUP_REVISIONS: '20',
+};
+const accessConfiguration = {
+  ACCESS_TEAM_DOMAIN: 'https://mandalacodes.cloudflareaccess.com',
+  ACCESS_AUD: 'a'.repeat(64),
+  OWNER_EMAILS: 'owner@example.com',
+};
 
 function workflowRunScript(stepName) {
   const marker = `      - name: ${stepName}\n`;
@@ -63,6 +82,7 @@ const deploymentDocs = [
   readFileSync(resolve(root, '../docs/deployment-checklist.md'), 'utf8'),
   readFileSync(resolve(root, '../docs/worker-flash-runbook.md'), 'utf8'),
 ].join('\n');
+const deploymentChecklist = readFileSync(resolve(root, '../docs/deployment-checklist.md'), 'utf8');
 
 assert.equal(pkg.scripts['build:design'], undefined);
 assert.match(pkg.scripts['stage:pages'], /^npm run build:functions && /);
@@ -80,7 +100,24 @@ assert.match(pkg.scripts['test:core'], /pages-headers\.mjs && node tests\/pages-
 assert.equal(pkg.scripts['test:prod-deploy'], 'node --test src/lib/productionDeploymentCheck.test.js src/lib/productionReleaseGate.test.js');
 assert.equal(pkg.scripts['test:build-graph'], 'node --test scripts/generate-studio-build-graph.test.mjs');
 assert.match(pkg.scripts['launch:source'], /npm run test:build-graph/);
-assert.match(pkg.scripts['launch:source'], /npm run test:projects && npm run test:cloud-bindings/);
+assert.match(pkg.scripts['test:projects'], /accountAuth\.test\.js/);
+assert.match(pkg.scripts['test:projects'], /library-api\.test\.js/);
+assert.equal(
+  pkg.scripts['test:projects:browser'],
+  'playwright test tests/cloud-project-library.spec.ts --project=chromium --workers=1',
+);
+assert.match(pkg.scripts['test:projects'], /tests\/cloud-bindings\.mjs/);
+assert.match(pkg.scripts['launch:source'], /npm run test:projects && npm run test:projects:browser && npm run test:mapper/);
+assert.equal(
+  (pkg.scripts['launch:source'].match(/npm run test:cloud-bindings/g) || []).length,
+  0,
+  'test:projects already includes cloud bindings, so the full binding suite must not run twice',
+);
+assert.equal(
+  (pkg.scripts['launch:source'].match(/npm run test:projects:browser/g) || []).length,
+  1,
+  'the focused account/library browser suite must run once in the launch gate',
+);
 assert.equal(pkg.scripts['test:screen-recovery'], 'playwright test tests/screen-recovery.spec.ts');
 assert.equal(pkg.scripts['test:production'], 'playwright test tests/production-setup.spec.ts tests/production-physical-unmount.spec.ts --project=chromium --workers=1');
 assert.match(pkg.scripts['launch:source'], /npm run test:prod-deploy && npm run test:build-graph && npm run test:show && npm run test:screen-recovery && npm run test:production/);
@@ -99,6 +136,11 @@ const migrationStep = workflow.indexOf('- name: Apply additive production D1 mig
 const deployStep = workflow.indexOf('- name: Build and deploy to Cloudflare Pages');
 assert.ok(migrationStep >= 0, 'production workflow must have an explicit remote migration step');
 assert.ok(deployStep > migrationStep, 'additive D1 migrations must finish before compatible Functions deploy');
+assert.equal(
+  (workflow.slice(migrationStep, deployStep).match(/^\s*if:/gm) || []).length,
+  1,
+  'the migration step must have one unambiguous execution condition',
+);
 assert.match(workflow, /CLOUDFLARE_MIGRATION_API_TOKEN:\s*\$\{\{ secrets\.CLOUDFLARE_MIGRATION_API_TOKEN \}\}/);
 assert.match(workflow, /Apply additive production D1 migrations[\s\S]*?CLOUDFLARE_API_TOKEN:\s*\$\{\{ secrets\.CLOUDFLARE_MIGRATION_API_TOKEN \}\}/);
 assert.match(workflow, /Build and deploy to Cloudflare Pages[\s\S]*?CLOUDFLARE_API_TOKEN:\s*\$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/);
@@ -112,6 +154,30 @@ const credentialScript = workflowRunScript('Check Cloudflare credentials');
 assert.doesNotMatch(credentialScript, /\$\{\{/, 'untrusted GitHub contexts must enter the shell through quoted environment values');
 assert.match(workflow, /EVENT_NAME:\s*\$\{\{ github\.event_name \}\}/);
 assert.match(workflow, /DISPATCH_SOURCE:\s*\$\{\{ github\.event\.inputs\.source \|\| 'manual' \}\}/);
+assert.match(workflow, /LIGHTWEAVER_NATIVE_AUTH_READY:\s*\$\{\{ vars\.LIGHTWEAVER_NATIVE_AUTH_READY \}\}/);
+
+assert.throws(
+  () => readProductionLibraryConfiguration(productionConfiguration),
+  error => error instanceof ProductionLibraryConfigurationError
+    && error.names.includes('ACCESS_TEAM_DOMAIN')
+    && error.names.includes('ACCESS_AUD')
+    && error.names.includes('OWNER_EMAILS'),
+  'pre-cutover deployment must retain the Access runtime requirements',
+);
+const dualAuthConfiguration = readProductionLibraryConfiguration({
+  ...productionConfiguration,
+  ...accessConfiguration,
+});
+assert.equal(dualAuthConfiguration.LIGHTWEAVER_NATIVE_AUTH_READY, 'pending');
+const nativeConfiguration = readProductionLibraryConfiguration({
+  ...productionConfiguration,
+  LIGHTWEAVER_NATIVE_AUTH_READY: 'confirmed',
+});
+assert.equal(nativeConfiguration.LIGHTWEAVER_NATIVE_AUTH_READY, 'confirmed');
+const nativeToml = productionWranglerToml(nativeConfiguration);
+assert.doesNotMatch(nativeToml, /^ACCESS_TEAM_DOMAIN\s*=/m);
+assert.doesNotMatch(nativeToml, /^ACCESS_AUD\s*=/m);
+assert.doesNotMatch(nativeToml, /^OWNER_EMAILS\s*=/m);
 
 const injectionRoot = mkdtempSync(join(tmpdir(), 'lightweaver-workflow-injection-'));
 try {
@@ -127,6 +193,7 @@ try {
     EVENT_NAME: 'workflow_dispatch',
     GITHUB_OUTPUT: githubOutput,
     LIGHTWEAVER_PREVIEW_ACCESS_READY: '',
+    LIGHTWEAVER_NATIVE_AUTH_READY: '',
     LIGHTWEAVER_PRODUCTION_LIBRARY_READY: '',
     MAX_LIBRARY_BACKUP_BYTES: '',
     MAX_LIBRARY_BACKUP_REVISIONS: '',
@@ -140,6 +207,38 @@ try {
   assert.equal(existsSync(injectedPath), false, 'workflow_dispatch input must remain inert shell data');
 } finally {
   rmSync(injectionRoot, { recursive: true, force: true });
+}
+
+const credentialBaseEnv = {
+  CLOUDFLARE_ACCOUNT_ID: 'account-id',
+  CLOUDFLARE_API_TOKEN: 'pages-token',
+  CLOUDFLARE_MIGRATION_API_TOKEN: 'migration-token',
+  DISPATCH_SOURCE: 'ci',
+  EVENT_NAME: 'push',
+  ...productionConfiguration,
+};
+for (const [label, env] of [
+  ['dual-auth', {
+    ...credentialBaseEnv,
+    ...accessConfiguration,
+    LIGHTWEAVER_NATIVE_AUTH_READY: '',
+    LIGHTWEAVER_PREVIEW_ACCESS_READY: 'confirmed',
+  }],
+  ['native-auth', {
+    ...credentialBaseEnv,
+    LIGHTWEAVER_NATIVE_AUTH_READY: 'confirmed',
+    LIGHTWEAVER_PREVIEW_ACCESS_READY: '',
+  }],
+]) {
+  const outputRoot = mkdtempSync(join(tmpdir(), `lightweaver-workflow-${label}-`));
+  try {
+    const githubOutput = join(outputRoot, 'github-output');
+    const result = runWorkflowScript(credentialScript, { ...env, GITHUB_OUTPUT: githubOutput });
+    assert.equal(result.status, 0, `${label}: ${result.stdout}\n${result.stderr}`);
+    assert.match(readFileSync(githubOutput, 'utf8'), /^enabled=true$/m, `${label} production configuration must enable deploy`);
+  } finally {
+    rmSync(outputRoot, { recursive: true, force: true });
+  }
 }
 
 const migrationScript = workflowRunScript('Apply additive production D1 migrations');
@@ -181,6 +280,8 @@ writeFileSync(process.env.MIGRATION_RECORD, JSON.stringify({
   assert.match(record.config, /database_name\s*=\s*"lightweaver-projects-production"/);
   assert.match(record.config, /database_id\s*=\s*"123e4567-e89b-42d3-a456-426614174000"/);
   assert.match(record.config, new RegExp(`migrations_dir\\s*=\\s*${JSON.stringify(resolve(root, 'migrations')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.match(migrationScript, /0002_account_access\.sql/);
+  assert.match(migrationScript, /0003_account_session_generation\.sql/);
   assert.equal(existsSync(record.configPath), false, 'temporary migration config must be removed after Wrangler exits');
 } finally {
   rmSync(migrationRoot, { recursive: true, force: true });
@@ -236,13 +337,27 @@ assert.doesNotMatch(testWorkflow, /node-version: '20'/);
 assert.doesNotMatch(deploymentDocs, /led\.mandalacodes\.com\/design\/?#|led\.mandalacodes\.com\/design[^\n]*opens Studio/);
 assert.match(setupDoc, /Wrangler is pinned/);
 assert.match(setupDoc, /PROD_ORIGIN/);
+assert.match(setupDoc, /LIGHTWEAVER_NATIVE_AUTH_READY=confirmed/);
+assert.match(setupDoc, /four account\/library includes/);
+assert.match(setupDoc, /restore the Access application and exact-email policy/i);
+assert.match(deploymentChecklist, /LIGHTWEAVER_NATIVE_AUTH_READY=confirmed/);
+assert.match(deploymentChecklist, /Create owner account/);
+assert.match(deploymentChecklist, /no public signup/i);
+assert.match(deploymentChecklist, /restore the Access application\/policy/i);
+assert.match(deploymentChecklist, /deploy the prior compatible Pages/i);
 assert.doesNotMatch(runtimeRootReferences, /led\.mandalacodes\.com\/design|\/design\//);
 assert.doesNotMatch(runtimeRootReferences, /\/api\/library/, 'card command and flashing paths must never traverse the cloud library API');
 assert.deepEqual(routes, {
   version: 1,
-  include: ['/api/library', '/api/library/*'],
+  include: ['/api/account', '/api/account/*', '/api/library', '/api/library/*'],
   exclude: [],
 });
+assert.match(freshness, /LIGHTWEAVER_NATIVE_AUTH_READY/);
+assert.match(freshness, /\/api\/account\/session/);
+assert.match(freshness, /\/api\/account\/login/);
+assert.match(freshness, /invalid_credentials/);
+assert.match(freshness, /Invalid username or password\./);
+assert.doesNotMatch(workflow, /LOGIN_PASSWORD|OWNER_PASSWORD|PBKDF2_PASSWORD/);
 assert.match(freshness, /\/api\/library\/session/);
 assert.match(freshness, /libraryResponse\.headers\.get\('cache-control'\)/);
 assert.match(freshness, /unauthenticated library request/i);

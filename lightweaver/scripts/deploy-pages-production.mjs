@@ -17,6 +17,12 @@ function tomlString(value) {
 }
 
 export function productionWranglerToml(config) {
+  const accessVariables = config.LIGHTWEAVER_NATIVE_AUTH_READY === 'confirmed'
+    ? ''
+    : `ACCESS_TEAM_DOMAIN = ${tomlString(config.ACCESS_TEAM_DOMAIN)}
+ACCESS_AUD = ${tomlString(config.ACCESS_AUD)}
+OWNER_EMAILS = ${tomlString(config.OWNER_EMAILS)}
+`;
   return `name = "lightweaver"
 compatibility_date = "2026-07-15"
 compatibility_flags = ["nodejs_compat"]
@@ -32,9 +38,7 @@ binding = "PROJECT_BLOBS"
 bucket_name = ${tomlString(config.PROJECT_BLOBS_BUCKET_NAME)}
 
 [vars]
-ACCESS_TEAM_DOMAIN = ${tomlString(config.ACCESS_TEAM_DOMAIN)}
-ACCESS_AUD = ${tomlString(config.ACCESS_AUD)}
-OWNER_EMAILS = ${tomlString(config.OWNER_EMAILS)}
+${accessVariables}LIGHTWEAVER_NATIVE_AUTH_READY = ${tomlString(config.LIGHTWEAVER_NATIVE_AUTH_READY)}
 MAX_LIBRARY_BODY_BYTES = ${tomlString(config.MAX_LIBRARY_BODY_BYTES)}
 MAX_LIBRARY_BACKUP_BYTES = ${tomlString(config.MAX_LIBRARY_BACKUP_BYTES)}
 MAX_LIBRARY_BACKUP_REVISIONS = ${tomlString(config.MAX_LIBRARY_BACKUP_REVISIONS)}

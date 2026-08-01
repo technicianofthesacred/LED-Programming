@@ -30,19 +30,25 @@ repo's staged bundle (`stage:pages`).
 
 ## Production publish gate configuration
 
-Production publishing stays disabled unless every item below exists and both
-readiness values equal `confirmed`. Names may appear in source; their real
-values must not.
+Production publishing always requires the storage, limit, library-readiness,
+and operational credential set below. During the first dual-auth deployment it
+also requires the Access set. After native acceptance, the exact GitHub variable
+`LIGHTWEAVER_NATIVE_AUTH_READY=confirmed` removes only those Access requirements.
+Names may appear in source; their real values must not.
 
 - Credentials: `CLOUDFLARE_API_TOKEN` (Pages-only),
   `CLOUDFLARE_MIGRATION_API_TOKEN` (D1-only), and
   `CLOUDFLARE_ACCOUNT_ID`.
-- Preview proof: `LIGHTWEAVER_PREVIEW_ACCESS_READY=confirmed` after the
-  protected preview acceptance passes.
+- Dual-auth proof: `LIGHTWEAVER_PREVIEW_ACCESS_READY=confirmed` after the
+  protected preview acceptance passes. This remains required until native auth
+  readiness is confirmed.
 - Production readiness: `LIGHTWEAVER_PRODUCTION_LIBRARY_READY=confirmed`.
+- Native cutover: keep `LIGHTWEAVER_NATIVE_AUTH_READY` unset until the first
+  owner, password change/logout, and owner/worker/customer acceptance pass.
 - Private storage: `PROJECTS_DB_DATABASE_ID`,
   `PROJECTS_DB_DATABASE_NAME`, and `PROJECT_BLOBS_BUCKET_NAME`.
-- Access and roles: `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, and `OWNER_EMAILS`.
+- Transitional Access and roles: `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, and
+  `OWNER_EMAILS`; these are required only before native cutover.
 - Bounds: `MAX_LIBRARY_BODY_BYTES`, `MAX_LIBRARY_BACKUP_BYTES`, and
   `MAX_LIBRARY_BACKUP_REVISIONS`.
 
@@ -95,12 +101,13 @@ Status on 2026-05-29:
 
 ## Private cloud project library
 
-The Studio assets, installer, and card support routes stay public. Only
-`/api/library*` is protected by Cloudflare Access and handled by Pages
-Functions. The route manifest invokes Functions for `/api/library` and
-`/api/library/*` only. No card URL, command, credential, local hostname, or
-firmware request goes through `/api/library`; card control remains on
-`lightweaver.local`, `192.168.4.1`, Web Serial, or the card-page bridge.
+The Studio assets, installer, and card support routes stay public. Pages
+Functions handle `/api/account*` and `/api/library*`; every other route remains
+static. Cloudflare Access temporarily protects `/api/library*` only for first
+owner bootstrap, then native sessions protect both APIs. No card URL, command,
+credential, local hostname, or firmware request goes through either API; card
+control remains on `lightweaver.local`, `192.168.4.1`, Web Serial, or the
+card-page bridge.
 
 ### Current provisioning blocker
 
@@ -148,21 +155,22 @@ For both Pages environments, configure `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`,
 normalized exact identity list that receives the owner role; every other
 identity admitted by Access is a worker. Missing Access, D1, or R2 configuration
 fails closed rather than falling back to public data or browser-supplied role
-headers.
+headers. After native cutover, remove the three Access values from the generated
+production runtime config; D1, R2, and all bounds remain mandatory.
 
 ### Cloudflare Access
 
-Create one self-hosted Access application for
+For the bootstrap phase, create one self-hosted Access application for
 `led.mandalacodes.com/api/library*`. Its Allow policy must use **Include →
 Emails** with each approved exact email identity. Do not use Everyone, Login
 Methods, an email-domain suffix, or any rule that admits every valid email.
 Copy the application's audience into the protected `ACCESS_AUD` configuration
 and the team origin into `ACCESS_TEAM_DOMAIN`; do not commit either value.
 
-The Function validates the Access assertion's signature, exact issuer, exact
-audience, subject, and expiry on every request. Workers can use every project
-workflow except permanent delete; the server returns `403` for a worker delete
-even if someone manually calls the endpoint. Log out at:
+During bootstrap, the Function validates the Access assertion's signature,
+exact issuer, exact audience, subject, and expiry on every request. After the
+native owner is proven, remove this path application as described below. Log
+out of the transitional Access session at:
 
 ```text
 https://led.mandalacodes.com/cdn-cgi/access/logout
@@ -186,8 +194,9 @@ as Actions variables: `PROJECTS_DB_DATABASE_NAME`,
 variable `LIGHTWEAVER_PREVIEW_ACCESS_READY=confirmed` only after the protected
 preview acceptance below, then set
 `LIGHTWEAVER_PRODUCTION_LIBRARY_READY=confirmed` when the complete production
-configuration is ready. The workflow never prints any value and never gives
-the normal Pages deploy token D1 migration authority.
+configuration is ready. Create `LIGHTWEAVER_NATIVE_AUTH_READY` but leave it
+unset until the native cutover acceptance passes. The workflow never prints any
+value and never gives the normal Pages deploy token D1 migration authority.
 
 ### Migrations, preview, and production
 
@@ -266,17 +275,24 @@ history, download a master backup, and receives `403` for a direct permanent
 delete. In a private browser with no Access session, request
 `/api/library/session`; it must be denied and must include `Cache-Control:
 no-store`. Confirm the signed-out preview root is also denied, and confirm the
-staged `_routes.json` has only the two library includes. Only after these checks
+staged `_routes.json` has the four account/library includes. Only after these checks
 may `LIGHTWEAVER_PREVIEW_ACCESS_READY=confirmed` be set.
 
-Production is ordered and non-interchangeable: apply the expand-only migration
-with the D1-only credential, deploy the exact compatible commit with the
-Pages-only credential, then run the live smoke. `.github/workflows/deploy-site.yml`
-enforces migration before deployment. For a manual recovery run, dispatch that
-workflow on the exact `main` commit. It validates the canonical production D1
-name and ID, generates a mode-`0600` temporary Wrangler config with the absolute
-migration directory, applies `PROJECTS_DB` through that config, removes it, and
-then deploys with the separate Pages credential:
+Production uses two safe passes. First, leave native readiness unset: the
+workflow applies pending additive migrations (including `0002` and `0003`) with
+the D1-only credential, deploys dual-auth code with the Pages-only credential,
+and requires the Access denial live. Through the existing Access owner session,
+use Studio's **Create owner account**, then prove native password change, logout,
+login, owner/worker/customer authorization, customer draft isolation, and
+backup. There is no public signup, email identity, or self-service recovery.
+
+Only after that acceptance, remove the `/api/library*` Access protection, set
+`LIGHTWEAVER_NATIVE_AUTH_READY=confirmed`, and rerun the same workflow. Its live
+check now requires public Studio HTTP 200 plus unauthenticated no-store HTTP 401
+responses from both account and library session APIs, and a generic invalid
+login response. The workflow validates the canonical production D1 name and ID,
+creates mode-`0600` temporary configs, and keeps migration and Pages credentials
+separate. Dispatch the exact `main` commit with:
 
 ```bash
 gh workflow run deploy-site.yml --ref main
@@ -303,6 +319,10 @@ objects, then use D1 Time Travel only as an explicit incident operation; do not
 assume it rewinds R2. Re-run authenticated create/open/history/backup,
 unauthenticated denial, worker-delete denial, and live freshness proof after
 any rollback or restore.
+
+For native-auth rollback, restore the Access application and exact-email policy
+first, unset or reset `LIGHTWEAVER_NATIVE_AUTH_READY`, and then deploy the prior
+compatible Pages release. Do not reverse the account migrations.
 
 One-time project creation:
 

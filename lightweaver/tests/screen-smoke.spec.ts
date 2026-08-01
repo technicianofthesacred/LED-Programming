@@ -937,9 +937,28 @@ for (const viewport of [
     await page.route('https://fonts.googleapis.com/**', emptyCss);
     await page.route('https://fonts.gstatic.com/**', emptyCss);
 
+    // Vite does not run Pages Functions. Model both unauthenticated session
+    // probes exactly so their expected 401s do not become unrelated Vite 404s.
+    const unauthenticatedSession = route => route.fulfill({
+      status: 401,
+      headers: {
+        'cache-control': 'no-store',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        error: { code: 'unauthenticated', message: 'Sign in to continue.' },
+      }),
+    });
+    await page.route('**/api/account/session', unauthenticatedSession);
+    await page.route('**/api/library/session', unauthenticatedSession);
+
     const consoleErrors: string[] = [];
     page.on('console', msg => {
-      if (msg.type() === 'error') consoleErrors.push(msg.text());
+      if (msg.type() !== 'error') return;
+      const url = msg.location().url;
+      const expectedUnauthenticatedSession = msg.text().includes('status of 401')
+        && (url.endsWith('/api/account/session') || url.endsWith('/api/library/session'));
+      if (!expectedUnauthenticatedSession) consoleErrors.push(msg.text());
     });
     page.on('pageerror', err => consoleErrors.push(err.message));
 

@@ -1,17 +1,15 @@
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const REQUIRED = [
+const BASE_REQUIRED = [
   'PROJECTS_DB_DATABASE_ID',
   'PROJECTS_DB_DATABASE_NAME',
   'PROJECT_BLOBS_BUCKET_NAME',
-  'ACCESS_TEAM_DOMAIN',
-  'ACCESS_AUD',
-  'OWNER_EMAILS',
   'MAX_LIBRARY_BODY_BYTES',
   'MAX_LIBRARY_BACKUP_BYTES',
   'MAX_LIBRARY_BACKUP_REVISIONS',
 ];
+const ACCESS_REQUIRED = ['ACCESS_TEAM_DOMAIN', 'ACCESS_AUD', 'OWNER_EMAILS'];
 
 export class ProductionLibraryConfigurationError extends Error {
   constructor(names) {
@@ -27,8 +25,16 @@ function positiveInteger(value) {
 }
 
 export function readProductionLibraryConfiguration(env = process.env) {
-  const values = Object.fromEntries(REQUIRED.map(name => [name, env[name]?.trim() || '']));
-  const invalid = REQUIRED.filter(name => !values[name]);
+  const values = Object.fromEntries(
+    [...BASE_REQUIRED, ...ACCESS_REQUIRED].map(name => [name, env[name]?.trim() || '']),
+  );
+  const nativeAuthReady = env.LIGHTWEAVER_NATIVE_AUTH_READY === 'confirmed';
+  values.LIGHTWEAVER_NATIVE_AUTH_READY = nativeAuthReady ? 'confirmed' : 'pending';
+  const invalid = BASE_REQUIRED.filter(name => !values[name]);
+
+  if (!nativeAuthReady) {
+    invalid.push(...ACCESS_REQUIRED.filter(name => !values[name]));
+  }
 
   if (env.LIGHTWEAVER_PRODUCTION_LIBRARY_READY !== 'confirmed') {
     invalid.push('LIGHTWEAVER_PRODUCTION_LIBRARY_READY=confirmed');
@@ -46,10 +52,10 @@ export function readProductionLibraryConfiguration(env = process.env) {
     && !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(values.PROJECT_BLOBS_BUCKET_NAME)) {
     invalid.push('PROJECT_BLOBS_BUCKET_NAME');
   }
-  if (values.ACCESS_AUD && !/^[0-9a-f]{64}$/i.test(values.ACCESS_AUD)) {
+  if (!nativeAuthReady && values.ACCESS_AUD && !/^[0-9a-f]{64}$/i.test(values.ACCESS_AUD)) {
     invalid.push('ACCESS_AUD');
   }
-  if (values.ACCESS_TEAM_DOMAIN) {
+  if (!nativeAuthReady && values.ACCESS_TEAM_DOMAIN) {
     try {
       const url = new URL(values.ACCESS_TEAM_DOMAIN);
       if (url.protocol !== 'https:'
@@ -67,13 +73,17 @@ export function readProductionLibraryConfiguration(env = process.env) {
       invalid.push('ACCESS_TEAM_DOMAIN');
     }
   }
-  if (values.OWNER_EMAILS) {
+  if (!nativeAuthReady && values.OWNER_EMAILS) {
     const emails = values.OWNER_EMAILS.split(',').map(value => value.trim().toLowerCase());
     if (emails.some(value => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))) {
       invalid.push('OWNER_EMAILS');
     } else {
       values.OWNER_EMAILS = emails.join(',');
     }
+  }
+
+  if (nativeAuthReady) {
+    for (const name of ACCESS_REQUIRED) values[name] = '';
   }
   for (const name of [
     'MAX_LIBRARY_BODY_BYTES',

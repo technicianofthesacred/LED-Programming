@@ -1310,7 +1310,7 @@ test('binding config, migration, route manifest, and package scripts are local-s
   ]);
   assert.deepEqual(JSON.parse(routesText), {
     version: 1,
-    include: ['/api/library', '/api/library/*'],
+    include: ['/api/account', '/api/account/*', '/api/library', '/api/library/*'],
     exclude: [],
   });
 
@@ -1338,6 +1338,7 @@ test('binding config, migration, route manifest, and package scripts are local-s
   assert.match(pkg.scripts['build:functions'] || '', /--output-routes-path \.pages\/functions-build\/_routes\.json/);
   assert.equal(pkg.scripts['deploy:pages'], 'node scripts/deploy-pages-production.mjs');
   for (const required of [
+    'LIGHTWEAVER_NATIVE_AUTH_READY',
     'LIGHTWEAVER_PRODUCTION_LIBRARY_READY',
     'PROJECTS_DB_DATABASE_ID',
     'PROJECTS_DB_DATABASE_NAME',

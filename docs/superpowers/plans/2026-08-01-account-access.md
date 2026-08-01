@@ -257,24 +257,26 @@ git commit -m "Add account and customer draft controls"
 - Modify: `lightweaver/scripts/require-cloud-library-production.mjs`
 - Modify: `lightweaver/scripts/deploy-pages-production.mjs`
 - Modify: `.github/workflows/deploy-site.yml`
+- Modify: `lightweaver/package.json`
 - Modify: `docs/deployment-checklist.md`
+- Modify: `docs/led-mandalacodes-setup.md`
 - Modify: `docs/superpowers/plans/2026-08-01-account-access.md`
 
-- [ ] **Step 1: Write failing deployment-contract tests**
+- [x] **Step 1: Write failing deployment-contract tests**
 
 Assert `/api/account/*` is included in Pages Functions, sensitive account/library responses are `no-store`, production migrations include `0002_account_access.sql`, unauthenticated project routes return `401`, and production no longer requires `OWNER_EMAILS` after the explicit cutover flag is confirmed.
 
-- [ ] **Step 2: Run tests and confirm RED**
+- [x] **Step 2: Run tests and confirm RED**
 
 Run: `cd lightweaver && node tests/pages-headers.mjs && node tests/pages-staging.mjs && node scripts/require-cloud-library-production.mjs`
 
 Expected: account routes and native-auth deployment requirements are missing.
 
-- [ ] **Step 3: Update deployment safety gates**
+- [x] **Step 3: Update deployment safety gates**
 
 Deploy the additive migration before code, require a confirmed native-auth readiness variable before removing Access requirements, and preserve fail-closed behavior when D1 is unavailable. Document bootstrap, owner recovery, account reset, role checks, preview acceptance, production cutover, and rollback.
 
-- [ ] **Step 4: Run focused and full verification**
+- [x] **Step 4: Run focused and full verification**
 
 Run:
 
@@ -291,9 +293,9 @@ Expected: every command exits 0.
 
 - [ ] **Step 5: Production cutover and smoke test**
 
-Apply migration 0002, deploy dual-auth code, bootstrap the owner account through the existing Access session, verify all three roles in preview, then remove the `/api/library*` Access application rule so native login can reach the API. Verify signed-out denial, owner account administration, worker create/edit and delete denial, customer assignment isolation, draft save, promotion, logout, and master backup.
+Apply migrations 0002 and 0003, deploy dual-auth code, bootstrap the owner account through the existing Access session, and verify all three roles in preview. Then remove the `/api/account*` and `/api/library*` Access application rules, set `LIGHTWEAVER_NATIVE_AUTH_READY=confirmed`, and redeploy so native login can reach the API without the legacy Access settings. Verify signed-out denial, owner account administration, worker create/edit and delete denial, customer assignment isolation, draft save, promotion, logout, and master backup.
 
-- [ ] **Step 6: Commit final deployment changes**
+- [x] **Step 6: Commit final deployment changes**
 
 ```bash
 git add .github/workflows/deploy-site.yml lightweaver/public lightweaver/tests lightweaver/scripts docs/deployment-checklist.md docs/superpowers/plans/2026-08-01-account-access.md

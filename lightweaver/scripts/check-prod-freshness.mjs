@@ -48,6 +48,9 @@ const {
 } = resolveProductionUrls(process.env);
 const productionOrigin = new URL(studioUrl).origin;
 const librarySessionUrl = new URL('/api/library/session', productionOrigin);
+const accountSessionUrl = new URL('/api/account/session', productionOrigin);
+const accountLoginUrl = new URL('/api/account/login', productionOrigin);
+const nativeAuthReady = process.env.LIGHTWEAVER_NATIVE_AUTH_READY === 'confirmed';
 const productionFetch = (input, init = {}) => fetch(new URL(String(input), productionOrigin), {
   ...init,
   signal: AbortSignal.timeout(20_000),
@@ -60,6 +63,26 @@ function sha256(bytes) {
 function fail(message) {
   console.error(`check-prod-freshness FAILED\n${message}`);
   process.exit(1);
+}
+
+function hasNoStore(response) {
+  return /(?:^|,)\s*no-store(?:\s*(?:,|$))/i.test(response.headers.get('cache-control') || '');
+}
+
+async function fetchAuthProbe(url, init = {}) {
+  try {
+    return await fetch(url, {
+      cache: 'no-store',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(20_000),
+      ...init,
+    });
+  } catch (err) {
+    fail(
+      `Production root is reachable, but an authentication probe failed at\n  ${url}\n` +
+        `  ${err?.cause?.code ?? err?.name ?? err?.message ?? err}`,
+    );
+  }
 }
 
 let expectedStudioGraph;
@@ -105,30 +128,34 @@ try {
   fail(err.message);
 }
 
-let libraryResponse;
-try {
-  libraryResponse = await fetch(librarySessionUrl, {
-    cache: 'no-store',
-    redirect: 'manual',
-    signal: AbortSignal.timeout(20_000),
-  });
-} catch (err) {
-  fail(`Production root is reachable, but the unauthenticated library request failed at\n  ${librarySessionUrl}\n  ${err?.cause?.code ?? err?.name ?? err?.message ?? err}`);
-}
+const libraryResponse = await fetchAuthProbe(librarySessionUrl);
 const libraryCacheControl = libraryResponse.headers.get('cache-control') || '';
 const isAccessRedirect = [301, 302, 303, 307, 308].includes(libraryResponse.status)
   && /(?:cloudflareaccess\.com|\/cdn-cgi\/access\/)/i.test(libraryResponse.headers.get('location') || '');
-if (![401, 403].includes(libraryResponse.status) && !isAccessRedirect) {
+if (nativeAuthReady ? libraryResponse.status !== 401 : !isAccessRedirect) {
   fail(
     `Production allowed or misrouted an unauthenticated library request.\n` +
-      `  ${librarySessionUrl}\n  expected Access redirect, HTTP 401, or HTTP 403; received HTTP ${libraryResponse.status}`,
+      `  ${librarySessionUrl}\n  expected ${nativeAuthReady ? 'native HTTP 401' : 'Cloudflare Access redirect'}; received HTTP ${libraryResponse.status}`,
   );
 }
-if (!/(?:^|,)\s*no-store(?:\s*(?:,|$))/i.test(libraryCacheControl)) {
+if (!hasNoStore(libraryResponse)) {
   fail(
     `The private library denial is cacheable.\n  ${librarySessionUrl}\n` +
       `  expected Cache-Control to contain no-store; received ${JSON.stringify(libraryCacheControl)}`,
   );
+}
+
+let accountSessionResponse = null;
+let accountLoginResponse = null;
+if (nativeAuthReady) {
+  accountSessionResponse = await fetchAuthProbe(accountSessionUrl);
+  if (accountSessionResponse.status !== 401 || !hasNoStore(accountSessionResponse)) {
+    fail(
+      `Native account session denial is not ready.\n  ${accountSessionUrl}\n` +
+        `  expected HTTP 401 with Cache-Control: no-store; received HTTP ${accountSessionResponse.status}`,
+    );
+  }
+
 }
 
 let studioBuildFileCount = 0;
@@ -185,9 +212,43 @@ if (remoteHash !== localHash) {
   );
 }
 
+if (nativeAuthReady) {
+  // Run this last so convergence retries do not repeatedly perform PBKDF2 work.
+  // These synthetic values are not secrets and the request body is never logged.
+  accountLoginResponse = await fetchAuthProbe(accountLoginUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      origin: productionOrigin,
+    },
+    body: JSON.stringify({
+      username: `ci-probe-${localHash.slice(0, 32)}`,
+      password: 'synthetic-invalid-password',
+    }),
+  });
+  let loginPayload = null;
+  try {
+    loginPayload = await accountLoginResponse.json();
+  } catch {
+    // The structured assertion below reports one bounded deployment error.
+  }
+  if (accountLoginResponse.status !== 401
+    || !hasNoStore(accountLoginResponse)
+    || loginPayload?.error?.code !== 'invalid_credentials'
+    || loginPayload?.error?.message !== 'Invalid username or password.') {
+    fail(
+      `Native account login did not reject the synthetic probe generically.\n  ${accountLoginUrl}\n` +
+        `  expected generic HTTP 401 with Cache-Control: no-store; received HTTP ${accountLoginResponse.status}`,
+    );
+  }
+}
+
 console.log(
   `check-prod-freshness OK — production serves the signed committed factory binary\n  sha256 ${localHash}  (${local.length} bytes)\n  ${new URL(release.manifest.image.url, productionOrigin)}\n  legacy alias: ${legacyAliasUrl}`,
   `\n  Studio build graph: ${studioBuildFileCount} verified files\n  ${studioBuildGraphUrl}`,
   `\n  Production Setup: ${productionSetupUrl}\n  verified production jobs: ${productionJobCount}\n  job index: ${productionJobIndexUrl}`,
   `\n  Private library: unauthenticated HTTP ${libraryResponse.status}, Cache-Control ${libraryCacheControl}\n  ${librarySessionUrl}`,
+  nativeAuthReady
+    ? `\n  Native auth: account session HTTP ${accountSessionResponse.status}; login route HTTP ${accountLoginResponse.status}\n  ${accountSessionUrl}`
+    : '\n  Native auth cutover: pending; Cloudflare Access denial verified',
 );
