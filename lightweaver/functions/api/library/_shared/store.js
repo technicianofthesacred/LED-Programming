@@ -9,6 +9,7 @@ import {
 } from './validation.js';
 
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
+const DEFAULT_MAX_BACKUP_REVISIONS = 10_000;
 
 export class LibraryStoreError extends Error {
   constructor(code, message, status) {
@@ -72,6 +73,7 @@ function actorEmail(actor) {
 
 function mutationStatement(db, {
   actor,
+  attemptId,
   conditionSql = '1',
   conditionValues = [],
   idempotencyKey,
@@ -79,9 +81,9 @@ function mutationStatement(db, {
   timestamp,
 }) {
   return db.prepare(`
-    INSERT INTO library_mutations (idempotency_key, mutation_kind, actor, created_at)
-    SELECT CASE WHEN (${conditionSql}) THEN ? ELSE NULL END, ?, ?, ?
-  `).bind(...conditionValues, idempotencyKey, kind, actorEmail(actor), timestamp);
+    INSERT INTO library_mutations (idempotency_key, attempt_id, mutation_kind, actor, created_at)
+    SELECT CASE WHEN (${conditionSql}) THEN ? ELSE NULL END, ?, ?, ?, ?
+  `).bind(...conditionValues, idempotencyKey, attemptId, kind, actorEmail(actor), timestamp);
 }
 
 export function createD1R2LibraryStore(env, options = {}) {
@@ -94,6 +96,9 @@ export function createD1R2LibraryStore(env, options = {}) {
   const maxBackupBytes = Number.isFinite(options.maxBackupBytes) && options.maxBackupBytes > 0
     ? options.maxBackupBytes
     : DEFAULT_MAX_BACKUP_BYTES;
+  const maxBackupRevisions = Number.isInteger(options.maxBackupRevisions) && options.maxBackupRevisions > 0
+    ? options.maxBackupRevisions
+    : DEFAULT_MAX_BACKUP_REVISIONS;
   const now = typeof options.now === 'function' ? options.now : () => new Date().toISOString();
 
   function timestamp() {
@@ -111,10 +116,14 @@ export function createD1R2LibraryStore(env, options = {}) {
     if (accepted) fail('idempotency_conflict', 'The idempotency key was already accepted.', 409);
   }
 
+  async function acceptedMutation(idempotencyKey) {
+    return db.prepare(
+      'SELECT * FROM library_mutations WHERE idempotency_key = ?',
+    ).bind(idempotencyKey).first();
+  }
+
   async function acceptedKey(idempotencyKey) {
-    return Boolean(await db.prepare(
-      'SELECT idempotency_key FROM library_mutations WHERE idempotency_key = ?',
-    ).bind(idempotencyKey).first());
+    return Boolean(await acceptedMutation(idempotencyKey));
   }
 
   async function cleanupObjects(keys) {
@@ -136,7 +145,29 @@ export function createD1R2LibraryStore(env, options = {}) {
     }
   }
 
+  async function cleanupUnreferencedObjects(keys) {
+    if (!keys.length) return;
+    const referenced = new Set();
+    for (let index = 0; index < keys.length; index += 200) {
+      const chunk = keys.slice(index, index + 200);
+      const placeholders = chunk.map(() => '?').join(', ');
+      const { results } = await db.prepare(`
+        SELECT current_object_key AS object_key FROM projects
+          WHERE current_object_key IN (${placeholders})
+        UNION SELECT object_key FROM project_revisions
+          WHERE object_key IN (${placeholders})
+        UNION SELECT current_object_key AS object_key FROM asset_heads
+          WHERE current_object_key IN (${placeholders})
+        UNION SELECT object_key FROM asset_revisions
+          WHERE object_key IN (${placeholders})
+      `).bind(...chunk, ...chunk, ...chunk, ...chunk).all();
+      for (const row of results) referenced.add(row.object_key);
+    }
+    await cleanupObjects(keys.filter(key => !referenced.has(key)));
+  }
+
   async function guardedBatch(statements, {
+    attemptId,
     cleanup = [],
     idempotencyKey,
     onConflict,
@@ -144,8 +175,12 @@ export function createD1R2LibraryStore(env, options = {}) {
     try {
       return await db.batch(statements);
     } catch (error) {
-      await cleanupObjects(cleanup);
-      if (await acceptedKey(idempotencyKey)) {
+      const accepted = await acceptedMutation(idempotencyKey);
+      await cleanupUnreferencedObjects(cleanup);
+      if (accepted?.attempt_id === attemptId) {
+        return [];
+      }
+      if (accepted) {
         fail('idempotency_conflict', 'The idempotency key was already accepted.', 409);
       }
       if (onConflict && await onConflict()) {
@@ -212,6 +247,7 @@ export function createD1R2LibraryStore(env, options = {}) {
     const details = await contentDetails(document);
     const id = crypto.randomUUID();
     const createdAt = timestamp();
+    const attemptId = crypto.randomUUID();
     const objectKey = `projects/${id}/revisions/1-${crypto.randomUUID()}.lw.json`;
     await putBody(objectKey, details);
 
@@ -235,6 +271,7 @@ export function createD1R2LibraryStore(env, options = {}) {
       ),
       mutationStatement(db, {
         actor,
+        attemptId,
         conditionSql: 'EXISTS (SELECT 1 FROM projects WHERE id = ? AND current_object_key = ?)',
         conditionValues: [id, objectKey],
         idempotencyKey,
@@ -242,7 +279,11 @@ export function createD1R2LibraryStore(env, options = {}) {
         timestamp: createdAt,
       }),
     ];
-    await guardedBatch(statements, { cleanup: [objectKey], idempotencyKey });
+    await guardedBatch(statements, {
+      attemptId,
+      cleanup: [objectKey],
+      idempotencyKey,
+    });
     return publicProject(await projectRow(id));
   }
 
@@ -266,6 +307,7 @@ export function createD1R2LibraryStore(env, options = {}) {
     const revision = baseRevision + 1;
     const details = await contentDetails(document);
     const updatedAt = timestamp();
+    const attemptId = crypto.randomUUID();
     const objectKey = `projects/${id}/revisions/${revision}-${crypto.randomUUID()}.lw.json`;
     await putBody(objectKey, details);
 
@@ -292,6 +334,7 @@ export function createD1R2LibraryStore(env, options = {}) {
       ),
       mutationStatement(db, {
         actor,
+        attemptId,
         conditionSql: 'EXISTS (SELECT 1 FROM projects WHERE id = ? AND current_revision = ? AND current_object_key = ?)',
         conditionValues: [id, revision, objectKey],
         idempotencyKey,
@@ -300,6 +343,7 @@ export function createD1R2LibraryStore(env, options = {}) {
       }),
     ];
     await guardedBatch(statements, {
+      attemptId,
       cleanup: [objectKey],
       idempotencyKey,
       onConflict: async () => (await projectRow(id)).current_revision !== baseRevision,
@@ -323,6 +367,7 @@ export function createD1R2LibraryStore(env, options = {}) {
     const nextArchived = archived === true ? 1 : 0;
     const revision = baseRevision + 1;
     const updatedAt = timestamp();
+    const attemptId = crypto.randomUUID();
     const statements = [
       db.prepare(`
         INSERT INTO project_revisions (
@@ -342,6 +387,7 @@ export function createD1R2LibraryStore(env, options = {}) {
       `).bind(nextArchived, revision, updatedAt, actorEmail(actor), id, baseRevision),
       mutationStatement(db, {
         actor,
+        attemptId,
         conditionSql: 'EXISTS (SELECT 1 FROM projects WHERE id = ? AND current_revision = ? AND archived = ?)',
         conditionValues: [id, revision, nextArchived],
         idempotencyKey,
@@ -350,6 +396,7 @@ export function createD1R2LibraryStore(env, options = {}) {
       }),
     ];
     await guardedBatch(statements, {
+      attemptId,
       idempotencyKey,
       onConflict: async () => (await projectRow(id)).current_revision !== baseRevision,
     });
@@ -379,9 +426,11 @@ export function createD1R2LibraryStore(env, options = {}) {
         fail('revision_conflict', 'The project changed since it was opened.', 409);
       }
       const deletedAt = timestamp();
+      const attemptId = crypto.randomUUID();
       const tombstone = [
         mutationStatement(db, {
           actor,
+          attemptId,
           conditionSql: 'EXISTS (SELECT 1 FROM projects WHERE id = ? AND current_revision = ? AND deleted_at IS NULL)',
           conditionValues: [id, baseRevision],
           idempotencyKey,
@@ -468,6 +517,7 @@ export function createD1R2LibraryStore(env, options = {}) {
     const nextRevision = baseRevision + 1;
     const details = await contentDetails(document);
     const updatedAt = timestamp();
+    const attemptId = crypto.randomUUID();
     const objectKey = `projects/${id}/revisions/${nextRevision}-${crypto.randomUUID()}.lw.json`;
     await putBody(objectKey, details);
     const statements = [
@@ -492,6 +542,7 @@ export function createD1R2LibraryStore(env, options = {}) {
       ),
       mutationStatement(db, {
         actor,
+        attemptId,
         conditionSql: 'EXISTS (SELECT 1 FROM projects WHERE id = ? AND current_revision = ? AND current_object_key = ?)',
         conditionValues: [id, nextRevision, objectKey],
         idempotencyKey,
@@ -500,6 +551,7 @@ export function createD1R2LibraryStore(env, options = {}) {
       }),
     ];
     await guardedBatch(statements, {
+      attemptId,
       cleanup: [objectKey],
       idempotencyKey,
       onConflict: async () => (await projectRow(id)).current_revision !== baseRevision,
@@ -542,6 +594,7 @@ export function createD1R2LibraryStore(env, options = {}) {
     const revision = baseRevision + 1;
     const details = await contentDetails(normalized);
     const updatedAt = timestamp();
+    const attemptId = crypto.randomUUID();
     const objectKey = `workspace-assets/${encodeURIComponent(kind)}/revisions/${revision}-${crypto.randomUUID()}.json`;
     await putBody(objectKey, details);
 
@@ -589,6 +642,7 @@ export function createD1R2LibraryStore(env, options = {}) {
     ];
     statements.push(mutationStatement(db, {
       actor,
+      attemptId,
       conditionSql: 'EXISTS (SELECT 1 FROM asset_heads WHERE asset_kind = ? AND current_revision = ? AND current_object_key = ?)',
       conditionValues: [kind, revision, objectKey],
       idempotencyKey,
@@ -596,6 +650,7 @@ export function createD1R2LibraryStore(env, options = {}) {
       timestamp: updatedAt,
     }));
     await guardedBatch(statements, {
+      attemptId,
       cleanup: [objectKey],
       idempotencyKey,
       onConflict: async () => (await assetRow(kind))?.current_revision !== baseRevision,
@@ -604,6 +659,32 @@ export function createD1R2LibraryStore(env, options = {}) {
   }
 
   async function exportBackup({ exportedAt = timestamp() } = {}) {
+    const projectStats = await db.prepare(`
+      SELECT COUNT(DISTINCT p.id) AS entry_count,
+        COUNT(r.id) AS revision_count,
+        COALESCE(SUM(r.byte_length), 0) AS body_bytes
+      FROM projects p
+      LEFT JOIN project_revisions r ON r.project_id = p.id
+      WHERE p.deleted_at IS NULL
+    `).first();
+    const assetStats = await db.prepare(`
+      SELECT COUNT(DISTINCT h.asset_kind) AS entry_count,
+        COUNT(r.id) AS revision_count,
+        COALESCE(SUM(r.byte_length), 0) AS body_bytes
+      FROM asset_heads h
+      LEFT JOIN asset_revisions r ON r.asset_kind = h.asset_kind
+    `).first();
+    const revisionCount = Number(projectStats.revision_count) + Number(assetStats.revision_count);
+    const estimatedBytes = Number(projectStats.body_bytes)
+      + Number(assetStats.body_bytes)
+      + revisionCount * 256
+      + Number(projectStats.entry_count) * 384
+      + Number(assetStats.entry_count) * 256
+      + 1024;
+    if (revisionCount > maxBackupRevisions || estimatedBytes > maxBackupBytes) {
+      fail('backup_too_large', 'The project library is too large for one backup response.', 413);
+    }
+
     const { results: projects } = await db.prepare(`
       SELECT * FROM projects WHERE deleted_at IS NULL ORDER BY created_at, id
     `).all();
@@ -688,6 +769,7 @@ export function createD1R2LibraryStore(env, options = {}) {
     const conditions = [];
     const conditionValues = [];
     const importedAt = timestamp();
+    const attemptId = crypto.randomUUID();
 
     try {
       for (const source of normalized.projects) {
@@ -818,6 +900,7 @@ export function createD1R2LibraryStore(env, options = {}) {
 
     statements.push(mutationStatement(db, {
       actor,
+      attemptId,
       conditionSql: conditions.length ? conditions.join(' AND ') : '1',
       conditionValues,
       idempotencyKey,
@@ -833,6 +916,7 @@ export function createD1R2LibraryStore(env, options = {}) {
       normalized.projects.length, normalized.workspaceAssets.length,
     ));
     await guardedBatch(statements, {
+      attemptId,
       cleanup: objectKeys,
       idempotencyKey,
       onConflict: async () => true,

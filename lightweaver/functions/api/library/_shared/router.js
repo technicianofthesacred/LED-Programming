@@ -11,6 +11,7 @@ import {
 
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 const SAFE_STORE_ERRORS = {
+  backup_too_large: [413, 'The project library is too large for one backup response.'],
   idempotency_conflict: [409, 'The idempotency key was already accepted.'],
   invalid_project: [400, 'The project is not a supported Lightweaver project.'],
   not_found: [404, 'The requested library record was not found.'],

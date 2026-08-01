@@ -404,6 +404,37 @@ test('D1/R2 store writes immutable private bodies before atomic metadata and cle
   );
 });
 
+test('an ambiguous commit-then-throw keeps committed R2 references readable', async t => {
+  const { mf, db, bucket } = await localBindings();
+  t.after(() => mf.dispose());
+  let committedBatches = 0;
+  const ambiguousDb = {
+    prepare: (...args) => db.prepare(...args),
+    async batch(statements) {
+      const result = await db.batch(statements);
+      committedBatches += 1;
+      if (committedBatches === 1) throw new Error('ambiguous transport failure after commit');
+      return result;
+    },
+  };
+  const store = createD1R2LibraryStore({ PROJECTS_DB: ambiguousDb, PROJECT_BLOBS: bucket });
+  const actor = { email: 'worker@example.test', role: 'worker', subject: 'worker-1' };
+  const created = await store.createProject({
+    title: 'Committed despite transport failure',
+    project: portableProject({ id: 'committed-after-throw' }),
+    actor,
+    idempotencyKey: 'commit-then-throw',
+  });
+
+  assert.equal(created.revision, 1);
+  assert.equal((await store.readProject({ id: created.id })).document.id, 'committed-after-throw');
+  assert.equal((await bucket.list({ prefix: `projects/${created.id}/` })).objects.length, 1);
+  const mutation = await db.prepare(`
+    SELECT attempt_id FROM library_mutations WHERE idempotency_key = ?
+  `).bind('commit-then-throw').first();
+  assert.match(mutation.attempt_id, /^[0-9a-f-]{36}$/);
+});
+
 test('D1/R2 store implements assets, duplicate, restore, backup/import, deletion, and atomic idempotency', async t => {
   const { mf, db, bucket } = await localBindings();
   t.after(() => mf.dispose());
@@ -684,6 +715,43 @@ test('a failed multi-object import best-effort removes every object written befo
   assert.equal((await bucket.list()).objects.length, 0);
 });
 
+test('oversized full-library export rejects before reading any R2 body', async t => {
+  const { mf, db, bucket } = await localBindings();
+  t.after(() => mf.dispose());
+  const actor = { email: 'worker@example.test', role: 'worker', subject: 'worker-1' };
+  const setupStore = createD1R2LibraryStore({ PROJECTS_DB: db, PROJECT_BLOBS: bucket });
+  await setupStore.createProject({
+    title: 'Too large to export',
+    project: portableProject({ id: 'too-large-to-export' }),
+    actor,
+    idempotencyKey: 'oversized-export-create',
+  });
+  let r2Reads = 0;
+  const trackingBucket = {
+    async get(...args) {
+      r2Reads += 1;
+      return bucket.get(...args);
+    },
+    head: (...args) => bucket.head(...args),
+    list: (...args) => bucket.list(...args),
+    put: (...args) => bucket.put(...args),
+    delete: (...args) => bucket.delete(...args),
+  };
+  const boundedStore = createD1R2LibraryStore(
+    { PROJECTS_DB: db, PROJECT_BLOBS: trackingBucket },
+    { maxBackupBytes: 128 },
+  );
+  const response = await handleLibraryRequest({
+    request: new Request('https://led.mandalacodes.com/api/library/backup'),
+    identity: actor,
+    store: boundedStore,
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 413);
+  assert.equal(payload.error.code, 'backup_too_large');
+  assert.equal(r2Reads, 0);
+});
+
 test('Wrangler applies local migrations and serves the deployed Pages catch-all without remote access', {
   timeout: 30_000,
 }, async () => {
@@ -696,13 +764,15 @@ test('Wrangler applies local migrations and serves the deployed Pages catch-all 
   let child;
   try {
     const migration = await runWrangler([
-      'd1', 'migrations', 'apply', 'PROJECTS_DB', '--local', '--persist-to', state,
+      'd1', 'migrations', 'apply', 'PROJECTS_DB', '--config', 'wrangler.local.toml',
+      '--local', '--persist-to', state,
     ]);
     assert.equal(migration.code, 0, `${migration.stdout}\n${migration.stderr}`);
     assert.match(`${migration.stdout}\n${migration.stderr}`, /0001_cloud_project_library\.sql/);
 
     const schema = await runWrangler([
-      'd1', 'execute', 'PROJECTS_DB', '--local', '--persist-to', state,
+      'd1', 'execute', 'PROJECTS_DB', '--config', 'wrangler.local.toml',
+      '--local', '--persist-to', state,
       '--command', "SELECT COUNT(*) AS project_tables FROM sqlite_master WHERE type='table' AND name='projects'",
       '--json',
     ]);
@@ -719,6 +789,8 @@ test('Wrangler applies local migrations and serves the deployed Pages catch-all 
       '--port', String(port),
       '--log-level', 'error',
       '--show-interactive-dev-session=false',
+      '--d1', 'PROJECTS_DB',
+      '--r2', 'PROJECT_BLOBS',
       '--binding', 'LIGHTWEAVER_LOCAL_AUTH=wrangler-pages-dev',
       '--binding', `LOCAL_ACCESS_JWKS=${JSON.stringify(fixture.jwksDocument)}`,
       '--binding', `ACCESS_TEAM_DOMAIN=${ACCESS_ENV.ACCESS_TEAM_DOMAIN}`,
@@ -789,12 +861,14 @@ test('Wrangler applies local migrations and serves the deployed Pages catch-all 
 });
 
 test('binding config, migration, route manifest, and package scripts are local-safe and complete', async () => {
-  const [routesText, migration, wrangler, packageText, gitignore] = await Promise.all([
+  const [routesText, migration, wrangler, localWrangler, packageText, gitignore, productionGuard] = await Promise.all([
     readFile(new URL('../public/_routes.json', import.meta.url), 'utf8'),
     readFile(new URL('../migrations/0001_cloud_project_library.sql', import.meta.url), 'utf8'),
     readFile(new URL('../wrangler.toml', import.meta.url), 'utf8'),
+    readFile(new URL('../wrangler.local.toml', import.meta.url), 'utf8'),
     readFile(new URL('../package.json', import.meta.url), 'utf8'),
     readFile(new URL('../../.gitignore', import.meta.url), 'utf8'),
+    readFile(new URL('../scripts/require-cloud-library-production.mjs', import.meta.url), 'utf8'),
   ]);
   assert.deepEqual(JSON.parse(routesText), {
     version: 1,
@@ -810,11 +884,11 @@ test('binding config, migration, route manifest, and package scripts are local-s
   assert.match(migration, /archived[^,\n]*NOT NULL/i);
   assert.match(migration, /deleted_at/i);
   assert.match(migration, /deletion_idempotency_key\s+TEXT\s+UNIQUE/i);
-  assert.match(wrangler, /binding\s*=\s*"PROJECTS_DB"/);
-  assert.match(wrangler, /binding\s*=\s*"PROJECT_BLOBS"/);
-  assert.match(wrangler, /ACCESS_TEAM_DOMAIN\s*=\s*""/);
-  assert.match(wrangler, /ACCESS_AUD\s*=\s*""/);
-  assert.match(wrangler, /OWNER_EMAILS\s*=\s*""/);
+  assert.match(migration, /attempt_id\s+TEXT\s+NOT NULL\s+UNIQUE/i);
+  assert.doesNotMatch(wrangler, /PROJECTS_DB|PROJECT_BLOBS|ACCESS_TEAM_DOMAIN|ACCESS_AUD|OWNER_EMAILS/);
+  assert.match(localWrangler, /binding\s*=\s*"PROJECTS_DB"/);
+  assert.match(localWrangler, /binding\s*=\s*"PROJECT_BLOBS"/);
+  assert.doesNotMatch(localWrangler, /ACCESS_TEAM_DOMAIN\s*=\s*""|ACCESS_AUD\s*=\s*""|OWNER_EMAILS\s*=\s*""/);
   assert.doesNotMatch(wrangler, /LOCAL_ACCESS_JWKS|LIGHTWEAVER_LOCAL_AUTH/);
   assert.doesNotMatch(wrangler, /database_id\s*=|preview_database_id\s*=/);
 
@@ -824,7 +898,40 @@ test('binding config, migration, route manifest, and package scripts are local-s
   assert.equal(pkg.scripts['test:cloud-bindings'], 'node tests/cloud-bindings.mjs');
   assert.match(pkg.scripts['build:functions'] || '', /^mkdir -p \.pages\/functions-build && wrangler pages functions build /);
   assert.match(pkg.scripts['build:functions'] || '', /--output-routes-path \.pages\/functions-build\/_routes\.json/);
+  assert.match(pkg.scripts['deploy:pages'], /^node scripts\/require-cloud-library-production\.mjs && /);
+  for (const required of [
+    'LIGHTWEAVER_PRODUCTION_LIBRARY_READY',
+    'PROJECTS_DB_DATABASE_ID',
+    'PROJECT_BLOBS_BUCKET_NAME',
+    'ACCESS_TEAM_DOMAIN',
+    'ACCESS_AUD',
+    'OWNER_EMAILS',
+  ]) assert.match(productionGuard, new RegExp(required));
   assert.match(gitignore, /\.wrangler/);
   assert.match(gitignore, /\.dev\.vars/);
   assert.match(gitignore, /\.env/);
+});
+
+test('production deploy guard fails closed without real library configuration', async () => {
+  const guard = join(PROJECT_DIR, 'scripts', 'require-cloud-library-production.mjs');
+  const child = spawn(process.execPath, [guard], {
+    cwd: PROJECT_DIR,
+    env: {
+      PATH: process.env.PATH,
+      PROJECTS_DB_DATABASE_ID: '',
+      PROJECT_BLOBS_BUCKET_NAME: '',
+      ACCESS_TEAM_DOMAIN: '',
+      ACCESS_AUD: '',
+      OWNER_EMAILS: '',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stderr = '';
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  const [code] = await once(child, 'close');
+
+  assert.equal(code, 1);
+  assert.match(stderr, /production deployment is blocked/i);
+  assert.match(stderr, /PROJECTS_DB_DATABASE_ID/);
+  assert.match(stderr, /LIGHTWEAVER_PRODUCTION_LIBRARY_READY=confirmed/);
 });

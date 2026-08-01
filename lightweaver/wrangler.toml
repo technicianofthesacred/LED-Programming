@@ -2,20 +2,3 @@ name = "lightweaver"
 compatibility_date = "2026-07-15"
 compatibility_flags = ["nodejs_compat"]
 pages_build_output_dir = "dist"
-
-# Local/test bindings. Provision production resources, then attach their real IDs
-# in the Cloudflare Pages project settings before deploying the library API.
-[[d1_databases]]
-binding = "PROJECTS_DB"
-database_name = "lightweaver-projects-local"
-migrations_dir = "migrations"
-
-[[r2_buckets]]
-binding = "PROJECT_BLOBS"
-bucket_name = "lightweaver-projects-local"
-
-[vars]
-ACCESS_TEAM_DOMAIN = ""
-ACCESS_AUD = ""
-OWNER_EMAILS = ""
-MAX_LIBRARY_BODY_BYTES = "2097152"

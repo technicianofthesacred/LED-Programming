@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS library_imports (
 
 CREATE TABLE IF NOT EXISTS library_mutations (
   idempotency_key TEXT PRIMARY KEY NOT NULL,
+  attempt_id TEXT NOT NULL UNIQUE,
   mutation_kind TEXT NOT NULL,
   actor TEXT NOT NULL,
   created_at TEXT NOT NULL
