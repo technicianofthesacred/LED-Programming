@@ -82,6 +82,9 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_MIGRATION_API_TOKEN: ${{ secrets.CLOUDFLARE_MIGRATION_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DISPATCH_SOURCE: ${{ github.event.inputs.source || 'manual' }}
+          EVENT_NAME: ${{ github.event_name }}
+          LIGHTWEAVER_PREVIEW_ACCESS_READY: ${{ vars.LIGHTWEAVER_PREVIEW_ACCESS_READY }}
           LIGHTWEAVER_PRODUCTION_LIBRARY_READY: ${{ vars.LIGHTWEAVER_PRODUCTION_LIBRARY_READY }}
           PROJECTS_DB_DATABASE_ID: ${{ secrets.PROJECTS_DB_DATABASE_ID }}
           PROJECTS_DB_DATABASE_NAME: ${{ vars.PROJECTS_DB_DATABASE_NAME }}
@@ -94,19 +97,21 @@ jobs:
           MAX_LIBRARY_BACKUP_REVISIONS: ${{ vars.MAX_LIBRARY_BACKUP_REVISIONS }}
         run: |
           missing=()
-          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_MIGRATION_API_TOKEN CLOUDFLARE_ACCOUNT_ID LIGHTWEAVER_PRODUCTION_LIBRARY_READY PROJECTS_DB_DATABASE_ID PROJECTS_DB_DATABASE_NAME PROJECT_BLOBS_BUCKET_NAME ACCESS_TEAM_DOMAIN ACCESS_AUD OWNER_EMAILS MAX_LIBRARY_BODY_BYTES MAX_LIBRARY_BACKUP_BYTES MAX_LIBRARY_BACKUP_REVISIONS; do
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_MIGRATION_API_TOKEN CLOUDFLARE_ACCOUNT_ID LIGHTWEAVER_PREVIEW_ACCESS_READY LIGHTWEAVER_PRODUCTION_LIBRARY_READY PROJECTS_DB_DATABASE_ID PROJECTS_DB_DATABASE_NAME PROJECT_BLOBS_BUCKET_NAME ACCESS_TEAM_DOMAIN ACCESS_AUD OWNER_EMAILS MAX_LIBRARY_BODY_BYTES MAX_LIBRARY_BACKUP_BYTES MAX_LIBRARY_BACKUP_REVISIONS; do
             if [ -z "${!name}" ]; then
               missing+=("$name")
             fi
           done
-          if [ "${#missing[@]}" -eq 0 ] && [ "$LIGHTWEAVER_PRODUCTION_LIBRARY_READY" = "confirmed" ]; then
+          if [ "${#missing[@]}" -eq 0 ] \
+            && [ "$LIGHTWEAVER_PREVIEW_ACCESS_READY" = "confirmed" ] \
+            && [ "$LIGHTWEAVER_PRODUCTION_LIBRARY_READY" = "confirmed" ]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Cloudflare library provisioning or credentials are incomplete — skipping deploy. Missing names: ${missing[*]:-none}; readiness must be confirmed."
             # Fail loudly only for a HUMAN manual run; CI dispatches
             # (build-firmware passes source=ci) skip cleanly like push runs.
-            if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.source || 'manual' }}" != "ci" ]; then
+            if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DISPATCH_SOURCE" != "ci" ]; then
               echo "::error::Manual deploy requested but Cloudflare secrets are missing."
               exit 1
             fi
@@ -126,18 +131,54 @@ jobs:
       # Schema changes are expand-only. This token is account-scoped to D1
       # writes and is never exposed to the normal Pages deployment step.
       - name: Apply additive production D1 migrations
+        id: migrate
         if: steps.creds.outputs.enabled == 'true'
         working-directory: lightweaver
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_MIGRATION_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PROJECTS_DB_DATABASE_ID: ${{ secrets.PROJECTS_DB_DATABASE_ID }}
           PROJECTS_DB_DATABASE_NAME: ${{ vars.PROJECTS_DB_DATABASE_NAME }}
-        run: npm exec -- wrangler d1 migrations apply "$PROJECTS_DB_DATABASE_NAME" --remote
+        run: |
+          set -euo pipefail
+          if [ "$PROJECTS_DB_DATABASE_NAME" != "lightweaver-projects-production" ]; then
+            echo "::error::PROJECTS_DB_DATABASE_NAME is not the canonical production database."
+            exit 1
+          fi
+          if [[ ! "$PROJECTS_DB_DATABASE_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]]; then
+            echo "::error::PROJECTS_DB_DATABASE_ID is not a valid D1 database UUID."
+            exit 1
+          fi
+          migration_source="$GITHUB_WORKSPACE/lightweaver/migrations"
+          if [ ! -d "$migration_source" ]; then
+            echo "::error::Migration source directory is missing."
+            exit 1
+          fi
+          umask 077
+          migration_root="$(mktemp -d "$RUNNER_TEMP/lightweaver-d1-migration.XXXXXX")"
+          migration_config="$migration_root/wrangler.toml"
+          cleanup_migration_config() {
+            rm -rf -- "$migration_root"
+          }
+          trap cleanup_migration_config EXIT
+          cat > "$migration_config" <<EOF
+          name = "lightweaver-production-migrations"
+          compatibility_date = "2026-07-15"
+
+          [[d1_databases]]
+          binding = "PROJECTS_DB"
+          database_name = "$PROJECTS_DB_DATABASE_NAME"
+          database_id = "$PROJECTS_DB_DATABASE_ID"
+          migrations_dir = "$migration_source"
+          EOF
+          chmod 600 "$migration_config"
+          npm exec -- wrangler d1 migrations apply PROJECTS_DB --config "$migration_config" --remote
 
       # Core tests already ran in the required `test` job above. deploy:pages
       # still builds, stages, and runs artifact assertions immediately before
       # the pinned Wrangler upload so an invalid artifact cannot be published.
       - name: Build and deploy to Cloudflare Pages
+        id: publish
         if: steps.creds.outputs.enabled == 'true'
         working-directory: lightweaver
         env:
@@ -156,6 +197,7 @@ jobs:
         run: npm run deploy:pages
 
       - name: Verify the live Production Setup release
+        id: freshness
         if: steps.creds.outputs.enabled == 'true'
         working-directory: lightweaver
         env:
@@ -179,13 +221,28 @@ jobs:
       - name: Record publish result
         if: always()
         env:
+          FRESHNESS_OUTCOME: ${{ steps.freshness.outcome }}
+          MIGRATION_OUTCOME: ${{ steps.migrate.outcome }}
           PUBLISH_ENABLED: ${{ steps.creds.outputs.enabled }}
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
         run: |
-          if [ "$PUBLISH_ENABLED" = "true" ]; then
-            echo "## Production publish" >> "$GITHUB_STEP_SUMMARY"
-            echo "Cloudflare upload ran and the live freshness check passed before this job could succeed." >> "$GITHUB_STEP_SUMMARY"
-          else
+          if [ "$PUBLISH_ENABLED" != "true" ]; then
             echo "## Production publish: NOT RUN" >> "$GITHUB_STEP_SUMMARY"
-            echo "Cloudflare credentials were unavailable. This successful CI result is not a deployment and must not be used as shipment evidence." >> "$GITHUB_STEP_SUMMARY"
+            echo "Cloudflare provisioning or credentials were unavailable. This CI result is not a deployment." >> "$GITHUB_STEP_SUMMARY"
             echo "::warning::No production publish occurred. Shipment still requires a credentialed deploy and passing live freshness check."
+          elif [ "$MIGRATION_OUTCOME" != "success" ]; then
+            echo "## Production publish failed before upload" >> "$GITHUB_STEP_SUMMARY"
+            echo "The production migration outcome was $MIGRATION_OUTCOME; Pages upload did not complete." >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Production migration did not succeed; no publish is proven."
+          elif [ "$PUBLISH_OUTCOME" != "success" ]; then
+            echo "## Production publish failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "The Pages upload outcome was $PUBLISH_OUTCOME; no live deployment is proven." >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Pages upload did not succeed."
+          elif [ "$FRESHNESS_OUTCOME" != "success" ]; then
+            echo "## Production uploaded; live proof failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "The Pages upload succeeded, but live freshness outcome was $FRESHNESS_OUTCOME. Do not treat this run as shipped." >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Live freshness proof did not succeed."
+          else
+            echo "## Production publish" >> "$GITHUB_STEP_SUMMARY"
+            echo "The migration, Pages upload, and live freshness check all succeeded." >> "$GITHUB_STEP_SUMMARY"
           fi

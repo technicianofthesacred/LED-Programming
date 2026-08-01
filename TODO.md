@@ -81,8 +81,6 @@ Building the sound-reactive effect set for the backlit laser-cut mandala (675 LE
 
 - [ ] **Bench-test WiFi recovery firmware** — flash the rebuilt factory binary to a bench card and verify the new WiFi recovery chain end-to-end _(you · moderate)_
   The 2026-06-11 batch (WiFi auto-rejoin, Change-WiFi/factory-reset buttons, scan polling, CORS allowlist, multi-range zones) was written and reviewed without hardware. Done when: wrong-password setup shows the "WiFi isn't connecting" banner and Re-enter WiFi works; power-cycling the router while the card runs makes the card rejoin within ~2 minutes on its own; the captive portal stays usable during retry attempts (watch for AP hiccups from STA channel switching); Studio push and mapper live push still work from localhost and led.mandalacodes.com. → Changes: `firmware/lightweaver-controller/src/`, review at [docs/project-review-2026-06-11.md](docs/project-review-2026-06-11.md)
-- [ ] **Redeploy the mandalacodes production bundle** — rebuild and deploy the landing+/design bundle so production picks up the new Studio dist and firmware binary _(you · quick)_
-  Deploy ownership was settled 2026-06-11: this repo deploys only to the `studio` Pages preview branch; production at led.mandalacodes.com ships from the mandalacodes repo. Done when led.mandalacodes.com/design and /firmware/…factory.bin serve the new builds. → Plan: [docs/led-mandalacodes-setup.md](docs/led-mandalacodes-setup.md)
 
 ### Security hardening (2026-06-16 audit)
 

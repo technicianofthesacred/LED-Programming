@@ -77,6 +77,12 @@ provisioning blocker remains.
       Function compilation artifact exists.
 - [ ] Preview D1 and private R2 bindings use `PROJECTS_DB` and `PROJECT_BLOBS`;
       production has separate resources with the same binding names.
+- [ ] Pages Preview Access is enabled because preview deployment URLs are public
+      by default. Its Access application allows only the approved exact-email
+      identities, covers hash and branch-alias URLs, and the preview Function
+      uses that preview application's audience. Set
+      `LIGHTWEAVER_PREVIEW_ACCESS_READY=confirmed` only after signed-out root
+      and `/api/library/session` requests are denied.
 - [ ] Access protects `led.mandalacodes.com/api/library*` with an exact-email
       allow policy, and the deployed owner identity configuration is correct.
 - [ ] Preview migration completes before preview deploy. An approved worker

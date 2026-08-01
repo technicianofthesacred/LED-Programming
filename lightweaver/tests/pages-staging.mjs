@@ -1,7 +1,19 @@
 import assert from 'node:assert/strict';
 import { createHash, webcrypto } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { resolve, sep } from 'node:path';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve, sep } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { verifyProductionReleaseSet } from '../src/lib/productionReleaseGate.js';
 import { parseStudioBuildGraph } from '../src/lib/productionDeploymentCheck.js';
 
@@ -17,10 +29,35 @@ const routes = JSON.parse(readFileSync(resolve(root, 'public/_routes.json'), 'ut
 const workflow = readFileSync(resolve(root, '../.github/workflows/deploy-site.yml'), 'utf8');
 const testWorkflow = readFileSync(resolve(root, '../.github/workflows/test.yml'), 'utf8');
 const setupDoc = readFileSync(resolve(root, '../docs/led-mandalacodes-setup.md'), 'utf8');
+const todo = readFileSync(resolve(root, '../TODO.md'), 'utf8');
 const runtimeRootReferences = [
   readFileSync(resolve(root, 'src/lib/cardPushClient.js'), 'utf8'),
   readFileSync(resolve(root, 'src/v3/lw-flash.jsx'), 'utf8'),
 ].join('\n');
+
+function workflowRunScript(stepName) {
+  const marker = `      - name: ${stepName}\n`;
+  const start = workflow.indexOf(marker);
+  assert.ok(start >= 0, `workflow step must exist: ${stepName}`);
+  const next = workflow.indexOf('\n      - ', start + marker.length);
+  const step = workflow.slice(start, next < 0 ? workflow.length : next);
+  const runMarker = '\n        run: |\n';
+  const runStart = step.indexOf(runMarker);
+  assert.ok(runStart >= 0, `${stepName} must use a testable multiline run block`);
+  return step.slice(runStart + runMarker.length)
+    .split('\n')
+    .map(line => line.startsWith('          ') ? line.slice(10) : line)
+    .join('\n')
+    .trimEnd();
+}
+
+function runWorkflowScript(script, env = {}) {
+  return spawnSync('/bin/bash', ['-c', `set -euo pipefail\n${script}`], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { PATH: process.env.PATH, ...env },
+  });
+}
 const deploymentDocs = [
   readFileSync(resolve(root, '../docs/led-mandalacodes-setup.md'), 'utf8'),
   readFileSync(resolve(root, '../docs/deployment-checklist.md'), 'utf8'),
@@ -65,12 +102,108 @@ assert.ok(deployStep > migrationStep, 'additive D1 migrations must finish before
 assert.match(workflow, /CLOUDFLARE_MIGRATION_API_TOKEN:\s*\$\{\{ secrets\.CLOUDFLARE_MIGRATION_API_TOKEN \}\}/);
 assert.match(workflow, /Apply additive production D1 migrations[\s\S]*?CLOUDFLARE_API_TOKEN:\s*\$\{\{ secrets\.CLOUDFLARE_MIGRATION_API_TOKEN \}\}/);
 assert.match(workflow, /Build and deploy to Cloudflare Pages[\s\S]*?CLOUDFLARE_API_TOKEN:\s*\$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/);
-assert.match(workflow, /wrangler d1 migrations apply "\$PROJECTS_DB_DATABASE_NAME" --remote/);
 assert.doesNotMatch(
   workflow.slice(deployStep),
   /CLOUDFLARE_API_TOKEN:\s*\$\{\{ secrets\.CLOUDFLARE_MIGRATION_API_TOKEN \}\}/,
   'the normal Pages deploy must not inherit the D1 migration credential',
 );
+
+const credentialScript = workflowRunScript('Check Cloudflare credentials');
+assert.doesNotMatch(credentialScript, /\$\{\{/, 'untrusted GitHub contexts must enter the shell through quoted environment values');
+assert.match(workflow, /EVENT_NAME:\s*\$\{\{ github\.event_name \}\}/);
+assert.match(workflow, /DISPATCH_SOURCE:\s*\$\{\{ github\.event\.inputs\.source \|\| 'manual' \}\}/);
+
+const injectionRoot = mkdtempSync(join(tmpdir(), 'lightweaver-workflow-injection-'));
+try {
+  const githubOutput = join(injectionRoot, 'github-output');
+  const injectedPath = join(injectionRoot, 'injected');
+  const injection = runWorkflowScript(credentialScript, {
+    ACCESS_AUD: '',
+    ACCESS_TEAM_DOMAIN: '',
+    CLOUDFLARE_ACCOUNT_ID: '',
+    CLOUDFLARE_API_TOKEN: '',
+    CLOUDFLARE_MIGRATION_API_TOKEN: '',
+    DISPATCH_SOURCE: `ci\" ]; touch ${injectedPath}; #`,
+    EVENT_NAME: 'workflow_dispatch',
+    GITHUB_OUTPUT: githubOutput,
+    LIGHTWEAVER_PREVIEW_ACCESS_READY: '',
+    LIGHTWEAVER_PRODUCTION_LIBRARY_READY: '',
+    MAX_LIBRARY_BACKUP_BYTES: '',
+    MAX_LIBRARY_BACKUP_REVISIONS: '',
+    MAX_LIBRARY_BODY_BYTES: '',
+    OWNER_EMAILS: '',
+    PROJECTS_DB_DATABASE_ID: '',
+    PROJECTS_DB_DATABASE_NAME: '',
+    PROJECT_BLOBS_BUCKET_NAME: '',
+  });
+  assert.notEqual(injection.status, 0, 'a malicious manual source must not bypass the missing-configuration failure');
+  assert.equal(existsSync(injectedPath), false, 'workflow_dispatch input must remain inert shell data');
+} finally {
+  rmSync(injectionRoot, { recursive: true, force: true });
+}
+
+const migrationScript = workflowRunScript('Apply additive production D1 migrations');
+const migrationRoot = mkdtempSync(join(tmpdir(), 'lightweaver-workflow-migration-'));
+try {
+  const fakeBin = join(migrationRoot, 'bin');
+  const recordPath = join(migrationRoot, 'migration-record.json');
+  mkdirSync(fakeBin);
+  const fakeNpm = join(fakeBin, 'npm');
+  writeFileSync(fakeNpm, `#!/usr/bin/env node
+const { readFileSync, statSync, writeFileSync } = require('node:fs');
+const args = process.argv.slice(2);
+const configIndex = args.indexOf('--config');
+const configPath = args[configIndex + 1];
+writeFileSync(process.env.MIGRATION_RECORD, JSON.stringify({
+  args,
+  configPath,
+  config: readFileSync(configPath, 'utf8'),
+  mode: statSync(configPath).mode & 0o777,
+}));
+`);
+  chmodSync(fakeNpm, 0o755);
+  const migration = runWorkflowScript(migrationScript, {
+    GITHUB_WORKSPACE: resolve(root, '..'),
+    MIGRATION_RECORD: recordPath,
+    PATH: `${fakeBin}:${process.env.PATH}`,
+    PROJECTS_DB_DATABASE_ID: '123e4567-e89b-42d3-a456-426614174000',
+    PROJECTS_DB_DATABASE_NAME: 'lightweaver-projects-production',
+    RUNNER_TEMP: migrationRoot,
+  });
+  assert.equal(migration.status, 0, `${migration.stdout}\n${migration.stderr}`);
+  const record = JSON.parse(readFileSync(recordPath, 'utf8'));
+  assert.deepEqual(record.args, [
+    'exec', '--', 'wrangler', 'd1', 'migrations', 'apply', 'PROJECTS_DB',
+    '--config', record.configPath, '--remote',
+  ]);
+  assert.equal(record.mode, 0o600, 'generated production migration config must be owner-readable only');
+  assert.match(record.config, /binding\s*=\s*"PROJECTS_DB"/);
+  assert.match(record.config, /database_name\s*=\s*"lightweaver-projects-production"/);
+  assert.match(record.config, /database_id\s*=\s*"123e4567-e89b-42d3-a456-426614174000"/);
+  assert.match(record.config, new RegExp(`migrations_dir\\s*=\\s*${JSON.stringify(resolve(root, 'migrations')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.equal(existsSync(record.configPath), false, 'temporary migration config must be removed after Wrangler exits');
+} finally {
+  rmSync(migrationRoot, { recursive: true, force: true });
+}
+
+const summaryScript = workflowRunScript('Record publish result');
+const summaryRoot = mkdtempSync(join(tmpdir(), 'lightweaver-workflow-summary-'));
+try {
+  const summaryPath = join(summaryRoot, 'summary.md');
+  const failedPublish = runWorkflowScript(summaryScript, {
+    FRESHNESS_OUTCOME: 'skipped',
+    GITHUB_STEP_SUMMARY: summaryPath,
+    MIGRATION_OUTCOME: 'success',
+    PUBLISH_ENABLED: 'true',
+    PUBLISH_OUTCOME: 'failure',
+  });
+  assert.equal(failedPublish.status, 0, `${failedPublish.stdout}\n${failedPublish.stderr}`);
+  const failedSummary = readFileSync(summaryPath, 'utf8');
+  assert.match(failedSummary, /publish failed/i);
+  assert.doesNotMatch(failedSummary, /live freshness check passed/i);
+} finally {
+  rmSync(summaryRoot, { recursive: true, force: true });
+}
 
 assert.doesNotMatch(redirects, /^\/design/m);
 assert.match(redirects, /^\/visitor \/src\/visitor\/visitor\.html 200$/m);
@@ -120,6 +253,31 @@ assert.match(setupDoc, /D1 (?:Edit|Write) only/);
 assert.match(setupDoc, /led\.mandalacodes\.com\/api\/library\*/);
 assert.match(setupDoc, /exact email/i);
 assert.match(setupDoc, /\/cdn-cgi\/access\/logout/);
+for (const required of [
+  'CLOUDFLARE_API_TOKEN',
+  'CLOUDFLARE_MIGRATION_API_TOKEN',
+  'CLOUDFLARE_ACCOUNT_ID',
+  'LIGHTWEAVER_PREVIEW_ACCESS_READY',
+  'LIGHTWEAVER_PRODUCTION_LIBRARY_READY',
+  'PROJECTS_DB_DATABASE_ID',
+  'PROJECTS_DB_DATABASE_NAME',
+  'PROJECT_BLOBS_BUCKET_NAME',
+  'ACCESS_TEAM_DOMAIN',
+  'ACCESS_AUD',
+  'OWNER_EMAILS',
+  'MAX_LIBRARY_BODY_BYTES',
+  'MAX_LIBRARY_BACKUP_BYTES',
+  'MAX_LIBRARY_BACKUP_REVISIONS',
+]) assert.match(setupDoc.slice(0, setupDoc.indexOf('## Current recommended setup')), new RegExp(required));
+assert.match(setupDoc, /preview deployment URLs are public by default/i);
+assert.match(setupDoc, /Enable\s+access\s+policy/);
+assert.match(setupDoc, /preview Access application(?:'s)? audience/i);
+assert.match(setupDoc, /LIGHTWEAVER_PREVIEW_ACCESS_READY=confirmed/);
+assert.match(workflow, /LIGHTWEAVER_PREVIEW_ACCESS_READY:\s*\$\{\{ vars\.LIGHTWEAVER_PREVIEW_ACCESS_READY \}\}/);
+assert.doesNotMatch(setupDoc, /d1 migrations apply lightweaver-projects-(?:preview|production) --remote/);
+assert.match(setupDoc, /d1 migrations apply PROJECTS_DB --config \.wrangler\/deploy\/lightweaver-preview\.toml --remote/);
+assert.doesNotMatch(todo, /this repo deploys only to the `studio` Pages preview branch/);
+assert.doesNotMatch(todo, /production at led\.mandalacodes\.com ships from the mandalacodes repo/);
 assert.match(headers, /\/production\/jobs\/index\.json\n  Cache-Control: no-store/);
 assert.match(headers, /\/studio-build-graph\.json\n  Cache-Control: no-store/);
 assert.match(headers, /\/production\/jobs\/\*\n  Cache-Control: public, max-age=31536000, immutable/);
