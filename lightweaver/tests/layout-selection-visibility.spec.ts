@@ -40,12 +40,12 @@ async function screenBadgeTextSize(locator: any) {
   });
 }
 
-async function zoomToMinimum(page: any) {
+async function zoomToTerminal(page: any, controlTitle: string) {
   const svg = page.locator('.lw-viewport svg');
-  const zoomOut = page.getByTitle('Zoom out (-)');
+  const zoomControl = page.getByTitle(controlTitle);
   for (let index = 0; index < 80; index += 1) {
     const previousViewBox = await svg.getAttribute('viewBox');
-    await zoomOut.click();
+    await zoomControl.click();
     try {
       await expect.poll(() => svg.getAttribute('viewBox'), {
         timeout: 1000,
@@ -61,10 +61,32 @@ async function zoomToMinimum(page: any) {
       return previousViewBox;
     }
   }
-  throw new Error('Zoom out did not reach its terminal clamp within 80 clicks.');
+  const lastViewBox = await svg.getAttribute('viewBox');
+  const zoomPercentage = await page.getByTestId('layout-zoom-percentage').textContent();
+  throw new Error(`${controlTitle} did not reach its terminal clamp within 80 clicks (zoom ${zoomPercentage}, viewBox ${lastViewBox}).`);
 }
 
-test('selected Draw strip has a clear, non-blocking visual identity that remains legible at minimum zoom', async ({ page }) => {
+async function fitSelectionView(page: any) {
+  const svg = page.locator('.lw-viewport svg');
+  const fitAll = page.getByRole('button', { name: 'Fit all' });
+  for (let index = 0; index < 10; index += 1) {
+    const previousViewBox = await svg.getAttribute('viewBox');
+    await fitAll.click();
+    try {
+      await expect.poll(() => svg.getAttribute('viewBox'), {
+        timeout: 1000,
+        intervals: [50, 100, 200],
+      }).not.toBe(previousViewBox);
+    } catch {
+      await expect.poll(() => svg.getAttribute('viewBox')).toBe(previousViewBox);
+      return previousViewBox;
+    }
+  }
+  return svg.getAttribute('viewBox');
+}
+
+test('selected Draw strip has a clear, non-blocking visual identity across drag and zoom extremes', async ({ page }) => {
+  test.setTimeout(60_000);
   await gotoFreshLayout(page);
   await createTwoLineStrips(page);
 
@@ -115,18 +137,6 @@ test('selected Draw strip has a clear, non-blocking visual identity that remains
   await expect(selectedHitPath).toHaveCSS('cursor', 'grab');
   await expect(unselectedHitPath).toHaveCSS('cursor', 'pointer');
 
-  const selectedPathBox = await selectedHitPath.boundingBox();
-  if (!selectedPathBox) throw new Error('Selected strip has no pointer target.');
-  await page.mouse.move(
-    selectedPathBox.x + selectedPathBox.width / 2,
-    selectedPathBox.y + selectedPathBox.height / 2,
-  );
-  await page.mouse.down();
-  await expect(selectedHitPath).toHaveCSS('cursor', 'grabbing');
-  await page.mouse.up();
-  await expect(page.locator('.la-strip-row').first()).toHaveClass(/sel/);
-  await expect(halo).toHaveCount(1);
-
   // Selection weight is intentionally screen-legible rather than shrinking
   // away with the drawing as the maker zooms out to the supported minimum.
   const normalHaloWidth = await screenStrokeWidth(halo);
@@ -136,7 +146,7 @@ test('selected Draw strip has a clear, non-blocking visual identity that remains
   expect(normalCoreWidth).toBeGreaterThanOrEqual(2);
   expect(normalBadgeSize).toBeGreaterThanOrEqual(8);
 
-  const terminalViewBox = await zoomToMinimum(page);
+  const terminalViewBox = await zoomToTerminal(page, 'Zoom out (-)');
   const terminalWidth = Number(terminalViewBox?.trim().split(/\s+/)[2]);
   // Fresh layouts have a 640-unit viewBox; the terminal width demonstrates
   // that the zoom clamp, rather than an intermediate render, was reached.
@@ -151,4 +161,76 @@ test('selected Draw strip has a clear, non-blocking visual identity that remains
   expect(minHaloWidth / normalHaloWidth).toBeGreaterThanOrEqual(0.75);
   expect(minCoreWidth / normalCoreWidth).toBeGreaterThanOrEqual(0.75);
   expect(minBadgeSize / normalBadgeSize).toBeGreaterThanOrEqual(0.75);
+  expect(minHaloWidth / normalHaloWidth).toBeLessThanOrEqual(1.25);
+  expect(minCoreWidth / normalCoreWidth).toBeLessThanOrEqual(1.25);
+  expect(minBadgeSize / normalBadgeSize).toBeLessThanOrEqual(1.25);
+
+  const svg = page.locator('.lw-viewport svg');
+  const fittedViewBox = await fitSelectionView(page);
+  expect(fittedViewBox).not.toBe(terminalViewBox);
+  const fitHaloWidth = await screenStrokeWidth(halo);
+  const fitCoreWidth = await screenStrokeWidth(core);
+  const fitBadgeSize = await screenBadgeTextSize(badge);
+
+  const maximumViewBox = await zoomToTerminal(page, 'Zoom in (+)');
+  const maximumWidth = Number(maximumViewBox?.trim().split(/\s+/)[2]);
+  expect(maximumWidth).toBeLessThanOrEqual((640 / 1e6) * 1.001);
+  const maxHaloWidth = await screenStrokeWidth(halo);
+  const maxCoreWidth = await screenStrokeWidth(core);
+  const maxBadgeSize = await screenBadgeTextSize(badge);
+  expect(maxHaloWidth).toBeGreaterThanOrEqual(3);
+  expect(maxCoreWidth).toBeGreaterThanOrEqual(2);
+  expect(maxBadgeSize).toBeGreaterThanOrEqual(8);
+  expect(maxHaloWidth / fitHaloWidth).toBeGreaterThanOrEqual(0.75);
+  expect(maxCoreWidth / fitCoreWidth).toBeGreaterThanOrEqual(0.75);
+  expect(maxBadgeSize / fitBadgeSize).toBeGreaterThanOrEqual(0.75);
+  expect(maxHaloWidth / fitHaloWidth).toBeLessThanOrEqual(1.25);
+  expect(maxCoreWidth / fitCoreWidth).toBeLessThanOrEqual(1.25);
+  // Chromium rounds SVG text bounds more aggressively near the numerical
+  // zoom ceiling, so allow up to a 2x text-size ratio while keeping it legible.
+  expect(maxBadgeSize / fitBadgeSize).toBeLessThanOrEqual(2);
+
+  const dragViewBox = await fitSelectionView(page);
+  expect(dragViewBox).not.toBe(maximumViewBox);
+  const selectedPathBox = await selectedHitPath.boundingBox();
+  if (!selectedPathBox) throw new Error('Selected strip has no pointer target.');
+  await page.mouse.move(
+    selectedPathBox.x + selectedPathBox.width / 2,
+    selectedPathBox.y + selectedPathBox.height / 2,
+  );
+  await page.mouse.down();
+  await expect(selectedHitPath).toHaveCSS('cursor', 'grabbing');
+  await expect(badge).toHaveCount(0);
+  await page.mouse.up();
+  await expect(page.locator('.la-strip-row').first()).toHaveClass(/sel/);
+  await expect(halo).toHaveCount(1);
+  await expect(badge).toContainText(selected.name);
+});
+
+test('a long selected strip name keeps a compact badge while exposing its full label', async ({ page }) => {
+  await gotoFreshLayout(page);
+  await createTwoLineStrips(page);
+
+  const firstRow = page.locator('.la-strip-row').first();
+  await firstRow.click();
+  const selectedId = await page.locator('path[data-strip-path]').first().getAttribute('data-strip-path');
+  if (!selectedId) throw new Error('Selected strip has no id.');
+  await expect.poll(() => stripDetails(page, selectedId)).not.toBeNull();
+  const ledCount = (await stripDetails(page, selectedId))?.pixelCount;
+  const longName = 'Atrium north wall illuminated contour installation segment alpha';
+  await firstRow.locator('.layer-name').dblclick();
+  const renameInput = firstRow.locator('input').first();
+  await renameInput.fill(longName);
+  await renameInput.press('Enter');
+
+  const badge = page.getByTestId('selected-strip-badge');
+  await expect(badge).toContainText(longName);
+  const fullLabel = `${longName} · ${ledCount} LEDs`;
+  await expect(badge).toContainText(fullLabel);
+  const screenWidth = await badge.locator('rect').evaluate(rect => rect.getBoundingClientRect().width);
+  expect(screenWidth).toBeGreaterThan(0);
+  expect(screenWidth).toBeLessThanOrEqual(240);
+  const exposedLabel = await badge.evaluate(node =>
+    node.getAttribute('aria-label') || node.getAttribute('title') || node.querySelector('title')?.textContent || '');
+  expect(exposedLabel).toBe(fullLabel);
 });
