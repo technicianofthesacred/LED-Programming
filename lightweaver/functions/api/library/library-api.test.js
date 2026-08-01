@@ -188,6 +188,53 @@ test('account session, password change, and logout rotate then revoke the cookie
   })).response.status, 401);
 });
 
+test('account password route does not replace an owner reset raced after session authentication', async () => {
+  const { accountStore, repository } = createAccountFixture();
+  const worker = await accountStore.createAccount({
+    username: 'workshop',
+    displayName: 'Workshop',
+    role: 'worker',
+    temporaryPassword: 'temporary-passphrase',
+  });
+  const login = await callAccount(accountStore, '/login', {
+    method: 'POST',
+    body: { username: worker.username, password: 'temporary-passphrase' },
+  });
+  const initialCookie = cookiePair(login.response);
+  let resetInjected = false;
+  const racingStore = {
+    ...accountStore,
+    async changePassword(values) {
+      if (!resetInjected) {
+        resetInjected = true;
+        await accountStore.resetPassword({
+          id: worker.id,
+          temporaryPassword: 'replacement-passphrase',
+        });
+      }
+      return accountStore.changePassword(values);
+    },
+  };
+
+  const raced = await callAccount(racingStore, '/password', {
+    method: 'POST',
+    cookie: initialCookie,
+    body: { password: 'personal-passphrase-456' },
+  });
+  assert.equal(raced.response.status, 409);
+  assert.equal(raced.payload.error.code, 'session_state_changed');
+  assert.equal(raced.response.headers.get('set-cookie'), null);
+  assert.equal((await accountStore.verifyLogin({
+    username: worker.username,
+    password: 'replacement-passphrase',
+  })).identity.accountId, worker.id);
+  await assert.rejects(accountStore.verifyLogin({
+    username: worker.username,
+    password: 'personal-passphrase-456',
+  }), { code: 'invalid_credentials' });
+  assert.equal(repository.snapshot().sessions.some(row => !row.revoked_at), false);
+});
+
 function portableProject({ id = 'lwproj-contract', name = 'Contract Project', brightness = 1 } = {}) {
   return {
     version: 3,
@@ -247,17 +294,22 @@ async function call(store, {
 }
 
 async function activeNativeIdentity(accountStore, account, password) {
+  const authenticated = await accountStore.verifyLogin({
+    username: account.username,
+    password: 'temporary-passphrase',
+  });
   const changed = await accountStore.changePassword({
     accountId: account.id,
     newPassword: password,
+    expectedGeneration: authenticated.observedGeneration,
   });
   return {
-    accountId: changed.id,
-    username: changed.username,
-    displayName: changed.displayName,
-    role: changed.role,
-    mustChangePassword: changed.mustChangePassword,
-    subject: `account:${changed.id}`,
+    accountId: changed.account.id,
+    username: changed.account.username,
+    displayName: changed.account.displayName,
+    role: changed.account.role,
+    mustChangePassword: changed.account.mustChangePassword,
+    subject: `account:${changed.account.id}`,
   };
 }
 

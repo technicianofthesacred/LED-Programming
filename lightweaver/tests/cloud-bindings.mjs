@@ -282,9 +282,14 @@ test('Pages adapter prefers a native session and narrows Access fallback after o
     role: 'worker',
     temporaryPassword: 'temporary-passphrase',
   });
+  const temporaryLogin = await accountStore.verifyLogin({
+    username: worker.username,
+    password: 'temporary-passphrase',
+  });
   await accountStore.changePassword({
     accountId: worker.id,
     newPassword: 'personal-passphrase-456',
+    expectedGeneration: temporaryLogin.observedGeneration,
   });
   const verified = await accountStore.verifyLogin({
     username: worker.username,

@@ -272,6 +272,27 @@ test('persists only a session digest and authenticates active unexpired sessions
   assert.equal(await accounts.authenticateSession(session.token), null);
 });
 
+test('session authentication can return the generation proof for a sensitive mutation', async () => {
+  const { accounts } = setup();
+  const worker = await createWorker(accounts);
+  const session = await createInitialSession(accounts, worker);
+
+  const authenticated = await accounts.authenticateSession(session.token, {
+    includeGeneration: true,
+  });
+  assert.deepEqual(authenticated, {
+    identity: {
+      accountId: worker.id,
+      username: 'workshop',
+      displayName: 'Workshop',
+      role: 'worker',
+      mustChangePassword: true,
+      subject: `account:${worker.id}`,
+    },
+    observedGeneration: 0,
+  });
+});
+
 test('session inserts cannot race past account security mutations', async t => {
   const mutations = [
     ['password reset', (accounts, id) => accounts.resetPassword({
@@ -409,13 +430,54 @@ test('password reset revokes sessions and password change clears forced-change s
   const changed = await accounts.changePassword({
     accountId: worker.id,
     newPassword: 'personal-passphrase-456',
+    expectedGeneration: resetLogin.observedGeneration,
   });
-  assert.equal(changed.mustChangePassword, false);
-  assert.equal((await accounts.authenticateSession(beforeChange.token)).accountId, worker.id);
+  assert.ok(changed.account, 'password change returns the updated account with its new generation');
+  assert.equal(changed.account.mustChangePassword, false);
+  assert.equal(changed.observedGeneration, resetLogin.observedGeneration + 1);
+  assert.equal(await accounts.authenticateSession(beforeChange.token), null);
+  const replacement = await accounts.createSession(worker.id, {
+    expectedGeneration: changed.observedGeneration,
+  });
+  assert.equal((await accounts.authenticateSession(replacement.token)).accountId, worker.id);
   assert.equal((await accounts.verifyLogin({
     username: worker.username,
     password: 'personal-passphrase-456',
   })).identity.accountId, worker.id);
+});
+
+test('password change cannot overwrite a reset that invalidated its authenticated session', async () => {
+  const { accounts, repository } = setup();
+  const worker = await createWorker(accounts);
+  const login = await accounts.verifyLogin({
+    username: worker.username,
+    password: 'temporary-passphrase',
+  });
+  const session = await accounts.createSession(worker.id, {
+    expectedGeneration: login.observedGeneration,
+  });
+  const authenticated = await accounts.authenticateSession(session.token);
+  assert.equal(authenticated.accountId, worker.id);
+
+  await accounts.resetPassword({
+    id: worker.id,
+    temporaryPassword: 'replacement-passphrase',
+  });
+  await assert.rejects(accounts.changePassword({
+    accountId: authenticated.accountId,
+    newPassword: 'personal-passphrase-456',
+    expectedGeneration: login.observedGeneration,
+  }), { code: 'session_state_changed', status: 409 });
+
+  assert.equal((await accounts.verifyLogin({
+    username: worker.username,
+    password: 'replacement-passphrase',
+  })).identity.accountId, worker.id);
+  await assert.rejects(accounts.verifyLogin({
+    username: worker.username,
+    password: 'personal-passphrase-456',
+  }), { code: 'invalid_credentials' });
+  assert.equal(repository.snapshot().sessions.some(row => !row.revoked_at), false);
 });
 
 test('a failed atomic reset leaves both the old password and sessions intact', async () => {
@@ -539,4 +601,65 @@ test('D1 applies account migrations and preserves atomic lockout and reset behav
     password: 'temporary-passphrase',
   })).identity.accountId, worker.id);
   assert.equal((await accounts.authenticateSession(session.token)).accountId, worker.id);
+});
+
+test('D1 rejects a password change authenticated before a concurrent owner reset', async t => {
+  const miniflare = new Miniflare({
+    compatibilityDate: '2026-07-15',
+    modules: true,
+    script: 'export default { fetch() { return new Response("ok") } }',
+    d1Databases: ['PROJECTS_DB'],
+  });
+  t.after(() => miniflare.dispose());
+  const db = await miniflare.getD1Database('PROJECTS_DB');
+  for (const migrationName of [
+    '0001_cloud_project_library.sql',
+    '0002_account_access.sql',
+    '0003_account_session_generation.sql',
+  ]) {
+    const migration = await readFile(
+      new URL(`../../../../migrations/${migrationName}`, import.meta.url),
+      'utf8',
+    );
+    for (const statement of migration.split(';').map(value => value.trim()).filter(Boolean)) {
+      await db.prepare(statement).run();
+    }
+  }
+
+  const accounts = createD1AccountStore({ PROJECTS_DB: db }, {
+    now: () => '2026-08-01T00:00:00.000Z',
+    passwordIterations: TEST_ITERATIONS,
+  });
+  const worker = await createWorker(accounts);
+  const login = await accounts.verifyLogin({
+    username: worker.username,
+    password: 'temporary-passphrase',
+  });
+  const session = await accounts.createSession(worker.id, {
+    expectedGeneration: login.observedGeneration,
+  });
+  const authenticated = await accounts.authenticateSession(session.token);
+
+  await accounts.resetPassword({
+    id: worker.id,
+    temporaryPassword: 'replacement-passphrase',
+  });
+  await assert.rejects(accounts.changePassword({
+    accountId: authenticated.accountId,
+    newPassword: 'personal-passphrase-456',
+    expectedGeneration: login.observedGeneration,
+  }), { code: 'session_state_changed', status: 409 });
+
+  assert.equal((await accounts.verifyLogin({
+    username: worker.username,
+    password: 'replacement-passphrase',
+  })).identity.accountId, worker.id);
+  await assert.rejects(accounts.verifyLogin({
+    username: worker.username,
+    password: 'personal-passphrase-456',
+  }), { code: 'invalid_credentials' });
+  const activeSessions = await db.prepare(`
+    SELECT COUNT(*) AS count FROM account_sessions WHERE revoked_at IS NULL
+  `).first();
+  assert.equal(activeSessions.count, 0);
 });

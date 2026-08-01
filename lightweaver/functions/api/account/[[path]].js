@@ -109,22 +109,20 @@ async function handleAccountRequest(request, accountStore) {
     }
     const body = await readJson(request);
     const token = readSessionCookie(request);
-    const identity = token ? await accountStore.authenticateSession(token) : null;
-    if (!identity) return errorResponse(401, 'unauthenticated', 'Authentication is required.');
+    const authenticated = token
+      ? await accountStore.authenticateSession(token, { includeGeneration: true })
+      : null;
+    if (!authenticated) return errorResponse(401, 'unauthenticated', 'Authentication is required.');
 
     const changed = await accountStore.changePassword({
-      accountId: identity.accountId,
+      accountId: authenticated.identity.accountId,
       newPassword: body.password,
+      expectedGeneration: authenticated.observedGeneration,
     });
-    const verified = await accountStore.verifyLogin({
-      username: changed.username,
-      password: body.password,
+    const replacement = await accountStore.createSession(changed.account.id, {
+      expectedGeneration: changed.observedGeneration,
     });
-    const replacement = await accountStore.createSession(changed.id, {
-      expectedGeneration: verified.observedGeneration,
-    });
-    await accountStore.revokeSession(token);
-    return jsonResponse({ session: publicSession(changed) }, 200, {
+    return jsonResponse({ session: publicSession(changed.account) }, 200, {
       'set-cookie': serializeSessionCookie(replacement.token),
     });
   }

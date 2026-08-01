@@ -337,7 +337,7 @@ export function createAccountStore(repository, options = {}) {
     return { token: credential.token, expiresAt };
   }
 
-  async function authenticateSession(token) {
+  async function authenticateSession(token, authenticationOptions = {}) {
     if (typeof token !== 'string' || !token) return null;
     const tokenHash = await hashSessionToken(token, { crypto: options.crypto });
     const result = await repository.findSessionWithAccount(tokenHash);
@@ -349,7 +349,13 @@ export function createAccountStore(repository, options = {}) {
       || result.session.account_generation !== result.account.session_generation) {
       return null;
     }
-    return accountIdentity(result.account);
+    const identity = accountIdentity(result.account);
+    return authenticationOptions.includeGeneration
+      ? {
+          identity,
+          observedGeneration: result.session.account_generation,
+        }
+      : identity;
   }
 
   async function revokeSession(token) {
@@ -359,19 +365,26 @@ export function createAccountStore(repository, options = {}) {
     return { revoked: Boolean(revoked) };
   }
 
-  async function changePassword({ accountId, newPassword }) {
-    const account = await requireAccount(accountId);
-    if (account.status !== 'active') fail('account_disabled', 'The account is disabled.', 403);
+  async function changePassword({ accountId, newPassword, expectedGeneration }) {
+    if (!Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0) {
+      fail('invalid_request', 'An authenticated account generation is required.', 400);
+    }
     const updatedAt = timestamp();
-    await repository.updatePassword(account.id, {
+    const observedGeneration = await repository.changePasswordForCurrentGeneration(accountId, {
       password_hash: await passwordHash(newPassword),
       must_change_password: 0,
       failed_login_attempts: 0,
       last_failed_login_at: null,
       locked_until: null,
       updated_at: updatedAt,
-    });
-    return publicAccount(await requireAccount(account.id));
+    }, expectedGeneration, updatedAt);
+    if (observedGeneration === null) {
+      fail('session_state_changed', 'The account security state changed. Sign in again.', 409);
+    }
+    return {
+      account: publicAccount(await requireAccount(accountId)),
+      observedGeneration,
+    };
   }
 
   return {
@@ -456,20 +469,29 @@ export function createD1AccountRepository(db) {
         'SELECT * FROM accounts WHERE normalized_username = ?',
       ).bind(username).first();
     },
-    async updatePassword(id, values) {
-      await db.prepare(`
-        UPDATE accounts SET password_hash = ?, must_change_password = ?,
-          failed_login_attempts = ?, last_failed_login_at = ?, locked_until = ?, updated_at = ?
-        WHERE id = ?
-      `).bind(
-        values.password_hash,
-        values.must_change_password,
-        values.failed_login_attempts,
-        values.last_failed_login_at,
-        values.locked_until,
-        values.updated_at,
-        id,
-      ).run();
+    async changePasswordForCurrentGeneration(id, values, expectedGeneration, revokedAt) {
+      const [updated] = await db.batch([
+        db.prepare(`
+          UPDATE accounts SET password_hash = ?, must_change_password = ?,
+            failed_login_attempts = ?, last_failed_login_at = ?, locked_until = ?,
+            session_generation = session_generation + 1, updated_at = ?
+          WHERE id = ? AND status = 'active' AND session_generation = ?
+        `).bind(
+          values.password_hash,
+          values.must_change_password,
+          values.failed_login_attempts,
+          values.last_failed_login_at,
+          values.locked_until,
+          values.updated_at,
+          id,
+          expectedGeneration,
+        ),
+        db.prepare(`
+          UPDATE account_sessions SET revoked_at = ?
+          WHERE account_id = ? AND account_generation = ? AND revoked_at IS NULL
+        `).bind(revokedAt, id, expectedGeneration),
+      ]);
+      return (updated?.meta?.changes || 0) > 0 ? expectedGeneration + 1 : null;
     },
     async resetPasswordAndRevokeSessions(id, values, revokedAt) {
       await db.batch([
@@ -662,8 +684,21 @@ export function createMemoryAccountRepository(seed = {}) {
       const row = [...accounts.values()].find(value => value.normalized_username === username);
       return row ? structuredClone(row) : null;
     },
-    async updatePassword(id, values) {
-      Object.assign(account(id), structuredClone(values));
+    async changePasswordForCurrentGeneration(id, values, expectedGeneration, revokedAt) {
+      const row = account(id);
+      if (!row || row.status !== 'active' || row.session_generation !== expectedGeneration) {
+        return null;
+      }
+      Object.assign(row, structuredClone(values));
+      row.session_generation += 1;
+      for (const session of sessions.values()) {
+        if (session.account_id === id
+          && session.account_generation === expectedGeneration
+          && !session.revoked_at) {
+          session.revoked_at = revokedAt;
+        }
+      }
+      return row.session_generation;
     },
     async resetPasswordAndRevokeSessions(id, values, revokedAt) {
       const row = account(id);
