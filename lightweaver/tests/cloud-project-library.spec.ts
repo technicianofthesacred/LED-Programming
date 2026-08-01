@@ -270,6 +270,10 @@ class LibraryFixture {
             this.delayNextUpdate = false;
             this.signalDelayedUpdateStarted?.();
             await this.delayedUpdateGate;
+            if (body.baseRevision !== project.revision) {
+              await json(route, { error: { code: 'revision_conflict', message: 'The project changed online.', requestId: 'fixture-delayed-stale' } }, 409);
+              return;
+            }
           }
           project.revision += 1;
           project.title = body.title ?? project.title;
@@ -562,7 +566,7 @@ test('reconnect replays a committed save with its original request ID and reconc
   expect(fixture.projects.get(remote.id)?.document.name).toBe('Recovered after reconnect');
 });
 
-test('same-project rename supersedes a stale retry and saves edits made while the rename completes', async ({ page }) => {
+test('same-project rename wins over an in-flight stale replay without creating a false conflict', async ({ page }) => {
   const fixture = new LibraryFixture('worker');
   const remote = fixture.seed('Rename retry project');
   fixture.updateFailures.push(503);
@@ -575,21 +579,23 @@ test('same-project rename supersedes a stale retry and saves edits made while th
   await expect(page.getByTestId('cloud-sync-status')).toHaveText('Waiting to save online');
 
   fixture.holdNextUpdate();
+  await fixture.delayedUpdateStarted;
   const row = page.getByTestId('cloud-project-row').filter({ hasText: 'Rename retry project' });
   await row.getByRole('button', { name: 'Rename' }).click();
   await page.getByLabel('Rename project').fill('Renamed after transient failure');
   await page.getByRole('button', { name: 'Save name' }).click();
-  await fixture.delayedUpdateStarted;
+  await expect.poll(() => fixture.projects.get(remote.id)?.title).toBe('Renamed after transient failure');
   await page.getByLabel('Project name').fill('Edited while rename completed');
   fixture.releaseUpdate();
 
   await expect.poll(() => fixture.projects.get(remote.id)?.document.name).toBe('Edited while rename completed');
   await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
+  await expect(page.getByRole('button', { name: 'Open latest' })).toHaveCount(0);
   expect(fixture.projects.get(remote.id)?.revision).toBe(3);
-  expect(fixture.updateCount).toBe(3);
+  expect(fixture.updateCount).toBe(4);
 });
 
-test('same-project archive supersedes a stale retry and saves the pending document against the new revision', async ({ page }) => {
+test('same-project archive wins over an in-flight stale replay and saves the pending document', async ({ page }) => {
   const fixture = new LibraryFixture('worker');
   const remote = fixture.seed('Archive retry project');
   fixture.updateFailures.push(503);
@@ -600,16 +606,21 @@ test('same-project archive supersedes a stale retry and saves the pending docume
   await page.getByLabel('Project name').fill('Pending through archive');
   await expect.poll(() => fixture.updateCount).toBe(1);
   await expect(page.getByTestId('cloud-sync-status')).toHaveText('Waiting to save online');
+  fixture.holdNextUpdate();
+  await fixture.delayedUpdateStarted;
   await page.getByTestId('cloud-project-row').getByRole('button', { name: 'Archive' }).click();
+  await expect.poll(() => fixture.projects.get(remote.id)?.archived).toBe(true);
+  fixture.releaseUpdate();
 
   await expect.poll(() => fixture.projects.get(remote.id)?.document.name).toBe('Pending through archive');
   await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
+  await expect(page.getByRole('button', { name: 'Open latest' })).toHaveCount(0);
   expect(fixture.projects.get(remote.id)?.archived).toBe(true);
   expect(fixture.projects.get(remote.id)?.revision).toBe(3);
-  expect(fixture.updateCount).toBe(2);
+  expect(fixture.updateCount).toBe(3);
 });
 
-test('same-project history restore supersedes a stale retry so later edits can save', async ({ page }) => {
+test('same-project history restore wins over an in-flight stale replay so later edits can save', async ({ page }) => {
   const fixture = new LibraryFixture('worker');
   const remote = fixture.seed('Restore retry project', {
     revisions: [portable('Earlier restore state'), portable('Restore retry project')],
@@ -623,15 +634,19 @@ test('same-project history restore supersedes a stale retry so later edits can s
   await page.getByLabel('Project name').fill('Pending before restore');
   await expect.poll(() => fixture.updateCount).toBe(1);
   await expect(page.getByTestId('cloud-sync-status')).toHaveText('Waiting to save online');
+  fixture.holdNextUpdate();
+  await fixture.delayedUpdateStarted;
   await row.getByRole('button', { name: 'History' }).click();
   await page.getByTestId('history-revision-1').getByRole('button', { name: 'Restore' }).click();
   await expect(page.getByLabel('Project name')).toHaveValue('Earlier restore state');
+  fixture.releaseUpdate();
 
   await page.getByLabel('Project name').fill('Edited after restore');
   await expect.poll(() => fixture.projects.get(remote.id)?.document.name).toBe('Edited after restore');
   await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
+  await expect(page.getByRole('button', { name: 'Open latest' })).toHaveCount(0);
   expect(fixture.projects.get(remote.id)?.revision).toBe(4);
-  expect(fixture.updateCount).toBe(2);
+  expect(fixture.updateCount).toBe(3);
 });
 
 test('demotes a forbidden authenticated session without retrying', async ({ page }) => {

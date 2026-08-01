@@ -169,6 +169,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   const onlineRef = useRef(online);
   const pendingSaveOperationRef = useRef(null);
   const performSaveRef = useRef(null);
+  const activeRemoteEpochRef = useRef(0);
 
   lifecycleRef.current = projectLifecycle;
   documentRef.current = serializeProject();
@@ -211,6 +212,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       queuedRef.current = false;
       clearTimeout(retryRef.current);
     }
+    activeRemoteEpochRef.current += 1;
     activeRemoteRef.current = project;
     setActiveRemoteProject(project);
     writeActiveRemoteAssociation(project);
@@ -373,25 +375,34 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       if (mountedRef.current) setSyncStatus('waiting');
       return { ok: false, reason: 'offline' };
     }
-    if (inFlightRef.current) {
-      queuedRef.current = true;
-      return { ok: false, reason: 'queued' };
-    }
 
     const operation = suppliedOperation || {
       remoteId: remote.id,
       baseRevision: remote.revision,
+      activeRemoteEpoch: activeRemoteEpochRef.current,
       marker: projectMarker(lifecycleRef.current),
       document: structuredClone(documentRef.current),
       requestId: mutationRequestId(),
     };
-    if (operation.remoteId !== remote.id || operation.baseRevision !== remote.revision) {
+    const clearPendingOperation = () => {
       if (pendingSaveOperationRef.current?.requestId === operation.requestId) {
         pendingSaveOperationRef.current = null;
         clearTimeout(retryRef.current);
-        resumeAfterSupersededSave(acknowledgedMarkerRef.current);
       }
-      return { ok: false, reason: 'replaced' };
+    };
+    const operationIsCurrent = () => mountedRef.current
+      && activeRemoteRef.current?.id === operation.remoteId
+      && activeRemoteRef.current?.revision === operation.baseRevision
+      && activeRemoteEpochRef.current === operation.activeRemoteEpoch;
+    const replacedResult = error => {
+      clearPendingOperation();
+      resumeAfterSupersededSave(acknowledgedMarkerRef.current);
+      return { ok: false, reason: 'replaced', ...(error ? { error } : {}) };
+    };
+    if (!operationIsCurrent()) return replacedResult();
+    if (inFlightRef.current) {
+      queuedRef.current = true;
+      return { ok: false, reason: 'queued' };
     }
     inFlightRef.current = true;
     if (mountedRef.current) {
@@ -400,16 +411,8 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     }
     const capturedKey = markerKey(operation.marker);
     let completed = false;
-    const clearPendingOperation = () => {
-      if (pendingSaveOperationRef.current?.requestId === operation.requestId) {
-        pendingSaveOperationRef.current = null;
-        clearTimeout(retryRef.current);
-      }
-    };
     const acknowledge = acknowledged => {
-      if (!mountedRef.current
-        || activeRemoteRef.current?.id !== operation.remoteId
-        || activeRemoteRef.current?.revision !== operation.baseRevision) return false;
+      if (!operationIsCurrent()) return false;
       completed = true;
       clearPendingOperation();
       activeRemoteRef.current = acknowledged;
@@ -438,15 +441,17 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         project: operation.document,
       }, { requestId: operation.requestId });
       if (!acknowledge(acknowledged)) {
-        return { ok: false, reason: 'replaced' };
+        return replacedResult();
       }
       return { ok: true, project: acknowledged };
     } catch (rawError) {
       let error = normalizeError(rawError);
       if (!mountedRef.current) return { ok: false, reason: 'unmounted', error };
+      if (!operationIsCurrent()) return replacedResult(error);
       if (error.code === 'idempotency_conflict') {
         try {
           const latest = await client.readProject(operation.remoteId);
+          if (!operationIsCurrent()) return replacedResult(error);
           const expectedTitle = operation.document.name || remote.title;
           const matchesAcceptedSave = latest.revision === operation.baseRevision + 1
             && latest.title === expectedTitle
@@ -457,6 +462,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         } catch (readError) {
           error = normalizeError(readError);
           if (!mountedRef.current) return { ok: false, reason: 'unmounted', error };
+          if (!operationIsCurrent()) return replacedResult(error);
         }
       }
       if (error.state === 'conflict') {
@@ -516,6 +522,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     const operation = {
       remoteId: remote.id,
       baseRevision: remote.revision,
+      activeRemoteEpoch: activeRemoteEpochRef.current,
       marker: currentMarker,
       document: structuredClone(documentRef.current),
       requestId: mutationRequestId(),
@@ -622,6 +629,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     return performSave({
       remoteId: remote.id,
       baseRevision: remote.revision,
+      activeRemoteEpoch: activeRemoteEpochRef.current,
       marker,
       document: structuredClone(documentRef.current),
       requestId: mutationRequestId(),
