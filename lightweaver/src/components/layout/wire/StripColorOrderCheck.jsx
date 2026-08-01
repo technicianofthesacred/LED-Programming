@@ -17,6 +17,7 @@ export function StripColorOrderCheck({ cardHost, controller, setController, auto
   const [statusKind, setStatusKind] = useState('');
   const [busy, setBusy] = useState(false);
   const [liveTestedOrder, setLiveTestedOrder] = useState('');
+  const [quickStage, setQuickStage] = useState('red');
   const testRequestRef = useRef(0);
   const colorOrder = normalizeUsbLedColorOrder(controller?.led?.colorOrder || 'RGB');
   const confirmed = Boolean(
@@ -85,9 +86,7 @@ export function StripColorOrderCheck({ cardHost, controller, setController, auto
     void playTest(activeTestId);
   };
 
-  const tryNextOrder = async () => {
-    const currentIndex = COLOR_ORDERS.indexOf(colorOrder);
-    const nextOrder = COLOR_ORDERS[((currentIndex >= 0 ? currentIndex : 0) + 1) % COLOR_ORDERS.length];
+  const tryOrder = async (nextOrder, testId = activeTestId) => {
     const requestId = ++testRequestRef.current;
     setBusy(true);
     setStatus('');
@@ -96,13 +95,37 @@ export function StripColorOrderCheck({ cardHost, controller, setController, auto
       const response = await pushLiveHardwareToCard({ colorOrder: nextOrder }, { host: cardHost, timeoutMs: 2200 });
       const appliedOrder = normalizeUsbLedColorOrder(response?.colorOrder || nextOrder, nextOrder);
       saveOrder(appliedOrder);
-      await playTest(activeTestId, appliedOrder);
+      await playTest(testId, appliedOrder);
     } catch (error) {
       if (testRequestRef.current !== requestId) return;
       setStatus(error?.message || `${nextOrder} order could not reach the card.`);
       setStatusKind('err');
       setBusy(false);
     }
+  };
+
+  const tryNextOrder = () => {
+    const currentIndex = COLOR_ORDERS.indexOf(colorOrder);
+    const nextOrder = COLOR_ORDERS[((currentIndex >= 0 ? currentIndex : 0) + 1) % COLOR_ORDERS.length];
+    return tryOrder(nextOrder);
+  };
+
+  const acceptQuickRed = () => {
+    if (busy || quickStage !== 'red' || activeTestId !== 'r' || !liveTestReady) return;
+    setQuickStage('green');
+    void playTest('g');
+  };
+
+  const tryOtherQuickMatch = () => {
+    if (busy || quickStage !== 'green' || activeTestId !== 'g') return;
+    const redIndex = colorOrder.indexOf('R');
+    const pairedOrder = COLOR_ORDERS.find(order => order !== colorOrder && order.indexOf('R') === redIndex);
+    if (pairedOrder) void tryOrder(pairedOrder, 'g');
+  };
+
+  const confirmQuickOrder = () => {
+    if (busy || quickStage !== 'green' || activeTestId !== 'g' || !liveTestReady) return;
+    confirmOrder();
   };
 
   // Chained entry from the bench check presents the first color question.
@@ -158,7 +181,7 @@ export function StripColorOrderCheck({ cardHost, controller, setController, auto
         <div className="lwb-quiz-head">
           <div className="lwb-quiz-head-text">
             <strong>Shift colors</strong>
-            <span className="lwb-detail">Look at the real LEDs</span>
+            <span className="lwb-detail">{quickStage === 'red' ? 'Check red first' : 'Now check green'}</span>
           </div>
         </div>
         <div className="lwb-quiz-body">
@@ -167,11 +190,24 @@ export function StripColorOrderCheck({ cardHost, controller, setController, auto
             role="img"
             aria-label={`The strip should now be lit ${activeTest.label.toLowerCase()}`}
           />
-          <p className="lwb-quiz-hint">Keep shifting until the strip shows the expected color.</p>
+          <p className="lwb-quiz-hint">
+            {quickStage === 'red'
+              ? 'Keep shifting until the strip shows red.'
+              : 'Choose the matching green position, then confirm it.'}
+          </p>
           <p className="lwb-detail" role="note">Colors change at a reduced, power-limited brightness.</p>
           <div className="lwb-quick-actions">
-            <button type="button" className="btn" disabled={busy} onClick={() => void tryNextOrder()}>Try next order</button>
-            <button type="button" className="btn primary" disabled={busy || !liveTestReady} onClick={confirmOrder}>Looks right</button>
+            {quickStage === 'red' ? (
+              <>
+                <button type="button" className="btn" disabled={busy} onClick={() => void tryNextOrder()}>Try next order</button>
+                <button type="button" className="btn primary" disabled={busy || activeTestId !== 'r' || !liveTestReady} onClick={acceptQuickRed}>Red is correct</button>
+              </>
+            ) : (
+              <>
+                <button type="button" className="btn" disabled={busy} onClick={tryOtherQuickMatch}>Try other match</button>
+                <button type="button" className="btn primary" disabled={busy || activeTestId !== 'g' || !liveTestReady} onClick={confirmQuickOrder}>Green is correct</button>
+              </>
+            )}
           </div>
           {busy && <p className="lwb-quiz-status" role="status">Trying {colorOrder}…</p>}
           {!busy && status && <p className={`lwb-quiz-status${statusKind ? ` is-${statusKind}` : ''}`} role={statusKind === 'err' ? 'alert' : 'status'}>{status}</p>}

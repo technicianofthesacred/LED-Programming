@@ -166,31 +166,49 @@ test('Shift colors immediately tries the next order and opens direct correction 
   await expect(popover).toBeVisible();
   await expect(popover.getByText('What color do you see?')).toHaveCount(0);
   await expect(popover.getByRole('button', { name: 'Try next order' })).toBeVisible();
-  await expect(popover.getByRole('button', { name: 'Looks right' })).toBeVisible();
+  await expect(popover.getByRole('button', { name: 'Red is correct' })).toBeVisible();
+  await expect(popover.getByRole('button', { name: 'Looks right' })).toHaveCount(0);
+  await expect(popover.getByRole('button', { name: 'Green is correct' })).toHaveCount(0);
   await expect.poll(() => controlRequests.some(request => request.colorOrder === 'GRB')).toBe(true);
   await expect.poll(() => recoveryRequests.some(request => request.patternId === 'test-red')).toBe(true);
   await expect(popover.getByTestId('strip-color-order')).toHaveText('GRB');
-  await expect(popover.getByRole('button', { name: 'Looks right' })).toBeEnabled();
-  await popover.getByRole('button', { name: 'Looks right' }).click();
-  await expect(popover.locator('.lwb-quiz-order')).toContainText('GRB · confirmed');
+  await expect(popover.getByRole('button', { name: 'Red is correct' })).toBeEnabled();
+  await popover.getByRole('button', { name: 'Red is correct' }).click();
+  await expect(popover.getByRole('button', { name: 'Red is correct' })).toHaveCount(0);
+  await expect(popover.getByRole('button', { name: 'Try other match' })).toBeVisible();
+  await expect(popover.getByRole('button', { name: 'Green is correct' })).toBeVisible();
+  await expect.poll(() => recoveryRequests.some(request => request.patternId === 'test-green')).toBe(true);
+  await expect.poll(() => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
+    return saved.devices?.standaloneController?.led?.colorOrderConfirmed;
+  })).toBe(false);
+
+  const greenTestsBeforePair = recoveryRequests.filter(request => request.patternId === 'test-green').length;
+  await popover.getByRole('button', { name: 'Try other match' }).click();
+  await expect.poll(() => controlRequests.some(request => request.colorOrder === 'BRG')).toBe(true);
+  await expect.poll(() => recoveryRequests.filter(request => request.patternId === 'test-green').length).toBeGreaterThan(greenTestsBeforePair);
+  await expect(popover.getByTestId('strip-color-order')).toHaveText('BRG');
+  await expect(popover.getByRole('button', { name: 'Green is correct' })).toBeEnabled();
+  await popover.getByRole('button', { name: 'Green is correct' }).click();
+  await expect(popover.locator('.lwb-quiz-order')).toContainText('BRG · confirmed');
   await expect.poll(() => page.evaluate(() => {
     const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
     return saved.devices?.standaloneController?.led?.confirmedColorOrder;
-  })).toBe('GRB');
+  })).toBe('BRG');
 
   await trigger.dispatchEvent('click');
   await expect(popover).toHaveCount(0);
   await expect(trigger).toBeFocused();
 
   await trigger.click();
-  await expect(popover.getByTestId('strip-color-order')).toHaveText('BRG');
+  await expect(popover.getByTestId('strip-color-order')).toHaveText('BGR');
   await page.keyboard.press('Escape');
   await expect(popover).toHaveCount(0);
   await expect(trigger).toBeFocused();
 
   await page.setViewportSize({ width: 390, height: 260 });
   await trigger.click();
-  await expect(popover.getByTestId('strip-color-order')).toHaveText('BGR');
+  await expect(popover.getByTestId('strip-color-order')).toHaveText('RBG');
   const popoverBox = await popover.boundingBox();
   expect(popoverBox).toBeTruthy();
   expect(popoverBox!.x).toBeGreaterThanOrEqual(0);
