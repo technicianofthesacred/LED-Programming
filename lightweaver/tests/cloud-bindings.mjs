@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -281,6 +281,22 @@ function wrapStatement(statement, sql, prepared) {
   };
 }
 
+function parameterLimitedStatement(statement, limit = 100) {
+  return {
+    __statement: statement,
+    bind(...values) {
+      if (values.length > limit) {
+        throw new Error(`D1_ERROR: too many SQL variables (${values.length} > ${limit})`);
+      }
+      return parameterLimitedStatement(statement.bind(...values), limit);
+    },
+    first: (...args) => statement.first(...args),
+    all: (...args) => statement.all(...args),
+    run: (...args) => statement.run(...args),
+    raw: (...args) => statement.raw(...args),
+  };
+}
+
 function recordingBindings(db, bucket) {
   const events = [];
   const prepared = [];
@@ -433,6 +449,72 @@ test('an ambiguous commit-then-throw keeps committed R2 references readable', as
     SELECT attempt_id FROM library_mutations WHERE idempotency_key = ?
   `).bind('commit-then-throw').first();
   assert.match(mutation.attempt_id, /^[0-9a-f-]{36}$/);
+});
+
+test('large ambiguous and losing imports reconcile within D1 parameter limits', async t => {
+  const { mf, db, bucket } = await localBindings();
+  t.after(() => mf.dispose());
+  const actor = { email: 'owner@example.test', role: 'owner', subject: 'owner-1' };
+  const backup = {
+    format: 'lightweaver.library-backup',
+    version: 1,
+    exportedAt: '2026-08-01T00:00:00.000Z',
+    projects: Array.from({ length: 30 }, (_, index) => ({
+      id: `large-import-${index}`,
+      title: `Large import ${index}`,
+      archived: false,
+      currentRevision: 1,
+      revisions: [{
+        revision: 1,
+        archived: false,
+        document: portableProject({ id: `large-import-project-${index}` }),
+      }],
+    })),
+    workspaceAssets: [],
+  };
+  let batchMode = 'commit-then-throw';
+  const limitedDb = {
+    prepare: sql => parameterLimitedStatement(db.prepare(sql)),
+    async batch(statements) {
+      if (batchMode === 'lose-to-competitor') {
+        await db.prepare(`
+          INSERT INTO library_mutations (
+            idempotency_key, attempt_id, mutation_kind, actor, created_at
+          ) VALUES (?, ?, ?, ?, ?)
+        `).bind(
+          'large-losing-import', crypto.randomUUID(), 'competing-import',
+          'competitor@example.test', '2026-08-01T00:00:01.000Z',
+        ).run();
+        throw new Error('competing mutation committed first');
+      }
+      const result = await db.batch(statements.map(statement => statement.__statement || statement));
+      if (batchMode === 'commit-then-throw') {
+        batchMode = 'normal';
+        throw new Error('ambiguous transport failure after large commit');
+      }
+      return result;
+    },
+  };
+  const store = createD1R2LibraryStore({ PROJECTS_DB: limitedDb, PROJECT_BLOBS: bucket });
+
+  assert.deepEqual(await store.importBackup({
+    backup,
+    actor,
+    idempotencyKey: 'large-ambiguous-import',
+  }), { projectsCreated: 30, assetsCreated: 0 });
+  assert.equal((await bucket.list()).objects.length, 30);
+  for (let index = 0; index < 30; index += 1) {
+    const opened = await store.readProject({ id: `large-import-${index}` });
+    assert.equal(opened.document.id, `large-import-project-${index}`);
+  }
+
+  batchMode = 'lose-to-competitor';
+  await assert.rejects(
+    store.importBackup({ backup, actor, idempotencyKey: 'large-losing-import' }),
+    error => error.code === 'idempotency_conflict',
+  );
+  assert.equal((await bucket.list()).objects.length, 30);
+  assert.equal((await db.prepare('SELECT COUNT(*) AS count FROM projects').first('count')), 30);
 });
 
 test('D1/R2 store implements assets, duplicate, restore, backup/import, deletion, and atomic idempotency', async t => {
@@ -752,6 +834,37 @@ test('oversized full-library export rejects before reading any R2 body', async t
   assert.equal(r2Reads, 0);
 });
 
+test('Pages adapter applies configured full-library export bounds', async t => {
+  const fixture = await accessFixture();
+  const { mf, db, bucket } = await localBindings();
+  t.after(() => mf.dispose());
+  const actor = { email: 'worker@example.test', role: 'worker', subject: 'worker-1' };
+  const store = createD1R2LibraryStore({ PROJECTS_DB: db, PROJECT_BLOBS: bucket });
+  await store.createProject({
+    title: 'Adapter backup bound',
+    project: portableProject({ id: 'adapter-backup-bound' }),
+    actor,
+    idempotencyKey: 'adapter-backup-bound-create',
+  });
+
+  const response = await handleLibraryPagesRequest({
+    request: new Request('https://led.mandalacodes.com/api/library/backup', {
+      headers: { 'Cf-Access-Jwt-Assertion': await fixture.token() },
+    }),
+    env: {
+      ...ACCESS_ENV,
+      PROJECTS_DB: db,
+      PROJECT_BLOBS: bucket,
+      MAX_LIBRARY_BACKUP_BYTES: '128',
+      MAX_LIBRARY_BACKUP_REVISIONS: '10000',
+    },
+    params: {},
+  }, { jwks: fixture.jwks });
+
+  assert.equal(response.status, 413);
+  assert.equal((await response.json()).error.code, 'backup_too_large');
+});
+
 test('Wrangler applies local migrations and serves the deployed Pages catch-all without remote access', {
   timeout: 30_000,
 }, async () => {
@@ -898,14 +1011,18 @@ test('binding config, migration, route manifest, and package scripts are local-s
   assert.equal(pkg.scripts['test:cloud-bindings'], 'node tests/cloud-bindings.mjs');
   assert.match(pkg.scripts['build:functions'] || '', /^mkdir -p \.pages\/functions-build && wrangler pages functions build /);
   assert.match(pkg.scripts['build:functions'] || '', /--output-routes-path \.pages\/functions-build\/_routes\.json/);
-  assert.match(pkg.scripts['deploy:pages'], /^node scripts\/require-cloud-library-production\.mjs && /);
+  assert.equal(pkg.scripts['deploy:pages'], 'node scripts/deploy-pages-production.mjs');
   for (const required of [
     'LIGHTWEAVER_PRODUCTION_LIBRARY_READY',
     'PROJECTS_DB_DATABASE_ID',
+    'PROJECTS_DB_DATABASE_NAME',
     'PROJECT_BLOBS_BUCKET_NAME',
     'ACCESS_TEAM_DOMAIN',
     'ACCESS_AUD',
     'OWNER_EMAILS',
+    'MAX_LIBRARY_BODY_BYTES',
+    'MAX_LIBRARY_BACKUP_BYTES',
+    'MAX_LIBRARY_BACKUP_REVISIONS',
   ]) assert.match(productionGuard, new RegExp(required));
   assert.match(gitignore, /\.wrangler/);
   assert.match(gitignore, /\.dev\.vars/);
@@ -934,4 +1051,91 @@ test('production deploy guard fails closed without real library configuration', 
   assert.match(stderr, /production deployment is blocked/i);
   assert.match(stderr, /PROJECTS_DB_DATABASE_ID/);
   assert.match(stderr, /LIGHTWEAVER_PRODUCTION_LIBRARY_READY=confirmed/);
+});
+
+test('production deploy gives Wrangler a complete generated config and cleans it afterward', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'lightweaver-production-deploy-'));
+  const bin = join(root, 'bin');
+  const wranglerRecord = join(root, 'wrangler-record.json');
+  const npmRecord = join(root, 'npm-record.jsonl');
+  await mkdir(bin, { recursive: true });
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const wranglerStub = join(bin, 'wrangler');
+  await writeFile(wranglerStub, `#!/usr/bin/env node
+import { readFile, stat, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+const redirectPath = join(process.cwd(), '.wrangler', 'deploy', 'config.json');
+const record = { args: process.argv.slice(2), redirectPath };
+try {
+  const redirect = JSON.parse(await readFile(redirectPath, 'utf8'));
+  const configPath = isAbsolute(redirect.configPath)
+    ? redirect.configPath
+    : resolve(dirname(redirectPath), redirect.configPath);
+  record.configPath = configPath;
+  record.config = await readFile(configPath, 'utf8');
+  record.configMode = (await stat(configPath)).mode & 0o777;
+} catch (error) {
+  record.redirectError = error.code || error.message;
+}
+await writeFile(process.env.LIGHTWEAVER_WRANGLER_RECORD, JSON.stringify(record));
+`);
+  const npmStub = join(bin, 'npm');
+  await writeFile(npmStub, `#!/usr/bin/env node
+import { appendFile } from 'node:fs/promises';
+await appendFile(process.env.LIGHTWEAVER_NPM_RECORD, JSON.stringify(process.argv.slice(2)) + '\\n');
+`);
+  await Promise.all([chmod(wranglerStub, 0o755), chmod(npmStub, 0o755)]);
+
+  const packageText = await readFile(new URL('../package.json', import.meta.url), 'utf8');
+  const command = JSON.parse(packageText).scripts['deploy:pages'];
+  const child = spawn('/bin/sh', ['-c', command], {
+    cwd: PROJECT_DIR,
+    env: {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      LIGHTWEAVER_WRANGLER_RECORD: wranglerRecord,
+      LIGHTWEAVER_NPM_RECORD: npmRecord,
+      LIGHTWEAVER_PRODUCTION_LIBRARY_READY: 'confirmed',
+      PROJECTS_DB_DATABASE_ID: '123e4567-e89b-42d3-a456-426614174000',
+      PROJECTS_DB_DATABASE_NAME: 'lightweaver-projects-production',
+      PROJECT_BLOBS_BUCKET_NAME: 'lightweaver-projects-production',
+      ACCESS_TEAM_DOMAIN: 'https://lightweaver.cloudflareaccess.com',
+      ACCESS_AUD: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+      OWNER_EMAILS: 'owner@example.com,second-owner@example.com',
+      MAX_LIBRARY_BODY_BYTES: '2097152',
+      MAX_LIBRARY_BACKUP_BYTES: '8388608',
+      MAX_LIBRARY_BACKUP_REVISIONS: '10000',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stdout.on('data', chunk => { output += chunk; });
+  child.stderr.on('data', chunk => { output += chunk; });
+  const [code] = await once(child, 'close');
+  assert.equal(code, 0, output);
+
+  const record = JSON.parse(await readFile(wranglerRecord, 'utf8'));
+  assert.deepEqual(record.args, [
+    'pages', 'deploy', '.pages/lightweaver', '--project-name', 'lightweaver', '--branch', 'main',
+  ]);
+  assert.equal(record.redirectError, undefined);
+  assert.equal(record.configMode, 0o600);
+  assert.match(record.config, /binding\s*=\s*"PROJECTS_DB"/);
+  assert.match(record.config, /database_name\s*=\s*"lightweaver-projects-production"/);
+  assert.match(record.config, /database_id\s*=\s*"123e4567-e89b-42d3-a456-426614174000"/);
+  assert.match(record.config, /binding\s*=\s*"PROJECT_BLOBS"/);
+  assert.match(record.config, /bucket_name\s*=\s*"lightweaver-projects-production"/);
+  assert.match(record.config, /ACCESS_TEAM_DOMAIN\s*=\s*"https:\/\/lightweaver\.cloudflareaccess\.com"/);
+  assert.match(record.config, /ACCESS_AUD\s*=\s*"[0-9a-f]{64}"/);
+  assert.match(record.config, /OWNER_EMAILS\s*=\s*"owner@example\.com,second-owner@example\.com"/);
+  assert.match(record.config, /MAX_LIBRARY_BODY_BYTES\s*=\s*"2097152"/);
+  assert.match(record.config, /MAX_LIBRARY_BACKUP_BYTES\s*=\s*"8388608"/);
+  assert.match(record.config, /MAX_LIBRARY_BACKUP_REVISIONS\s*=\s*"10000"/);
+  assert.doesNotMatch(record.config, /LIGHTWEAVER_LOCAL_AUTH|LOCAL_ACCESS_JWKS/);
+
+  const npmCalls = (await readFile(npmRecord, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(npmCalls, [['run', 'build'], ['run', 'stage:pages'], ['run', 'verify:pages']]);
+  await assert.rejects(access(record.redirectPath), error => error.code === 'ENOENT');
+  await assert.rejects(access(record.configPath), error => error.code === 'ENOENT');
 });

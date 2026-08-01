@@ -32,7 +32,7 @@ assert.match(pkg.scripts['stage:pages'], /generate-studio-build-graph\.mjs \.pag
 assert.doesNotMatch(pkg.scripts['stage:pages'], /lightweaver\/design/);
 assert.equal(pkg.scripts['verify:pages'], 'node tests/pages-staging.mjs --artifact');
 assert.match(pkg.scripts['launch:source'], /npm run build && npm run stage:pages && npm run verify:pages$/);
-assert.equal(pkg.scripts['deploy:pages'], 'npm run build && npm run stage:pages && npm run verify:pages && wrangler pages deploy .pages/lightweaver --project-name lightweaver --branch main');
+assert.equal(pkg.scripts['deploy:pages'], 'node scripts/deploy-pages-production.mjs');
 assert.equal(pkg.scripts['pages:project'], 'wrangler pages project create lightweaver --production-branch main');
 assert.match(pkg.devDependencies.wrangler, /^\d+\.\d+\.\d+$/);
 assert.equal(lock.packages[''].devDependencies.wrangler, pkg.devDependencies.wrangler);

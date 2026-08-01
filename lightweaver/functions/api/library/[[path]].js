@@ -9,6 +9,11 @@ function configuredMaxBytes(env) {
   return Number.isInteger(value) && value > 0 ? value : DEFAULT_MAX_BYTES;
 }
 
+function configuredPositiveInteger(env, name) {
+  const value = Number(env?.[name]);
+  return Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
 export async function handleLibraryPagesRequest(context, authOptions) {
   let identity = null;
   try {
@@ -19,6 +24,8 @@ export async function handleLibraryPagesRequest(context, authOptions) {
   const maxBytes = configuredMaxBytes(context.env);
   const store = createD1R2LibraryStore(context.env, {
     maxBytes,
+    maxBackupBytes: configuredPositiveInteger(context.env, 'MAX_LIBRARY_BACKUP_BYTES'),
+    maxBackupRevisions: configuredPositiveInteger(context.env, 'MAX_LIBRARY_BACKUP_REVISIONS'),
     requestId: crypto.randomUUID(),
   });
   return handleLibraryRequest({

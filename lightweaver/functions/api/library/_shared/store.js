@@ -148,8 +148,8 @@ export function createD1R2LibraryStore(env, options = {}) {
   async function cleanupUnreferencedObjects(keys) {
     if (!keys.length) return;
     const referenced = new Set();
-    for (let index = 0; index < keys.length; index += 200) {
-      const chunk = keys.slice(index, index + 200);
+    for (let index = 0; index < keys.length; index += 25) {
+      const chunk = keys.slice(index, index + 25);
       const placeholders = chunk.map(() => '?').join(', ');
       const { results } = await db.prepare(`
         SELECT current_object_key AS object_key FROM projects
