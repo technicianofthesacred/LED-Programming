@@ -198,15 +198,6 @@ input[type=number]::-webkit-outer-spin-button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.savechip {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 2px 9px 2px 7px; border-radius: 100px;
-  background: var(--ok-dim); color: var(--ok);
-  font-size: 11px; font-weight: 500; letter-spacing: 0.01em;
-}
-.savechip .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--ok); }
-.savechip .t { color: var(--text-lo); font-family: var(--font-mono); font-size: 10.5px; }
-
 .top-right { min-width: 0; display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .top-div { width: 1px; height: 18px; background: var(--border-hair); margin: 0 5px; }
 .link-btn {
@@ -583,7 +574,7 @@ input[type=number]::-webkit-outer-spin-button {
 /* ============================================================
    Keep UI labels on one line (flex children must not wrap)
    ============================================================ */
-.brand .name, .crumb, .savechip, .savechip .t,
+.brand .name, .crumb,
 .link-btn, .btn, .tb-btn, .seg-label, .seg button,
 .viewtoggle button, .rail-item .lbl,
 .panel-head .ttl, .panel-head .meta,

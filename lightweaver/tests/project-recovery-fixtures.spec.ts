@@ -106,14 +106,14 @@ test('valid v3 autosave restores without claiming Unsaved changes', async ({ pag
   await expectWorkingLayoutScreen(page);
 
   await expect(page.locator('.crumb .proj')).toHaveText('Fixture V3');
-  // Restored work is truthfully labelled — never the false-dirty
-  // "Unsaved changes" of defect B-1.
-  await expect(page.locator('.savechip')).toContainText('Restored from recovery copy');
-  await expect(page.locator('.savechip')).not.toContainText('Unsaved changes');
+  // Restored work gets a brief event notice — never a passive false-dirty
+  // lifecycle label in the project breadcrumb.
+  await expect(page.getByTestId('workspace-notice')).toContainText('Restored from recovery copy');
+  await expect(page.locator('.savechip')).toHaveCount(0);
   expect(await readKey(page, QUARANTINE_KEY)).toBe('');
 });
 
-test('a project saved in the browser is still "Saved in browser" after reload', async ({ page }) => {
+test('a browser-saved project stays clean after reload without an ambient lifecycle notice', async ({ page }) => {
   const project = JSON.stringify({ version: 3, id: 'lwproj-fixture-saved', name: 'Saved Fixture' });
   await seedStorage(page, {
     [AUTOSAVE_KEY]: project,
@@ -124,7 +124,9 @@ test('a project saved in the browser is still "Saved in browser" after reload', 
   await expectWorkingLayoutScreen(page);
 
   await expect(page.locator('.crumb .proj')).toHaveText('Saved Fixture');
-  await expect(page.locator('.savechip')).toContainText('Saved in browser');
+  await expect(page.locator('.savechip')).toHaveCount(0);
+  await expect(page.getByTestId('workspace-notice')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').persistedDestination)).toBe('browser');
 });
 
 test('fresh boot is a clean New project and New project needs no discard confirm', async ({ page }) => {
@@ -141,12 +143,13 @@ test('fresh boot is a clean New project and New project needs no discard confirm
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expectWorkingLayoutScreen(page);
 
-  await expect(page.locator('.savechip')).toContainText('New project');
-  await expect(page.locator('.savechip')).not.toContainText('Unsaved changes');
+  await expect(page.locator('.savechip')).toHaveCount(0);
+  await expect(page.getByTestId('workspace-notice')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').dirty)).toBe(false);
 
   // Wait past the first autosave flush: an untouched app must STILL be clean.
   await page.waitForTimeout(700);
-  await expect(page.locator('.savechip')).toContainText('New project');
+  await expect(page.getByTestId('workspace-notice')).toHaveCount(0);
 
   await page.getByRole('button', { name: 'New project' }).click();
   // Neither the accessible replacement dialog nor window.confirm may fire on

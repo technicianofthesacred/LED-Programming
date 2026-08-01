@@ -166,7 +166,7 @@ test('icon-only actions expose immediate styled tooltips on hover and keyboard f
     await expect(workflow.getByRole('button', { name })).toHaveAttribute('data-tooltip-align', 'end');
   }
 
-  const globalTooltips = ['New project', 'Import project', 'Preferences', 'Export project', 'Save project'];
+  const globalTooltips = ['New project', 'Load project', 'Preferences', 'Export project', 'Save project'];
   for (const copy of globalTooltips) {
     await assertCustomTooltip(page.getByRole('button', { name: copy, exact: true }), copy);
   }
@@ -210,7 +210,7 @@ test('compact project actions never overlap project identity at constrained widt
     await expect(projectName).toBeVisible();
     if (viewport.width > 360) await expect(page.locator('.brand .name')).toBeVisible();
 
-    for (const name of ['New project', 'Import project', 'Preferences', 'Export project', 'Save project']) {
+    for (const name of ['New project', 'Load project', 'Preferences', 'Export project', 'Save project']) {
       const action = page.getByRole('button', { name, exact: true });
       await expect(action).toBeVisible();
       await expect(action.locator('svg')).toHaveCount(1);

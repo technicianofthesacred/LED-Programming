@@ -146,7 +146,8 @@ test('imports SVG, creates strips, saves, reloads, and previews on the Show scre
   // restored-unsaved work would be lost — covered by
   // tests/studio-hardening.spec.ts and tests/project-recovery-fixtures.spec.ts.)
   await expect(page.getByTestId('layout-primitive-picker')).toBeVisible();
-  await expect(page.locator('.savechip')).toContainText('New project');
+  await expect(page.locator('.savechip')).toHaveCount(0);
+  await expect(page.getByTestId('workspace-notice')).toHaveCount(0);
   await page.setInputFiles('[data-testid="layout-import-input"]', projectPath);
   await expect(page.getByRole('dialog', { name: 'Replace current project?' })).toHaveCount(0);
   await expect(page.locator('.la-strip-row')).toHaveCount(3);
@@ -333,7 +334,8 @@ test('complete playlist sync writes and verifies all card sections', async ({ pa
   ]);
   await expect(page.getByTestId('playlist-zone-fallback-note')).toHaveCount(0);
   await expect(page.getByTestId('playlist-card-status')).toContainText('Playlist installed on card.');
-  await expect(page.locator('.savechip')).toContainText('Installed on card');
+  await expect.poll(() => page.evaluate(() => Boolean(JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').installation))).toBe(true);
+  await expect(page.getByTestId('workspace-notice')).toHaveCount(0);
 });
 
 test('latest section preview installs dependencies once and wins rapid taps', async ({ page }) => {

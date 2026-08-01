@@ -487,7 +487,8 @@ test('verified Install persists the auditioned section assignment in Studio', as
   await setRangeValue(page.getByTestId('look-brightness-slider'), '0.42');
   await page.getByTitle('Install the current look on the card').click();
 
-  await expect(page.locator('.savechip')).toContainText('Installed on card');
+  await expect.poll(() => page.evaluate(() => Boolean(JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').installation))).toBe(true);
+  await expect(page.getByTestId('workspace-notice')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => {
     const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
     return saved.layout?.patchBoard?.patches?.[1]?.playback?.patternId;
@@ -549,7 +550,8 @@ test('an edit made during verification remains a draft above the installed snaps
   await expect(install).toBeEnabled();
   await page.waitForTimeout(300);
 
-  await expect(page.locator('.savechip')).toContainText('Unsaved changes');
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').dirty)).toBe(true);
+  await expect(page.getByTestId('workspace-notice')).toHaveCount(0);
   await expect(page.getByTestId('pattern-preview-meta')).toContainText('Ripple');
   await expect(innerTarget).toHaveClass(/\bon\b/);
   await expect.poll(() => page.evaluate(() => {

@@ -939,6 +939,292 @@ async function freshWorkspacePage(browser: Browser, fixture: LibraryFixture, has
   return { context, page };
 }
 
+test('top-bar Load lists only active online projects, filters them, and opens the selected project', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  fixture.seed('Amber Canopy');
+  fixture.seed('Blue Current');
+  fixture.seed('Archived Study', { archived: true });
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Load project' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Load project' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText('Amber Canopy', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('Blue Current', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('Archived Study', { exact: true })).toHaveCount(0);
+
+  await dialog.getByRole('searchbox', { name: 'Search projects' }).fill('blue');
+  await expect(dialog.getByText('Amber Canopy', { exact: true })).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Open Blue Current' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('.crumb .proj')).toHaveText('Blue Current');
+});
+
+test('top-bar Load imports a project from the computer through replacement flow', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Load project' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Load project' });
+  const chooserPromise = page.waitForEvent('filechooser');
+  await dialog.getByRole('button', { name: 'Import from computer' }).click();
+  const chooser = await chooserPromise;
+  await chooser.setFiles({
+    name: 'computer-project.lightweaver.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(portable('Computer Project'))),
+  });
+
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('.crumb .proj')).toHaveText('Computer Project');
+});
+
+test('signed-out Load shows guidance and routes to Preferences without exposing projects', async ({ page }) => {
+  const fixture = new LibraryFixture(null);
+  fixture.seed('Private Online Project');
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Load project' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Load project' });
+  await expect(dialog).toContainText('Sign in from Preferences to open online projects.');
+  await expect(dialog.getByText('Private Online Project', { exact: true })).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Open Preferences' }).click();
+  await expect(page.getByTestId('project-library-panel')).toBeVisible();
+});
+
+test('Load closes with Escape and restores focus to the top-bar action', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  fixture.seed('Focus Study');
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+
+  const load = page.getByRole('button', { name: 'Load project' });
+  await load.click();
+  const dialog = page.getByRole('dialog', { name: 'Load project' });
+  await expect(dialog.getByRole('searchbox', { name: 'Search projects' })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(load).toBeFocused();
+});
+
+test('first authenticated top-bar Save prompts for a title and creates an associated online project', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  await fixture.install(page);
+  const sessionResponse = page.waitForResponse('**/api/account/session');
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await sessionResponse;
+
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Save project online' });
+  await expect(dialog).toBeVisible();
+  expect(fixture.projects.size).toBe(0);
+  await dialog.getByLabel('Project title').fill('Top-bar Gallery');
+  await dialog.getByRole('button', { name: 'Save online' }).click();
+
+  await expect(dialog).toHaveCount(0);
+  await expect(page).toHaveURL(/#screen=layout/);
+  await expect.poll(() => [...fixture.projects.values()].map(project => project.title)).toEqual(['Top-bar Gallery']);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_cloud_active_project_v1') || 'null')?.revision)).toBe(1);
+});
+
+test('top-bar Save writes an associated authenticated project through the online revision path', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  const remote = fixture.seed('Associated Project');
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Load project' }).click();
+  await page.getByRole('dialog', { name: 'Load project' }).getByRole('button', { name: 'Open Associated Project' }).click();
+  await page.getByLabel('Preferences').first().click();
+  await page.getByLabel('Project name').fill('Associated Project Revised');
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+
+  await expect(page.getByRole('dialog', { name: 'Save project online' })).toHaveCount(0);
+  await expect.poll(() => fixture.updateCount).toBe(1);
+  await expect.poll(() => fixture.projects.get(remote.id)?.revision).toBe(2);
+  expect(fixture.projects.get(remote.id)?.document.name).toBe('Associated Project Revised');
+});
+
+test('signed-out top-bar Save uses the browser library without leaving the active artboard', async ({ page }) => {
+  const fixture = new LibraryFixture(null);
+  await fixture.install(page);
+  const sessionResponse = page.waitForResponse('**/api/account/session');
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await sessionResponse;
+
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+
+  await expect(page).toHaveURL(/#screen=layout/);
+  await expect(page.getByRole('dialog', { name: 'Save project online' })).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records?.length || 0)).toBe(1);
+});
+
+test('customer top-bar Save keeps unassociated work in browser and saves only an opened assigned draft online', async ({ page }) => {
+  const fixture = new LibraryFixture('customer', 'client@example.test');
+  const official = fixture.seed('Official Installation');
+  const draft = fixture.assignCustomer('client', official);
+  const officialRevision = official.revision;
+  const projectCount = fixture.projects.size;
+  await fixture.install(page);
+  const sessionResponse = page.waitForResponse('**/api/account/session');
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await sessionResponse;
+
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Save project online' })).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records?.length || 0)).toBe(1);
+  expect(fixture.projects.size).toBe(projectCount);
+  expect(official.revision).toBe(officialRevision);
+  expect(draft.revision).toBe(1);
+
+  await page.getByRole('button', { name: 'Load project' }).click();
+  await page.getByRole('dialog', { name: 'Load project' }).getByRole('button', { name: 'Open Official Installation' }).click();
+  await page.getByLabel('Preferences').first().click();
+  await page.getByLabel('Project name').fill('Customer Draft Revision');
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+
+  await expect.poll(() => draft.revision).toBe(2);
+  expect(draft.document.name).toBe('Customer Draft Revision');
+  expect(official.revision).toBe(officialRevision);
+  expect(official.document.name).toBe('Official Installation');
+  expect(fixture.projects.size).toBe(projectCount);
+});
+
+test('workspace notice shows explicit browser-save success, supports dismissal, and auto-clears', async ({ page }) => {
+  const fixture = new LibraryFixture(null);
+  await fixture.install(page);
+  const sessionResponse = page.waitForResponse('**/api/account/session');
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await sessionResponse;
+
+  await expect(page.locator('.savechip')).toHaveCount(0);
+  await expect(page.getByTestId('workspace-notice')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  const notice = page.getByTestId('workspace-notice');
+  await expect(notice).toContainText('saved in browser library');
+  await notice.getByRole('button', { name: 'Dismiss notice' }).click();
+  await expect(notice).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveCount(0, { timeout: 3500 });
+});
+
+test('workspace notice reports recovery briefly without surfacing passive lifecycle labels', async ({ page }) => {
+  const fixture = new LibraryFixture(null);
+  await page.addInitScript(project => {
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
+    localStorage.setItem('lw_autosave_v3_backup', JSON.stringify(project));
+  }, portable('Recovered Notice Project'));
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+
+  const notice = page.getByTestId('workspace-notice');
+  await expect(notice).toContainText('Restored from recovery copy');
+  await expect(page.locator('body')).not.toContainText('Unsaved changes');
+  await expect(notice).toHaveCount(0, { timeout: 3500 });
+});
+
+test('conflict notice persists until dismissed and offers Preferences review', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  fixture.seed('Conflict Notice Project');
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Load project' }).click();
+  await page.getByRole('dialog', { name: 'Load project' }).getByRole('button', { name: 'Open Conflict Notice Project' }).click();
+  await page.getByLabel('Preferences').first().click();
+  fixture.forceNextConflict = true;
+  await page.getByLabel('Project name').fill('Conflicting local revision');
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+
+  const notice = page.getByTestId('workspace-notice');
+  await expect(notice).toContainText('Online conflict');
+  await notice.getByRole('button', { name: 'Review' }).click();
+  await expect(page.getByTestId('project-library-panel')).toBeVisible();
+  await page.waitForTimeout(2400);
+  await expect(notice).toBeVisible();
+  await notice.getByRole('button', { name: 'Dismiss notice' }).click();
+  await page.waitForTimeout(500);
+  await expect(notice).toHaveCount(0);
+});
+
+test('offline and error notices persist, remember dismissal, and reappear after state re-entry', async ({ page, context }) => {
+  const fixture = new LibraryFixture('worker');
+  fixture.seed('Persistent Notice Project');
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Load project' }).click();
+  await page.getByRole('dialog', { name: 'Load project' }).getByRole('button', { name: 'Open Persistent Notice Project' }).click();
+
+  await context.setOffline(true);
+  const notice = page.getByTestId('workspace-notice');
+  await expect(notice).toContainText('Offline');
+  await notice.getByRole('button', { name: 'Dismiss notice' }).click();
+  await page.waitForTimeout(2400);
+  await expect(notice).toHaveCount(0);
+  await context.setOffline(false);
+  await context.setOffline(true);
+  await expect(notice).toContainText('Offline');
+  await context.setOffline(false);
+
+  await page.getByLabel('Preferences').first().click();
+  fixture.updateFailures.push(400);
+  await page.getByLabel('Project name').fill('Save error notice');
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  await expect(notice).toContainText('Online save needs attention');
+  await page.waitForTimeout(2400);
+  await expect(notice).toBeVisible();
+});
+
+for (const width of [320, 390]) {
+  test(`${width}px keeps five top actions and compact dialogs inside the viewport`, async ({ page }) => {
+    const fixture = new LibraryFixture(null);
+    await fixture.install(page);
+    await page.setViewportSize({ width, height: 760 });
+    await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+
+    const actions = ['New project', 'Load project', 'Preferences', 'Export project', 'Save project'];
+    const boxes = [];
+    for (const name of actions) {
+      const action = page.getByRole('button', { name, exact: true });
+      await expect(action).toBeVisible();
+      const box = await action.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.width).toBeGreaterThanOrEqual(44);
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+      boxes.push(box!);
+    }
+    for (let index = 1; index < boxes.length; index += 1) {
+      expect(boxes[index].x).toBeGreaterThanOrEqual(boxes[index - 1].x + boxes[index - 1].width);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+    await page.getByRole('button', { name: 'Load project' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Load project' });
+    const dialogBox = await dialog.boundingBox();
+    expect(dialogBox).not.toBeNull();
+    expect(dialogBox!.x).toBeGreaterThanOrEqual(0);
+    expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(width);
+    expect(dialogBox!.y + dialogBox!.height).toBeLessThanOrEqual(760);
+    const closeBox = await dialog.getByRole('button', { name: 'Close Load project' }).boundingBox();
+    expect(closeBox!.width).toBeGreaterThanOrEqual(44);
+    expect(closeBox!.height).toBeGreaterThanOrEqual(44);
+    await page.keyboard.press('Escape');
+
+    await page.getByRole('button', { name: 'Save project', exact: true }).click();
+    const noticeBox = await page.getByTestId('workspace-notice').boundingBox();
+    expect(noticeBox).not.toBeNull();
+    expect(noticeBox!.x).toBeGreaterThanOrEqual(58);
+    expect(noticeBox!.x + noticeBox!.width).toBeLessThanOrEqual(width);
+    for (const box of boxes) {
+      expect(noticeBox!.y).toBeGreaterThanOrEqual(box.y + box.height);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
+}
+
 async function installAuthEpochHarness(page: Page) {
   await page.goto('/');
   await page.evaluate(async () => {
