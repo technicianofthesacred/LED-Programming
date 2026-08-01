@@ -141,3 +141,22 @@ test('selection appearance and cursors remain stable across zoom and dragging', 
   assert.equal(result.releasedCursor, '');
   assert.deepEqual(result.deselected, { display: 'none', cursor: 'pointer' });
 });
+
+test('mapper zoom controls report the applied zoom to CanvasManager', async () => {
+  await page.reload();
+  await page.evaluate(async () => {
+    const { CanvasManager } = await import('/src/canvas.js');
+    const originalSetZoom = CanvasManager.prototype.setZoom;
+    window.__selectionZoomCalls = [];
+    CanvasManager.prototype.setZoom = function setZoomWithObservation(zoom) {
+      window.__selectionZoomCalls.push(zoom);
+      return originalSetZoom.call(this, zoom);
+    };
+  });
+
+  await page.dispatchEvent('.canvas-wrapper', 'wheel', { deltaY: -100 });
+  const calls = await page.evaluate(() => window.__selectionZoomCalls);
+
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0] > 1);
+});
