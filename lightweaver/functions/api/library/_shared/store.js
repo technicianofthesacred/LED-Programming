@@ -40,8 +40,8 @@ async function contentDetails(value) {
   return { hash, bytes: encoded.byteLength, text };
 }
 
-function publicProject(row) {
-  return {
+function publicProject(row, { redactAudit = false } = {}) {
+  const project = {
     id: row.id,
     embeddedProjectId: row.embedded_project_id,
     title: row.title,
@@ -51,20 +51,29 @@ function publicProject(row) {
     bytes: row.current_bytes,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    createdBy: row.created_by,
-    lastEditor: row.last_editor,
   };
+  if (!redactAudit) {
+    project.createdBy = row.created_by;
+    project.lastEditor = row.last_editor;
+  }
+  if (row.draft_of_project_id) {
+    project.draftOfProjectId = row.draft_of_project_id;
+    project.draftOwnerAccountId = row.draft_owner_account_id;
+    if (row.official_title) project.officialTitle = row.official_title;
+  }
+  return project;
 }
 
-function publicRevision(row) {
-  return {
+function publicRevision(row, { redactAudit = false } = {}) {
+  const revision = {
     revision: row.revision,
     archived: row.archived === 1,
     hash: row.content_hash,
     bytes: row.byte_length,
     createdAt: row.created_at,
-    editor: row.editor,
   };
+  if (!redactAudit) revision.editor = row.editor;
+  return revision;
 }
 
 function actorEmail(actor) {
@@ -104,6 +113,18 @@ export function createD1R2LibraryStore(env, options = {}) {
   function timestamp() {
     const value = now();
     return typeof value === 'string' ? value : new Date(value).toISOString();
+  }
+
+  function requireSharedRole(identity) {
+    if (identity?.role !== 'owner' && identity?.role !== 'worker') {
+      fail('forbidden', 'This library operation is not allowed.', 403);
+    }
+  }
+
+  function requireOwner(identity, { native = false } = {}) {
+    if (identity?.role !== 'owner' || (native && typeof identity?.accountId !== 'string')) {
+      fail('forbidden', 'Only a native owner may perform this operation.', 403);
+    }
   }
 
   async function unusedKey(idempotencyKey) {
@@ -209,38 +230,82 @@ export function createD1R2LibraryStore(env, options = {}) {
     return parsed;
   }
 
-  async function projectRow(id) {
+  async function rawProjectRow(id, { includeDeleted = false } = {}) {
     const row = await db.prepare(`
-      SELECT * FROM projects WHERE id = ? AND deleted_at IS NULL
+      SELECT * FROM projects WHERE id = ? ${includeDeleted ? '' : 'AND deleted_at IS NULL'}
     `).bind(id).first();
     if (!row) fail('not_found', 'The requested project was not found.', 404);
     return row;
+  }
+
+  async function customerHasAssignment(row, identity) {
+    if (identity?.role !== 'customer'
+      || typeof identity.accountId !== 'string'
+      || row.draft_owner_account_id !== identity.accountId
+      || !row.draft_of_project_id) return false;
+    return Boolean(await db.prepare(`
+      SELECT id FROM project_assignments
+      WHERE customer_account_id = ? AND project_id = ?
+    `).bind(identity.accountId, row.draft_of_project_id).first());
+  }
+
+  async function projectRow(id, identity, capability = 'read') {
+    const row = await rawProjectRow(id);
+    if (!row.draft_of_project_id) {
+      if (identity?.role === 'owner' || identity?.role === 'worker') return row;
+      fail('not_found', 'The requested project was not found.', 404);
+    }
+    if (identity?.role === 'owner'
+      && (capability === 'read' || capability === 'history' || capability === 'delete')) return row;
+    const assigned = await customerHasAssignment(row, identity);
+    if (assigned && (capability === 'read' || capability === 'history' || capability === 'update')) {
+      return row;
+    }
+    if (identity?.role === 'owner' || assigned) {
+      fail('forbidden', 'This project operation is not allowed.', 403);
+    }
+    fail('not_found', 'The requested project was not found.', 404);
   }
 
   async function anyProjectRow(id) {
     return db.prepare('SELECT * FROM projects WHERE id = ?').bind(id).first();
   }
 
-  async function requireProjectHead(id, baseRevision) {
+  async function requireProjectHead(id, baseRevision, identity, capability = 'update') {
     validateBaseRevision(baseRevision);
-    const row = await projectRow(id);
+    const row = await projectRow(id, identity, capability);
     if (row.current_revision !== baseRevision) {
       fail('revision_conflict', 'The project changed since it was opened.', 409);
     }
     return row;
   }
 
-  async function listProjects({ state = 'active' } = {}) {
+  async function listProjects({ state = 'active', identity } = {}) {
     const archived = state === 'archived' ? 1 : 0;
+    if (identity?.role !== 'owner' && identity?.role !== 'worker' && identity?.role !== 'customer') {
+      fail('forbidden', 'This library operation is not allowed.', 403);
+    }
+    const visibility = identity.role === 'customer'
+      ? `p.draft_owner_account_id = ? AND p.draft_of_project_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM project_assignments a
+            WHERE a.customer_account_id = ? AND a.project_id = p.draft_of_project_id
+          )`
+      : 'p.draft_of_project_id IS NULL';
+    const visibilityValues = identity.role === 'customer'
+      ? [identity.accountId, identity.accountId]
+      : [];
     const { results } = await db.prepare(`
-      SELECT * FROM projects
-      WHERE archived = ? AND deleted_at IS NULL
-      ORDER BY updated_at DESC, id ASC
-    `).bind(archived).all();
-    return results.map(publicProject);
+      SELECT p.*, official.title AS official_title FROM projects p
+      LEFT JOIN projects official ON official.id = p.draft_of_project_id
+      WHERE p.archived = ? AND p.deleted_at IS NULL AND ${visibility}
+      ORDER BY p.updated_at DESC, p.id ASC
+    `).bind(archived, ...visibilityValues).all();
+    return results.map(row => publicProject(row, { redactAudit: identity.role === 'customer' }));
   }
 
   async function createProject({ title, project, actor, idempotencyKey }) {
+    requireSharedRole(actor);
     await unusedKey(idempotencyKey);
     const cleanTitle = validateProjectTitle(title);
     const document = validatePortableProject(project, { maxBytes });
@@ -284,21 +349,32 @@ export function createD1R2LibraryStore(env, options = {}) {
       cleanup: [objectKey],
       idempotencyKey,
     });
-    return publicProject(await projectRow(id));
+    return publicProject(await rawProjectRow(id));
   }
 
-  async function readProject({ id }) {
-    const row = await projectRow(id);
+  async function readProject({ id, identity }) {
+    const row = await projectRow(id, identity);
     const document = validatePortableProject(
       await readBody(row.current_object_key, row.current_hash),
       { maxBytes },
     );
-    return { ...publicProject(row), document };
+    return {
+      ...publicProject(row, { redactAudit: identity?.role === 'customer' }),
+      document,
+    };
   }
 
-  async function updateProject({ id, title, project, baseRevision, actor, idempotencyKey }) {
+  async function updateProject({
+    id,
+    title,
+    project,
+    baseRevision,
+    actor,
+    idempotencyKey,
+    reviewedDraft,
+  }) {
     await unusedKey(idempotencyKey);
-    const head = await requireProjectHead(id, baseRevision);
+    const head = await requireProjectHead(id, baseRevision, actor, 'update');
     const cleanTitle = title === undefined ? head.title : validateProjectTitle(title);
     const document = validatePortableProject(project, { maxBytes });
     if (document.id !== head.embedded_project_id) {
@@ -309,6 +385,13 @@ export function createD1R2LibraryStore(env, options = {}) {
     const updatedAt = timestamp();
     const attemptId = crypto.randomUUID();
     const objectKey = `projects/${id}/revisions/${revision}-${crypto.randomUUID()}.lw.json`;
+    const reviewCondition = reviewedDraft
+      ? `AND EXISTS (
+          SELECT 1 FROM projects reviewed
+          WHERE reviewed.id = ? AND reviewed.current_revision = ? AND reviewed.deleted_at IS NULL
+        )`
+      : '';
+    const reviewValues = reviewedDraft ? [reviewedDraft.id, reviewedDraft.revision] : [];
     await putBody(objectKey, details);
 
     const statements = [
@@ -318,25 +401,30 @@ export function createD1R2LibraryStore(env, options = {}) {
           project_version, created_at, editor
         )
         SELECT id, ?, archived, ?, ?, ?, ?, ?, ? FROM projects
-        WHERE id = ? AND current_revision = ? AND deleted_at IS NULL
+        WHERE id = ? AND current_revision = ? AND deleted_at IS NULL ${reviewCondition}
       `).bind(
         revision, objectKey, details.hash, details.bytes, document.version,
-        updatedAt, actorEmail(actor), id, baseRevision,
+        updatedAt, actorEmail(actor), id, baseRevision, ...reviewValues,
       ),
       db.prepare(`
         UPDATE projects SET
           title = ?, current_revision = ?, current_object_key = ?, current_hash = ?,
           current_bytes = ?, updated_at = ?, last_editor = ?
-        WHERE id = ? AND current_revision = ? AND deleted_at IS NULL
+        WHERE id = ? AND current_revision = ? AND deleted_at IS NULL ${reviewCondition}
       `).bind(
         cleanTitle, revision, objectKey, details.hash, details.bytes, updatedAt,
-        actorEmail(actor), id, baseRevision,
+        actorEmail(actor), id, baseRevision, ...reviewValues,
       ),
       mutationStatement(db, {
         actor,
         attemptId,
-        conditionSql: 'EXISTS (SELECT 1 FROM projects WHERE id = ? AND current_revision = ? AND current_object_key = ?)',
-        conditionValues: [id, revision, objectKey],
+        conditionSql: `EXISTS (
+          SELECT 1 FROM projects WHERE id = ? AND current_revision = ? AND current_object_key = ?
+        )${reviewedDraft ? ` AND EXISTS (
+          SELECT 1 FROM projects reviewed
+          WHERE reviewed.id = ? AND reviewed.current_revision = ? AND reviewed.deleted_at IS NULL
+        )` : ''}`,
+        conditionValues: [id, revision, objectKey, ...reviewValues],
         idempotencyKey,
         kind: 'update-project',
         timestamp: updatedAt,
@@ -346,14 +434,23 @@ export function createD1R2LibraryStore(env, options = {}) {
       attemptId,
       cleanup: [objectKey],
       idempotencyKey,
-      onConflict: async () => (await projectRow(id)).current_revision !== baseRevision,
+      onConflict: async () => {
+        if ((await rawProjectRow(id)).current_revision !== baseRevision) return true;
+        if (!reviewedDraft) return false;
+        const reviewed = await anyProjectRow(reviewedDraft.id);
+        return !reviewed
+          || reviewed.deleted_at
+          || reviewed.current_revision !== reviewedDraft.revision;
+      },
     });
-    return publicProject(await projectRow(id));
+    return publicProject(await rawProjectRow(id), { redactAudit: actor?.role === 'customer' });
   }
 
   async function duplicateProject({ id, title, actor, idempotencyKey }) {
+    requireSharedRole(actor);
     await unusedKey(idempotencyKey);
-    const source = await readProject({ id });
+    const source = await readProject({ id, identity: actor });
+    if (source.draftOfProjectId) fail('forbidden', 'Customer drafts cannot be duplicated.', 403);
     const cleanTitle = validateProjectTitle(title || `${source.title} Copy`);
     const document = structuredClone(source.document);
     document.id = `lwproj-${crypto.randomUUID()}`;
@@ -362,8 +459,9 @@ export function createD1R2LibraryStore(env, options = {}) {
   }
 
   async function setArchived({ id, archived, baseRevision, actor, idempotencyKey }) {
+    requireSharedRole(actor);
     await unusedKey(idempotencyKey);
-    await requireProjectHead(id, baseRevision);
+    await requireProjectHead(id, baseRevision, actor);
     const nextArchived = archived === true ? 1 : 0;
     const revision = baseRevision + 1;
     const updatedAt = timestamp();
@@ -398,12 +496,13 @@ export function createD1R2LibraryStore(env, options = {}) {
     await guardedBatch(statements, {
       attemptId,
       idempotencyKey,
-      onConflict: async () => (await projectRow(id)).current_revision !== baseRevision,
+      onConflict: async () => (await rawProjectRow(id)).current_revision !== baseRevision,
     });
-    return publicProject(await projectRow(id));
+    return publicProject(await rawProjectRow(id));
   }
 
   async function deleteProject({ id, baseRevision, actor, idempotencyKey }) {
+    requireOwner(actor);
     validateBaseRevision(baseRevision);
     if (typeof idempotencyKey !== 'string' || !idempotencyKey) {
       fail('invalid_request', 'An idempotency key is required.', 400);
@@ -445,6 +544,12 @@ export function createD1R2LibraryStore(env, options = {}) {
           deletedAt, idempotencyKey, deletedAt, actorEmail(actor), id, baseRevision,
         ),
       ];
+      if (!deletion.draft_of_project_id) {
+        tombstone.push(db.prepare(`
+          UPDATE projects SET deleted_at = ?, updated_at = ?, last_editor = ?
+          WHERE draft_of_project_id = ? AND deleted_at IS NULL
+        `).bind(deletedAt, deletedAt, actorEmail(actor), id));
+      }
       try {
         await db.batch(tombstone);
       } catch (error) {
@@ -469,11 +574,35 @@ export function createD1R2LibraryStore(env, options = {}) {
       }
     }
 
-    const { results: revisions } = await db.prepare(
-      'SELECT DISTINCT object_key FROM project_revisions WHERE project_id = ?',
-    ).bind(id).all();
+    const deletingOfficial = !deletion.draft_of_project_id;
+    const { results: revisions } = await db.prepare(deletingOfficial ? `
+      SELECT DISTINCT r.object_key FROM project_revisions r
+      JOIN projects p ON p.id = r.project_id
+      WHERE p.id = ? OR p.draft_of_project_id = ?
+    ` : `
+      SELECT DISTINCT object_key FROM project_revisions WHERE project_id = ?
+    `).bind(...(deletingOfficial ? [id, id] : [id])).all();
     await deleteObjectsRequired(revisions.map(row => row.object_key));
-    const statements = [
+    const statements = deletingOfficial ? [
+      db.prepare('DELETE FROM project_assignments WHERE project_id = ?').bind(id),
+      db.prepare(`
+        DELETE FROM project_revisions
+        WHERE project_id = ? OR project_id IN (
+          SELECT id FROM projects WHERE draft_of_project_id = ?
+        )
+      `).bind(id, id),
+      db.prepare('DELETE FROM projects WHERE draft_of_project_id = ?').bind(id),
+      db.prepare(`
+        DELETE FROM projects
+        WHERE id = ? AND current_revision = ? AND deletion_idempotency_key = ?
+      `).bind(id, baseRevision, idempotencyKey),
+    ] : [
+      db.prepare(`
+        DELETE FROM project_assignments
+        WHERE (customer_account_id, project_id) IN (
+          SELECT draft_owner_account_id, draft_of_project_id FROM projects WHERE id = ?
+        )
+      `).bind(id),
       db.prepare(`
         DELETE FROM project_revisions
         WHERE project_id = ?
@@ -488,24 +617,25 @@ export function createD1R2LibraryStore(env, options = {}) {
       `).bind(id, baseRevision, idempotencyKey),
     ];
     const results = await db.batch(statements);
-    if ((results[1]?.meta?.changes || 0) === 0 && await anyProjectRow(id)) {
+    if ((results.at(-1)?.meta?.changes || 0) === 0 && await anyProjectRow(id)) {
       throw new Error('The project deletion could not be finalized.');
     }
     return { deleted: true };
   }
 
-  async function listRevisions({ id }) {
-    await projectRow(id);
+  async function listRevisions({ id, identity }) {
+    await projectRow(id, identity, 'history');
     const { results } = await db.prepare(`
       SELECT revision, archived, content_hash, byte_length, created_at, editor
       FROM project_revisions WHERE project_id = ? ORDER BY revision DESC
     `).bind(id).all();
-    return results.map(publicRevision);
+    return results.map(row => publicRevision(row, { redactAudit: identity?.role === 'customer' }));
   }
 
   async function restoreRevision({ id, revision: sourceRevision, baseRevision, actor, idempotencyKey }) {
+    requireSharedRole(actor);
     await unusedKey(idempotencyKey);
-    const head = await requireProjectHead(id, baseRevision);
+    const head = await requireProjectHead(id, baseRevision, actor);
     const source = await db.prepare(`
       SELECT * FROM project_revisions WHERE project_id = ? AND revision = ?
     `).bind(id, sourceRevision).first();
@@ -554,16 +684,17 @@ export function createD1R2LibraryStore(env, options = {}) {
       attemptId,
       cleanup: [objectKey],
       idempotencyKey,
-      onConflict: async () => (await projectRow(id)).current_revision !== baseRevision,
+      onConflict: async () => (await rawProjectRow(id)).current_revision !== baseRevision,
     });
-    return publicProject(await projectRow(id));
+    return publicProject(await rawProjectRow(id));
   }
 
   async function assetRow(kind) {
     return db.prepare('SELECT * FROM asset_heads WHERE asset_kind = ?').bind(kind).first();
   }
 
-  async function readAsset({ kind }) {
+  async function readAsset({ kind, identity }) {
+    requireSharedRole(identity);
     const row = await assetRow(kind);
     if (!row) fail('not_found', 'The requested workspace asset was not found.', 404);
     const value = validateWorkspaceAsset(
@@ -583,6 +714,7 @@ export function createD1R2LibraryStore(env, options = {}) {
   }
 
   async function writeAsset({ kind, value, baseRevision, actor, idempotencyKey }) {
+    requireSharedRole(actor);
     await unusedKey(idempotencyKey);
     validateBaseRevision(baseRevision);
     const current = await assetRow(kind);
@@ -655,17 +787,18 @@ export function createD1R2LibraryStore(env, options = {}) {
       idempotencyKey,
       onConflict: async () => (await assetRow(kind))?.current_revision !== baseRevision,
     });
-    return readAsset({ kind });
+    return readAsset({ kind, identity: actor });
   }
 
-  async function exportBackup({ exportedAt = timestamp() } = {}) {
+  async function exportBackup({ exportedAt = timestamp(), identity } = {}) {
+    requireSharedRole(identity);
     const projectStats = await db.prepare(`
       SELECT COUNT(DISTINCT p.id) AS entry_count,
         COUNT(r.id) AS revision_count,
         COALESCE(SUM(r.byte_length), 0) AS body_bytes
       FROM projects p
       LEFT JOIN project_revisions r ON r.project_id = p.id
-      WHERE p.deleted_at IS NULL
+      WHERE p.deleted_at IS NULL AND p.draft_of_project_id IS NULL
     `).first();
     const assetStats = await db.prepare(`
       SELECT COUNT(DISTINCT h.asset_kind) AS entry_count,
@@ -686,7 +819,9 @@ export function createD1R2LibraryStore(env, options = {}) {
     }
 
     const { results: projects } = await db.prepare(`
-      SELECT * FROM projects WHERE deleted_at IS NULL ORDER BY created_at, id
+      SELECT * FROM projects
+      WHERE deleted_at IS NULL AND draft_of_project_id IS NULL
+      ORDER BY created_at, id
     `).all();
     const backedUpProjects = [];
     for (const project of projects) {
@@ -753,13 +888,15 @@ export function createD1R2LibraryStore(env, options = {}) {
   }
 
   async function importBackup({ backup, actor, idempotencyKey }) {
+    requireSharedRole(actor);
     await unusedKey(idempotencyKey);
     const normalized = validateMasterBackup(backup, {
       maxBackupBytes,
       maxEntryBytes: maxBytes,
     });
     const { results: existingProjects } = await db.prepare(`
-      SELECT id, embedded_project_id, title FROM projects WHERE deleted_at IS NULL
+      SELECT id, embedded_project_id, title FROM projects
+      WHERE deleted_at IS NULL
     `).all();
     const occupiedIds = new Set(existingProjects.map(row => row.id));
     const occupiedEmbeddedIds = new Set(existingProjects.map(row => row.embedded_project_id));
@@ -927,6 +1064,230 @@ export function createD1R2LibraryStore(env, options = {}) {
     };
   }
 
+  async function activeCustomerAccount(id) {
+    const account = typeof id === 'string' && id
+      ? await db.prepare(`
+          SELECT id, role, status FROM accounts
+          WHERE id = ? AND role = 'customer' AND status = 'active'
+        `).bind(id).first()
+      : null;
+    if (!account) fail('invalid_assignment', 'Assignments require an active customer account.', 400);
+    return account;
+  }
+
+  async function knownAccount(id) {
+    const account = typeof id === 'string' && id
+      ? await db.prepare('SELECT id, role, status FROM accounts WHERE id = ?').bind(id).first()
+      : null;
+    if (!account) fail('invalid_assignment', 'An existing account is required.', 400);
+    return account;
+  }
+
+  async function customerDraftRow(customerId, officialId) {
+    return db.prepare(`
+      SELECT draft.*, official.title AS official_title
+      FROM projects draft
+      JOIN projects official ON official.id = draft.draft_of_project_id
+      WHERE draft.draft_owner_account_id = ? AND draft.draft_of_project_id = ?
+        AND draft.deleted_at IS NULL AND official.deleted_at IS NULL
+    `).bind(customerId, officialId).first();
+  }
+
+  async function assignmentResult(customerId, officialId) {
+    const row = await db.prepare(`
+      SELECT a.created_at AS assigned_at, draft.*, official.title AS official_title
+      FROM project_assignments a
+      JOIN projects official ON official.id = a.project_id AND official.deleted_at IS NULL
+      JOIN projects draft ON draft.draft_of_project_id = official.id
+        AND draft.draft_owner_account_id = a.customer_account_id
+        AND draft.deleted_at IS NULL
+      WHERE a.customer_account_id = ? AND a.project_id = ?
+    `).bind(customerId, officialId).first();
+    if (!row) throw new Error('The customer assignment was not committed.');
+    return {
+      customerId,
+      projectId: officialId,
+      draftProjectId: row.id,
+      assignedAt: row.assigned_at,
+      project: publicProject(row),
+    };
+  }
+
+  async function assignCustomerProject({ targetAccount, projectId, actor, idempotencyKey }) {
+    requireOwner(actor, { native: true });
+    await unusedKey(idempotencyKey);
+    const customer = await activeCustomerAccount(targetAccount?.id);
+    const official = await rawProjectRow(projectId);
+    if (official.draft_of_project_id) fail('not_found', 'The requested project was not found.', 404);
+    const existing = await customerDraftRow(customer.id, official.id);
+    const assignedAt = timestamp();
+    const attemptId = crypto.randomUUID();
+    let objectKey;
+    let details;
+    if (!existing) {
+      const document = validatePortableProject(
+        await readBody(official.current_object_key, official.current_hash),
+        { maxBytes },
+      );
+      details = await contentDetails(document);
+      objectKey = `projects/${crypto.randomUUID()}/assignment-${crypto.randomUUID()}.lw.json`;
+      await putBody(objectKey, details);
+    }
+    const draftId = existing?.id || crypto.randomUUID();
+    const statements = [];
+    if (!existing) {
+      statements.push(db.prepare(`
+        INSERT INTO projects (
+          id, embedded_project_id, title, archived, current_revision, current_object_key,
+          current_hash, current_bytes, created_at, updated_at, created_by, last_editor,
+          draft_of_project_id, draft_owner_account_id
+        )
+        SELECT ?, embedded_project_id, title, 0, 1, ?, ?, ?, ?, ?, ?, ?, id, ?
+        FROM projects
+        WHERE id = ? AND deleted_at IS NULL AND draft_of_project_id IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM projects draft
+            WHERE draft.draft_of_project_id = ? AND draft.draft_owner_account_id = ?
+              AND draft.deleted_at IS NULL
+          )
+      `).bind(
+        draftId, objectKey, details.hash, details.bytes, assignedAt, assignedAt,
+        actorEmail(actor), actorEmail(actor), customer.id, official.id, official.id, customer.id,
+      ));
+      statements.push(db.prepare(`
+        INSERT INTO project_revisions (
+          project_id, revision, archived, object_key, content_hash, byte_length,
+          project_version, created_at, editor
+        )
+        SELECT id, 1, 0, ?, ?, ?, ?, ?, ? FROM projects
+        WHERE draft_of_project_id = ? AND draft_owner_account_id = ?
+          AND current_object_key = ? AND deleted_at IS NULL
+      `).bind(
+        objectKey, details.hash, details.bytes,
+        JSON.parse(details.text).version, assignedAt, actorEmail(actor),
+        official.id, customer.id, objectKey,
+      ));
+    }
+    statements.push(db.prepare(`
+      INSERT OR IGNORE INTO project_assignments (
+        customer_account_id, project_id, assigned_by_account_id, created_at
+      )
+      SELECT ?, ?, ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM projects
+        WHERE draft_of_project_id = ? AND draft_owner_account_id = ? AND deleted_at IS NULL
+      )
+    `).bind(customer.id, official.id, actor.accountId, assignedAt, official.id, customer.id));
+    statements.push(mutationStatement(db, {
+      actor,
+      attemptId,
+      conditionSql: `EXISTS (
+        SELECT 1 FROM project_assignments
+        WHERE customer_account_id = ? AND project_id = ?
+      )`,
+      conditionValues: [customer.id, official.id],
+      idempotencyKey,
+      kind: 'assign-customer-project',
+      timestamp: assignedAt,
+    }));
+    await guardedBatch(statements, {
+      attemptId,
+      cleanup: objectKey ? [objectKey] : [],
+      idempotencyKey,
+    });
+    if (objectKey) await cleanupUnreferencedObjects([objectKey]);
+    const assignment = await assignmentResult(customer.id, official.id);
+    return { assignment, created: !existing && assignment.project.id === draftId };
+  }
+
+  async function unassignCustomerProject({ targetAccount, projectId, actor, idempotencyKey }) {
+    requireOwner(actor, { native: true });
+    await unusedKey(idempotencyKey);
+    const customer = await knownAccount(targetAccount?.id);
+    const official = await rawProjectRow(projectId);
+    if (official.draft_of_project_id) fail('not_found', 'The requested project was not found.', 404);
+    const removedAt = timestamp();
+    const attemptId = crypto.randomUUID();
+    await guardedBatch([
+      db.prepare(`
+        DELETE FROM project_assignments WHERE customer_account_id = ? AND project_id = ?
+      `).bind(customer.id, official.id),
+      mutationStatement(db, {
+        actor,
+        attemptId,
+        idempotencyKey,
+        kind: 'unassign-customer-project',
+        timestamp: removedAt,
+      }),
+    ], { attemptId, idempotencyKey });
+    return { unassigned: true };
+  }
+
+  async function listCustomerAssignments({ targetAccount, identity }) {
+    requireOwner(identity, { native: true });
+    const customer = await knownAccount(targetAccount?.id);
+    const { results } = await db.prepare(`
+      SELECT a.project_id FROM project_assignments a
+      JOIN projects official ON official.id = a.project_id AND official.deleted_at IS NULL
+      WHERE a.customer_account_id = ? ORDER BY a.created_at, a.project_id
+    `).bind(customer.id).all();
+    const assignments = [];
+    for (const row of results) assignments.push(await assignmentResult(customer.id, row.project_id));
+    return assignments;
+  }
+
+  async function listProjectDrafts({ officialId, identity }) {
+    requireOwner(identity);
+    const official = await rawProjectRow(officialId);
+    if (official.draft_of_project_id) fail('not_found', 'The requested project was not found.', 404);
+    const { results } = await db.prepare(`
+      SELECT draft.*, official.title AS official_title
+      FROM projects draft JOIN projects official ON official.id = draft.draft_of_project_id
+      WHERE draft.draft_of_project_id = ? AND draft.deleted_at IS NULL
+      ORDER BY draft.created_at, draft.id
+    `).bind(official.id).all();
+    return results.map(publicProject);
+  }
+
+  async function promoteDraft({
+    draftId,
+    officialBaseRevision,
+    draftBaseRevision,
+    actor,
+    idempotencyKey,
+  }) {
+    requireOwner(actor);
+    await unusedKey(idempotencyKey);
+    validateBaseRevision(officialBaseRevision);
+    validateBaseRevision(draftBaseRevision);
+    const draft = await rawProjectRow(draftId);
+    if (!draft.draft_of_project_id || !draft.draft_owner_account_id) {
+      fail('not_found', 'The requested project was not found.', 404);
+    }
+    if (draft.current_revision !== draftBaseRevision) {
+      fail('revision_conflict', 'The project changed since it was reviewed.', 409);
+    }
+    const official = await rawProjectRow(draft.draft_of_project_id);
+    if (official.current_revision !== officialBaseRevision) {
+      fail('revision_conflict', 'The project changed since it was opened.', 409);
+    }
+    const document = validatePortableProject(
+      await readBody(draft.current_object_key, draft.current_hash),
+      { maxBytes },
+    );
+    document.id = official.embedded_project_id;
+    document.name = official.title;
+    return updateProject({
+      id: official.id,
+      title: official.title,
+      project: document,
+      baseRevision: officialBaseRevision,
+      actor,
+      idempotencyKey,
+      reviewedDraft: { id: draft.id, revision: draftBaseRevision },
+    });
+  }
+
   return {
     listProjects,
     createProject,
@@ -941,5 +1302,10 @@ export function createD1R2LibraryStore(env, options = {}) {
     writeAsset,
     exportBackup,
     importBackup,
+    assignCustomerProject,
+    unassignCustomerProject,
+    listCustomerAssignments,
+    listProjectDrafts,
+    promoteDraft,
   };
 }

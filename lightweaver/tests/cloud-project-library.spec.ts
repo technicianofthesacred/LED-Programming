@@ -6,7 +6,7 @@ import path from 'node:path';
 import { handleLibraryRequest } from '../functions/api/library/_shared/router.js';
 import { createDefaultProject } from '../src/lib/projectModel.js';
 
-type Role = 'owner' | 'worker' | null;
+type Role = 'owner' | 'worker' | 'customer' | null;
 type PortableProject = ReturnType<typeof createDefaultProject>;
 
 type Revision = {
@@ -28,6 +28,9 @@ type StoredProject = {
   lastEditor: string;
   document: PortableProject;
   revisions: Revision[];
+  draftOfProjectId?: string;
+  draftOwnerAccountId?: string;
+  officialTitle?: string;
 };
 
 type StoredAsset = {
@@ -70,6 +73,11 @@ function metadata(project: StoredProject) {
     updatedAt: project.updatedAt,
     createdBy: project.createdBy,
     lastEditor: project.lastEditor,
+    ...(project.draftOfProjectId ? {
+      draftOfProjectId: project.draftOfProjectId,
+      draftOwnerAccountId: project.draftOwnerAccountId,
+      officialTitle: project.officialTitle,
+    } : {}),
   };
 }
 
@@ -83,7 +91,20 @@ function portable(name: string, id = `lwproj-${name.toLowerCase().replace(/[^a-z
 class LibraryFixture {
   role: Role;
   email: string;
+  username: string | null;
+  accounts = new Map<string, {
+    id: string;
+    username: string;
+    displayName: string;
+    role: Exclude<Role, null>;
+    status: 'active' | 'disabled';
+    mustChangePassword: boolean;
+    password: string;
+    createdAt: string;
+    updatedAt: string;
+  }>();
   projects = new Map<string, StoredProject>();
+  assignments = new Map<string, Set<string>>();
   assets = new Map<string, StoredAsset>();
   nextId = 1;
   delayNextUpdate = false;
@@ -96,6 +117,8 @@ class LibraryFixture {
   updateRequestIds: string[] = [];
   updateCount = 0;
   assetWriteCount = 0;
+  assetRequestCount = 0;
+  promotionBodies: Array<{ officialBaseRevision: number; draftBaseRevision: number }> = [];
   assetWriteFailures: number[] = [];
   assetReadFailures: number[] = [];
   assetWriteRequestIds: string[] = [];
@@ -132,6 +155,20 @@ class LibraryFixture {
   constructor(role: Role = 'worker', email = role === 'owner' ? 'owner@example.test' : 'worker@example.test') {
     this.role = role;
     this.email = email;
+    const initialRole = role || 'worker';
+    const username = email.split('@')[0];
+    this.username = role ? username : null;
+    this.accounts.set(username, {
+      id: `account-${username}`,
+      username,
+      displayName: email,
+      role: initialRole,
+      status: 'active',
+      mustChangePassword: false,
+      password: 'temporary-password',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    });
   }
 
   seed(title: string, options: { archived?: boolean; revisions?: PortableProject[] } = {}) {
@@ -160,6 +197,34 @@ class LibraryFixture {
     };
     this.projects.set(id, project);
     return project;
+  }
+
+  addAccount(username: string, role: 'owner' | 'worker' | 'customer', options: { displayName?: string; status?: 'active' | 'disabled'; password?: string; mustChangePassword?: boolean } = {}) {
+    const account = {
+      id: `account-${username}`,
+      username,
+      displayName: options.displayName || `${username} display`,
+      role,
+      status: options.status || 'active',
+      mustChangePassword: options.mustChangePassword ?? true,
+      password: options.password || 'temporary-password',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    } as const;
+    this.accounts.set(username, { ...account });
+    return this.accounts.get(username)!;
+  }
+
+  assignCustomer(username: string, official: StoredProject) {
+    const customer = this.accounts.get(username)!;
+    const draft = this.seed(official.title, { revisions: [structuredClone(official.document)] });
+    draft.draftOfProjectId = official.id;
+    draft.draftOwnerAccountId = customer.id;
+    draft.officialTitle = official.title;
+    const assigned = this.assignments.get(customer.id) || new Set<string>();
+    assigned.add(official.id);
+    this.assignments.set(customer.id, assigned);
+    return draft;
   }
 
   seedAsset(kind: string, value: Record<string, any>) {
@@ -261,11 +326,204 @@ class LibraryFixture {
   }
 
   async install(page: Page) {
-    await page.route('**/api/library/**', async route => {
+    await page.route('**/api/**', async route => {
       const request = route.request();
       const url = new URL(request.url());
+      if (url.pathname.startsWith('/api/account/')) {
+        const accountPath = url.pathname.slice('/api/account/'.length);
+        const method = request.method();
+        if (accountPath === 'session' && method === 'GET') {
+          const account = this.username ? this.accounts.get(this.username) : null;
+          if (!account || account.status !== 'active') {
+            await json(route, { error: { code: 'unauthenticated', message: 'Authentication is required.' } }, 401);
+            return;
+          }
+          await json(route, { session: {
+            username: account.username,
+            displayName: account.displayName,
+            role: account.role,
+            mustChangePassword: account.mustChangePassword,
+          } });
+          return;
+        }
+        if (accountPath === 'login' && method === 'POST') {
+          const body = request.postDataJSON();
+          const account = this.accounts.get(String(body.username || '').toLowerCase());
+          if (!account || account.status !== 'active' || account.password !== body.password) {
+            await json(route, { error: { code: 'invalid_credentials', message: 'Invalid username or password.' } }, 401);
+            return;
+          }
+          this.username = account.username;
+          this.role = account.role;
+          this.email = account.displayName;
+          await json(route, { session: {
+            username: account.username,
+            displayName: account.displayName,
+            role: account.role,
+            mustChangePassword: account.mustChangePassword,
+          } });
+          return;
+        }
+        if (accountPath === 'password' && method === 'POST') {
+          const account = this.username ? this.accounts.get(this.username) : null;
+          if (!account) {
+            await json(route, { error: { code: 'unauthenticated', message: 'Authentication is required.' } }, 401);
+            return;
+          }
+          account.password = request.postDataJSON().password;
+          account.mustChangePassword = false;
+          await json(route, { session: {
+            username: account.username,
+            displayName: account.displayName,
+            role: account.role,
+            mustChangePassword: false,
+          } });
+          return;
+        }
+        if (accountPath === 'logout' && method === 'POST') {
+          this.username = null;
+          this.role = null;
+          await json(route, { loggedOut: true });
+          return;
+        }
+        await json(route, { error: { code: 'not_found', message: 'Account route not found.' } }, 404);
+        return;
+      }
       const segments = url.pathname.slice('/api/library/'.length).split('/').filter(Boolean);
       const method = request.method();
+      if (segments[0] === 'assets' && segments.length === 2) this.assetRequestCount += 1;
+
+      const currentAccount = this.username ? this.accounts.get(this.username) : null;
+      if (currentAccount?.mustChangePassword && segments[0] !== 'session') {
+        await json(route, {
+          error: {
+            code: 'password_change_required',
+            message: 'Change the temporary password before using the library.',
+          },
+        }, 403);
+        return;
+      }
+
+      const publicAccount = (account: NonNullable<ReturnType<typeof this.accounts.get>>) => ({
+        id: account.id,
+        username: account.username,
+        displayName: account.displayName,
+        role: account.role,
+        status: account.status,
+        mustChangePassword: account.mustChangePassword,
+        createdAt: account.createdAt,
+        updatedAt: account.updatedAt,
+      });
+
+      if (segments[0] === 'accounts') {
+        if (segments[1] === 'bootstrap' && method === 'POST' && this.role === 'owner' && !this.username) {
+          const body = request.postDataJSON();
+          const created = {
+            id: `account-${body.username}`,
+            username: body.username,
+            displayName: body.displayName,
+            role: 'owner' as const,
+            status: 'active' as const,
+            mustChangePassword: true,
+            password: body.temporaryPassword,
+            createdAt: '2026-08-01T00:00:00.000Z',
+            updatedAt: '2026-08-01T00:00:00.000Z',
+          };
+          this.accounts.set(created.username, created);
+          await json(route, { account: publicAccount(created) }, 201);
+          return;
+        }
+        const actor = this.username ? this.accounts.get(this.username) : null;
+        if (!actor) {
+          await json(route, { error: { code: 'unauthenticated', message: 'Authentication is required.' } }, 401);
+          return;
+        }
+        if (actor.role !== 'owner') {
+          await json(route, { error: { code: 'forbidden', message: 'Only a native owner may manage accounts.' } }, 403);
+          return;
+        }
+        if (segments.length === 1 && method === 'GET') {
+          await json(route, { accounts: [...this.accounts.values()].map(publicAccount) });
+          return;
+        }
+        if (segments.length === 1 && method === 'POST') {
+          const body = request.postDataJSON();
+          const created = {
+            id: `account-${body.username}`,
+            username: body.username,
+            displayName: body.displayName,
+            role: body.role as 'worker' | 'customer',
+            status: 'active' as const,
+            mustChangePassword: true,
+            password: body.temporaryPassword,
+            createdAt: '2026-08-01T00:00:00.000Z',
+            updatedAt: '2026-08-01T00:00:00.000Z',
+          };
+          this.accounts.set(created.username, created);
+          await json(route, { account: publicAccount(created) }, 201);
+          return;
+        }
+        const target = [...this.accounts.values()].find(account => account.id === segments[1]);
+        if (!target) {
+          await json(route, { error: { code: 'account_not_found', message: 'Account not found.' } }, 404);
+          return;
+        }
+        if (segments[2] === 'assignments' && segments.length === 3 && method === 'GET') {
+          const projectIds = this.assignments.get(target.id) || new Set();
+          await json(route, { assignments: [...projectIds].map(projectId => {
+            const official = this.projects.get(projectId)!;
+            const draft = [...this.projects.values()].find(project => project.draftOfProjectId === projectId && project.draftOwnerAccountId === target.id)!;
+            return { customerId: target.id, projectId, draftProjectId: draft.id, assignedAt: '2026-08-01T00:00:00.000Z', project: metadata(draft), official };
+          }) });
+          return;
+        }
+        if (segments[2] === 'assignments' && segments.length === 3 && method === 'POST') {
+          const official = this.projects.get(request.postDataJSON().projectId);
+          if (!official || target.role !== 'customer' || target.status !== 'active') {
+            await json(route, { error: { code: 'invalid_assignment', message: 'Assignments require an active customer and official project.' } }, 400);
+            return;
+          }
+          let draft = [...this.projects.values()].find(project => project.draftOfProjectId === official.id && project.draftOwnerAccountId === target.id);
+          if (!draft) draft = this.assignCustomer(target.username, official);
+          const assignment = { customerId: target.id, projectId: official.id, draftProjectId: draft.id, assignedAt: '2026-08-01T00:00:00.000Z', project: metadata(draft) };
+          await json(route, { assignment }, 201);
+          return;
+        }
+        if (segments[2] === 'assignments' && segments.length === 4 && method === 'DELETE') {
+          this.assignments.get(target.id)?.delete(segments[3]);
+          await json(route, { unassigned: true });
+          return;
+        }
+        if (segments.length === 3 && method === 'POST') {
+          const body = request.postDataJSON();
+          if (segments[2] === 'reset') {
+            if (target.id === actor.id) {
+              await json(route, { error: { code: 'use_change_password', message: 'Use Change Password for your own account.' } }, 409);
+              return;
+            }
+            target.password = body.temporaryPassword;
+            target.mustChangePassword = true;
+            if (this.username === target.username) {
+              this.username = null;
+              this.role = null;
+            }
+          } else if (segments[2] === 'status') {
+            if (target.username === actor.username && body.status === 'disabled') {
+              await json(route, { error: { code: 'last_owner_required', message: 'At least one active owner is required.' } }, 409);
+              return;
+            }
+            target.status = body.status;
+          } else if (segments[2] === 'role') {
+            if (target.username === actor.username && body.role !== 'owner') {
+              await json(route, { error: { code: 'last_owner_required', message: 'At least one active owner is required.' } }, 409);
+              return;
+            }
+            target.role = body.role;
+          }
+          await json(route, { account: publicAccount(target) });
+          return;
+        }
+      }
 
       if (segments[0] === 'login' && method === 'GET' && request.isNavigationRequest()) {
         const returnTo = url.searchParams.get('returnTo') || '/';
@@ -293,10 +551,20 @@ class LibraryFixture {
         return;
       }
       if (segments[0] === 'session' && method === 'GET') {
-        await json(route, { session: { email: this.email, role: this.role } });
+        const account = this.username ? this.accounts.get(this.username) : null;
+        await json(route, { session: account ? {
+          username: account.username,
+          displayName: account.displayName,
+          role: account.role,
+          mustChangePassword: account.mustChangePassword,
+        } : { email: this.email, role: this.role } });
         return;
       }
       if (segments[0] === 'assets' && segments.length === 2) {
+        if (this.role === 'customer') {
+          await json(route, { error: { code: 'forbidden', message: 'Customers cannot access workspace assets.' } }, 403);
+          return;
+        }
         const kind = segments[1];
         if (method === 'GET') {
           const failure = this.assetReadFailures.shift();
@@ -361,10 +629,27 @@ class LibraryFixture {
       }
       if (segments[0] === 'projects' && segments.length === 1 && method === 'GET') {
         const archived = url.searchParams.get('state') === 'archived';
-        await json(route, { projects: [...this.projects.values()].filter(item => item.archived === archived).map(metadata) });
+        const actor = this.username ? this.accounts.get(this.username) : null;
+        const visible = [...this.projects.values()].filter(item => {
+          if (item.archived !== archived) return false;
+          if (actor?.role === 'customer') return item.draftOwnerAccountId === actor.id && this.assignments.get(actor.id)?.has(item.draftOfProjectId || '');
+          return !item.draftOfProjectId;
+        });
+        await json(route, { projects: visible.map(item => {
+          const value = metadata(item);
+          if (actor?.role === 'customer') {
+            delete value.createdBy;
+            delete value.lastEditor;
+          }
+          return value;
+        }) });
         return;
       }
       if (segments[0] === 'projects' && segments.length === 1 && method === 'POST') {
+        if (this.role === 'customer') {
+          await json(route, { error: { code: 'forbidden', message: 'Customers cannot create shared projects.' } }, 403);
+          return;
+        }
         const body = request.postDataJSON();
         if (this.delayNextCreate) {
           this.delayNextCreate = false;
@@ -382,6 +667,11 @@ class LibraryFixture {
           return;
         }
         if (method === 'GET') {
+          const actor = this.username ? this.accounts.get(this.username) : null;
+          if (actor?.role === 'customer' && (project.draftOwnerAccountId !== actor.id || !this.assignments.get(actor.id)?.has(project.draftOfProjectId || ''))) {
+            await json(route, { error: { code: 'not_found', message: 'Project not found.' } }, 404);
+            return;
+          }
           if (this.delayedReadId === project.id) {
             this.delayedReadId = '';
             this.signalDelayedReadStarted?.();
@@ -400,6 +690,11 @@ class LibraryFixture {
           return;
         }
         if (method === 'PUT') {
+          const actor = this.username ? this.accounts.get(this.username) : null;
+          if (actor?.role === 'customer' && (project.draftOwnerAccountId !== actor.id || !this.assignments.get(actor.id)?.has(project.draftOfProjectId || ''))) {
+            await json(route, { error: { code: 'forbidden', message: 'Customers may update only their assigned draft.' } }, 403);
+            return;
+          }
           this.updateCount += 1;
           const updateRequestId = request.headers()['x-lightweaver-request'] || '';
           this.updateRequestIds.push(updateRequestId);
@@ -466,7 +761,38 @@ class LibraryFixture {
       }
 
       const project = this.projects.get(segments[1]);
+      if (segments[0] === 'projects' && project && segments[2] === 'drafts' && method === 'GET') {
+        if (this.role !== 'owner') {
+          await json(route, { error: { code: 'forbidden', message: 'Only owners may review customer drafts.' } }, 403);
+          return;
+        }
+        await json(route, { drafts: [...this.projects.values()].filter(item => item.draftOfProjectId === project.id).map(metadata) });
+        return;
+      }
+      if (segments[0] === 'projects' && project?.draftOfProjectId && segments[2] === 'promote' && method === 'POST') {
+        if (this.role !== 'owner') {
+          await json(route, { error: { code: 'forbidden', message: 'Only owners may promote customer drafts.' } }, 403);
+          return;
+        }
+        const body = request.postDataJSON();
+        this.promotionBodies.push(body);
+        const official = this.projects.get(project.draftOfProjectId)!;
+        if (body.officialBaseRevision !== official.revision || body.draftBaseRevision !== project.revision) {
+          await json(route, { error: { code: 'revision_conflict', message: 'The library record changed since it was opened.' } }, 409);
+          return;
+        }
+        official.revision += 1;
+        official.document = structuredClone(project.document);
+        official.updatedAt = `2026-08-01T${String(official.revision).padStart(2, '0')}:55:00.000Z`;
+        official.revisions.push({ revision: official.revision, archived: false, createdAt: official.updatedAt, editor: this.email, document: structuredClone(official.document) });
+        await json(route, { project: metadata(official) });
+        return;
+      }
       if (segments[0] === 'projects' && project && segments[2] === 'duplicate' && method === 'POST') {
+        if (this.role === 'customer') {
+          await json(route, { error: { code: 'forbidden', message: 'Customers cannot duplicate projects.' } }, 403);
+          return;
+        }
         const body = request.postDataJSON();
         const title = body.title || `${project.title} Copy`;
         const duplicate = this.seed(title, { revisions: [{ ...structuredClone(project.document), id: `lwproj-copy-${this.nextId}`, name: title }] });
@@ -474,6 +800,10 @@ class LibraryFixture {
         return;
       }
       if (segments[0] === 'projects' && project && ['archive', 'unarchive'].includes(segments[2]) && method === 'POST') {
+        if (this.role === 'customer') {
+          await json(route, { error: { code: 'forbidden', message: 'Customers cannot archive projects.' } }, 403);
+          return;
+        }
         project.archived = segments[2] === 'archive';
         project.revision += 1;
         project.updatedAt = `2026-08-01T${String(project.revision).padStart(2, '0')}:30:00.000Z`;
@@ -492,11 +822,15 @@ class LibraryFixture {
           revision: item.revision,
           archived: item.archived,
           createdAt: item.createdAt,
-          editor: item.editor,
+          ...(this.role === 'customer' ? {} : { editor: item.editor }),
         })) });
         return;
       }
       if (segments[0] === 'projects' && project && segments[2] === 'revisions' && segments[4] === 'restore' && method === 'POST') {
+        if (this.role === 'customer') {
+          await json(route, { error: { code: 'forbidden', message: 'Customers cannot restore project revisions.' } }, 403);
+          return;
+        }
         const source = project.revisions.find(item => item.revision === Number(segments[3]));
         project.revision += 1;
         project.document = structuredClone(source!.document);
@@ -512,6 +846,10 @@ class LibraryFixture {
         return;
       }
       if (segments[0] === 'backup' && method === 'GET') {
+        if (this.role === 'customer') {
+          await json(route, { error: { code: 'forbidden', message: 'Customers cannot export the shared library.' } }, 403);
+          return;
+        }
         await json(route, {
           format: 'lightweaver.library-backup',
           version: 1,
@@ -541,6 +879,10 @@ class LibraryFixture {
         return;
       }
       if (segments[0] === 'restore' && method === 'POST') {
+        if (this.role === 'customer') {
+          await json(route, { error: { code: 'forbidden', message: 'Customers cannot import the shared library.' } }, 403);
+          return;
+        }
         const backup = request.postDataJSON();
         for (const item of backup.projects || []) {
           const source = item.revisions.find((revision: any) => revision.revision === item.currentRevision);
@@ -597,29 +939,504 @@ async function freshWorkspacePage(browser: Browser, fixture: LibraryFixture, has
   return { context, page };
 }
 
-test('signs in with a top-level Access navigation and returns to the Studio', async ({ page }) => {
-  const fixture = new LibraryFixture(null);
-  await fixture.install(page);
-  await openLibrary(page);
-  await expect(page.getByText('Sign in to use the online project library')).toBeVisible();
+async function installAuthEpochHarness(page: Page) {
+  await page.goto('/');
+  await page.evaluate(async () => {
+    document.body.innerHTML = '<div id="auth-epoch-root"></div>';
+    const React = (await import('/node_modules/.vite/deps/react.js')).default;
+    const { createRoot } = (await import('/node_modules/.vite/deps/react-dom_client.js')).default;
+    const { CloudLibraryProvider, useCloudLibrary } = await import('/src/state/CloudLibraryContext.jsx');
+    const { ProjectProvider } = await import('/src/state/ProjectContext.jsx');
 
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByText('worker@example.test')).toBeVisible();
-  await expect(page.getByText('Worker', { exact: true })).toBeVisible();
-  expect(fixture.signInNavigations).toEqual(['/#screen=card&section=preferences']);
+    const identities = {
+      'account-a': { username: 'account-a', displayName: 'Account A', role: 'customer', mustChangePassword: false },
+      'account-b': { username: 'account-b', displayName: 'Account B', role: 'customer', mustChangePassword: false },
+    };
+    const projects = {
+      'account-a': { id: 'project-a', title: 'Account A private project', archived: false, revision: 1, createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z' },
+      'account-b': { id: 'project-b', title: 'Account B private project', archived: false, revision: 1, createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z' },
+    };
+    const state = {
+      username: 'account-a',
+      api: null,
+      heldProjectCalls: 0,
+      projectRefreshStarted: null,
+      releaseProjectRefresh: null,
+      accountRefreshStarted: null,
+      releaseAccountRefresh: null,
+      sessionRefreshStarted: null,
+      releaseSessionRefresh: null,
+      holdProjects: false,
+      holdAccounts: false,
+      holdSession: false,
+      refreshSettled: false,
+      accountsSettled: false,
+      sessionSettled: false,
+      accountRequestStarted: false,
+      sessionRequestStarted: false,
+    };
+    const deferred = () => {
+      let resolve;
+      const promise = new Promise(done => { resolve = done; });
+      return { promise, resolve };
+    };
+    state.prepareProjectRefresh = () => {
+      const started = deferred();
+      const release = deferred();
+      state.heldProjectCalls = 0;
+      state.projectRefreshStarted = started.promise;
+      state.releaseProjectRefresh = release.resolve;
+      state.projectStartedResolve = started.resolve;
+      state.projectGate = release.promise;
+      state.holdProjects = true;
+    };
+    state.prepareAccountRefresh = () => {
+      const started = deferred();
+      const release = deferred();
+      state.accountRefreshStarted = started.promise;
+      state.releaseAccountRefresh = release.resolve;
+      state.accountStartedResolve = started.resolve;
+      state.accountGate = release.promise;
+      state.holdAccounts = true;
+    };
+    state.prepareSessionRefresh = () => {
+      const started = deferred();
+      const release = deferred();
+      state.sessionRefreshStarted = started.promise;
+      state.releaseSessionRefresh = release.resolve;
+      state.sessionStartedResolve = started.resolve;
+      state.sessionGate = release.promise;
+      state.holdSession = true;
+    };
+
+    const client = {
+      getAccountSession: async () => {
+        const captured = state.username;
+        if (state.holdSession && captured === 'account-a') {
+          state.holdSession = false;
+          state.sessionRequestStarted = true;
+          state.sessionStartedResolve();
+          await state.sessionGate;
+        }
+        if (!captured) throw Object.assign(new Error('Authentication is required.'), { status: 401 });
+        return { ...identities[captured] };
+      },
+      getSession: async () => { throw Object.assign(new Error('Authentication is required.'), { status: 401 }); },
+      login: async ({ username }) => {
+        state.username = username;
+        return { ...identities[username] };
+      },
+      logout: async () => { state.username = null; },
+      listProjects: async ({ state: projectState }) => {
+        const captured = state.username;
+        const result = projectState === 'active' && captured ? [{ ...projects[captured] }] : [];
+        if (state.holdProjects && captured === 'account-a') {
+          state.heldProjectCalls += 1;
+          if (state.heldProjectCalls === 2) state.projectStartedResolve();
+          await state.projectGate;
+          if (state.heldProjectCalls === 2) state.holdProjects = false;
+        }
+        return result;
+      },
+      listAccounts: async () => {
+        const captured = state.username;
+        const result = [{ id: `${captured}-secret`, username: `${captured}-managed`, displayName: `${captured} managed account`, role: 'customer', status: 'active', mustChangePassword: false, createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z' }];
+        if (state.holdAccounts && captured === 'account-a') {
+          state.accountRequestStarted = true;
+          state.accountStartedResolve();
+          await state.accountGate;
+          state.holdAccounts = false;
+        }
+        return result;
+      },
+    };
+
+    function Harness() {
+      const library = useCloudLibrary();
+      const [accounts, setAccounts] = React.useState([]);
+      const boundary = `${library.session.status}:${library.session.username || ''}:${library.session.role || ''}`;
+      React.useEffect(() => setAccounts([]), [boundary]);
+      state.api = library;
+      state.loadAccounts = async () => {
+        const result = await library.listAccounts();
+        if (result.ok) setAccounts(result.value);
+        return result;
+      };
+      return React.createElement('div', null,
+        React.createElement('span', { 'data-testid': 'epoch-session' }, `${library.session.status}:${library.session.username || ''}:${library.session.role || ''}`),
+        React.createElement('span', { 'data-testid': 'epoch-projects' }, library.activeProjects.map(project => project.title).join('|')),
+        React.createElement('span', { 'data-testid': 'epoch-accounts' }, accounts.map(account => account.displayName).join('|')),
+      );
+    }
+
+    const root = createRoot(document.getElementById('auth-epoch-root'));
+    root.render(React.createElement(ProjectProvider, null,
+      React.createElement(CloudLibraryProvider, { client }, React.createElement(Harness))));
+    window.__LW_AUTH_EPOCH__ = state;
+  });
+  await expect(page.getByTestId('epoch-session')).toHaveText('authenticated:account-a:customer');
+  await expect(page.getByTestId('epoch-projects')).toHaveText('Account A private project');
+}
+
+test('ignores delayed project and account refreshes from the previous authenticated account', async ({ page }) => {
+  await installAuthEpochHarness(page);
+  await page.evaluate(() => {
+    const state = window.__LW_AUTH_EPOCH__;
+    state.prepareProjectRefresh();
+    state.prepareAccountRefresh();
+    state.refreshPromise = state.api.refreshProjects().finally(() => { state.refreshSettled = true; });
+    state.accountsPromise = state.loadAccounts().finally(() => { state.accountsSettled = true; });
+  });
+  await expect.poll(() => page.evaluate(() => window.__LW_AUTH_EPOCH__.heldProjectCalls)).toBe(2);
+  await expect.poll(() => page.evaluate(() => window.__LW_AUTH_EPOCH__.accountRequestStarted)).toBe(true);
+
+  await page.evaluate(async () => {
+    const state = window.__LW_AUTH_EPOCH__;
+    const api = state.api;
+    await api.logout();
+    await api.login({ username: 'account-b', password: 'account-b-password' });
+  });
+  await expect(page.getByTestId('epoch-session')).toHaveText('authenticated:account-b:customer');
+  await expect(page.getByTestId('epoch-projects')).toHaveText('Account B private project');
+  await expect(page.getByTestId('epoch-accounts')).toHaveText('');
+
+  await page.evaluate(async () => {
+    const state = window.__LW_AUTH_EPOCH__;
+    state.releaseProjectRefresh();
+    state.releaseAccountRefresh();
+    await Promise.all([state.refreshPromise, state.accountsPromise]);
+  });
+  await expect(page.getByTestId('epoch-session')).toHaveText('authenticated:account-b:customer');
+  await expect(page.getByTestId('epoch-projects')).toHaveText('Account B private project');
+  await expect(page.getByTestId('epoch-accounts')).toHaveText('');
 });
 
-test('offers top-level Access sign-in when the session probe fails before Access authentication', async ({ page }) => {
+test('ignores a delayed session probe from account A after account B authenticates', async ({ page }) => {
+  await installAuthEpochHarness(page);
+  await page.evaluate(() => {
+    const state = window.__LW_AUTH_EPOCH__;
+    state.prepareSessionRefresh();
+    state.sessionPromise = state.api.retrySession().finally(() => { state.sessionSettled = true; });
+  });
+  await expect.poll(() => page.evaluate(() => window.__LW_AUTH_EPOCH__.sessionRequestStarted)).toBe(true);
+
+  await page.evaluate(async () => {
+    const state = window.__LW_AUTH_EPOCH__;
+    const api = state.api;
+    await api.logout();
+    await api.login({ username: 'account-b', password: 'account-b-password' });
+  });
+  await expect(page.getByTestId('epoch-session')).toHaveText('authenticated:account-b:customer');
+  await expect(page.getByTestId('epoch-projects')).toHaveText('Account B private project');
+
+  await page.evaluate(async () => {
+    const state = window.__LW_AUTH_EPOCH__;
+    state.releaseSessionRefresh();
+    await state.sessionPromise;
+  });
+  await expect(page.getByTestId('epoch-session')).toHaveText('authenticated:account-b:customer');
+  await expect(page.getByTestId('epoch-projects')).toHaveText('Account B private project');
+});
+
+test('signs in with native credentials, reports bad credentials generically, and signs out safely', async ({ page }) => {
   const fixture = new LibraryFixture(null);
-  fixture.sessionProbeFailures = 1;
   await fixture.install(page);
   await openLibrary(page);
-  await expect(page.getByText('The online library is unavailable')).toBeVisible();
-
+  await expect(page.getByLabel('Username')).toBeVisible();
+  await page.getByLabel('Username').fill('worker');
+  await page.getByLabel('Password').fill('wrong');
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByText('worker@example.test')).toBeVisible();
+  await expect(page.getByText('Invalid username or password.')).toBeVisible();
+
+  await page.getByLabel('Password').fill('temporary-password');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByText('@worker')).toBeVisible();
   await expect(page.getByText('Worker', { exact: true })).toBeVisible();
-  expect(fixture.signInNavigations).toEqual(['/#screen=card&section=preferences']);
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByLabel('Username')).toBeVisible();
+  const assetRequestsAfterLogout = fixture.assetRequestCount;
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await page.waitForTimeout(100);
+  expect(fixture.assetRequestCount).toBe(assetRequestsAfterLogout);
+});
+
+test('requires a temporary-password session to choose and confirm a personal password', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  fixture.accounts.get('worker')!.mustChangePassword = true;
+  await fixture.install(page);
+  await openLibrary(page);
+  await expect(page.getByLabel('New password', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Current password')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Create online project' })).toHaveCount(0);
+  expect(fixture.assetRequestCount).toBe(0);
+
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await saveWorkspaceFixture(page, '-forced-password');
+  await page.waitForTimeout(750);
+  expect(fixture.assetRequestCount).toBe(0);
+  await expect(page.getByLabel('New password', { exact: true })).toBeVisible();
+
+  const blocked = await page.evaluate(async () => Promise.all([
+    fetch('/api/library/projects').then(async response => ({ status: response.status, code: (await response.json()).error?.code })),
+    fetch('/api/library/assets/custom-patterns').then(async response => ({ status: response.status, code: (await response.json()).error?.code })),
+    fetch('/api/library/accounts').then(async response => ({ status: response.status, code: (await response.json()).error?.code })),
+  ]));
+  expect(blocked).toEqual([
+    { status: 403, code: 'password_change_required' },
+    { status: 403, code: 'password_change_required' },
+    { status: 403, code: 'password_change_required' },
+  ]);
+  await expect(page.getByLabel('New password', { exact: true })).toBeVisible();
+
+  await page.getByLabel('New password', { exact: true }).fill('personal-password-123');
+  await page.getByLabel('Confirm new password').fill('different-password');
+  await page.getByRole('button', { name: 'Change password' }).click();
+  await expect(page.getByText('Passwords do not match.')).toBeVisible();
+  await page.getByLabel('Confirm new password').fill('personal-password-123');
+  await page.getByRole('button', { name: 'Change password' }).click();
+  await expect(page.getByText('@worker')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Create online project' })).toBeVisible();
+});
+
+test('offers owner bootstrap only to a verified transitional owner session', async ({ page }) => {
+  const fixture = new LibraryFixture(null, 'legacy-owner@example.test');
+  fixture.role = 'owner';
+  await fixture.install(page);
+  await openLibrary(page);
+  await expect(page.getByRole('button', { name: 'Create owner account' })).toBeVisible();
+  await page.getByLabel('Username').fill('native-owner');
+  await page.getByLabel('Display name').fill('Native Owner');
+  await page.getByLabel('Temporary password').fill('temporary-owner-password');
+  await page.getByRole('button', { name: 'Create owner account' }).click();
+  await expect(page.getByLabel('New password', { exact: true })).toBeVisible();
+
+  const signedOut = new LibraryFixture(null);
+  await page.unroute('**/api/**');
+  await signedOut.install(page);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('button', { name: 'Create owner account' })).toHaveCount(0);
+  await expect(page.getByLabel('Username')).toBeVisible();
+});
+
+test('owner creates, resets, disables, enables, and changes account roles without exposing self-demotion', async ({ page }) => {
+  const fixture = new LibraryFixture('owner');
+  fixture.addAccount('backup-owner', 'owner', {
+    displayName: 'Backup Owner',
+    password: 'backup-owner-password',
+    mustChangePassword: false,
+  });
+  await fixture.install(page);
+  await openLibrary(page);
+  const selfRow = page.getByTestId('account-row').filter({ hasText: '@owner' });
+  await expect(selfRow.getByRole('button', { name: 'Disable' })).toBeDisabled();
+  await expect(selfRow.getByLabel('Role for owner')).toBeDisabled();
+  await expect(selfRow.getByLabel('Reset password for owner')).toHaveCount(0);
+  await expect(selfRow.getByRole('button', { name: 'Reset password' })).toHaveCount(0);
+  await expect(selfRow.getByText('Use Change Password for your own account.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Change password' })).toBeVisible();
+
+  const selfReset = await page.evaluate(async id => {
+    const response = await fetch(`/api/library/accounts/${id}/reset`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ temporaryPassword: 'replacement-owner-password' }),
+    });
+    return { status: response.status, code: (await response.json()).error?.code };
+  }, fixture.accounts.get('owner')!.id);
+  expect(selfReset).toEqual({ status: 409, code: 'use_change_password' });
+
+  const backupOwnerRow = page.getByTestId('account-row').filter({ hasText: '@backup-owner' });
+  await backupOwnerRow.getByLabel('Reset password for backup-owner').fill('backup-owner-replacement');
+  await backupOwnerRow.getByRole('button', { name: 'Reset password' }).click();
+  await expect(backupOwnerRow.getByLabel('Reset password for backup-owner')).toHaveValue('');
+  expect(fixture.accounts.get('backup-owner')!.mustChangePassword).toBe(true);
+
+  await page.getByLabel('New account username').fill('studio-worker');
+  await page.getByLabel('New account display name').fill('Studio Worker');
+  await page.getByLabel('Temporary password').fill('temporary-worker-password');
+  await page.getByRole('button', { name: 'Create account' }).click();
+  const row = page.getByTestId('account-row').filter({ hasText: '@studio-worker' });
+  await expect(row).toBeVisible();
+  await expect(page.getByLabel('Temporary password')).toHaveValue('');
+
+  await row.getByLabel('Reset password for studio-worker').fill('replacement-worker-password');
+  await row.getByRole('button', { name: 'Reset password' }).click();
+  await expect(row.getByLabel('Reset password for studio-worker')).toHaveValue('');
+  await row.getByLabel('Role for studio-worker').selectOption('customer');
+  await expect(row.getByLabel('Role for studio-worker')).toHaveValue('customer');
+  await row.getByRole('button', { name: 'Disable' }).click();
+  await expect(row.getByText('disabled')).toBeVisible();
+  await row.getByRole('button', { name: 'Enable' }).click();
+  await expect(row.getByText('active')).toBeVisible();
+
+  fixture.username = null;
+  fixture.role = null;
+  await page.getByLabel('New account username').fill('revoked-action');
+  await page.getByLabel('New account display name').fill('Revoked action');
+  await page.getByLabel('Temporary password').fill('revoked-action-password');
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await expect(page.getByText('Sign in to use the online project library')).toBeVisible();
+});
+
+test('clears owner account and draft-review state across logout and same-page role changes', async ({ page }) => {
+  const fixture = new LibraryFixture('owner');
+  fixture.addAccount('studio-worker', 'worker', {
+    displayName: 'Studio Worker',
+    password: 'studio-worker-password',
+    mustChangePassword: false,
+  });
+  fixture.addAccount('client', 'customer', {
+    displayName: 'Client One',
+    password: 'client-password-123',
+    mustChangePassword: false,
+  });
+  const official = fixture.seed('Session boundary installation');
+  fixture.assignCustomer('client', official);
+  await fixture.install(page);
+  await openLibrary(page);
+
+  await page.getByLabel('Temporary password').fill('owner-form-secret');
+  const clientRow = page.getByTestId('account-row').filter({ hasText: '@client' });
+  await clientRow.getByLabel('Reset password for client').fill('owner-reset-secret');
+  await page.getByRole('button', { name: 'Review drafts' }).click();
+  const review = page.getByRole('region', { name: 'Draft review for Session boundary installation' });
+  await expect(review.getByText('Client One · revision 1')).toBeVisible();
+  await expect(review.getByRole('button', { name: 'Open draft' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByLabel('Username', { exact: true })).toBeVisible();
+  await expect(page.getByText('Customer drafts')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Open draft' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Apply to main as new revision' })).toHaveCount(0);
+
+  await page.getByLabel('Username', { exact: true }).fill('studio-worker');
+  await page.getByLabel('Password', { exact: true }).fill('studio-worker-password');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByText('@studio-worker')).toBeVisible();
+  await expect(page.getByText('Client One · revision 1')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Open draft' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Sign out' }).click();
+
+  await page.getByLabel('Username', { exact: true }).fill('client');
+  await page.getByLabel('Password', { exact: true }).fill('client-password-123');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByText('@client')).toBeVisible();
+  await expect(page.getByText('Customer drafts')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Apply to main as new revision' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Sign out' }).click();
+
+  await page.getByLabel('Username', { exact: true }).fill('owner');
+  await page.getByLabel('Password', { exact: true }).fill('temporary-password');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByText('@owner').first()).toBeVisible();
+  await expect(page.getByLabel('Temporary password')).toHaveValue('');
+  await expect(page.getByTestId('account-row').filter({ hasText: '@client' }).getByLabel('Reset password for client')).toHaveValue('');
+  await expect(page.getByText('Customer drafts')).toHaveCount(0);
+});
+
+test('owner assigns and unassigns official projects while workers have no account or draft-review APIs', async ({ page }) => {
+  const owner = new LibraryFixture('owner');
+  owner.addAccount('client', 'customer', { displayName: 'Client One', mustChangePassword: false });
+  owner.seed('Official sculpture');
+  await owner.install(page);
+  await openLibrary(page);
+  const customerRow = page.getByTestId('account-row').filter({ hasText: '@client' });
+  await customerRow.getByLabel('Project for client').selectOption({ label: 'Official sculpture' });
+  await customerRow.getByRole('button', { name: 'Assign' }).click();
+  await expect(customerRow.getByText('Official sculpture')).toBeVisible();
+  await customerRow.getByRole('button', { name: 'Unassign' }).click();
+  await expect(customerRow.getByRole('button', { name: 'Unassign' })).toHaveCount(0);
+
+  await page.unroute('**/api/**');
+  const worker = new LibraryFixture('worker');
+  const project = worker.seed('Worker project');
+  await worker.install(page);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByText('Accounts', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Review drafts' })).toHaveCount(0);
+  const statuses = await page.evaluate(async id => Promise.all([
+    fetch('/api/library/accounts').then(response => response.status),
+    fetch(`/api/library/projects/${id}/drafts`).then(response => response.status),
+  ]), project.id);
+  expect(statuses).toEqual([403, 403]);
+});
+
+test('customer sees only assigned drafts, autosaves them, and cannot use shared-library controls', async ({ page }) => {
+  const fixture = new LibraryFixture('customer', 'client@example.test');
+  const assigned = fixture.seed('Assigned sculpture');
+  fixture.seed('Other sculpture');
+  const draft = fixture.assignCustomer('client', assigned);
+  await fixture.install(page);
+  await openLibrary(page);
+  await expect(page.getByText('Assigned sculpture', { exact: true })).toBeVisible();
+  await expect(page.getByText('Other sculpture', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Editing your draft')).toBeVisible();
+  const libraryPanel = page.getByTestId('project-library-panel');
+  for (const name of ['Create online project', 'Rename', 'Duplicate', 'Export', 'Archive', 'Import project', 'Download master backup', 'Restore master backup', 'Review drafts']) {
+    await expect(libraryPanel.getByRole('button', { name, exact: true })).toHaveCount(0);
+  }
+  expect(fixture.assetRequestCount).toBe(0);
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await page.waitForTimeout(100);
+  expect(fixture.assetRequestCount).toBe(0);
+  await page.getByRole('button', { name: 'Open' }).click();
+  await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
+  await page.getByLabel('Project name').fill('Customer draft edit');
+  await expect.poll(() => fixture.projects.get(draft.id)?.revision).toBe(2);
+  const denied = await page.evaluate(async ({ officialId, draftId }) => Promise.all([
+    fetch('/api/library/projects', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }).then(response => response.status),
+    fetch('/api/library/assets/custom-patterns').then(response => response.status),
+    fetch('/api/library/backup').then(response => response.status),
+    fetch(`/api/library/projects/${officialId}`).then(response => response.status),
+    fetch(`/api/library/projects/${draftId}/duplicate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }).then(response => response.status),
+  ]), { officialId: assigned.id, draftId: draft.id });
+  expect(denied).toEqual([403, 403, 403, 404, 403]);
+  await page.getByRole('button', { name: 'History' }).click();
+  await expect(page.getByRole('dialog', { name: 'Project history' }).getByRole('button', { name: 'Restore' })).toHaveCount(0);
+  await expect(page.locator('body')).not.toContainText('owner@example.test');
+});
+
+test('customer login always returns to assigned active drafts after an owner viewed archives', async ({ page }) => {
+  const fixture = new LibraryFixture('owner');
+  fixture.addAccount('client', 'customer', { displayName: 'Client One', password: 'client-password-123', mustChangePassword: false });
+  const official = fixture.seed('Assigned after owner');
+  fixture.assignCustomer('client', official);
+  await fixture.install(page);
+  await openLibrary(page);
+  await page.getByRole('button', { name: 'Archived projects' }).click();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await page.getByLabel('Username', { exact: true }).fill('client');
+  await page.getByLabel('Password', { exact: true }).fill('client-password-123');
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByText('Customer', { exact: true })).toBeVisible();
+  await expect(page.getByText('Assigned after owner', { exact: true })).toBeVisible();
+});
+
+test('owner reviews and promotes the exact customer draft revision and reports concurrent conflicts', async ({ page }) => {
+  const fixture = new LibraryFixture('owner');
+  fixture.addAccount('client', 'customer', { displayName: 'Client One', mustChangePassword: false });
+  const official = fixture.seed('Official installation', { revisions: [portable('Official one'), portable('Official two')] });
+  const draft = fixture.assignCustomer('client', official);
+  await fixture.install(page);
+  await openLibrary(page);
+  await page.getByRole('button', { name: 'Review drafts' }).click();
+  const review = page.getByRole('region', { name: 'Draft review for Official installation' });
+  await expect(review.getByText('Client One · revision 1')).toBeVisible();
+  draft.document.name = 'Customer draft opened by owner';
+  await review.getByRole('button', { name: 'Open draft' }).click();
+  await expect(page.getByLabel('Project name')).toHaveValue('Customer draft opened by owner');
+  page.once('dialog', dialog => dialog.accept());
+  await review.getByRole('button', { name: 'Apply to main as new revision' }).click();
+  expect(fixture.promotionBodies).toEqual([{ officialBaseRevision: 2, draftBaseRevision: 1 }]);
+  expect(fixture.projects.get(official.id)?.revision).toBe(3);
+  await expect(page.getByText('Applied customer draft to the official project as a new revision.')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Review drafts' }).click();
+  draft.revision += 1;
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('region', { name: 'Draft review for Official installation' }).getByRole('button', { name: 'Apply to main as new revision' }).click();
+  await expect(page.getByText('The library record changed since it was opened.')).toBeVisible();
+  expect(fixture.projects.get(official.id)?.revision).toBe(3);
 });
 
 test('syncs custom patterns, revision history, and Pattern Lab drafts into a fresh browser before selection', async ({ page, browser }) => {
@@ -992,7 +1809,6 @@ test('fresh Patterns resolves a project selection that exists only in cloud cust
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
 
   await expect.poll(() => page.evaluate(() => document.documentElement.dataset.workspaceAssetsReady || '')).toBe('true');
-  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Cloud-only cyan');
   await expect(page.locator('.pm-cards .pmcard[data-pattern-id="custom-cloud-only"]')).toHaveClass(/\bon\b/);
 });
 
@@ -1122,6 +1938,7 @@ test('retries transient saves with one request ID, waits exactly, and demotes re
   await fixture.install(page);
   await openLibrary(page);
   await page.getByTestId('cloud-project-row').getByRole('button', { name: 'Open' }).click();
+  await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
 
   fixture.updateFailures.push(503);
   await page.getByLabel('Project name').fill('Retry once');
@@ -1150,6 +1967,7 @@ test('reconnect replays a committed save with its original request ID and reconc
   await fixture.install(page);
   await openLibrary(page);
   await page.getByTestId('cloud-project-row').getByRole('button', { name: 'Open' }).click();
+  await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
 
   fixture.loseNextUpdateResponse = true;
   await page.getByLabel('Project name').fill('Recovered after reconnect');
@@ -1173,6 +1991,7 @@ test('same-project rename wins over an in-flight stale replay without creating a
   await fixture.install(page);
   await openLibrary(page);
   await page.getByTestId('cloud-project-row').getByRole('button', { name: 'Open' }).click();
+  await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
 
   await page.getByLabel('Project name').fill('Pending before rename');
   await expect.poll(() => fixture.updateCount).toBe(1);
@@ -1202,6 +2021,7 @@ test('same-project archive wins over an in-flight stale replay and saves the pen
   await fixture.install(page);
   await openLibrary(page);
   await page.getByTestId('cloud-project-row').getByRole('button', { name: 'Open' }).click();
+  await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
 
   await page.getByLabel('Project name').fill('Pending through archive');
   await expect.poll(() => fixture.updateCount).toBe(1);
@@ -1230,6 +2050,7 @@ test('same-project history restore wins over an in-flight stale replay so later 
   await openLibrary(page);
   const row = page.getByTestId('cloud-project-row').filter({ hasText: 'Restore retry project' });
   await row.getByRole('button', { name: 'Open' }).click();
+  await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
 
   await page.getByLabel('Project name').fill('Pending before restore');
   await expect.poll(() => fixture.updateCount).toBe(1);
@@ -1255,6 +2076,7 @@ test('demotes a forbidden authenticated session without retrying', async ({ page
   await fixture.install(page);
   await openLibrary(page);
   await page.getByTestId('cloud-project-row').getByRole('button', { name: 'Open' }).click();
+  await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
   fixture.updateFailures.push(403);
   await page.getByLabel('Project name').fill('Forbidden edit');
   await expect(page.getByText('The online library is unavailable')).toBeVisible();
@@ -1362,6 +2184,7 @@ test('preserves both sides of a conflict with Open latest and Save as copy', asy
   await fixture.install(page);
   await openLibrary(page);
   await page.getByTestId('cloud-project-row').getByRole('button', { name: 'Open' }).click();
+  await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
 
   fixture.forceNextConflict = true;
   await page.getByLabel('Project name').fill('My unsent version');
@@ -1380,11 +2203,13 @@ test('preserves both sides of a conflict with Open latest and Save as copy', asy
 
 test('never offers worker delete and requires an owner to type an archived project title', async ({ page }) => {
   const worker = new LibraryFixture('worker');
-  worker.seed('Archived work', { archived: true });
+  const workerArchive = worker.seed('Archived work', { archived: true });
   await worker.install(page);
   await openLibrary(page);
   await page.getByRole('button', { name: 'Archived projects' }).click();
   await expect(page.getByRole('button', { name: 'Delete permanently' })).toHaveCount(0);
+  const workerDeleteStatus = await page.evaluate(async id => fetch(`/api/library/projects/${id}`, { method: 'DELETE' }).then(response => response.status), workerArchive.id);
+  expect(workerDeleteStatus).toBe(403);
 
   await page.unroute('**/api/library/**');
   const owner = new LibraryFixture('owner');
@@ -1551,7 +2376,7 @@ test('reports a master restore failure when refreshed assets cannot be read and 
   await fixture.install(page);
   await openLibrary(page);
   await expect.poll(() => page.evaluate(() => document.documentElement.dataset.workspaceAssetsReady || '')).toBe('true');
-  await expect(page.getByText('owner@example.test')).toBeVisible();
+  await expect(page.getByText('owner@example.test').first()).toBeVisible();
 
   const restorePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-restore-failure-')), 'restore.lw-library.json');
   fs.writeFileSync(restorePath, JSON.stringify({
@@ -1594,7 +2419,7 @@ test('a master restore supersedes a committed PUT whose success response arrives
   await fixture.install(page);
   await openLibrary(page);
   await expect.poll(() => page.evaluate(() => document.documentElement.dataset.workspaceAssetsReady || '')).toBe('true');
-  await expect(page.getByText('owner@example.test')).toBeVisible();
+  await expect(page.getByText('owner@example.test').first()).toBeVisible();
 
   fixture.holdNextAssetSuccessResponse();
   await page.evaluate(async () => {

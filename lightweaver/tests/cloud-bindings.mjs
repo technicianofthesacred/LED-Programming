@@ -21,6 +21,7 @@ import {
   authenticateAccessRequest,
   isLocalAccessJwksRequest,
 } from '../functions/api/library/_shared/auth.js';
+import { createD1AccountStore } from '../functions/api/library/_shared/accountStore.js';
 import {
   createD1R2LibraryStore,
 } from '../functions/api/library/_shared/store.js';
@@ -238,6 +239,7 @@ test('Pages adapter authenticates a signed worker for a local D1/R2 round-trip a
         method,
         headers: {
           'Cf-Access-Jwt-Assertion': jwt,
+          origin: 'https://led.mandalacodes.com',
           ...(body ? {
             'content-type': 'application/json',
             'x-lightweaver-request': crypto.randomUUID(),
@@ -265,6 +267,100 @@ test('Pages adapter authenticates a signed worker for a local D1/R2 round-trip a
   });
   assert.equal(denied.response.status, 403);
   assert.equal(denied.payload.error.code, 'forbidden');
+});
+
+test('Pages adapter prefers a native session and narrows Access fallback after owner bootstrap', async t => {
+  const fixture = await accessFixture();
+  const { mf, db, bucket } = await localBindings();
+  t.after(() => mf.dispose());
+  const accountStore = createD1AccountStore({ PROJECTS_DB: db }, {
+    passwordIterations: 1,
+    now: () => '2026-08-01T00:00:00.000Z',
+  });
+  const worker = await accountStore.createAccount({
+    username: 'workshop',
+    displayName: 'Workshop',
+    role: 'worker',
+    temporaryPassword: 'temporary-passphrase',
+  });
+  const temporaryLogin = await accountStore.verifyLogin({
+    username: worker.username,
+    password: 'temporary-passphrase',
+  });
+  await accountStore.changePassword({
+    accountId: worker.id,
+    newPassword: 'personal-passphrase-456',
+    expectedGeneration: temporaryLogin.observedGeneration,
+  });
+  const verified = await accountStore.verifyLogin({
+    username: worker.username,
+    password: 'personal-passphrase-456',
+  });
+  const nativeSession = await accountStore.createSession(worker.id, {
+    expectedGeneration: verified.observedGeneration,
+  });
+  const env = { ...ACCESS_ENV, PROJECTS_DB: db, PROJECT_BLOBS: bucket };
+  const accessOwnerJwt = await fixture.token({ email: 'owner@example.test' });
+
+  const native = await handleLibraryPagesRequest({
+    request: new Request('https://led.mandalacodes.com/api/library/session', {
+      headers: {
+        cookie: `__Host-lightweaver_session=${nativeSession.token}`,
+        'Cf-Access-Jwt-Assertion': accessOwnerJwt,
+      },
+    }),
+    env,
+    params: {},
+  }, { accountStore, jwks: fixture.jwks });
+  assert.equal(native.status, 200);
+  assert.deepEqual((await native.json()).session, {
+    username: 'workshop',
+    displayName: 'Workshop',
+    role: 'worker',
+    mustChangePassword: false,
+  });
+
+  const bootstrap = await handleLibraryPagesRequest({
+    request: new Request('https://led.mandalacodes.com/api/library/accounts/bootstrap', {
+      method: 'POST',
+      headers: {
+        origin: 'https://led.mandalacodes.com',
+        'content-type': 'application/json',
+        'Cf-Access-Jwt-Assertion': accessOwnerJwt,
+      },
+      body: JSON.stringify({
+        username: 'owner',
+        displayName: 'Studio Owner',
+        temporaryPassword: 'temporary-passphrase',
+      }),
+    }),
+    env,
+    params: {},
+  }, { accountStore, jwks: fixture.jwks });
+  assert.equal(bootstrap.status, 201);
+  assert.equal((await bootstrap.json()).account.role, 'owner');
+
+  const legacyWorker = await handleLibraryPagesRequest({
+    request: new Request('https://led.mandalacodes.com/api/library/session', {
+      headers: { 'Cf-Access-Jwt-Assertion': await fixture.token() },
+    }),
+    env,
+    params: {},
+  }, { accountStore, jwks: fixture.jwks });
+  assert.equal(legacyWorker.status, 401);
+
+  const legacyOwner = await handleLibraryPagesRequest({
+    request: new Request('https://led.mandalacodes.com/api/library/session', {
+      headers: { 'Cf-Access-Jwt-Assertion': accessOwnerJwt },
+    }),
+    env,
+    params: {},
+  }, { accountStore, jwks: fixture.jwks });
+  assert.equal(legacyOwner.status, 200);
+  assert.deepEqual((await legacyOwner.json()).session, {
+    email: 'owner@example.test',
+    role: 'owner',
+  });
 });
 
 function wrapStatement(statement, sql, prepared) {
@@ -335,12 +431,238 @@ async function localBindings() {
   });
   const db = await mf.getD1Database('PROJECTS_DB');
   const bucket = await mf.getR2Bucket('PROJECT_BLOBS');
-  const migration = await readFile(new URL('../migrations/0001_cloud_project_library.sql', import.meta.url), 'utf8');
-  for (const statement of migration.split(';').map(value => value.trim()).filter(Boolean)) {
-    await db.prepare(statement).run();
+  for (const migrationName of [
+    '0001_cloud_project_library.sql',
+    '0002_account_access.sql',
+    '0003_account_session_generation.sql',
+  ]) {
+    const migration = await readFile(new URL(`../migrations/${migrationName}`, import.meta.url), 'utf8');
+    for (const statement of migration.split(';').map(value => value.trim()).filter(Boolean)) {
+      await db.prepare(statement).run();
+    }
   }
   return { mf, db, bucket };
 }
+
+test('D1 assignment races create one reusable customer draft and clean the losing R2 object', async t => {
+  const { mf, db, bucket } = await localBindings();
+  t.after(() => mf.dispose());
+  const bindings = recordingBindings(db, bucket);
+  const store = createD1R2LibraryStore(bindings.env);
+  assert.equal(typeof store.assignCustomerProject, 'function');
+  const accountStore = createD1AccountStore({ PROJECTS_DB: db }, { passwordIterations: 1 });
+  const ownerAccount = await accountStore.createAccount({
+    username: 'draft-owner', displayName: 'Draft Owner', role: 'owner',
+    temporaryPassword: 'temporary-passphrase',
+  });
+  const customerAccount = await accountStore.createAccount({
+    username: 'draft-customer', displayName: 'Draft Customer', role: 'customer',
+    temporaryPassword: 'temporary-passphrase',
+  });
+  const owner = {
+    accountId: ownerAccount.id, role: 'owner', email: 'Draft Owner (draft-owner)',
+    subject: `account:${ownerAccount.id}`,
+  };
+  const customer = {
+    accountId: customerAccount.id, role: 'customer', email: 'Draft Customer (draft-customer)',
+    subject: `account:${customerAccount.id}`,
+  };
+  const official = await store.createProject({
+    title: 'Official Race', project: portableProject({ id: 'official-race' }),
+    actor: owner, idempotencyKey: 'assignment-official',
+  });
+
+  const settled = await Promise.allSettled([
+    store.assignCustomerProject({
+      targetAccount: customerAccount, projectId: official.id, actor: owner,
+      idempotencyKey: 'assignment-race-a',
+    }),
+    store.assignCustomerProject({
+      targetAccount: customerAccount, projectId: official.id, actor: owner,
+      idempotencyKey: 'assignment-race-b',
+    }),
+  ]);
+  assert.deepEqual(settled.map(result => result.status), ['fulfilled', 'fulfilled']);
+  const draftIds = settled.map(result => result.value.assignment.draftProjectId);
+  assert.equal(new Set(draftIds).size, 1);
+  assert.equal(await db.prepare(
+    'SELECT COUNT(*) AS count FROM projects WHERE draft_of_project_id = ? AND draft_owner_account_id = ?',
+  ).bind(official.id, customerAccount.id).first('count'), 1);
+  assert.equal(await db.prepare(
+    'SELECT COUNT(*) AS count FROM project_assignments WHERE customer_account_id = ? AND project_id = ?',
+  ).bind(customerAccount.id, official.id).first('count'), 1);
+  assert.equal((await bucket.list()).objects.length, 2);
+  assert.equal(bindings.events.some(event => event.startsWith('r2:delete:projects/')), true);
+
+  const customerList = await store.listProjects({ state: 'active', identity: customer });
+  assert.deepEqual(customerList.map(project => project.id), [draftIds[0]]);
+  const ownerList = await store.listProjects({ state: 'active', identity: owner });
+  assert.deepEqual(ownerList.map(project => project.id), [official.id]);
+  assert.equal(ownerList[0].createdBy, 'Draft Owner (draft-owner)');
+  const opened = await store.readProject({ id: draftIds[0], identity: customer });
+  const updated = await store.updateProject({
+    id: draftIds[0], baseRevision: 1,
+    project: portableProject({ id: opened.embeddedProjectId, brightness: 0.4 }),
+    actor: customer, idempotencyKey: 'customer-draft-update',
+  });
+  const customerHistory = await store.listRevisions({ id: draftIds[0], identity: customer });
+  assert.equal(customerHistory.every(revision => !('editor' in revision)), true);
+  assert.doesNotMatch(
+    JSON.stringify({ customerList, opened, updated, customerHistory }),
+    /Draft Owner|draft-owner|Draft Customer|draft-customer/,
+  );
+  assert.equal((await store.readProject({ id: official.id, identity: owner })).revision, 1);
+
+  assert.deepEqual(await store.unassignCustomerProject({
+    targetAccount: customerAccount, projectId: official.id, actor: owner,
+    idempotencyKey: 'unassign-race-draft',
+  }), { unassigned: true });
+  await assert.rejects(
+    store.readProject({ id: draftIds[0], identity: customer }),
+    error => error.code === 'not_found',
+  );
+  const reassigned = await store.assignCustomerProject({
+    targetAccount: customerAccount, projectId: official.id, actor: owner,
+    idempotencyKey: 'reassign-race-draft',
+  });
+  assert.equal(reassigned.assignment.draftProjectId, draftIds[0]);
+  assert.equal(reassigned.assignment.project.revision, 2);
+
+  await accountStore.setAccountStatus({ id: customerAccount.id, status: 'disabled' });
+  const disabledAccount = await accountStore.getAccount(customerAccount.id);
+  assert.equal((await store.listCustomerAssignments({
+    targetAccount: disabledAccount, identity: owner,
+  })).length, 1);
+  await assert.rejects(store.assignCustomerProject({
+    targetAccount: disabledAccount, projectId: official.id, actor: owner,
+    idempotencyKey: 'disabled-assignment-denied',
+  }), error => error.code === 'invalid_assignment');
+  assert.deepEqual(await store.unassignCustomerProject({
+    targetAccount: disabledAccount, projectId: official.id, actor: owner,
+    idempotencyKey: 'disabled-assignment-cleanup',
+  }), { unassigned: true });
+
+  await accountStore.setAccountStatus({ id: customerAccount.id, status: 'active' });
+  const activeAgain = await accountStore.getAccount(customerAccount.id);
+  await store.assignCustomerProject({
+    targetAccount: activeAgain, projectId: official.id, actor: owner,
+    idempotencyKey: 'role-change-assignment',
+  });
+  await accountStore.setAccountRole({ id: customerAccount.id, role: 'worker' });
+  const reRoleAccount = await accountStore.getAccount(customerAccount.id);
+  assert.equal((await store.listCustomerAssignments({
+    targetAccount: reRoleAccount, identity: owner,
+  })).length, 1);
+  assert.deepEqual(await store.unassignCustomerProject({
+    targetAccount: reRoleAccount, projectId: official.id, actor: owner,
+    idempotencyKey: 'role-change-assignment-cleanup',
+  }), { unassigned: true });
+});
+
+test('D1 promotion preserves official identity and permanent delete cleans drafts, assignments, revisions, and R2', async t => {
+  const { mf, db, bucket } = await localBindings();
+  t.after(() => mf.dispose());
+  const store = createD1R2LibraryStore({ PROJECTS_DB: db, PROJECT_BLOBS: bucket });
+  assert.equal(typeof store.promoteDraft, 'function');
+  const accountStore = createD1AccountStore({ PROJECTS_DB: db }, { passwordIterations: 1 });
+  const ownerAccount = await accountStore.createAccount({
+    username: 'promotion-owner', displayName: 'Promotion Owner', role: 'owner',
+    temporaryPassword: 'temporary-passphrase',
+  });
+  const customerAccount = await accountStore.createAccount({
+    username: 'promotion-customer', displayName: 'Promotion Customer', role: 'customer',
+    temporaryPassword: 'temporary-passphrase',
+  });
+  const owner = { accountId: ownerAccount.id, role: 'owner', email: 'Promotion Owner', subject: 'owner' };
+  const customer = { accountId: customerAccount.id, role: 'customer', email: 'Promotion Customer', subject: 'customer' };
+  const official = await store.createProject({
+    title: 'Untouched Official Title', project: portableProject({ id: 'untouched-official-id' }),
+    actor: owner, idempotencyKey: 'promotion-official',
+  });
+  const assigned = await store.assignCustomerProject({
+    targetAccount: customerAccount, projectId: official.id, actor: owner,
+    idempotencyKey: 'promotion-assign',
+  });
+  const draftId = assigned.assignment.draftProjectId;
+  await store.updateProject({
+    id: draftId, baseRevision: 1,
+    project: portableProject({ id: 'untouched-official-id', name: 'Customer Name', brightness: 0.17 }),
+    title: 'Customer Title', actor: customer, idempotencyKey: 'promotion-draft-update',
+  });
+
+  await assert.rejects(store.promoteDraft({
+    draftId, officialBaseRevision: 0, draftBaseRevision: 2,
+    actor: owner, idempotencyKey: 'promotion-conflict',
+  }), error => error.code === 'revision_conflict');
+
+  await store.updateProject({
+    id: draftId, baseRevision: 2,
+    project: portableProject({ id: 'untouched-official-id', name: 'Later Customer Save', brightness: 0.27 }),
+    title: 'Later Customer Title', actor: customer, idempotencyKey: 'promotion-concurrent-save',
+  });
+  await assert.rejects(store.promoteDraft({
+    draftId, officialBaseRevision: 1, draftBaseRevision: 2,
+    actor: owner, idempotencyKey: 'promotion-stale-draft',
+  }), error => error.code === 'revision_conflict');
+  assert.equal((await store.readProject({ id: official.id, identity: owner })).revision, 1);
+
+  let injectedConcurrentSave = false;
+  const racingDb = {
+    prepare: (...args) => db.prepare(...args),
+    async batch(statements) {
+      if (!injectedConcurrentSave) {
+        injectedConcurrentSave = true;
+        await store.updateProject({
+          id: draftId,
+          baseRevision: 3,
+          project: portableProject({
+            id: 'untouched-official-id', name: 'Save During Promotion', brightness: 0.37,
+          }),
+          title: 'Save During Promotion',
+          actor: customer,
+          idempotencyKey: 'save-inside-promotion-window',
+        });
+      }
+      return db.batch(statements);
+    },
+  };
+  const racingStore = createD1R2LibraryStore({ PROJECTS_DB: racingDb, PROJECT_BLOBS: bucket });
+  await assert.rejects(racingStore.promoteDraft({
+    draftId, officialBaseRevision: 1, draftBaseRevision: 3,
+    actor: owner, idempotencyKey: 'promotion-raced-draft',
+  }), error => error.code === 'revision_conflict');
+  assert.equal((await store.readProject({ id: official.id, identity: owner })).revision, 1);
+
+  const promoted = await store.promoteDraft({
+    draftId, officialBaseRevision: 1, draftBaseRevision: 4,
+    actor: owner, idempotencyKey: 'promotion-success',
+  });
+  assert.equal(promoted.revision, 2);
+  assert.equal(promoted.title, 'Untouched Official Title');
+  assert.equal(promoted.embeddedProjectId, 'untouched-official-id');
+  const opened = await store.readProject({ id: official.id, identity: owner });
+  assert.equal(opened.document.id, 'untouched-official-id');
+  assert.equal(opened.document.name, 'Untouched Official Title');
+  assert.equal(opened.document.pattern.masterBrightness, 0.37);
+  assert.deepEqual(
+    (await store.listRevisions({ id: official.id, identity: owner })).map(revision => revision.revision),
+    [2, 1],
+  );
+  assert.equal((await bucket.list()).objects.length, 6);
+
+  await assert.rejects(store.promoteDraft({
+    draftId, officialBaseRevision: 2, draftBaseRevision: 4,
+    actor: owner, idempotencyKey: 'promotion-success',
+  }), error => error.code === 'idempotency_conflict');
+
+  assert.deepEqual(await store.deleteProject({
+    id: official.id, baseRevision: 2, actor: owner, idempotencyKey: 'delete-official-and-drafts',
+  }), { deleted: true });
+  assert.equal(await db.prepare('SELECT COUNT(*) AS count FROM projects').first('count'), 0);
+  assert.equal(await db.prepare('SELECT COUNT(*) AS count FROM project_revisions').first('count'), 0);
+  assert.equal(await db.prepare('SELECT COUNT(*) AS count FROM project_assignments').first('count'), 0);
+  assert.equal((await bucket.list()).objects.length, 0);
+});
 
 test('D1/R2 store writes immutable private bodies before atomic metadata and cleans the losing optimistic write', async t => {
   const { mf, db, bucket } = await localBindings();
@@ -443,7 +765,7 @@ test('an ambiguous commit-then-throw keeps committed R2 references readable', as
   });
 
   assert.equal(created.revision, 1);
-  assert.equal((await store.readProject({ id: created.id })).document.id, 'committed-after-throw');
+  assert.equal((await store.readProject({ id: created.id, identity: actor })).document.id, 'committed-after-throw');
   assert.equal((await bucket.list({ prefix: `projects/${created.id}/` })).objects.length, 1);
   const mutation = await db.prepare(`
     SELECT attempt_id FROM library_mutations WHERE idempotency_key = ?
@@ -504,7 +826,7 @@ test('large ambiguous and losing imports reconcile within D1 parameter limits', 
   }), { projectsCreated: 30, assetsCreated: 0 });
   assert.equal((await bucket.list()).objects.length, 30);
   for (let index = 0; index < 30; index += 1) {
-    const opened = await store.readProject({ id: `large-import-${index}` });
+    const opened = await store.readProject({ id: `large-import-${index}`, identity: actor });
     assert.equal(opened.document.id, `large-import-project-${index}`);
   }
 
@@ -641,6 +963,7 @@ test('an R2 deletion failure returns a safe router failure and preserves project
       method: 'DELETE',
       headers: {
         'content-type': 'application/json',
+        origin: 'https://led.mandalacodes.com',
         'x-lightweaver-request': 'failed-delete-request',
       },
       body: JSON.stringify({ baseRevision: 1, confirmation: 'DELETE' }),
@@ -934,6 +1257,7 @@ test('Wrangler applies local migrations and serves the deployed Pages catch-all 
       headers: {
         ...authHeaders,
         'content-type': 'application/json',
+        origin: `http://127.0.0.1:${port}`,
         'x-lightweaver-request': 'served-create',
       },
       body: JSON.stringify({
@@ -960,6 +1284,7 @@ test('Wrangler applies local migrations and serves the deployed Pages catch-all 
         headers: {
           ...authHeaders,
           'content-type': 'application/json',
+          origin: `http://127.0.0.1:${port}`,
           'x-lightweaver-request': 'served-worker-delete',
         },
         body: JSON.stringify({ baseRevision: 1, confirmation: 'DELETE' }),
@@ -985,7 +1310,7 @@ test('binding config, migration, route manifest, and package scripts are local-s
   ]);
   assert.deepEqual(JSON.parse(routesText), {
     version: 1,
-    include: ['/api/library', '/api/library/*'],
+    include: ['/api/account', '/api/account/*', '/api/library', '/api/library/*'],
     exclude: [],
   });
 
@@ -1013,6 +1338,7 @@ test('binding config, migration, route manifest, and package scripts are local-s
   assert.match(pkg.scripts['build:functions'] || '', /--output-routes-path \.pages\/functions-build\/_routes\.json/);
   assert.equal(pkg.scripts['deploy:pages'], 'node scripts/deploy-pages-production.mjs');
   for (const required of [
+    'LIGHTWEAVER_NATIVE_AUTH_READY',
     'LIGHTWEAVER_PRODUCTION_LIBRARY_READY',
     'PROJECTS_DB_DATABASE_ID',
     'PROJECTS_DB_DATABASE_NAME',

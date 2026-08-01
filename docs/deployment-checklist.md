@@ -28,16 +28,17 @@ keys:
    commits do not re-trigger it.
 4. On the protected release commit, `npm run launch:check` must pass. It repeats
    the source gate and proves the committed signed factory binary is fresh.
-5. `deploy-site.yml` applies the expand-only production D1 migration with the
-   separate D1-only credential, then builds and publishes the compatible Studio
-   and Pages Function to the `lightweaver` production branch with the Pages-only
-   credential. On HTTPS, Studio automatically uses the card-page bridge for
-   local commands; no card URL routes through `/api/library` and workers never
-   install or operate a separate Bridge product.
-6. The deploy runs `PROD_CHECK_REQUIRED=1 npm run check:prod`. The live check
-   verifies the signed release, production-job index/artifacts, cache policy,
-   root Studio, the unauthenticated/no-store library denial, and the published
-   build graph plus every reachable JS/CSS asset.
+5. `deploy-site.yml` applies every pending expand-only D1 migration, including
+   `0002_account_access.sql` and `0003_account_session_generation.sql`, with the
+   separate D1-only credential before publishing compatible Studio and Pages
+   Functions. The first deployment keeps Cloudflare Access in front of the
+   library for owner bootstrap; the final deployment is enabled by
+   `LIGHTWEAVER_NATIVE_AUTH_READY=confirmed` only after native login is proven.
+6. The deploy runs `PROD_CHECK_REQUIRED=1 npm run check:prod`. Before cutover it
+   requires the Access denial. After cutover it requires public Studio HTTP 200,
+   native account and library session HTTP 401 responses with `no-store`, and a
+   reachable public login Function, as well as the signed release, job, cache,
+   build-graph, and JS/CSS proofs.
 7. One fully erased physical card completes the live Production Setup route and
    [`new-card-checklist.md`](new-card-checklist.md). Only then may a batch begin.
 
@@ -60,21 +61,21 @@ steps 5–7. A human manual deploy with missing credentials fails loudly.
 - [ ] Live `https://led.mandalacodes.com/#screen=production` opens the current
       root Studio and verified `bench-fixture-44` job.
 
-## Private project-library release evidence
+## Native account cutover runbook
 
-The exact one-time resource, binding, Access, migration, credential, backup,
-and rollback procedure is in
+Keep `LIGHTWEAVER_NATIVE_AUTH_READY` unset until the bootstrap and acceptance
+steps below pass. There is no public signup, email identity, invitation, or
+self-service recovery; only the owner creates accounts and resets passwords.
+The resource/binding procedure remains in
 [`led-mandalacodes-setup.md`](led-mandalacodes-setup.md#private-cloud-project-library).
-The library cannot be declared released while that document's current
-provisioning blocker remains.
 
 - [ ] `npm run test:projects` and `npm run test:cloud-bindings` pass from
       `lightweaver/`; the latter applies the migration only to isolated local
       state and proves unauthenticated `401`, `Cache-Control: no-store`, an
       authenticated project round-trip, and worker delete `403`.
 - [ ] `npm run build`, `npm run stage:pages`, and `npm run verify:pages` pass;
-      the staged artifact contains the exact `_routes.json` and the Pages
-      Function compilation artifact exists.
+      `_routes.json` includes `/api/account*` and `/api/library*`, while `/`
+      remains a public static Studio route.
 - [ ] Preview D1 and private R2 bindings use `PROJECTS_DB` and `PROJECT_BLOBS`;
       production has separate resources with the same binding names.
 - [ ] Pages Preview Access is enabled because preview deployment URLs are public
@@ -83,21 +84,39 @@ provisioning blocker remains.
       uses that preview application's audience. Set
       `LIGHTWEAVER_PREVIEW_ACCESS_READY=confirmed` only after signed-out root
       and `/api/library/session` requests are denied.
-- [ ] Access protects `led.mandalacodes.com/api/library*` with an exact-email
-      allow policy, and the deployed owner identity configuration is correct.
-- [ ] Preview migration completes before preview deploy. An approved worker
-      proves create/edit/history/master-backup restore, direct worker delete is
-      denied, and a signed-out/private browser is denied with `no-store`.
-- [ ] A master backup is stored outside browser storage and Cloudflare before
-      production migration.
+- [ ] Access protects `led.mandalacodes.com/api/library*` with its exact-email
+      owner policy. Keep `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `OWNER_EMAILS`, and
+      preview Access readiness configured while native readiness is unconfirmed.
+- [ ] Run the deploy once with native readiness unconfirmed. Confirm the workflow
+      applies migrations `0002` and `0003` before publishing the dual-auth code,
+      and its live proof still sees the Access denial.
+- [ ] While signed in through the existing Access owner session, open Studio's
+      Library panel and use **Create owner account**. Do not put a temporary or
+      permanent password in a command, log, issue, screenshot, or CI variable.
+- [ ] Sign in with that native owner, change the temporary password, sign out,
+      and sign back in. Create one worker and one customer through the Accounts
+      panel; there is no signup or email flow.
+- [ ] Before cutover, prove owner account/reset/delete powers, worker
+      create/edit/history with permanent delete denied, and customer assignment
+      isolation, draft save, owner promotion, logout denial, and master backup.
+- [ ] Before removing Access, store a master backup outside browser storage and
+      Cloudflare.
 - [ ] The production workflow used `CLOUDFLARE_MIGRATION_API_TOKEN` for the
       additive migration before the Pages deploy; the Pages credential has no
       D1 administrative permission.
-- [ ] The exact verified commit is live. Repeat authenticated
-      create/edit/history/backup, unauthenticated denial, worker-delete denial,
-      and `PROD_CHECK_REQUIRED=1 npm run check:prod` against production.
-- [ ] The logout URL clears the Access session and the next library request is
-      denied: `https://led.mandalacodes.com/cdn-cgi/access/logout`.
+- [ ] Only after all native checks pass, remove the Cloudflare Access path
+      protection, set the GitHub variable
+      `LIGHTWEAVER_NATIVE_AUTH_READY=confirmed`, and rerun the same deployment.
+      The Access audience/team/owner settings are no longer required in this
+      phase; D1/R2 resource IDs, names, limits, and library readiness remain
+      mandatory.
+- [ ] In a signed-out browser, verify `/` is HTTP 200 and both
+      `/api/account/session` and `/api/library/session` are HTTP 401 with
+      `Cache-Control: no-store`—never an Access 302. Confirm login failures stay
+      generic, then repeat the owner, worker, and customer checks.
+- [ ] Rollback order: restore the Access application/policy, unset or reset
+      `LIGHTWEAVER_NATIVE_AUTH_READY`, then deploy the prior compatible Pages
+      release. Do not reverse `0002`/`0003`; their additive D1 schema remains.
 
 Do not use a Pages rollback as a database rollback. Expanded D1 schema and
 private R2 revisions remain in place; roll back only to code compatible with

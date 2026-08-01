@@ -202,7 +202,7 @@ export async function assertReleaseProvenance(response, manifest, url) {
 }
 
 export async function assertStudioRoot(response, url) {
-  if (!response.ok) {
+  if (response.status !== 200) {
     throw new Error(`Production Studio root answered HTTP ${response.status} at\n  ${url}`);
   }
   const bytes = new Uint8Array(await response.arrayBuffer());

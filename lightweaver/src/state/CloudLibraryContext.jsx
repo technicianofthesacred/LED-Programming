@@ -24,6 +24,16 @@ const WORKSPACE_ASSET_KINDS = ['custom-patterns', 'pattern-lab-drafts'];
 
 const CloudLibraryContext = createContext(null);
 
+function canUseWorkspaceAssets(session) {
+  return session?.status === 'authenticated'
+    && !session.mustChangePassword
+    && (session.role === 'owner' || session.role === 'worker');
+}
+
+function authenticatedPrincipal(session) {
+  return `${session?.username || session?.email || ''}:${session?.role || ''}:${session?.mustChangePassword ? 'forced' : 'ready'}`;
+}
+
 function readActiveRemoteAssociation() {
   try {
     const raw = localStorage.getItem(ACTIVE_REMOTE_KEY);
@@ -304,7 +314,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     markProjectPersisted,
   } = useProject();
 
-  const [session, setSession] = useState({ status: 'loading', email: '', role: null, error: null });
+  const [session, setSession] = useState({ status: 'loading', username: '', displayName: '', role: null, error: null });
   const [projectsByState, setProjectsByState] = useState({ active: [], archived: [] });
   const [activeRemoteProject, setActiveRemoteProject] = useState(null);
   const [syncStatus, setSyncStatus] = useState('idle');
@@ -325,6 +335,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   const documentRef = useRef(null);
   const activeRemoteRef = useRef(activeRemoteProject);
   const sessionRef = useRef(session);
+  const authEpochRef = useRef(0);
   const conflictRef = useRef(conflict);
   const saveTimerRef = useRef(null);
   const inFlightRef = useRef(false);
@@ -358,6 +369,32 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   sessionRef.current = session;
   conflictRef.current = conflict;
   onlineRef.current = online;
+
+  const beginAuthTransition = useCallback(() => {
+    authEpochRef.current += 1;
+    return authEpochRef.current;
+  }, []);
+
+  const captureAuthenticatedSession = useCallback(() => {
+    const current = sessionRef.current;
+    if (current.status !== 'authenticated') return null;
+    return {
+      epoch: authEpochRef.current,
+      principal: authenticatedPrincipal(current),
+    };
+  }, []);
+
+  const authenticatedSessionIsCurrent = useCallback(token => Boolean(
+    token
+      && mountedRef.current
+      && token.epoch === authEpochRef.current
+      && sessionRef.current.status === 'authenticated'
+      && token.principal === authenticatedPrincipal(sessionRef.current),
+  ), []);
+
+  const authEpochIsCurrent = useCallback(epoch => (
+    mountedRef.current && epoch === authEpochRef.current
+  ), []);
 
   const waitForLocalEdit = useCallback(async (previousMarker, predicate) => {
     for (let frame = 0; frame < 6; frame += 1) {
@@ -407,18 +444,20 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   }, []);
 
   const demoteSession = useCallback(error => {
+    beginAuthTransition();
     clearTimeout(saveTimerRef.current);
     clearTimeout(retryRef.current);
     pendingSaveOperationRef.current = null;
     queuedRef.current = false;
     const next = error?.status === 401 || error?.state === 'sign-in'
-      ? { status: 'unauthenticated', email: '', role: null, error }
-      : { status: 'error', email: '', role: null, error };
+      ? { status: 'unauthenticated', username: '', displayName: '', role: null, error }
+      : { status: 'error', username: '', displayName: '', role: null, error };
     sessionRef.current = next;
     if (!mountedRef.current) return;
     setSession(next);
     setProjectsByState({ active: [], archived: [] });
-  }, []);
+    setActiveRemote(null);
+  }, [beginAuthTransition, setActiveRemote]);
 
   const handleLibraryError = useCallback(rawError => {
     const error = normalizeError(rawError);
@@ -445,7 +484,9 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   }, []);
 
   const performWorkspaceAssetSync = useCallback(async suppliedOperations => {
-    if (!workspaceAssetsLoadedRef.current || sessionRef.current.status !== 'authenticated') {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken || !canUseWorkspaceAssets(sessionRef.current)) return { ok: false, reason: 'disabled' };
+    if (!workspaceAssetsLoadedRef.current) {
       workspaceAssetQueuedRef.current = true;
       return { ok: false, reason: 'not-ready' };
     }
@@ -505,6 +546,10 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
             baseRevision: operation.baseRevision,
             value: operation.value,
           }, { requestId: operation.requestId });
+          if (!authenticatedSessionIsCurrent(authToken)) {
+            pendingWorkspaceAssetOperationsRef.current = null;
+            return { ok: false, reason: 'disabled' };
+          }
           if (operation.epoch === workspaceAssetEpochsRef.current[operation.kind]) {
             workspaceAssetHeadsRef.current[operation.kind] = {
               revision: acknowledged.revision,
@@ -516,6 +561,10 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         } catch (rawError) {
           let error = normalizeError(rawError);
           if (!mountedRef.current) return { ok: false, reason: 'unmounted', error };
+          if (!authenticatedSessionIsCurrent(authToken)) {
+            pendingWorkspaceAssetOperationsRef.current = null;
+            return { ok: false, reason: 'disabled' };
+          }
           if (operation.epoch !== workspaceAssetEpochsRef.current[operation.kind]) {
             pendingWorkspaceAssetOperationsRef.current = operations.slice(index + 1);
             continue;
@@ -618,12 +667,13 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         }, WORKSPACE_ASSET_DEBOUNCE_MS);
       }
     }
-  }, [client, demoteSession, publishWorkspaceAssetConflicts, setWorkspaceAssetStatus]);
+  }, [authenticatedSessionIsCurrent, captureAuthenticatedSession, client, demoteSession, publishWorkspaceAssetConflicts, setWorkspaceAssetStatus]);
   performWorkspaceAssetSyncRef.current = performWorkspaceAssetSync;
 
   const queueWorkspaceAssetSync = useCallback(() => {
+    if (!canUseWorkspaceAssets(sessionRef.current)) return;
     workspaceAssetQueuedRef.current = true;
-    if (!workspaceAssetsLoadedRef.current || sessionRef.current.status !== 'authenticated') return;
+    if (!workspaceAssetsLoadedRef.current) return;
     if (workspaceAssetConflictsRef.current.size === WORKSPACE_ASSET_KINDS.length) {
       publishWorkspaceAssetConflicts();
       return;
@@ -638,6 +688,8 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   }, [publishWorkspaceAssetConflicts]);
 
   const loadWorkspaceAssets = useCallback(async ({ force = false, replaceLocal = false } = {}) => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken || !canUseWorkspaceAssets(sessionRef.current)) return { ok: true, disabled: true };
     if (!force && workspaceAssetsLoadedRef.current) return { ok: true, unchanged: true };
     const loadOperation = ++workspaceAssetLoadOperationRef.current;
     setWorkspaceAssetStatus({ status: 'loading', ready: false, error: null });
@@ -658,6 +710,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
           throw error;
         }
       }));
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       if (!mountedRef.current) return { ok: false, reason: 'unmounted' };
       if (loadOperation !== workspaceAssetLoadOperationRef.current) {
         return { ok: false, reason: 'superseded' };
@@ -734,7 +787,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       return { ok: true };
     } catch (rawError) {
       const error = normalizeError(rawError);
-      if (!mountedRef.current) return { ok: false, reason: 'unmounted', error };
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session', error };
       if (loadOperation !== workspaceAssetLoadOperationRef.current) {
         return { ok: false, reason: 'superseded', error };
       }
@@ -749,15 +802,17 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       }
       return { ok: false, reason: error.state, error };
     }
-  }, [client, demoteSession, publishWorkspaceAssetConflicts, queueWorkspaceAssetSync, setWorkspaceAssetStatus]);
+  }, [authenticatedSessionIsCurrent, captureAuthenticatedSession, client, demoteSession, publishWorkspaceAssetConflicts, queueWorkspaceAssetSync, setWorkspaceAssetStatus]);
   loadWorkspaceAssetsRef.current = loadWorkspaceAssets;
 
   const refreshProjects = useCallback(async () => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken) return { active: [], archived: [], stale: true };
     const [active, archived] = await Promise.all([
       client.listProjects({ state: 'active' }),
       client.listProjects({ state: 'archived' }),
     ]);
-    if (!mountedRef.current) return { active, archived };
+    if (!authenticatedSessionIsCurrent(authToken)) return { active, archived, stale: true };
     setProjectsByState({ active, archived });
     const associatedId = activeRemoteRef.current?.id;
     const associated = [...active, ...archived].find(project => project.id === associatedId) || null;
@@ -778,28 +833,94 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       setActiveRemote(null);
     }
     return { active, archived };
-  }, [client, setActiveRemote, setCurrentConflict]);
+  }, [authenticatedSessionIsCurrent, captureAuthenticatedSession, client, setActiveRemote, setCurrentConflict]);
 
   const loadSession = useCallback(async () => {
-    if (mountedRef.current) setSession(current => ({ ...current, status: 'loading', error: null }));
+    const authEpoch = beginAuthTransition();
+    if (mountedRef.current) {
+      const loading = { ...sessionRef.current, status: 'loading', error: null };
+      sessionRef.current = loading;
+      setSession(loading);
+    }
     try {
-      const identity = await client.getSession();
-      if (!mountedRef.current) return;
+      let identity;
+      try {
+        identity = typeof client.getAccountSession === 'function'
+          ? await client.getAccountSession()
+          : await client.getSession();
+        if (!authEpochIsCurrent(authEpoch)) return { ok: false, reason: 'stale-session' };
+      } catch (accountError) {
+        if (!authEpochIsCurrent(authEpoch)) return { ok: false, reason: 'stale-session' };
+        const normalizedAccountError = normalizeError(accountError);
+        if (!isAuthenticationError(normalizedAccountError)) throw normalizedAccountError;
+        try {
+          const transitional = await client.getSession();
+          if (!authEpochIsCurrent(authEpoch)) return { ok: false, reason: 'stale-session' };
+          if (transitional?.email && transitional.role === 'owner') {
+            const bootstrap = { status: 'bootstrap', ...transitional, error: null };
+            sessionRef.current = bootstrap;
+            setSession(bootstrap);
+            setProjectsByState({ active: [], archived: [] });
+            setWorkspaceAssets(current => ({
+              ...current,
+              status: 'local',
+              ready: true,
+              error: null,
+              generation: current.generation + 1,
+            }));
+            return;
+          }
+        } catch (transitionalError) {
+          if (!authEpochIsCurrent(authEpoch)) return { ok: false, reason: 'stale-session' };
+          const normalizedTransitionalError = normalizeError(transitionalError);
+          if (!isAuthenticationError(normalizedTransitionalError)) throw normalizedTransitionalError;
+        }
+        throw normalizedAccountError;
+      }
+      if (!authEpochIsCurrent(authEpoch)) return { ok: false, reason: 'stale-session' };
+      if (identity.mustChangePassword) {
+        const forced = { status: 'password-change', ...identity, error: null };
+        sessionRef.current = forced;
+        setSession(forced);
+        setProjectsByState({ active: [], archived: [] });
+        setActiveRemote(null);
+        setWorkspaceAssets(current => ({
+          ...current,
+          status: 'local',
+          ready: true,
+          error: null,
+          generation: current.generation + 1,
+        }));
+        return;
+      }
       const authenticated = { status: 'authenticated', ...identity, error: null };
       sessionRef.current = authenticated;
       setSession(authenticated);
-      const assetResult = await loadWorkspaceAssets();
-      if (!mountedRef.current || isAuthenticationError(assetResult?.error)) return;
+      const assetResult = identity.role === 'customer'
+        ? { ok: true, disabled: true }
+        : await loadWorkspaceAssets();
+      if (identity.role === 'customer') {
+        workspaceAssetsLoadedRef.current = false;
+        setWorkspaceAssets(current => ({
+          ...current,
+          status: 'disabled',
+          ready: true,
+          conflict: null,
+          error: null,
+          generation: current.generation + 1,
+        }));
+      }
+      if (!authEpochIsCurrent(authEpoch) || isAuthenticationError(assetResult?.error)) return { ok: false, reason: 'stale-session' };
       sessionRef.current = authenticated;
       setSession(authenticated);
       const lists = await refreshProjects();
-      if (!mountedRef.current) return;
+      if (!authEpochIsCurrent(authEpoch) || lists.stale) return { ok: false, reason: 'stale-session' };
       const rememberedAssociation = readActiveRemoteAssociation();
       const remembered = [...lists.active, ...lists.archived].find(project => project.id === rememberedAssociation?.id);
       if (remembered) {
         try {
           const remote = await client.readProject(remembered.id);
-          if (!mountedRef.current) return;
+          if (!authEpochIsCurrent(authEpoch)) return { ok: false, reason: 'stale-session' };
           const marker = projectMarker(lifecycleRef.current);
           const matchesRecoveryCopy = canonicalJson(remote.document) === canonicalJson(documentRef.current);
           const matchesRememberedRevision = rememberedAssociation.revision === null
@@ -823,18 +944,19 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
             setSyncStatus('conflict');
           }
         } catch (error) {
-          if (!mountedRef.current) return;
+          if (!authEpochIsCurrent(authEpoch)) return { ok: false, reason: 'stale-session' };
           setActiveRemote(null);
           handleLibraryError(error);
           setSyncStatus('error');
         }
       }
     } catch (rawError) {
-      if (!mountedRef.current) return;
+      if (!authEpochIsCurrent(authEpoch)) return { ok: false, reason: 'stale-session' };
+      beginAuthTransition();
       const error = normalizeError(rawError);
       const next = error.state === 'sign-in'
-        ? { status: 'unauthenticated', email: '', role: null, error }
-        : { status: 'error', email: '', role: null, error };
+        ? { status: 'unauthenticated', username: '', displayName: '', role: null, error }
+        : { status: 'error', username: '', displayName: '', role: null, error };
       sessionRef.current = next;
       setSession(next);
       setProjectsByState({ active: [], archived: [] });
@@ -847,7 +969,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         generation: current.generation + 1,
       }));
     }
-  }, [client, handleLibraryError, loadWorkspaceAssets, markProjectPersisted, refreshProjects, setActiveRemote, setCurrentConflict]);
+  }, [authEpochIsCurrent, beginAuthTransition, client, handleLibraryError, loadWorkspaceAssets, markProjectPersisted, refreshProjects, setActiveRemote, setCurrentConflict]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -884,12 +1006,14 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         setRefreshTick(value => value + 1);
       }
       clearTimeout(workspaceAssetRetryRef.current);
-      if (!workspaceAssetsLoadedRef.current) void loadWorkspaceAssetsRef.current?.({ force: true });
-      else if (pendingWorkspaceAssetOperationsRef.current) {
-        void performWorkspaceAssetSyncRef.current?.(pendingWorkspaceAssetOperationsRef.current);
-      } else if (workspaceAssetQueuedRef.current) {
-        workspaceAssetQueuedRef.current = false;
-        void performWorkspaceAssetSyncRef.current?.();
+      if (canUseWorkspaceAssets(sessionRef.current)) {
+        if (!workspaceAssetsLoadedRef.current) void loadWorkspaceAssetsRef.current?.({ force: true });
+        else if (pendingWorkspaceAssetOperationsRef.current) {
+          void performWorkspaceAssetSyncRef.current?.(pendingWorkspaceAssetOperationsRef.current);
+        } else if (workspaceAssetQueuedRef.current) {
+          workspaceAssetQueuedRef.current = false;
+          void performWorkspaceAssetSyncRef.current?.();
+        }
       }
     };
     const onOffline = () => {
@@ -909,8 +1033,9 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   }, [setWorkspaceAssetStatus]);
 
   const performSave = useCallback(async suppliedOperation => {
+    const authToken = captureAuthenticatedSession();
     const remote = activeRemoteRef.current;
-    if (!remote || sessionRef.current.status !== 'authenticated') return { ok: false, reason: 'unassociated' };
+    if (!authToken || !remote) return { ok: false, reason: 'unassociated' };
     if (conflictRef.current) return { ok: false, reason: 'conflict' };
     if (!onlineRef.current || navigator.onLine === false) {
       if (mountedRef.current) setSyncStatus('waiting');
@@ -932,11 +1057,15 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       }
     };
     const operationIsCurrent = () => mountedRef.current
+      && authenticatedSessionIsCurrent(authToken)
       && activeRemoteRef.current?.id === operation.remoteId
       && activeRemoteRef.current?.revision === operation.baseRevision
       && activeRemoteEpochRef.current === operation.activeRemoteEpoch;
     const replacedResult = error => {
       clearPendingOperation();
+      if (!authenticatedSessionIsCurrent(authToken)) {
+        return { ok: false, reason: 'stale-session', ...(error ? { error } : {}) };
+      }
       resumeAfterSupersededSave(acknowledgedMarkerRef.current);
       return { ok: false, reason: 'replaced', ...(error ? { error } : {}) };
     };
@@ -1038,7 +1167,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         setRefreshTick(value => value + 1);
       }
     }
-  }, [client, demoteSession, markProjectPersisted, resumeAfterSupersededSave, setCurrentConflict]);
+  }, [authenticatedSessionIsCurrent, captureAuthenticatedSession, client, demoteSession, markProjectPersisted, resumeAfterSupersededSave, setCurrentConflict]);
   performSaveRef.current = performSave;
 
   useEffect(() => {
@@ -1075,8 +1204,12 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   }, [activeRemoteProject, conflict, online, projectLifecycle.editedRevision, projectLifecycle.generation, refreshTick, session.status]);
 
   const associateOpenedProject = useCallback(async (remote, { force = false } = {}) => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken) return { ok: false, reason: 'stale-session' };
     const result = await replaceProject(remote.document, force ? { confirmDiscard: () => true } : undefined);
-    if (!result.ok || !mountedRef.current) return result;
+    if (!result.ok || !authenticatedSessionIsCurrent(authToken)) {
+      return result.ok ? { ok: false, reason: 'stale-session' } : result;
+    }
     const nextMarker = { generation: lifecycleRef.current.generation + 1, revision: 0 };
     setCurrentConflict(null);
     setSyncError(null);
@@ -1084,9 +1217,11 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     markProjectPersisted('cloud', nextMarker);
     setSyncStatus('saved');
     return { ok: true, project: remote };
-  }, [markProjectPersisted, replaceProject, setActiveRemote, setCurrentConflict]);
+  }, [authenticatedSessionIsCurrent, captureAuthenticatedSession, markProjectPersisted, replaceProject, setActiveRemote, setCurrentConflict]);
 
   const createProject = useCallback(async (title) => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken) return { ok: false, reason: 'stale-session' };
     const cleanTitle = String(title || '').trim();
     if (!cleanTitle) return { ok: false, reason: 'title-required' };
     openOperationRef.current += 1;
@@ -1096,7 +1231,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     try {
       const capturedLocalEdit = !titleChanged
         || await waitForLocalEdit(previousMarker, () => documentRef.current.name === cleanTitle);
-      if (!mountedRef.current) return { ok: false, reason: 'unmounted' };
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       if (!capturedLocalEdit) return { ok: false, reason: 'local-state-not-ready' };
       const capturedMarker = projectMarker(lifecycleRef.current);
       const document = structuredClone(documentRef.current);
@@ -1105,7 +1240,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         { title: cleanTitle, project: document },
         { requestId: mutationRequestId() },
       );
-      if (!mountedRef.current) return { ok: false, reason: 'unmounted' };
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       if (lifecycleRef.current.generation !== capturedMarker.generation) {
         await refreshProjects();
         return { ok: true, project: created, associated: false };
@@ -1124,18 +1259,21 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       await refreshProjects();
       return { ok: true, project: created };
     } catch (error) {
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       const normalized = handleLibraryError(error);
       return { ok: false, error: normalized };
     }
-  }, [client, handleLibraryError, markProjectPersisted, refreshProjects, setActiveRemote, setCurrentConflict, setProjectName, waitForLocalEdit]);
+  }, [authenticatedSessionIsCurrent, captureAuthenticatedSession, client, handleLibraryError, markProjectPersisted, refreshProjects, setActiveRemote, setCurrentConflict, setProjectName, waitForLocalEdit]);
 
   const openProject = useCallback(async (projectOrId, options) => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken) return { ok: false, reason: 'stale-session' };
     const id = typeof projectOrId === 'string' ? projectOrId : projectOrId.id;
     const operation = ++openOperationRef.current;
     const capturedMarker = projectMarker(lifecycleRef.current);
     try {
       const remote = await client.readProject(id);
-      if (!mountedRef.current || operation !== openOperationRef.current) return { ok: false, reason: 'superseded' };
+      if (!authenticatedSessionIsCurrent(authToken) || operation !== openOperationRef.current) return { ok: false, reason: 'superseded' };
       const currentMarker = projectMarker(lifecycleRef.current);
       const changedDuringRead = markerKey(currentMarker) !== markerKey(capturedMarker);
       if (changedDuringRead && !options?.force) {
@@ -1143,7 +1281,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
           currentName: documentRef.current?.name,
           incomingName: remote.document?.name,
         });
-        if (!mountedRef.current || operation !== openOperationRef.current) return { ok: false, reason: 'superseded' };
+        if (!authenticatedSessionIsCurrent(authToken) || operation !== openOperationRef.current) return { ok: false, reason: 'superseded' };
         if (!confirmed) return { ok: false, reason: 'cancelled' };
         const result = await associateOpenedProject(remote, { force: true });
         if (result.ok) openOperationRef.current += 1;
@@ -1153,12 +1291,14 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       if (result.ok) openOperationRef.current += 1;
       return result;
     } catch (error) {
-      const normalized = operation === openOperationRef.current ? handleLibraryError(error) : normalizeError(error);
+      const normalized = operation === openOperationRef.current && authenticatedSessionIsCurrent(authToken) ? handleLibraryError(error) : normalizeError(error);
       return { ok: false, error: normalized };
     }
-  }, [associateOpenedProject, client, handleLibraryError, requestReplacementConfirmation]);
+  }, [associateOpenedProject, authenticatedSessionIsCurrent, captureAuthenticatedSession, client, handleLibraryError, requestReplacementConfirmation]);
 
   const saveNow = useCallback(async () => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken) return { ok: false, reason: 'stale-session' };
     clearTimeout(saveTimerRef.current);
     const marker = projectMarker(lifecycleRef.current);
     if (acknowledgedMarkerRef.current && markerKey(acknowledgedMarkerRef.current) === markerKey(marker)) {
@@ -1175,7 +1315,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       document: structuredClone(documentRef.current),
       requestId: mutationRequestId(),
     });
-  }, [performSave]);
+  }, [captureAuthenticatedSession, performSave]);
 
   const detachProject = useCallback(() => {
     openOperationRef.current += 1;
@@ -1188,6 +1328,8 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   }, [setActiveRemote, setCurrentConflict]);
 
   const renameProject = useCallback(async (project, title) => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken) return { ok: false, reason: 'stale-session' };
     const cleanTitle = String(title || '').trim();
     if (!cleanTitle) return { ok: false, reason: 'title-required' };
     const isActive = activeRemoteRef.current?.id === project.id;
@@ -1199,7 +1341,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       if (titleChanged) setProjectName(cleanTitle);
       const capturedLocalEdit = !titleChanged
         || await waitForLocalEdit(previousMarker, () => documentRef.current.name === cleanTitle);
-      if (!mountedRef.current) return { ok: false, reason: 'unmounted' };
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       if (!capturedLocalEdit) return { ok: false, reason: 'local-state-not-ready' };
       capturedMarker = projectMarker(lifecycleRef.current);
       const document = structuredClone(documentRef.current);
@@ -1214,7 +1356,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         title: cleanTitle,
         project: { ...opened.document, name: cleanTitle },
       }, { requestId: mutationRequestId() });
-      if (!mountedRef.current) return { ok: false, reason: 'unmounted' };
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       if (isActive
         && activeRemoteRef.current?.id === project.id
         && activeRemoteRef.current?.revision === opened.revision
@@ -1232,113 +1374,150 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       await refreshProjects();
       return { ok: true, project: updated };
     } catch (error) {
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       const normalized = handleLibraryError(error);
       return { ok: false, error: normalized };
     }
-  }, [client, handleLibraryError, markProjectPersisted, refreshProjects, setActiveRemote, setProjectName, waitForLocalEdit]);
+  }, [authenticatedSessionIsCurrent, captureAuthenticatedSession, client, handleLibraryError, markProjectPersisted, refreshProjects, setActiveRemote, setProjectName, waitForLocalEdit]);
 
   const duplicateProject = useCallback(async (project, title) => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken) return { ok: false, reason: 'stale-session' };
     try {
       const duplicate = await client.duplicateProject(project.id, title ? { title } : undefined);
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       await refreshProjects();
       return { ok: true, project: duplicate };
     } catch (error) {
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       const normalized = handleLibraryError(error);
       return { ok: false, error: normalized };
     }
-  }, [client, handleLibraryError, refreshProjects]);
+  }, [authenticatedSessionIsCurrent, captureAuthenticatedSession, client, handleLibraryError, refreshProjects]);
 
   const changeArchiveState = useCallback(async (project, archived) => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken) return { ok: false, reason: 'stale-session' };
     try {
       const updated = await client.setArchived(project.id, archived, { baseRevision: project.revision });
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       if (activeRemoteRef.current?.id === updated.id) {
         setActiveRemote(updated, acknowledgedMarkerRef.current);
       }
       await refreshProjects();
       return { ok: true, project: updated };
     } catch (error) {
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       const normalized = handleLibraryError(error);
       return { ok: false, error: normalized };
     }
-  }, [client, handleLibraryError, refreshProjects, setActiveRemote]);
+  }, [authenticatedSessionIsCurrent, captureAuthenticatedSession, client, handleLibraryError, refreshProjects, setActiveRemote]);
 
   const archiveProject = useCallback(project => changeArchiveState(project, true), [changeArchiveState]);
   const unarchiveProject = useCallback(project => changeArchiveState(project, false), [changeArchiveState]);
 
   const deleteProject = useCallback(async (project) => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken) return { ok: false, reason: 'stale-session' };
     try {
       await client.deleteProject(project.id, { baseRevision: project.revision, confirmation: 'DELETE' });
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       if (activeRemoteRef.current?.id === project.id) setActiveRemote(null);
       await refreshProjects();
       return { ok: true };
     } catch (error) {
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       const normalized = handleLibraryError(error);
       return { ok: false, error: normalized };
     }
-  }, [client, handleLibraryError, refreshProjects, setActiveRemote]);
+  }, [authenticatedSessionIsCurrent, captureAuthenticatedSession, client, handleLibraryError, refreshProjects, setActiveRemote]);
 
   const listHistory = useCallback(async project => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken) return [];
     try {
-      return await client.listRevisions(project.id);
+      const revisions = await client.listRevisions(project.id);
+      return authenticatedSessionIsCurrent(authToken) ? revisions : [];
     } catch (error) {
+      if (!authenticatedSessionIsCurrent(authToken)) return [];
       throw handleLibraryError(error);
     }
-  }, [client, handleLibraryError]);
+  }, [authenticatedSessionIsCurrent, captureAuthenticatedSession, client, handleLibraryError]);
 
   const restoreHistory = useCallback(async (project, revision) => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken) return { ok: false, reason: 'stale-session' };
     try {
       await client.restoreRevision(project.id, revision, { baseRevision: project.revision });
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       const restored = await client.readProject(project.id);
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       await refreshProjects();
       return associateOpenedProject(restored, { force: true });
     } catch (error) {
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       const normalized = handleLibraryError(error);
       return { ok: false, error: normalized };
     }
-  }, [associateOpenedProject, client, handleLibraryError, refreshProjects]);
+  }, [associateOpenedProject, authenticatedSessionIsCurrent, captureAuthenticatedSession, client, handleLibraryError, refreshProjects]);
 
   const exportProject = useCallback(async project => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken) return false;
     try {
       const opened = await client.readProject(project.id);
+      if (!authenticatedSessionIsCurrent(authToken)) return false;
       // The network read completes after the click's transient user activation;
       // use the deterministic anchor path instead of reopening a native picker.
       return downloadJsonFile(canonicalProjectFileName(opened.title), opened.document, { preferPicker: false });
     } catch (error) {
+      if (!authenticatedSessionIsCurrent(authToken)) return false;
       handleLibraryError(error);
       return false;
     }
-  }, [client, handleLibraryError]);
+  }, [authenticatedSessionIsCurrent, captureAuthenticatedSession, client, handleLibraryError]);
 
   const importProject = useCallback(async candidate => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken) return { ok: false, reason: 'stale-session' };
     const project = migrateProject(candidate);
     if (!project || isLibraryBackup(candidate)) return { ok: false, reason: 'invalid' };
     try {
       const created = await client.createProject({ title: project.name || 'Imported project', project });
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       await refreshProjects();
       return { ok: true, project: created };
     } catch (error) {
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       const normalized = handleLibraryError(error);
       return { ok: false, error: normalized };
     }
-  }, [client, handleLibraryError, refreshProjects]);
+  }, [authenticatedSessionIsCurrent, captureAuthenticatedSession, client, handleLibraryError, refreshProjects]);
 
   const exportMaster = useCallback(async () => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken) return false;
     try {
       const blob = await client.downloadBackup();
+      if (!authenticatedSessionIsCurrent(authToken)) return false;
       return downloadTextFile(canonicalLibraryBackupFileName(new Date()), await blob.text(), {
         type: 'application/json',
         preferPicker: false,
       });
     } catch (error) {
+      if (!authenticatedSessionIsCurrent(authToken)) return false;
       handleLibraryError(error);
       return false;
     }
-  }, [client, handleLibraryError]);
+  }, [authenticatedSessionIsCurrent, captureAuthenticatedSession, client, handleLibraryError]);
 
   const restoreMaster = useCallback(async candidate => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken) return { ok: false, reason: 'stale-session' };
     if (!isLibraryBackup(candidate)) return { ok: false, reason: 'invalid' };
     try {
       const summary = await client.restoreBackup(candidate);
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       const [, assetsResult] = await Promise.all([
         refreshProjects(),
         loadWorkspaceAssets({ force: true, replaceLocal: true }),
@@ -1348,12 +1527,15 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       }
       return { ok: true, summary };
     } catch (error) {
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       const normalized = handleLibraryError(error);
       return { ok: false, error: normalized };
     }
-  }, [client, handleLibraryError, loadWorkspaceAssets, refreshProjects]);
+  }, [authenticatedSessionIsCurrent, captureAuthenticatedSession, client, handleLibraryError, loadWorkspaceAssets, refreshProjects]);
 
   const resolveWorkspaceAssetConflict = useCallback(async action => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken || !canUseWorkspaceAssets(sessionRef.current)) return { ok: false, reason: 'stale-session' };
     const currentConflict = workspaceAssets.conflict;
     if (!currentConflict) return { ok: false, reason: 'no-conflict' };
     if (action !== 'keep-both') return { ok: false, reason: 'unknown-action' };
@@ -1380,13 +1562,16 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       setWorkspaceAssets(current => ({ ...current, generation: current.generation + 1 }));
       return performWorkspaceAssetSync();
     } catch (error) {
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
       const normalized = normalizeError(error);
       setWorkspaceAssetStatus({ status: 'error', error: normalized });
       return { ok: false, reason: normalized.state, error: normalized };
     }
-  }, [performWorkspaceAssetSync, publishWorkspaceAssetConflicts, setWorkspaceAssetStatus, workspaceAssets.conflict]);
+  }, [authenticatedSessionIsCurrent, captureAuthenticatedSession, performWorkspaceAssetSync, publishWorkspaceAssetConflicts, setWorkspaceAssetStatus, workspaceAssets.conflict]);
 
   const claimBrowserProjects = useCallback(async () => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken) return { imported: 0, rejected: 0, reason: 'stale-session' };
     const claimedIds = readClaimedBrowserProjectIds();
     const records = listProjectLibraryRecords().filter(record => !claimedIds.has(record.id));
     let imported = 0;
@@ -1399,9 +1584,11 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       }
       try {
         await client.createProject({ title: record.name || project.name, project });
+        if (!authenticatedSessionIsCurrent(authToken)) return { imported, rejected, reason: 'stale-session' };
         imported += 1;
         claimedIds.add(record.id);
       } catch (error) {
+        if (!authenticatedSessionIsCurrent(authToken)) return { imported, rejected, reason: 'stale-session' };
         const normalized = handleLibraryError(error);
         rejected += 1;
         if (isAuthenticationError(normalized)) break;
@@ -1411,7 +1598,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     setBrowserClaimRevision(value => value + 1);
     if (sessionRef.current.status === 'authenticated') await refreshProjects();
     return { imported, rejected };
-  }, [client, handleLibraryError, refreshProjects]);
+  }, [authenticatedSessionIsCurrent, captureAuthenticatedSession, client, handleLibraryError, refreshProjects]);
 
   const resolveConflict = useCallback(async action => {
     const currentConflict = conflict;
@@ -1420,6 +1607,8 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       return openProject(currentConflict.remoteId, { force: true });
     }
     if (action === 'save-copy') {
+      const authToken = captureAuthenticatedSession();
+      if (!authToken) return { ok: false, reason: 'stale-session' };
       const capturedMarker = projectMarker(lifecycleRef.current);
       try {
         const localDocument = structuredClone(documentRef.current || currentConflict.localDocument);
@@ -1429,7 +1618,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
           { title: localDocument.name, project: localDocument },
           { requestId: mutationRequestId() },
         );
-        if (!mountedRef.current) return { ok: false, reason: 'unmounted' };
+        if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
         setCurrentConflict(null);
         await refreshProjects();
         if (markerKey(projectMarker(lifecycleRef.current)) === markerKey(capturedMarker)) {
@@ -1437,15 +1626,156 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         }
         return { ok: true, project: created };
       } catch (error) {
+        if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
         const normalized = handleLibraryError(error);
         return { ok: false, error: normalized };
       }
     }
     return { ok: false, reason: 'unknown-action' };
-  }, [associateOpenedProject, client, conflict, handleLibraryError, openProject, projectName, refreshProjects, setCurrentConflict]);
+  }, [associateOpenedProject, authenticatedSessionIsCurrent, captureAuthenticatedSession, client, conflict, handleLibraryError, openProject, projectName, refreshProjects, setCurrentConflict]);
 
   const claimedBrowserIds = readClaimedBrowserProjectIds();
   const browserProjects = listProjectLibraryRecords().filter(record => !claimedBrowserIds.has(record.id));
+  const login = useCallback(async credentials => {
+    const loginEpoch = beginAuthTransition();
+    try {
+      const identity = await client.login(credentials);
+      if (!authEpochIsCurrent(loginEpoch)) return { ok: false, reason: 'stale-session' };
+      beginAuthTransition();
+      const next = {
+        status: identity.mustChangePassword ? 'password-change' : 'loading',
+        ...identity,
+        error: null,
+      };
+      sessionRef.current = next;
+      setSession(next);
+      if (!identity.mustChangePassword) await loadSession();
+      return { ok: true, session: identity };
+    } catch (error) {
+      if (!authEpochIsCurrent(loginEpoch)) return { ok: false, reason: 'stale-session' };
+      const normalized = normalizeError(error);
+      if (isAuthenticationError(normalized) && sessionRef.current.status === 'authenticated') demoteSession(normalized);
+      return { ok: false, error: normalized };
+    }
+  }, [authEpochIsCurrent, beginAuthTransition, client, demoteSession, loadSession]);
+
+  const bootstrapOwner = useCallback(async input => {
+    let authEpoch = beginAuthTransition();
+    try {
+      await client.bootstrapOwner(input);
+      if (!authEpochIsCurrent(authEpoch)) return { ok: false, reason: 'stale-session' };
+      const identity = await client.login({ username: input.username, password: input.temporaryPassword });
+      if (!authEpochIsCurrent(authEpoch)) return { ok: false, reason: 'stale-session' };
+      authEpoch = beginAuthTransition();
+      const next = { status: 'password-change', ...identity, error: null };
+      sessionRef.current = next;
+      setSession(next);
+      return { ok: true, session: identity };
+    } catch (error) {
+      if (!authEpochIsCurrent(authEpoch)) return { ok: false, reason: 'stale-session' };
+      return { ok: false, error: normalizeError(error) };
+    }
+  }, [authEpochIsCurrent, beginAuthTransition, client]);
+
+  const changePassword = useCallback(async password => {
+    let authEpoch = beginAuthTransition();
+    try {
+      await client.changePassword(password);
+      if (!authEpochIsCurrent(authEpoch)) return { ok: false, reason: 'stale-session' };
+      authEpoch = beginAuthTransition();
+      await loadSession();
+      return { ok: true };
+    } catch (error) {
+      if (!authEpochIsCurrent(authEpoch)) return { ok: false, reason: 'stale-session' };
+      const normalized = normalizeError(error);
+      if (isAuthenticationError(normalized)) demoteSession(normalized);
+      return { ok: false, error: normalized };
+    }
+  }, [authEpochIsCurrent, beginAuthTransition, client, demoteSession, loadSession]);
+
+  const logout = useCallback(async () => {
+    const logoutEpoch = beginAuthTransition();
+    try {
+      await client.logout();
+    } catch (error) {
+      if (!authEpochIsCurrent(logoutEpoch)) return { ok: false, reason: 'stale-session' };
+      const normalized = normalizeError(error);
+      if (!isAuthenticationError(normalized)) return { ok: false, error: normalized };
+    }
+    if (!authEpochIsCurrent(logoutEpoch)) return { ok: false, reason: 'stale-session' };
+    openOperationRef.current += 1;
+    workspaceAssetLoadOperationRef.current += 1;
+    clearTimeout(saveTimerRef.current);
+    clearTimeout(retryRef.current);
+    clearTimeout(workspaceAssetTimerRef.current);
+    clearTimeout(workspaceAssetRetryRef.current);
+    pendingSaveOperationRef.current = null;
+    pendingWorkspaceAssetOperationsRef.current = null;
+    queuedRef.current = false;
+    workspaceAssetQueuedRef.current = false;
+    workspaceAssetsLoadedRef.current = false;
+    setCurrentConflict(null);
+    setSyncError(null);
+    setSyncStatus('idle');
+    setActiveRemote(null);
+    setProjectsByState({ active: [], archived: [] });
+    const signedOut = { status: 'unauthenticated', username: '', displayName: '', role: null, error: null };
+    sessionRef.current = signedOut;
+    setSession(signedOut);
+    setWorkspaceAssets(current => ({
+      ...current,
+      status: 'local',
+      ready: true,
+      conflict: null,
+      error: null,
+      generation: current.generation + 1,
+    }));
+    return { ok: true };
+  }, [authEpochIsCurrent, beginAuthTransition, client, setActiveRemote, setCurrentConflict]);
+
+  const accountAction = useCallback(async action => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken) return { ok: false, reason: 'stale-session' };
+    try {
+      const value = await action();
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
+      return { ok: true, value };
+    } catch (error) {
+      if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
+      const normalized = normalizeError(error);
+      if (isAuthenticationError(normalized)) demoteSession(normalized);
+      return { ok: false, error: normalized };
+    }
+  }, [authenticatedSessionIsCurrent, captureAuthenticatedSession, demoteSession]);
+
+  const listAccounts = useCallback(() => accountAction(() => client.listAccounts()), [accountAction, client]);
+  const createAccount = useCallback(input => accountAction(() => client.createAccount(input)), [accountAction, client]);
+  const resetAccountPassword = useCallback((id, password) => accountAction(() => client.resetAccountPassword(id, password)), [accountAction, client]);
+  const setAccountStatus = useCallback((id, status) => accountAction(() => client.setAccountStatus(id, status)), [accountAction, client]);
+  const setAccountRole = useCallback((id, role) => accountAction(() => client.setAccountRole(id, role)), [accountAction, client]);
+  const listAssignments = useCallback(id => accountAction(() => client.listAssignments(id)), [accountAction, client]);
+  const assignProject = useCallback((id, projectId) => accountAction(() => client.assignProject(id, projectId)), [accountAction, client]);
+  const unassignProject = useCallback((id, projectId) => accountAction(() => client.unassignProject(id, projectId)), [accountAction, client]);
+  const listProjectDrafts = useCallback(async project => {
+    const result = await accountAction(async () => {
+      const [drafts, accounts] = await Promise.all([
+        client.listProjectDrafts(project.id),
+        client.listAccounts(),
+      ]);
+      const byId = new Map(accounts.map(account => [account.id, account]));
+      return drafts.map(draft => ({ ...draft, customer: byId.get(draft.draftOwnerAccountId) || null }));
+    });
+    return result;
+  }, [accountAction, client]);
+  const promoteDraft = useCallback(async (official, draft) => {
+    const result = await accountAction(() => client.promoteDraft(draft.id, {
+      officialBaseRevision: official.revision,
+      draftBaseRevision: draft.revision,
+    }));
+    if (result.ok) await refreshProjects();
+    return result;
+  }, [accountAction, client, refreshProjects]);
+
   const signIn = useCallback(() => {
     window.location.assign(signInUrl());
   }, []);
@@ -1466,6 +1796,20 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     syncState,
     workspaceAssets,
     browserProjects,
+    login,
+    logout,
+    bootstrapOwner,
+    changePassword,
+    listAccounts,
+    createAccount,
+    resetAccountPassword,
+    setAccountStatus,
+    setAccountRole,
+    listAssignments,
+    assignProject,
+    unassignProject,
+    listProjectDrafts,
+    promoteDraft,
     signIn,
     retrySession: loadSession,
     refreshProjects,
@@ -1488,11 +1832,12 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     claimBrowserProjects,
     resolveConflict,
   }), [
-    activeRemoteProject, archiveProject, browserProjects, claimBrowserProjects, createProject,
-    deleteProject, duplicateProject, exportMaster, exportProject, importProject, listHistory,
+    accountAction, activeRemoteProject, archiveProject, assignProject, bootstrapOwner, browserProjects,
+    changePassword, claimBrowserProjects, createAccount, createProject, deleteProject, duplicateProject,
+    exportMaster, exportProject, importProject, listAccounts, listAssignments, listHistory, listProjectDrafts, login, logout,
     detachProject, loadSession, openProject, projectsByState, refreshProjects, renameProject, resolveConflict,
-    resolveWorkspaceAssetConflict, restoreHistory, restoreMaster, saveNow, session, signIn, syncState,
-    unarchiveProject, workspaceAssets,
+    promoteDraft, resetAccountPassword, resolveWorkspaceAssetConflict, restoreHistory, restoreMaster, saveNow,
+    session, setAccountRole, setAccountStatus, signIn, syncState, unarchiveProject, unassignProject, workspaceAssets,
   ]);
 
   return <CloudLibraryContext.Provider value={value}>{children}</CloudLibraryContext.Provider>;

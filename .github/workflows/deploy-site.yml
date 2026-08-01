@@ -84,6 +84,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           DISPATCH_SOURCE: ${{ github.event.inputs.source || 'manual' }}
           EVENT_NAME: ${{ github.event_name }}
+          LIGHTWEAVER_NATIVE_AUTH_READY: ${{ vars.LIGHTWEAVER_NATIVE_AUTH_READY }}
           LIGHTWEAVER_PREVIEW_ACCESS_READY: ${{ vars.LIGHTWEAVER_PREVIEW_ACCESS_READY }}
           LIGHTWEAVER_PRODUCTION_LIBRARY_READY: ${{ vars.LIGHTWEAVER_PRODUCTION_LIBRARY_READY }}
           PROJECTS_DB_DATABASE_ID: ${{ secrets.PROJECTS_DB_DATABASE_ID }}
@@ -97,13 +98,22 @@ jobs:
           MAX_LIBRARY_BACKUP_REVISIONS: ${{ vars.MAX_LIBRARY_BACKUP_REVISIONS }}
         run: |
           missing=()
-          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_MIGRATION_API_TOKEN CLOUDFLARE_ACCOUNT_ID LIGHTWEAVER_PREVIEW_ACCESS_READY LIGHTWEAVER_PRODUCTION_LIBRARY_READY PROJECTS_DB_DATABASE_ID PROJECTS_DB_DATABASE_NAME PROJECT_BLOBS_BUCKET_NAME ACCESS_TEAM_DOMAIN ACCESS_AUD OWNER_EMAILS MAX_LIBRARY_BODY_BYTES MAX_LIBRARY_BACKUP_BYTES MAX_LIBRARY_BACKUP_REVISIONS; do
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_MIGRATION_API_TOKEN CLOUDFLARE_ACCOUNT_ID LIGHTWEAVER_PRODUCTION_LIBRARY_READY PROJECTS_DB_DATABASE_ID PROJECTS_DB_DATABASE_NAME PROJECT_BLOBS_BUCKET_NAME MAX_LIBRARY_BODY_BYTES MAX_LIBRARY_BACKUP_BYTES MAX_LIBRARY_BACKUP_REVISIONS; do
             if [ -z "${!name}" ]; then
               missing+=("$name")
             fi
           done
+          if [ "$LIGHTWEAVER_NATIVE_AUTH_READY" != "confirmed" ]; then
+            for name in LIGHTWEAVER_PREVIEW_ACCESS_READY ACCESS_TEAM_DOMAIN ACCESS_AUD OWNER_EMAILS; do
+              if [ -z "${!name}" ]; then
+                missing+=("$name")
+              fi
+            done
+            if [ "$LIGHTWEAVER_PREVIEW_ACCESS_READY" != "confirmed" ]; then
+              missing+=("LIGHTWEAVER_PREVIEW_ACCESS_READY=confirmed")
+            fi
+          fi
           if [ "${#missing[@]}" -eq 0 ] \
-            && [ "$LIGHTWEAVER_PREVIEW_ACCESS_READY" = "confirmed" ] \
             && [ "$LIGHTWEAVER_PRODUCTION_LIBRARY_READY" = "confirmed" ]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
@@ -154,6 +164,12 @@ jobs:
             echo "::error::Migration source directory is missing."
             exit 1
           fi
+          for migration in 0002_account_access.sql 0003_account_session_generation.sql; do
+            if [ ! -f "$migration_source/$migration" ]; then
+              echo "::error::Required native account migration is missing: $migration"
+              exit 1
+            fi
+          done
           umask 077
           migration_root="$(mktemp -d "$RUNNER_TEMP/lightweaver-d1-migration.XXXXXX")"
           migration_config="$migration_root/wrangler.toml"
@@ -184,6 +200,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          LIGHTWEAVER_NATIVE_AUTH_READY: ${{ vars.LIGHTWEAVER_NATIVE_AUTH_READY }}
           LIGHTWEAVER_PRODUCTION_LIBRARY_READY: ${{ vars.LIGHTWEAVER_PRODUCTION_LIBRARY_READY }}
           PROJECTS_DB_DATABASE_ID: ${{ secrets.PROJECTS_DB_DATABASE_ID }}
           PROJECTS_DB_DATABASE_NAME: ${{ vars.PROJECTS_DB_DATABASE_NAME }}
@@ -201,6 +218,7 @@ jobs:
         if: steps.creds.outputs.enabled == 'true'
         working-directory: lightweaver
         env:
+          LIGHTWEAVER_NATIVE_AUTH_READY: ${{ vars.LIGHTWEAVER_NATIVE_AUTH_READY }}
           PROD_CHECK_REQUIRED: '1'
         run: |
           # Cloudflare Pages can expose the new no-store graph before every

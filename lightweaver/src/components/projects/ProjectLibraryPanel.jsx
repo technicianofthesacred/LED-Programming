@@ -1,7 +1,8 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { isLibraryBackup } from '../../lib/libraryBackup.js';
 import { useCloudLibrary } from '../../state/CloudLibraryContext.jsx';
+import { AccountAccessPanel } from './AccountAccessPanel.jsx';
 import { CloudLibraryDialogPortal, ProjectHistoryDialog } from './ProjectHistoryDialog.jsx';
 
 const MAX_PROJECT_FILE_BYTES = 2 * 1024 * 1024;
@@ -38,12 +39,34 @@ export function ProjectLibraryPanel() {
   const [historyProject, setHistoryProject] = useState(null);
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [draftReview, setDraftReview] = useState(null);
   const projectImportRef = useRef(null);
   const masterRestoreRef = useRef(null);
   const deleteDialogRef = useRef(null);
   const deleteCancelRef = useRef(null);
+  const sessionBoundary = `${library.session.status}:${library.session.username || library.session.email || ''}:${library.session.role || ''}:${library.session.mustChangePassword ? 'forced' : 'ready'}`;
+  const nativeOwner = library.session.status === 'authenticated'
+    && library.session.role === 'owner'
+    && Boolean(library.session.username);
 
-  const sourceProjects = view === 'archived' ? library.archivedProjects : library.activeProjects;
+  useEffect(() => {
+    setView('active');
+    setQuery('');
+    setNewTitle('');
+    setBusy('');
+    setNotice('');
+    setRename(null);
+    setDeleteTarget(null);
+    setDeleteConfirmation('');
+    setHistoryProject(null);
+    setHistory([]);
+    setHistoryLoading(false);
+    setDraftReview(null);
+  }, [sessionBoundary]);
+
+  const sourceProjects = library.session.role === 'customer'
+    ? library.activeProjects
+    : view === 'archived' ? library.archivedProjects : library.activeProjects;
   const shownProjects = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
     if (!normalized) return sourceProjects;
@@ -154,6 +177,28 @@ export function ProjectLibraryPanel() {
     }
   };
 
+  const reviewDrafts = async project => {
+    setBusy(`drafts-${project.id}`);
+    setNotice('');
+    const result = await library.listProjectDrafts(project);
+    setBusy('');
+    if (!result.ok) {
+      setNotice(result.error?.message || 'Customer drafts could not be loaded.');
+      return;
+    }
+    setDraftReview({ project, drafts: result.value });
+  };
+
+  const promoteDraft = async draft => {
+    if (!window.confirm('Apply this customer draft to the official project as a new revision? Previous official revisions remain available.')) return;
+    const result = await run(`promote-${draft.id}`, () => library.promoteDraft(draftReview.project, draft), 'Applied customer draft to the official project as a new revision.');
+    if (result?.ok) {
+      const project = { ...draftReview.project, revision: result.value.revision };
+      const refreshed = await library.listProjectDrafts(project);
+      if (refreshed.ok) setDraftReview({ project, drafts: refreshed.value });
+    }
+  };
+
   return (
     <div className="cloud-library" data-testid="project-library-panel">
       <div className="cloud-library-heading">
@@ -161,32 +206,8 @@ export function ProjectLibraryPanel() {
           <span className="cloud-kicker">Private workspace</span>
           <h3>Online project library</h3>
         </div>
-        {library.session.status === 'authenticated' && (
-          <div className="cloud-identity">
-            <strong>{library.session.email}</strong>
-            <span>{library.session.role === 'owner' ? 'Owner' : 'Worker'}</span>
-          </div>
-        )}
       </div>
-
-      {library.session.status === 'loading' && <p role="status">Checking online library access…</p>}
-      {library.session.status === 'unauthenticated' && (
-        <div className="cloud-library-guidance">
-          <strong>Sign in to use the online project library</strong>
-          <p>Your browser recovery copy is still working. Sign in through Lightweaver’s private access page to save across devices.</p>
-          <button type="button" className="btn primary" onClick={library.signIn}>Sign in</button>
-        </div>
-      )}
-      {library.session.status === 'error' && (
-        <div className="cloud-library-guidance">
-          <strong>The online library is unavailable</strong>
-          <p>{library.session.error?.message || 'Your browser recovery copy is still safe.'}</p>
-          <div className="set-actions">
-            <button type="button" className="btn primary" onClick={library.signIn}>Sign in</button>
-            <button type="button" className="btn" onClick={library.retrySession}>Try again</button>
-          </div>
-        </div>
-      )}
+      <AccountAccessPanel />
 
       {library.session.status === 'authenticated' && (
         <>
@@ -206,7 +227,7 @@ export function ProjectLibraryPanel() {
             </div>
           )}
 
-          <div className="cloud-create-row">
+          {library.session.role !== 'customer' && <div className="cloud-create-row">
             <label htmlFor="cloud-new-project-title">Save this artwork online</label>
             <input
               id="cloud-new-project-title"
@@ -218,9 +239,9 @@ export function ProjectLibraryPanel() {
               maxLength={160}
             />
             <button type="button" className="btn primary" disabled={busy === 'create'} onClick={create}>Create online project</button>
-          </div>
+          </div>}
 
-          <div className="cloud-library-tools">
+          {library.session.role !== 'customer' && <div className="cloud-library-tools">
             <button type="button" className="btn" onClick={() => projectImportRef.current?.click()}>Import project</button>
             <input ref={projectImportRef} data-testid="cloud-project-import" type="file" accept=".lw.json,.lwproj.json,.json" hidden onChange={importIndividual} />
             <button type="button" className="btn" onClick={library.exportMaster}>Download master backup</button>
@@ -229,13 +250,13 @@ export function ProjectLibraryPanel() {
             {library.browserProjects.length > 0 && (
               <button type="button" className="btn" disabled={busy === 'claim'} onClick={claimBrowserProjects}>Bring browser projects online</button>
             )}
-          </div>
+          </div>}
 
           <div className="cloud-library-filter">
-            <div className="mini-seg" role="group" aria-label="Project state">
+            {library.session.role !== 'customer' && <div className="mini-seg" role="group" aria-label="Project state">
               <button type="button" aria-label="Active projects" aria-pressed={view === 'active'} className={view === 'active' ? 'on' : ''} onClick={() => setView('active')}>Active</button>
               <button type="button" aria-label="Archived projects" aria-pressed={view === 'archived'} className={view === 'archived' ? 'on' : ''} onClick={() => setView('archived')}>Archived</button>
-            </div>
+            </div>}
             <input className="pm-input" type="search" aria-label="Search online projects" placeholder="Search projects" value={query} onChange={event => setQuery(event.target.value)} />
           </div>
 
@@ -252,41 +273,49 @@ export function ProjectLibraryPanel() {
                       <button type="button" className="btn ghost-sm" onClick={() => setRename(null)}>Cancel</button>
                     </div>
                   ) : <strong>{project.title}</strong>}
-                  <span>{formatTime(project.updatedAt)} · {project.lastEditor || 'Unknown editor'} · revision {project.revision}</span>
+                  {library.session.role === 'customer' && <em className="cloud-draft-label">Editing your draft</em>}
+                  <span>{formatTime(project.updatedAt)}{library.session.role === 'customer' ? '' : ` · ${project.lastEditor || 'Unknown editor'}`} · revision {project.revision}</span>
                 </div>
                 <div className="cloud-project-actions">
                   <button type="button" className="btn ghost-sm" onClick={() => run(`open-${project.id}`, () => library.openProject(project))}>Open</button>
-                  <button type="button" className="btn ghost-sm" onClick={() => setRename({ project, title: project.title })}>Rename</button>
-                  <button type="button" className="btn ghost-sm" onClick={() => run(`duplicate-${project.id}`, () => library.duplicateProject(project))}>Duplicate</button>
+                  {library.session.role !== 'customer' && <button type="button" className="btn ghost-sm" onClick={() => setRename({ project, title: project.title })}>Rename</button>}
+                  {library.session.role !== 'customer' && <button type="button" className="btn ghost-sm" onClick={() => run(`duplicate-${project.id}`, () => library.duplicateProject(project))}>Duplicate</button>}
                   <button type="button" className="btn ghost-sm" onClick={() => beginHistory(project)}>History</button>
-                  <button type="button" className="btn ghost-sm" onClick={() => library.exportProject(project)}>Export</button>
-                  {project.archived ? (
+                  {library.session.role !== 'customer' && <button type="button" className="btn ghost-sm" onClick={() => library.exportProject(project)}>Export</button>}
+                  {library.session.role !== 'customer' && (project.archived ? (
                     <button type="button" className="btn ghost-sm" onClick={() => run(`unarchive-${project.id}`, () => library.unarchiveProject(project))}>Unarchive</button>
                   ) : (
                     <button type="button" className="btn ghost-sm" onClick={() => run(`archive-${project.id}`, () => library.archiveProject(project))}>Archive</button>
-                  )}
-                  {project.archived && library.session.role === 'owner' && (
+                  ))}
+                  {nativeOwner && !project.archived && <button type="button" className="btn ghost-sm" disabled={busy === `drafts-${project.id}`} onClick={() => reviewDrafts(project)}>Review drafts</button>}
+                  {project.archived && nativeOwner && (
                     <button type="button" className="btn ghost-sm danger" onClick={() => { setDeleteTarget(project); setDeleteConfirmation(''); }}>Delete permanently</button>
                   )}
                 </div>
               </article>
             ))}
           </div>
+          {nativeOwner && draftReview && (
+            <section className="cloud-draft-review" aria-label={`Draft review for ${draftReview.project.title}`}>
+              <div className="cloud-library-heading"><div><span className="cloud-kicker">Customer drafts</span><h4>{draftReview.project.title}</h4></div><button type="button" className="btn ghost-sm" onClick={() => setDraftReview(null)}>Close review</button></div>
+              {draftReview.drafts.length === 0 ? <p>No customer drafts for this project.</p> : draftReview.drafts.map(draft => <div className="cloud-history-row" key={draft.id}><div><strong>{draft.customer?.displayName || 'Customer'} · revision {draft.revision}</strong><span>@{draft.customer?.username || 'customer'} · based on assigned project</span></div><div className="cloud-project-actions"><button type="button" className="btn ghost-sm" onClick={() => run(`open-draft-${draft.id}`, () => library.openProject(draft))}>Open draft</button><button type="button" className="btn primary ghost-sm" disabled={busy === `promote-${draft.id}`} onClick={() => promoteDraft(draft)}>Apply to main as new revision</button></div></div>)}
+            </section>
+          )}
           {notice && <p className="cloud-library-notice" role="status">{notice}</p>}
         </>
       )}
 
-      {historyProject && (
+      {library.session.status === 'authenticated' && historyProject && (
         <ProjectHistoryDialog
           project={historyProject}
           revisions={history}
           loading={historyLoading}
           onClose={() => setHistoryProject(null)}
-          onRestore={restoreRevision}
+          onRestore={library.session.role === 'customer' ? null : restoreRevision}
         />
       )}
 
-      {deleteTarget && (
+      {nativeOwner && deleteTarget && (
         <CloudLibraryDialogPortal
           dialogRef={deleteDialogRef}
           initialFocusRef={deleteCancelRef}
