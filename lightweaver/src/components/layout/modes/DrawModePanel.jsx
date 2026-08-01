@@ -83,6 +83,7 @@ export function DrawModePanel({
   onCancelFirstLedPicker,
   kaleidoscopeEditor,
   onToggleKaleidoscope,
+  onCloseKaleidoscope,
   onChangeKaleidoscopeCount,
   onNudgeKaleidoscopeSet,
   onPickKaleidoscopeStart,
@@ -1270,7 +1271,6 @@ export function DrawModePanel({
                         )}
                         {kaleidoscopeEditor?.stripId === s.id && s.kaleidoscope && (() => {
                           const points = deriveReflectionPointIndices(s.kaleidoscope, s.pixelCount);
-                          const customSpacing = s.kaleidoscope.offsets.some(offset => offset !== 0);
                           return (
                             <section className="la-kaleidoscope-panel" aria-label="Kaleidoscope reflection points">
                               <div className="la-kaleidoscope-head">
@@ -1334,25 +1334,39 @@ export function DrawModePanel({
                                   </span>
                                 ))}
                               </div>}
-                              {customSpacing && <div className="hint">Custom spacing</div>}
                               {kaleidoscopeResetNotices?.[s.id]?.length > 0 && (
                                 <div className="hint">Count changed; reset point {kaleidoscopeResetNotices[s.id].map(i => i + 1).join(', ')}.</div>
                               )}
                               {kaleidoscopeEditor.error && <div className="la-gpio-error" role="alert">{kaleidoscopeEditor.error}</div>}
-                              {kaleidoscopeCalibration?.message && (
-                                <div className={`hint${kaleidoscopeCalibration.physicalDelivered ? '' : ' warn'}`} role="status">
-                                  {kaleidoscopeCalibration.message}
-                                  {!kaleidoscopeCalibration.physicalDelivered && (
-                                    <button type="button" className="btn" onClick={() => {
-                                      if (onOpenConnectionCenter) onOpenConnectionCenter();
-                                      else onConnectCard?.();
-                                    }}>
-                                      Connect card
+                              <div className="la-kaleidoscope-footer" role="group" aria-label="Kaleidoscope preview and save">
+                                {kaleidoscopeCalibration?.message && (
+                                  <span className={`la-kaleidoscope-status${kaleidoscopeCalibration.physicalDelivered ? ' is-live' : ''}`} role="status">
+                                    <span className="la-kaleidoscope-status-dot" aria-hidden="true"/>
+                                    {kaleidoscopeCalibration.message}
+                                  </span>
+                                )}
+                                <span className="la-kaleidoscope-footer-actions">
+                                  {kaleidoscopeCalibration?.active && !kaleidoscopeCalibration.physicalDelivered && (
+                                    <button type="button" className="btn la-kaleidoscope-footer-button"
+                                      aria-label="Connect card for live preview"
+                                      title="Connect card for live preview"
+                                      onClick={() => {
+                                        if (onOpenConnectionCenter) onOpenConnectionCenter();
+                                        else onConnectCard?.();
+                                      }}>
+                                      Connect
                                     </button>
                                   )}
-                                </div>
-                              )}
-                              <div className="hint">Red markers are reflection points. Pick or fine-tune them on the artwork.</div>
+                                  <button type="button" className="btn primary la-kaleidoscope-footer-button"
+                                    aria-label="Save and close Kaleidoscope"
+                                    onClick={() => {
+                                      setFineTuneOpenByStrip(current => ({ ...current, [s.id]: false }));
+                                      onCloseKaleidoscope();
+                                    }}>
+                                    Save &amp; close
+                                  </button>
+                                </span>
+                              </div>
                             </section>
                           );
                         })()}

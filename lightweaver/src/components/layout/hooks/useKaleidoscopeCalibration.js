@@ -123,8 +123,8 @@ export function useKaleidoscopeCalibration({
     error: delivery.error,
     message: active
       ? delivery.physicalDelivered
-        ? 'Canvas updated · physical preview live'
-        : 'Canvas updated · physical preview unavailable'
+        ? 'Preview live'
+        : 'Preview off'
       : '',
   };
 }

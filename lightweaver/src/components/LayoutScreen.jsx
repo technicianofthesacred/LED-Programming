@@ -401,6 +401,7 @@ export function LayoutScreen({ connected, cardHost, onConnectCard, onOpenConnect
                            onCancelFirstLedPicker={cancelFirstLedPicker}
                            kaleidoscopeEditor={kaleidoscopeEditor}
                            onToggleKaleidoscope={openKaleidoscope}
+                           onCloseKaleidoscope={() => setKaleidoscopeEditor(null)}
                            onChangeKaleidoscopeCount={changeKaleidoscopeCount}
                            onNudgeKaleidoscopeSet={nudgeKaleidoscopeSet}
                            onPickKaleidoscopeStart={stripId => setKaleidoscopeEditor(current => ({ ...current, stripId, mode: 'pick', error: null }))}

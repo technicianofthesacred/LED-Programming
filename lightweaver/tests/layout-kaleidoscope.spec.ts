@@ -104,7 +104,7 @@ test('Kaleidoscope editor exposes bounded count and per-point inline steppers', 
   await expect(page.locator('[data-testid="kaleidoscope-marker"][data-point-index="1"]'))
     .toHaveClass(/selected/);
   await expect(page.getByRole('group', { name: 'Fine tune selected reflection point' })).toHaveCount(0);
-  await expect(page.getByText('Custom spacing')).toBeVisible();
+  await expect(page.getByText('Custom spacing', { exact: true })).toHaveCount(0);
   page.once('dialog', dialog => dialog.dismiss());
   await decreaseCount.click();
   await expect(page.getByTestId('kaleidoscope-summary')).toHaveText('6 points · start LED 2');
@@ -118,6 +118,31 @@ test('Kaleidoscope editor exposes bounded count and per-point inline steppers', 
   await page.getByRole('button', { name: 'Pick starting reflection point on canvas' }).click();
   await page.getByTestId('strip-led-strip-1-4').click();
   await expect(page.getByTestId('kaleidoscope-summary')).toContainText('start LED 5');
+
+  await fineTune.click();
+  await page.getByRole('button', { name: 'Fine-tune reflection point 1' }).click();
+  const footer = page.getByRole('group', { name: 'Kaleidoscope preview and save' });
+  await expect(footer).toBeVisible();
+  await expect(footer.getByRole('status')).toHaveText('Preview off');
+  const connect = footer.getByRole('button', { name: 'Connect card for live preview' });
+  await expect(connect).toHaveAttribute('title', 'Connect card for live preview');
+  await expect(connect).toHaveText('Connect');
+  await expect(page.getByText('Custom spacing', { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/Red markers are reflection points/)).toHaveCount(0);
+  const footerLayout = await footer.evaluate(element => {
+    const style = getComputedStyle(element);
+    return { display: style.display, flexWrap: style.flexWrap };
+  });
+  expect(footerLayout).toEqual({ display: 'flex', flexWrap: 'wrap' });
+
+  await footer.getByRole('button', { name: 'Save and close Kaleidoscope' }).click();
+  await expect(page.getByRole('region', { name: 'Kaleidoscope reflection points' })).toHaveCount(0);
+  await expect(page.locator('[data-testid="kaleidoscope-marker"]')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Edit Kaleidoscope reflection points' }).click();
+  await expect(page.getByTestId('kaleidoscope-summary')).toHaveText('5 points · start LED 5');
+  await expect(page.getByRole('button', { name: 'Fine-tune LEDs' })).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('button', { name: 'Fine-tune reflection point 1' })).toHaveCount(0);
 
   await expect.poll(() => page.evaluate(() => {
     const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
@@ -184,11 +209,11 @@ test('marker drag snaps after zoom and pan, rejects collision without consuming 
   })).toEqual([true, true]);
 });
 
-test('calibration is active only for the selected strip in Draw mode and reports unavailable delivery honestly', async ({ page }) => {
+test('calibration is active only for the selected strip in Draw mode and reports preview off honestly', async ({ page }) => {
   await createTwelveLedLine(page);
   await page.getByRole('button', { name: 'Edit Kaleidoscope reflection points' }).click();
   await page.getByRole('button', { name: 'Pick starting reflection point on canvas' }).click();
-  const unavailable = page.getByText('Canvas updated · physical preview unavailable');
+  const unavailable = page.getByRole('status').filter({ hasText: 'Preview off' });
   await expect(unavailable).toBeVisible();
 
   await page.getByTestId('layout-add-strip').click();
