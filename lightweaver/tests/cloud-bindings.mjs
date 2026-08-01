@@ -239,6 +239,7 @@ test('Pages adapter authenticates a signed worker for a local D1/R2 round-trip a
         method,
         headers: {
           'Cf-Access-Jwt-Assertion': jwt,
+          origin: 'https://led.mandalacodes.com',
           ...(body ? {
             'content-type': 'application/json',
             'x-lightweaver-request': crypto.randomUUID(),
@@ -443,6 +444,142 @@ async function localBindings() {
   return { mf, db, bucket };
 }
 
+test('D1 assignment races create one reusable customer draft and clean the losing R2 object', async t => {
+  const { mf, db, bucket } = await localBindings();
+  t.after(() => mf.dispose());
+  const bindings = recordingBindings(db, bucket);
+  const store = createD1R2LibraryStore(bindings.env);
+  assert.equal(typeof store.assignCustomerProject, 'function');
+  const accountStore = createD1AccountStore({ PROJECTS_DB: db }, { passwordIterations: 1 });
+  const ownerAccount = await accountStore.createAccount({
+    username: 'draft-owner', displayName: 'Draft Owner', role: 'owner',
+    temporaryPassword: 'temporary-passphrase',
+  });
+  const customerAccount = await accountStore.createAccount({
+    username: 'draft-customer', displayName: 'Draft Customer', role: 'customer',
+    temporaryPassword: 'temporary-passphrase',
+  });
+  const owner = {
+    accountId: ownerAccount.id, role: 'owner', email: 'Draft Owner (draft-owner)',
+    subject: `account:${ownerAccount.id}`,
+  };
+  const customer = {
+    accountId: customerAccount.id, role: 'customer', email: 'Draft Customer (draft-customer)',
+    subject: `account:${customerAccount.id}`,
+  };
+  const official = await store.createProject({
+    title: 'Official Race', project: portableProject({ id: 'official-race' }),
+    actor: owner, idempotencyKey: 'assignment-official',
+  });
+
+  const settled = await Promise.allSettled([
+    store.assignCustomerProject({
+      targetAccount: customerAccount, projectId: official.id, actor: owner,
+      idempotencyKey: 'assignment-race-a',
+    }),
+    store.assignCustomerProject({
+      targetAccount: customerAccount, projectId: official.id, actor: owner,
+      idempotencyKey: 'assignment-race-b',
+    }),
+  ]);
+  assert.deepEqual(settled.map(result => result.status), ['fulfilled', 'fulfilled']);
+  const draftIds = settled.map(result => result.value.assignment.draftProjectId);
+  assert.equal(new Set(draftIds).size, 1);
+  assert.equal(await db.prepare(
+    'SELECT COUNT(*) AS count FROM projects WHERE draft_of_project_id = ? AND draft_owner_account_id = ?',
+  ).bind(official.id, customerAccount.id).first('count'), 1);
+  assert.equal(await db.prepare(
+    'SELECT COUNT(*) AS count FROM project_assignments WHERE customer_account_id = ? AND project_id = ?',
+  ).bind(customerAccount.id, official.id).first('count'), 1);
+  assert.equal((await bucket.list()).objects.length, 2);
+  assert.equal(bindings.events.some(event => event.startsWith('r2:delete:projects/')), true);
+
+  const customerList = await store.listProjects({ state: 'active', identity: customer });
+  assert.deepEqual(customerList.map(project => project.id), [draftIds[0]]);
+  assert.deepEqual((await store.listProjects({ state: 'active', identity: owner })).map(project => project.id), [official.id]);
+  const opened = await store.readProject({ id: draftIds[0], identity: customer });
+  await store.updateProject({
+    id: draftIds[0], baseRevision: 1,
+    project: portableProject({ id: opened.embeddedProjectId, brightness: 0.4 }),
+    actor: customer, idempotencyKey: 'customer-draft-update',
+  });
+  assert.equal((await store.readProject({ id: official.id, identity: owner })).revision, 1);
+
+  assert.deepEqual(await store.unassignCustomerProject({
+    targetAccount: customerAccount, projectId: official.id, actor: owner,
+    idempotencyKey: 'unassign-race-draft',
+  }), { unassigned: true });
+  await assert.rejects(
+    store.readProject({ id: draftIds[0], identity: customer }),
+    error => error.code === 'not_found',
+  );
+  const reassigned = await store.assignCustomerProject({
+    targetAccount: customerAccount, projectId: official.id, actor: owner,
+    idempotencyKey: 'reassign-race-draft',
+  });
+  assert.equal(reassigned.assignment.draftProjectId, draftIds[0]);
+  assert.equal(reassigned.assignment.project.revision, 2);
+});
+
+test('D1 promotion preserves official identity and permanent delete cleans drafts, assignments, revisions, and R2', async t => {
+  const { mf, db, bucket } = await localBindings();
+  t.after(() => mf.dispose());
+  const store = createD1R2LibraryStore({ PROJECTS_DB: db, PROJECT_BLOBS: bucket });
+  assert.equal(typeof store.promoteDraft, 'function');
+  const accountStore = createD1AccountStore({ PROJECTS_DB: db }, { passwordIterations: 1 });
+  const ownerAccount = await accountStore.createAccount({
+    username: 'promotion-owner', displayName: 'Promotion Owner', role: 'owner',
+    temporaryPassword: 'temporary-passphrase',
+  });
+  const customerAccount = await accountStore.createAccount({
+    username: 'promotion-customer', displayName: 'Promotion Customer', role: 'customer',
+    temporaryPassword: 'temporary-passphrase',
+  });
+  const owner = { accountId: ownerAccount.id, role: 'owner', email: 'Promotion Owner', subject: 'owner' };
+  const customer = { accountId: customerAccount.id, role: 'customer', email: 'Promotion Customer', subject: 'customer' };
+  const official = await store.createProject({
+    title: 'Untouched Official Title', project: portableProject({ id: 'untouched-official-id' }),
+    actor: owner, idempotencyKey: 'promotion-official',
+  });
+  const assigned = await store.assignCustomerProject({
+    targetAccount: customerAccount, projectId: official.id, actor: owner,
+    idempotencyKey: 'promotion-assign',
+  });
+  const draftId = assigned.assignment.draftProjectId;
+  await store.updateProject({
+    id: draftId, baseRevision: 1,
+    project: portableProject({ id: 'untouched-official-id', name: 'Customer Name', brightness: 0.17 }),
+    title: 'Customer Title', actor: customer, idempotencyKey: 'promotion-draft-update',
+  });
+
+  await assert.rejects(store.promoteDraft({
+    draftId, officialBaseRevision: 0, actor: owner, idempotencyKey: 'promotion-conflict',
+  }), error => error.code === 'revision_conflict');
+  const promoted = await store.promoteDraft({
+    draftId, officialBaseRevision: 1, actor: owner, idempotencyKey: 'promotion-success',
+  });
+  assert.equal(promoted.revision, 2);
+  assert.equal(promoted.title, 'Untouched Official Title');
+  assert.equal(promoted.embeddedProjectId, 'untouched-official-id');
+  const opened = await store.readProject({ id: official.id, identity: owner });
+  assert.equal(opened.document.id, 'untouched-official-id');
+  assert.equal(opened.document.name, 'Untouched Official Title');
+  assert.equal(opened.document.pattern.masterBrightness, 0.17);
+  assert.deepEqual(
+    (await store.listRevisions({ id: official.id, identity: owner })).map(revision => revision.revision),
+    [2, 1],
+  );
+  assert.equal((await bucket.list()).objects.length, 4);
+
+  assert.deepEqual(await store.deleteProject({
+    id: official.id, baseRevision: 2, actor: owner, idempotencyKey: 'delete-official-and-drafts',
+  }), { deleted: true });
+  assert.equal(await db.prepare('SELECT COUNT(*) AS count FROM projects').first('count'), 0);
+  assert.equal(await db.prepare('SELECT COUNT(*) AS count FROM project_revisions').first('count'), 0);
+  assert.equal(await db.prepare('SELECT COUNT(*) AS count FROM project_assignments').first('count'), 0);
+  assert.equal((await bucket.list()).objects.length, 0);
+});
+
 test('D1/R2 store writes immutable private bodies before atomic metadata and cleans the losing optimistic write', async t => {
   const { mf, db, bucket } = await localBindings();
   t.after(() => mf.dispose());
@@ -544,7 +681,7 @@ test('an ambiguous commit-then-throw keeps committed R2 references readable', as
   });
 
   assert.equal(created.revision, 1);
-  assert.equal((await store.readProject({ id: created.id })).document.id, 'committed-after-throw');
+  assert.equal((await store.readProject({ id: created.id, identity: actor })).document.id, 'committed-after-throw');
   assert.equal((await bucket.list({ prefix: `projects/${created.id}/` })).objects.length, 1);
   const mutation = await db.prepare(`
     SELECT attempt_id FROM library_mutations WHERE idempotency_key = ?
@@ -605,7 +742,7 @@ test('large ambiguous and losing imports reconcile within D1 parameter limits', 
   }), { projectsCreated: 30, assetsCreated: 0 });
   assert.equal((await bucket.list()).objects.length, 30);
   for (let index = 0; index < 30; index += 1) {
-    const opened = await store.readProject({ id: `large-import-${index}` });
+    const opened = await store.readProject({ id: `large-import-${index}`, identity: actor });
     assert.equal(opened.document.id, `large-import-project-${index}`);
   }
 
@@ -742,6 +879,7 @@ test('an R2 deletion failure returns a safe router failure and preserves project
       method: 'DELETE',
       headers: {
         'content-type': 'application/json',
+        origin: 'https://led.mandalacodes.com',
         'x-lightweaver-request': 'failed-delete-request',
       },
       body: JSON.stringify({ baseRevision: 1, confirmation: 'DELETE' }),
@@ -1035,6 +1173,7 @@ test('Wrangler applies local migrations and serves the deployed Pages catch-all 
       headers: {
         ...authHeaders,
         'content-type': 'application/json',
+        origin: `http://127.0.0.1:${port}`,
         'x-lightweaver-request': 'served-create',
       },
       body: JSON.stringify({
@@ -1061,6 +1200,7 @@ test('Wrangler applies local migrations and serves the deployed Pages catch-all 
         headers: {
           ...authHeaders,
           'content-type': 'application/json',
+          origin: `http://127.0.0.1:${port}`,
           'x-lightweaver-request': 'served-worker-delete',
         },
         body: JSON.stringify({ baseRevision: 1, confirmation: 'DELETE' }),

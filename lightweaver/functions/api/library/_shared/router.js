@@ -15,6 +15,8 @@ const SAFE_STORE_ERRORS = {
   backup_too_large: [413, 'The project library is too large for one backup response.'],
   idempotency_conflict: [409, 'The idempotency key was already accepted.'],
   invalid_project: [400, 'The project is not a supported Lightweaver project.'],
+  invalid_assignment: [400, 'Assignments require an active customer and official project.'],
+  forbidden: [403, 'This library operation is not allowed.'],
   not_found: [404, 'The requested library record was not found.'],
   revision_conflict: [409, 'The library record changed since it was opened.'],
   revision_not_found: [404, 'The requested revision was not found.'],
@@ -194,6 +196,10 @@ export async function handleLibraryRequest({
       return redirectResponse(sanitizedStudioReturnPath(request));
     }
 
+    if (method !== 'GET' && method !== 'HEAD' && !requireSameOrigin(request)) {
+      return errorResponse(403, 'invalid_origin', 'The request origin is not allowed.', requestId);
+    }
+
     if (segments.length >= 1 && segments[0] === 'accounts') {
       if (!accountStore) {
         return errorResponse(503, 'account_unavailable', 'Account access is unavailable.', requestId);
@@ -220,6 +226,43 @@ export async function handleLibraryRequest({
 
       if (!isNativeIdentity(identity) || identity.role !== 'owner') {
         return errorResponse(403, 'forbidden', 'Only a native owner may manage accounts.', requestId);
+      }
+
+      if (segments.length === 3 && segments[2] === 'assignments') {
+        if (!store) {
+          return errorResponse(503, 'library_unavailable', 'The project library is unavailable.', requestId);
+        }
+        const targetAccount = await accountStore.getAccount(segments[1]);
+        if (method === 'GET') {
+          return jsonResponse({
+            assignments: await store.listCustomerAssignments({ targetAccount, identity }),
+          });
+        }
+        if (method === 'POST') {
+          const body = await readJson(request, maxBytes);
+          const result = await store.assignCustomerProject({
+            targetAccount,
+            projectId: body.projectId,
+            ...mutationContext(identity, requestId),
+          });
+          return jsonResponse({ assignment: result.assignment }, result.created ? 201 : 200);
+        }
+        return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);
+      }
+
+      if (segments.length === 4 && segments[2] === 'assignments') {
+        if (method !== 'DELETE') {
+          return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);
+        }
+        if (!store) {
+          return errorResponse(503, 'library_unavailable', 'The project library is unavailable.', requestId);
+        }
+        const targetAccount = await accountStore.getAccount(segments[1]);
+        return jsonResponse(await store.unassignCustomerProject({
+          targetAccount,
+          projectId: segments[3],
+          ...mutationContext(identity, requestId),
+        }));
       }
 
       if (segments.length === 1) {
@@ -270,10 +313,6 @@ export async function handleLibraryRequest({
       return errorResponse(404, 'not_found', 'The requested library route was not found.', requestId);
     }
 
-    if (isNativeIdentity(identity) && identity.role === 'customer') {
-      return errorResponse(403, 'forbidden', 'Customers may only use assigned project drafts.', requestId);
-    }
-
     if (!store) return errorResponse(503, 'library_unavailable', 'The project library is unavailable.', requestId);
 
     if (segments.length === 1 && segments[0] === 'projects') {
@@ -285,6 +324,9 @@ export async function handleLibraryRequest({
         return jsonResponse({ projects: await store.listProjects({ state, identity }) });
       }
       if (method === 'POST') {
+        if (identity.role === 'customer') {
+          return errorResponse(403, 'forbidden', 'Customers cannot create shared projects.', requestId);
+        }
         const body = await readJson(request, maxBytes);
         const project = validatePortableProject(body.project, { maxBytes });
         const result = await store.createProject({
@@ -332,6 +374,9 @@ export async function handleLibraryRequest({
 
     if (segments.length === 3 && segments[0] === 'projects' && segments[2] === 'duplicate') {
       if (method !== 'POST') return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);
+      if (identity.role === 'customer') {
+        return errorResponse(403, 'forbidden', 'Customers cannot duplicate projects.', requestId);
+      }
       const body = await readJson(request, maxBytes);
       const result = await store.duplicateProject({
         id: segments[1],
@@ -345,6 +390,9 @@ export async function handleLibraryRequest({
       && segments[0] === 'projects'
       && (segments[2] === 'archive' || segments[2] === 'unarchive')) {
       if (method !== 'POST') return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);
+      if (identity.role === 'customer') {
+        return errorResponse(403, 'forbidden', 'Customers cannot archive projects.', requestId);
+      }
       const body = await readJson(request, maxBytes);
       const result = await store.setArchived({
         id: segments[1],
@@ -360,11 +408,36 @@ export async function handleLibraryRequest({
       return jsonResponse({ revisions: await store.listRevisions({ id: segments[1], identity }) });
     }
 
+    if (segments.length === 3 && segments[0] === 'projects' && segments[2] === 'drafts') {
+      if (method !== 'GET') return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);
+      if (identity.role !== 'owner') {
+        return errorResponse(403, 'forbidden', 'Only owners may review customer drafts.', requestId);
+      }
+      return jsonResponse({ drafts: await store.listProjectDrafts({ officialId: segments[1], identity }) });
+    }
+
+    if (segments.length === 3 && segments[0] === 'projects' && segments[2] === 'promote') {
+      if (method !== 'POST') return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);
+      if (identity.role !== 'owner') {
+        return errorResponse(403, 'forbidden', 'Only owners may promote customer drafts.', requestId);
+      }
+      const body = await readJson(request, maxBytes);
+      const result = await store.promoteDraft({
+        draftId: segments[1],
+        officialBaseRevision: validateBaseRevision(body.officialBaseRevision),
+        ...mutationContext(identity, requestId),
+      });
+      return jsonResponse({ project: result });
+    }
+
     if (segments.length === 5
       && segments[0] === 'projects'
       && segments[2] === 'revisions'
       && segments[4] === 'restore') {
       if (method !== 'POST') return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);
+      if (identity.role === 'customer') {
+        return errorResponse(403, 'forbidden', 'Customers cannot restore project revisions.', requestId);
+      }
       const revision = Number(segments[3]);
       if (!Number.isInteger(revision) || revision < 1) {
         throw new LibraryValidationError('invalid_request', 'A valid revision number is required.');
@@ -380,6 +453,9 @@ export async function handleLibraryRequest({
     }
 
     if (segments.length === 2 && segments[0] === 'assets') {
+      if (identity.role === 'customer') {
+        return errorResponse(403, 'forbidden', 'Customers cannot access workspace assets.', requestId);
+      }
       const kind = validateAssetKind(segments[1]);
       if (method === 'GET') return jsonResponse({ asset: await store.readAsset({ kind, identity }) });
       if (method === 'PUT') {
@@ -396,11 +472,17 @@ export async function handleLibraryRequest({
     }
 
     if (segments.length === 1 && segments[0] === 'backup') {
+      if (identity.role === 'customer') {
+        return errorResponse(403, 'forbidden', 'Customers cannot export the shared library.', requestId);
+      }
       if (method !== 'GET') return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);
       return jsonResponse(await store.exportBackup({ identity }));
     }
 
     if (segments.length === 1 && segments[0] === 'restore') {
+      if (identity.role === 'customer') {
+        return errorResponse(403, 'forbidden', 'Customers cannot import the shared library.', requestId);
+      }
       if (method !== 'POST') return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);
       const body = await readJson(request, maxBackupBytes);
       const backup = validateMasterBackup(body, {

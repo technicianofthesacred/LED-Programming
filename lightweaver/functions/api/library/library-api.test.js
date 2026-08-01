@@ -405,6 +405,30 @@ async function activeNativeIdentity(accountStore, account, password) {
   };
 }
 
+async function createNativeLibraryFixture() {
+  const { accountStore } = createAccountFixture();
+  const accounts = {};
+  const identities = {};
+  for (const [username, role] of [
+    ['owner', 'owner'],
+    ['customer-one', 'customer'],
+    ['customer-two', 'customer'],
+  ]) {
+    accounts[username] = await accountStore.createAccount({
+      username,
+      displayName: username.replace('-', ' '),
+      role,
+      temporaryPassword: 'temporary-passphrase',
+    });
+    identities[username] = await activeNativeIdentity(
+      accountStore,
+      accounts[username],
+      `${username}-personal-passphrase`,
+    );
+  }
+  return { accountStore, accounts, identities };
+}
+
 test('forced-change native sessions can inspect session but cannot use the library', async () => {
   const { accountStore } = createAccountFixture();
   const owner = await accountStore.createAccount({
@@ -923,6 +947,283 @@ test('router forbids worker permanent deletion and permits confirmed owner delet
   assert.equal(ownerDelete.response.status, 200);
   assert.deepEqual(ownerDelete.payload, { deleted: true });
   assert.equal((await call(store, { path: `/projects/${created.id}` })).response.status, 404);
+});
+
+test('owner assignment creates one reusable private draft and customer edits never change official work', async () => {
+  const store = createMemoryLibraryStore();
+  const { accountStore, accounts, identities } = await createNativeLibraryFixture();
+  const official = await call(store, {
+    identity: identities.owner,
+    accountStore,
+    method: 'POST',
+    path: '/projects',
+    body: { title: 'Official Mandala', project: portableProject({ id: 'official-mandala' }) },
+  });
+  const assignmentPath = `/accounts/${accounts['customer-one'].id}/assignments`;
+
+  const wrongOrigin = await call(store, {
+    identity: identities.owner,
+    accountStore,
+    method: 'POST',
+    path: assignmentPath,
+    origin: 'https://evil.example',
+    body: { projectId: official.payload.project.id },
+  });
+  assert.equal(wrongOrigin.response.status, 403);
+  assert.equal(wrongOrigin.payload.error.code, 'invalid_origin');
+
+  const assigned = await call(store, {
+    identity: identities.owner,
+    accountStore,
+    method: 'POST',
+    path: assignmentPath,
+    body: { projectId: official.payload.project.id },
+  });
+  assert.equal(assigned.response.status, 201);
+  assert.equal(assigned.payload.assignment.projectId, official.payload.project.id);
+  assert.equal(assigned.payload.assignment.project.draftOfProjectId, official.payload.project.id);
+  assert.equal(assigned.payload.assignment.project.officialTitle, 'Official Mandala');
+  const draftId = assigned.payload.assignment.draftProjectId;
+
+  const assignedAgain = await call(store, {
+    identity: identities.owner,
+    accountStore,
+    method: 'POST',
+    path: assignmentPath,
+    requestId: 'assign-the-same-pair-again',
+    body: { projectId: official.payload.project.id },
+  });
+  assert.equal(assignedAgain.response.status, 200);
+  assert.equal(assignedAgain.payload.assignment.draftProjectId, draftId);
+  assert.equal((await call(store, {
+    identity: identities.owner,
+    accountStore,
+    path: assignmentPath,
+  })).payload.assignments.length, 1);
+
+  for (const identity of [identities.owner, {
+    email: 'worker@example.test', role: 'worker', subject: 'worker-subject',
+  }]) {
+    const shared = await call(store, { identity, accountStore, path: '/projects' });
+    assert.deepEqual(shared.payload.projects.map(project => project.id), [official.payload.project.id]);
+  }
+
+  const customerProjects = await call(store, {
+    identity: identities['customer-one'], accountStore, path: '/projects',
+  });
+  assert.deepEqual(customerProjects.payload.projects.map(project => project.id), [draftId]);
+  assert.equal(customerProjects.payload.projects[0].draftOfProjectId, official.payload.project.id);
+
+  const draft = await call(store, {
+    identity: identities['customer-one'], accountStore, path: `/projects/${draftId}`,
+  });
+  const changedDocument = structuredClone(draft.payload.project.document);
+  changedDocument.name = 'Customer Renamed Copy';
+  changedDocument.pattern.masterBrightness = 0.21;
+  const updated = await call(store, {
+    identity: identities['customer-one'],
+    accountStore,
+    method: 'PUT',
+    path: `/projects/${draftId}`,
+    body: { baseRevision: 1, title: 'Customer Renamed Copy', project: changedDocument },
+  });
+  assert.equal(updated.response.status, 200);
+  assert.equal(updated.payload.project.revision, 2);
+  assert.deepEqual((await call(store, {
+    identity: identities['customer-one'], accountStore, path: `/projects/${draftId}/revisions`,
+  })).payload.revisions.map(revision => revision.revision), [2, 1]);
+
+  const unchangedOfficial = await call(store, {
+    identity: identities.owner, accountStore, path: `/projects/${official.payload.project.id}`,
+  });
+  assert.equal(unchangedOfficial.payload.project.revision, 1);
+  assert.equal(unchangedOfficial.payload.project.title, 'Official Mandala');
+  assert.equal(unchangedOfficial.payload.project.document.pattern.masterBrightness, 1);
+
+  const unassigned = await call(store, {
+    identity: identities.owner,
+    accountStore,
+    method: 'DELETE',
+    path: `${assignmentPath}/${official.payload.project.id}`,
+  });
+  assert.equal(unassigned.response.status, 200);
+  assert.deepEqual(unassigned.payload, { unassigned: true });
+  assert.deepEqual((await call(store, {
+    identity: identities['customer-one'], accountStore, path: '/projects',
+  })).payload.projects, []);
+  assert.equal((await call(store, {
+    identity: identities['customer-one'], accountStore, path: `/projects/${draftId}`,
+  })).response.status, 404);
+
+  const reassigned = await call(store, {
+    identity: identities.owner,
+    accountStore,
+    method: 'POST',
+    path: assignmentPath,
+    requestId: 'reassign-preserved-draft',
+    body: { projectId: official.payload.project.id },
+  });
+  assert.equal(reassigned.payload.assignment.draftProjectId, draftId);
+  assert.equal(reassigned.payload.assignment.project.revision, 2);
+});
+
+test('customers cannot discover official or other customer projects and cannot use shared-library mutations', async () => {
+  const store = createMemoryLibraryStore();
+  const { accountStore, accounts, identities } = await createNativeLibraryFixture();
+  const official = await call(store, {
+    identity: identities.owner,
+    accountStore,
+    method: 'POST',
+    path: '/projects',
+    body: { title: 'Private Official', project: portableProject({ id: 'private-official' }) },
+  });
+  const assignments = {};
+  for (const username of ['customer-one', 'customer-two']) {
+    assignments[username] = await call(store, {
+      identity: identities.owner,
+      accountStore,
+      method: 'POST',
+      path: `/accounts/${accounts[username].id}/assignments`,
+      requestId: `assign-${username}`,
+      body: { projectId: official.payload.project.id },
+    });
+    assert.equal(assignments[username].response.status, 201);
+  }
+  const customer = identities['customer-one'];
+  const ownDraftId = assignments['customer-one'].payload.assignment.draftProjectId;
+  const otherDraftId = assignments['customer-two'].payload.assignment.draftProjectId;
+
+  for (const hiddenId of [official.payload.project.id, otherDraftId, 'missing-project']) {
+    const hidden = await call(store, { identity: customer, accountStore, path: `/projects/${hiddenId}` });
+    assert.equal(hidden.response.status, 404, hiddenId);
+    assert.equal(hidden.payload.error.code, 'not_found');
+  }
+
+  const deniedRoutes = [
+    ['POST', '/projects', { title: 'No', project: portableProject({ id: 'customer-create' }) }],
+    ['POST', `/projects/${ownDraftId}/duplicate`, {}],
+    ['POST', `/projects/${ownDraftId}/archive`, { baseRevision: 1 }],
+    ['POST', `/projects/${ownDraftId}/unarchive`, { baseRevision: 1 }],
+    ['POST', `/projects/${ownDraftId}/revisions/1/restore`, { baseRevision: 1 }],
+    ['DELETE', `/projects/${ownDraftId}`, { baseRevision: 1, confirmation: 'DELETE' }],
+    ['GET', '/assets/custom-patterns', undefined],
+    ['PUT', '/assets/custom-patterns', { baseRevision: 0, value: { patterns: [] } }],
+    ['GET', '/backup', undefined],
+    ['POST', '/restore', { format: LIBRARY_BACKUP_FORMAT, version: 1, projects: [], workspaceAssets: [] }],
+  ];
+  for (const [method, path, body] of deniedRoutes) {
+    const denied = await call(store, { identity: customer, accountStore, method, path, body });
+    assert.equal(denied.response.status, 403, `${method} ${path}`);
+    assert.equal(denied.payload.error.code, 'forbidden');
+  }
+});
+
+test('only owners review customer drafts and promotion appends conflict-safe official history', async () => {
+  const store = createMemoryLibraryStore();
+  const { accountStore, accounts, identities } = await createNativeLibraryFixture();
+  const official = await call(store, {
+    identity: identities.owner,
+    accountStore,
+    method: 'POST',
+    path: '/projects',
+    body: { title: 'Canonical Title', project: portableProject({ id: 'canonical-id' }) },
+  });
+  const assigned = await call(store, {
+    identity: identities.owner,
+    accountStore,
+    method: 'POST',
+    path: `/accounts/${accounts['customer-one'].id}/assignments`,
+    body: { projectId: official.payload.project.id },
+  });
+  assert.equal(assigned.response.status, 201);
+  const draftId = assigned.payload.assignment.draftProjectId;
+  const draft = await call(store, {
+    identity: identities['customer-one'], accountStore, path: `/projects/${draftId}`,
+  });
+  const customerDocument = structuredClone(draft.payload.project.document);
+  customerDocument.id = draft.payload.project.embeddedProjectId;
+  customerDocument.name = 'Customer Draft Name';
+  customerDocument.pattern.masterBrightness = 0.38;
+  await call(store, {
+    identity: identities['customer-one'], accountStore, method: 'PUT', path: `/projects/${draftId}`,
+    body: { baseRevision: 1, title: 'Customer Draft Title', project: customerDocument },
+  });
+
+  const ownerDrafts = await call(store, {
+    identity: identities.owner,
+    accountStore,
+    path: `/projects/${official.payload.project.id}/drafts`,
+  });
+  assert.equal(ownerDrafts.response.status, 200);
+  assert.deepEqual(ownerDrafts.payload.drafts.map(project => project.id), [draftId]);
+  assert.equal((await call(store, {
+    identity: identities.owner, accountStore, path: `/projects/${draftId}`,
+  })).response.status, 200);
+  assert.equal((await call(store, {
+    identity: { email: 'worker@example.test', role: 'worker', subject: 'worker-subject' },
+    accountStore,
+    path: `/projects/${official.payload.project.id}/drafts`,
+  })).response.status, 403);
+  assert.equal((await call(store, {
+    identity: { email: 'worker@example.test', role: 'worker', subject: 'worker-subject' },
+    accountStore,
+    method: 'POST',
+    path: `/projects/${draftId}/promote`,
+    body: { officialBaseRevision: 1 },
+  })).response.status, 403);
+
+  for (const [path, body] of [
+    [`/projects/${draftId}/duplicate`, {}],
+    [`/projects/${draftId}/archive`, { baseRevision: 2 }],
+    [`/projects/${draftId}/revisions/1/restore`, { baseRevision: 2 }],
+  ]) {
+    const denied = await call(store, {
+      identity: identities.owner,
+      accountStore,
+      method: 'POST',
+      path,
+      requestId: `owner-draft-denied-${path.split('/').at(-1)}`,
+      body,
+    });
+    assert.equal(denied.response.status, 403, path);
+    assert.equal(denied.payload.error.code, 'forbidden');
+  }
+
+  const conflict = await call(store, {
+    identity: identities.owner,
+    accountStore,
+    method: 'POST',
+    path: `/projects/${draftId}/promote`,
+    body: { officialBaseRevision: 0 },
+  });
+  assert.equal(conflict.response.status, 409);
+  assert.equal(conflict.payload.error.code, 'revision_conflict');
+
+  const promoted = await call(store, {
+    identity: identities.owner,
+    accountStore,
+    method: 'POST',
+    path: `/projects/${draftId}/promote`,
+    requestId: 'promote-draft',
+    body: { officialBaseRevision: 1 },
+  });
+  assert.equal(promoted.response.status, 200);
+  assert.equal(promoted.payload.project.id, official.payload.project.id);
+  assert.equal(promoted.payload.project.revision, 2);
+  assert.equal(promoted.payload.project.title, 'Canonical Title');
+  assert.equal(promoted.payload.project.embeddedProjectId, 'canonical-id');
+
+  const opened = await call(store, {
+    identity: identities.owner, accountStore, path: `/projects/${official.payload.project.id}`,
+  });
+  assert.equal(opened.payload.project.document.id, 'canonical-id');
+  assert.equal(opened.payload.project.document.name, 'Canonical Title');
+  assert.equal(opened.payload.project.document.pattern.masterBrightness, 0.38);
+  assert.deepEqual((await call(store, {
+    identity: identities.owner,
+    accountStore,
+    path: `/projects/${official.payload.project.id}/revisions`,
+  })).payload.revisions.map(revision => revision.revision), [2, 1]);
 });
 
 test('workspace assets use optimistic revisions and preserve their history in backup', async () => {

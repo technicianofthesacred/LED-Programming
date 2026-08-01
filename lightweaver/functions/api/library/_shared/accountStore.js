@@ -229,6 +229,10 @@ export function createAccountStore(repository, options = {}) {
     return (await repository.listAccounts()).map(publicAccount);
   }
 
+  async function getAccount(id) {
+    return publicAccount(await requireAccount(id));
+  }
+
   async function resetPassword({ id, temporaryPassword }) {
     const account = await requireAccount(id);
     const updatedAt = timestamp();
@@ -403,6 +407,7 @@ export function createAccountStore(repository, options = {}) {
     changePassword,
     createAccount,
     createSession,
+    getAccount,
     listAccounts,
     resetPassword,
     revokeSession,
