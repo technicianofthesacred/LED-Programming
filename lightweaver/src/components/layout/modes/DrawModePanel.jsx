@@ -1279,15 +1279,21 @@ export function DrawModePanel({
                                   {s.kaleidoscope.pointCount} points · start LED {s.kaleidoscope.startLed + 1}
                                 </span>
                               </div>
-                              <label className="la-kaleidoscope-count">
-                                <span>Points</span>
-                                <input type="number" min="2" max={s.pixelCount} step="1"
-                                       value={s.kaleidoscope.pointCount}
-                                       aria-label="Reflection point count"
-                                       onFocus={event => event.currentTarget.select()}
-                                       onChange={event => onChangeKaleidoscopeCount(s.id, Number(event.target.value))}
-                                       onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }}/>
-                              </label>
+                              <div className="la-kaleidoscope-stepper la-kaleidoscope-count"
+                                   role="group" aria-label="Reflection point count">
+                                <button type="button" className="btn"
+                                        aria-label="Decrease reflection point count"
+                                        disabled={s.kaleidoscope.pointCount <= 2}
+                                        onClick={() => onChangeKaleidoscopeCount(s.id, s.kaleidoscope.pointCount - 1)}>←</button>
+                                <span className="btn la-stepper-value" aria-live="polite"
+                                      data-testid="kaleidoscope-count-value">
+                                  {s.kaleidoscope.pointCount} points
+                                </span>
+                                <button type="button" className="btn"
+                                        aria-label="Increase reflection point count"
+                                        disabled={s.kaleidoscope.pointCount >= s.pixelCount}
+                                        onClick={() => onChangeKaleidoscopeCount(s.id, s.kaleidoscope.pointCount + 1)}>→</button>
+                              </div>
                               <div className="la-kaleidoscope-start" role="group" aria-label="Starting reflection point">
                                 <button className="btn" aria-label="Move all reflection points backward one LED"
                                         onClick={() => onNudgeKaleidoscopeSet(s.id, -1)}>←</button>
@@ -1307,24 +1313,27 @@ export function DrawModePanel({
                               </button>
                               {fineTuneOpenByStrip[s.id] && <div className="la-kaleidoscope-points" role="list" aria-label="Reflection points">
                                 {points.map((ledIndex, pointIndex) => (
-                                  <span key={pointIndex} role="listitem">
+                                  <span key={pointIndex} role="listitem" className="la-kaleidoscope-stepper">
+                                    <button type="button" className="btn"
+                                            aria-label={`Move reflection point ${pointIndex + 1} backward one LED`}
+                                            onClick={() => {
+                                              onSelectKaleidoscopePoint(s.id, pointIndex);
+                                              onNudgeKaleidoscopePoint(s.id, pointIndex, -1);
+                                            }}>←</button>
                                     <button type="button" className={`btn${kaleidoscopeEditor.selectedPointIndex === pointIndex ? ' active' : ''}`}
                                             aria-label={`Fine-tune reflection point ${pointIndex + 1}`}
                                             onClick={() => onSelectKaleidoscopePoint(s.id, pointIndex)}>
                                       {pointIndex + 1}: LED {ledIndex + 1}
                                     </button>
+                                    <button type="button" className="btn"
+                                            aria-label={`Move reflection point ${pointIndex + 1} forward one LED`}
+                                            onClick={() => {
+                                              onSelectKaleidoscopePoint(s.id, pointIndex);
+                                              onNudgeKaleidoscopePoint(s.id, pointIndex, 1);
+                                            }}>→</button>
                                   </span>
                                 ))}
                               </div>}
-                              {fineTuneOpenByStrip[s.id] && kaleidoscopeEditor.mode === 'fine' && (
-                                <div className="la-kaleidoscope-fine" role="group" aria-label="Fine tune selected reflection point">
-                                  <button className="btn" aria-label="Move selected reflection point backward one LED"
-                                          onClick={() => onNudgeKaleidoscopePoint(s.id, kaleidoscopeEditor.selectedPointIndex, -1)}>←</button>
-                                  <span>Point {kaleidoscopeEditor.selectedPointIndex + 1}</span>
-                                  <button className="btn" aria-label="Move selected reflection point forward one LED"
-                                          onClick={() => onNudgeKaleidoscopePoint(s.id, kaleidoscopeEditor.selectedPointIndex, 1)}>→</button>
-                                </div>
-                              )}
                               {customSpacing && <div className="hint">Custom spacing</div>}
                               {kaleidoscopeResetNotices?.[s.id]?.length > 0 && (
                                 <div className="hint">Count changed; reset point {kaleidoscopeResetNotices[s.id].map(i => i + 1).join(', ')}.</div>

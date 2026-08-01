@@ -651,23 +651,60 @@
 }
 
 .la-kaleidoscope-head,
-.la-kaleidoscope-count,
-.la-kaleidoscope-start,
-.la-kaleidoscope-fine {
+.la-kaleidoscope-start {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 7px;
 }
 
-.la-kaleidoscope-head span,
-.la-kaleidoscope-fine span {
+.la-kaleidoscope-head span {
   color: var(--text-faint);
   font-size: 11px;
 }
 
-.la-kaleidoscope-count input {
-  width: 64px;
+.la-kaleidoscope-stepper {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 36px;
+  align-items: stretch;
+  gap: 4px;
+  min-width: 0;
+}
+
+.la-kaleidoscope-stepper > .btn {
+  width: 100%;
+  min-width: 0;
+  padding-inline: 4px;
+  justify-content: center;
+}
+
+.la-kaleidoscope-count > .btn:disabled {
+  opacity: .42;
+  cursor: not-allowed;
+}
+
+.la-kaleidoscope-count > .btn:disabled:hover {
+  background: var(--bg-elev);
+  border-color: var(--border-soft);
+}
+
+.la-kaleidoscope-count > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-mid);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.la-stepper-value {
+  cursor: default;
+}
+
+.la-stepper-value:hover {
+  background: var(--bg-elev);
+  border-color: var(--border-soft);
 }
 
 .la-kaleidoscope-start .btn:nth-child(2) {
@@ -676,15 +713,27 @@
 
 .la-kaleidoscope-points {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: 5px;
 }
 
-.la-kaleidoscope-points .btn {
-  width: 100%;
-  min-width: 0;
+.la-kaleidoscope-points .la-kaleidoscope-stepper > .btn:nth-child(2) {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.la-kaleidoscope-points .btn.active {
+  color: var(--accent);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent) 28%, transparent),
+              0 0 14px color-mix(in oklab, var(--accent) 18%, transparent);
+}
+
+@media (max-width: 600px) {
+  .la-kaleidoscope-points {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .lw-kaleidoscope-markers circle {
