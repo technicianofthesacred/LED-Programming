@@ -97,6 +97,19 @@ class LibraryFixture {
   updateCount = 0;
   assetWriteCount = 0;
   assetWriteFailures: number[] = [];
+  assetReadFailures: number[] = [];
+  assetWriteRequestIds: string[] = [];
+  acceptedAssetRequests = new Map<string, { kind: string; value: Record<string, any> }>();
+  loseNextAssetWriteResponse = false;
+  private delayedAssetWriteGate: Promise<void> | null = null;
+  private releaseDelayedAssetWrite: (() => void) | null = null;
+  delayedAssetWriteStarted: Promise<void> | null = null;
+  private signalDelayedAssetWriteStarted: (() => void) | null = null;
+  private heldAssetReadsRemaining = 0;
+  private delayedAssetReadGate: Promise<void> | null = null;
+  private releaseDelayedAssetReads: (() => void) | null = null;
+  delayedAssetReadsStarted: Promise<void> | null = null;
+  private signalDelayedAssetReadsStarted: (() => void) | null = null;
   loseNextUpdateResponse = false;
   acceptedUpdateRequestIds = new Set<string>();
   signInNavigations: string[] = [];
@@ -178,6 +191,27 @@ class LibraryFixture {
     };
   }
 
+  holdNextAssetWrite() {
+    this.delayedAssetWriteStarted = new Promise(resolve => { this.signalDelayedAssetWriteStarted = resolve; });
+    this.delayedAssetWriteGate = new Promise<void>(resolve => { this.releaseDelayedAssetWrite = resolve; });
+  }
+
+  releaseAssetWrite() {
+    this.releaseDelayedAssetWrite?.();
+    this.releaseDelayedAssetWrite = null;
+  }
+
+  holdNextAssetLoad() {
+    this.heldAssetReadsRemaining = 2;
+    this.delayedAssetReadsStarted = new Promise(resolve => { this.signalDelayedAssetReadsStarted = resolve; });
+    this.delayedAssetReadGate = new Promise<void>(resolve => { this.releaseDelayedAssetReads = resolve; });
+  }
+
+  releaseAssetReads() {
+    this.releaseDelayedAssetReads?.();
+    this.releaseDelayedAssetReads = null;
+  }
+
   holdNextUpdate() {
     this.delayNextUpdate = true;
     this.delayedUpdateStarted = new Promise(resolve => { this.signalDelayedUpdateStarted = resolve; });
@@ -243,8 +277,18 @@ class LibraryFixture {
       }
       if (segments[0] === 'assets' && segments.length === 2) {
         const kind = segments[1];
-        const asset = this.assets.get(kind);
         if (method === 'GET') {
+          const failure = this.assetReadFailures.shift();
+          if (failure) {
+            await json(route, { error: { code: `fixture_asset_read_${failure}`, message: `Fixture asset read failure ${failure}.`, requestId: `fixture-asset-read-${failure}` } }, failure);
+            return;
+          }
+          const asset = this.assets.get(kind);
+          if (this.heldAssetReadsRemaining > 0) {
+            this.heldAssetReadsRemaining -= 1;
+            if (this.heldAssetReadsRemaining === 0) this.signalDelayedAssetReadsStarted?.();
+            await this.delayedAssetReadGate;
+          }
           if (!asset) {
             await json(route, { error: { code: 'not_found', message: 'Workspace asset not found.', requestId: 'fixture-asset-404' } }, 404);
             return;
@@ -254,18 +298,37 @@ class LibraryFixture {
         }
         if (method === 'PUT') {
           this.assetWriteCount += 1;
+          const requestId = request.headers()['x-lightweaver-request'] || '';
+          this.assetWriteRequestIds.push(requestId);
+          const accepted = this.acceptedAssetRequests.get(requestId);
+          if (accepted) {
+            await json(route, { error: { code: 'idempotency_conflict', message: 'The asset request was already accepted.', requestId: 'fixture-asset-idempotency' } }, 409);
+            return;
+          }
           const failure = this.assetWriteFailures.shift();
           if (failure) {
             await json(route, { error: { code: `fixture_${failure}`, message: `Fixture asset failure ${failure}.`, requestId: `fixture-asset-${failure}` } }, failure);
             return;
           }
           const body = request.postDataJSON();
+          if (this.delayedAssetWriteGate) {
+            this.signalDelayedAssetWriteStarted?.();
+            await this.delayedAssetWriteGate;
+            this.delayedAssetWriteGate = null;
+          }
+          const asset = this.assets.get(kind);
           if (body.baseRevision !== (asset?.revision || 0)) {
             await json(route, { error: { code: 'revision_conflict', message: 'The workspace asset changed online.', requestId: 'fixture-asset-409' } }, 409);
             return;
           }
           const updated = this.seedAsset(kind, body.value);
           updated.revisions[updated.revisions.length - 1].editor = this.email;
+          this.acceptedAssetRequests.set(requestId, { kind, value: structuredClone(body.value) });
+          if (this.loseNextAssetWriteResponse) {
+            this.loseNextAssetWriteResponse = false;
+            await route.abort('failed');
+            return;
+          }
           await json(route, { asset: this.assetResponse(updated) });
           return;
         }
@@ -595,6 +658,252 @@ test('makes stale workspace asset revisions explicit and keeps both named copies
   const names = fixture.assets.get('custom-patterns')!.value.customPatterns.map((pattern: any) => pattern.name).sort();
   expect(names).toEqual(['Shared glow from this device (local copy)', 'Shared glow online']);
   expect(new Set(fixture.assets.get('custom-patterns')!.value.customPatterns.map((pattern: any) => pattern.id)).size).toBe(2);
+});
+
+test('blocks conflicted asset writes and Keep both incorporates edits made while the stale write was in flight', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  fixture.seedAsset('custom-patterns', {
+    version: 1,
+    customPatterns: [{ id: 'custom-flight', name: 'Flight online', code: 'return rgb(1, 0, 0);', custom: true }],
+    customPatternRevisions: {},
+  });
+  await fixture.install(page);
+  await page.goto('/#screen=pattern-lab', { waitUntil: 'domcontentloaded' });
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.workspaceAssetsReady || '')).toBe('true');
+
+  fixture.holdNextAssetWrite();
+  await page.evaluate(async () => {
+    const { updateCustomPattern } = await import('/src/lib/customPatterns.js');
+    updateCustomPattern('custom-flight', { name: 'Flight local first', code: 'return rgb(0, 1, 0);' });
+  });
+  await fixture.delayedAssetWriteStarted;
+  fixture.seedAsset('custom-patterns', {
+    version: 1,
+    customPatterns: [{ id: 'custom-flight', name: 'Flight online latest', code: 'return rgb(0, 0, 1);', custom: true }],
+    customPatternRevisions: {},
+  });
+  await page.evaluate(async () => {
+    const { updateCustomPattern } = await import('/src/lib/customPatterns.js');
+    updateCustomPattern('custom-flight', { name: 'Flight local second', code: 'return rgb(1, 1, 0);' });
+  });
+  fixture.releaseAssetWrite();
+
+  const notice = page.getByRole('alert').filter({ hasText: 'Workspace patterns changed on another device' });
+  await expect(notice).toBeVisible();
+  await page.evaluate(async () => {
+    const { updateCustomPattern } = await import('/src/lib/customPatterns.js');
+    updateCustomPattern('custom-flight', { name: 'Flight local final', code: 'return rgb(0, 1, 1);' });
+  });
+  const writesAtConflict = fixture.assetWriteCount;
+  await page.waitForTimeout(700);
+  expect(fixture.assetWriteCount).toBe(writesAtConflict);
+
+  await notice.getByRole('button', { name: 'Keep both copies' }).click();
+  await expect.poll(() => fixture.assets.get('custom-patterns')?.value.customPatterns.length).toBe(2);
+  expect(fixture.assets.get('custom-patterns')!.value.customPatterns.map((pattern: any) => pattern.name).sort())
+    .toEqual(['Flight local final (local copy)', 'Flight online latest']);
+});
+
+test('bootstraps simultaneous asset conflicts independently and resolves both without claiming unapplied heads', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  fixture.seedAsset('custom-patterns', {
+    version: 1,
+    customPatterns: [{ id: 'custom-multi', name: 'Pattern base', code: 'return rgb(1, 0, 0);', custom: true }],
+    customPatternRevisions: {},
+  });
+  fixture.seedAsset('pattern-lab-drafts', {
+    version: 1,
+    patternLabDrafts: [],
+  });
+  await fixture.install(page);
+  await page.goto('/#screen=pattern-lab', { waitUntil: 'domcontentloaded' });
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.workspaceAssetsReady || '')).toBe('true');
+  await page.evaluate(async () => {
+    const { updateCustomPattern } = await import('/src/lib/customPatterns.js');
+    const { createPatternLabRecipe } = await import('/src/lib/patternLabRecipe.js');
+    const { savePatternLabDraft } = await import('/src/lib/patternLabStorage.js');
+    updateCustomPattern('custom-multi', { name: 'Pattern local', code: 'return rgb(0, 1, 0);' }, { dispatch: false });
+    savePatternLabDraft(createPatternLabRecipe({ id: 'draft-multi', name: 'Draft local' }), { dispatch: false });
+  });
+  fixture.seedAsset('custom-patterns', {
+    version: 1,
+    customPatterns: [{ id: 'custom-multi', name: 'Pattern online', code: 'return rgb(0, 0, 1);', custom: true }],
+    customPatternRevisions: {},
+  });
+  fixture.seedAsset('pattern-lab-drafts', {
+    version: 1,
+    patternLabDrafts: [(await import('../src/lib/patternLabRecipe.js')).createPatternLabRecipe({ id: 'draft-multi', name: 'Draft online' })],
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  const conflict = page.getByRole('alert').filter({ hasText: 'Workspace patterns changed on another device' });
+  await expect(conflict).toBeVisible();
+  await conflict.getByRole('button', { name: 'Keep both copies' }).click();
+  await expect(conflict).toBeVisible();
+  await conflict.getByRole('button', { name: 'Keep both copies' }).click();
+  await expect(conflict).toHaveCount(0);
+  await expect.poll(() => fixture.assets.get('custom-patterns')?.value.customPatterns.length).toBe(2);
+  await expect.poll(() => fixture.assets.get('pattern-lab-drafts')?.value.patternLabDrafts.length).toBe(2);
+});
+
+test('ignores an older delayed asset load after a newer load has applied', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  fixture.seedAsset('custom-patterns', {
+    version: 1,
+    customPatterns: [{ id: 'custom-load', name: 'Old remote', code: '', custom: true }],
+    customPatternRevisions: {},
+  });
+  fixture.holdNextAssetLoad();
+  await fixture.install(page);
+  await page.goto('/#screen=pattern-lab', { waitUntil: 'domcontentloaded' });
+  await fixture.delayedAssetReadsStarted;
+  fixture.seedAsset('custom-patterns', {
+    version: 1,
+    customPatterns: [{ id: 'custom-load', name: 'New remote', code: '', custom: true }],
+    customPatternRevisions: {},
+  });
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect.poll(() => page.evaluate(async () => {
+    const { readWorkspaceAssets } = await import('/src/lib/workspaceAssets.js');
+    return readWorkspaceAssets().customPatterns[0]?.name || '';
+  })).toBe('New remote');
+  fixture.releaseAssetReads();
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(async () => {
+    const { readWorkspaceAssets } = await import('/src/lib/workspaceAssets.js');
+    return readWorkspaceAssets().customPatterns[0]?.name || '';
+  })).toBe('New remote');
+});
+
+test('does not overwrite a local edit made while the initial asset load is awaiting the network', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  fixture.seedAsset('custom-patterns', {
+    version: 1,
+    customPatterns: [{ id: 'custom-load-edit', name: 'Remote during load', code: '', custom: true }],
+    customPatternRevisions: {},
+  });
+  fixture.holdNextAssetLoad();
+  await fixture.install(page);
+  await page.goto('/#screen=pattern-lab', { waitUntil: 'domcontentloaded' });
+  await fixture.delayedAssetReadsStarted;
+  await page.evaluate(async () => {
+    const { saveCustomPattern } = await import('/src/lib/customPatterns.js');
+    saveCustomPattern({ id: 'custom-load-edit', name: 'Local during load', code: '', custom: true }, { dispatch: false });
+  });
+  fixture.releaseAssetReads();
+
+  await expect(page.getByRole('alert').filter({ hasText: 'Workspace patterns changed on another device' })).toBeVisible();
+  expect(await page.evaluate(async () => {
+    const { readWorkspaceAssets } = await import('/src/lib/workspaceAssets.js');
+    return readWorkspaceAssets().customPatterns[0]?.name || '';
+  })).toBe('Local during load');
+});
+
+test('uploads an offline edit on reload when the remote revision still matches the acknowledged head', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  fixture.seedAsset('custom-patterns', {
+    version: 1,
+    customPatterns: [{ id: 'custom-reload', name: 'Reload base', code: 'return rgb(1, 0, 0);', custom: true }],
+    customPatternRevisions: {},
+  });
+  await fixture.install(page);
+  await page.goto('/#screen=pattern-lab', { waitUntil: 'domcontentloaded' });
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.workspaceAssetsReady || '')).toBe('true');
+  await page.evaluate(async () => {
+    const { updateCustomPattern } = await import('/src/lib/customPatterns.js');
+    updateCustomPattern('custom-reload', { name: 'Reload offline edit', code: 'return rgb(0, 1, 0);' }, { dispatch: false });
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('alert').filter({ hasText: 'Workspace patterns changed on another device' })).toHaveCount(0);
+  await expect.poll(() => fixture.assets.get('custom-patterns')?.value.customPatterns[0]?.name).toBe('Reload offline edit');
+});
+
+test('reconciles a lost asset response with the same request ID and surfaces divergent replay state', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  await fixture.install(page);
+  await openLibrary(page);
+  await waitForAuthenticatedAssets(page);
+
+  fixture.loseNextAssetWriteResponse = true;
+  await saveWorkspaceFixture(page, ' accepted');
+  await expect.poll(() => fixture.assetWriteCount, { timeout: 7000 }).toBeGreaterThanOrEqual(3);
+  expect(fixture.assetWriteRequestIds.filter(id => id === fixture.assetWriteRequestIds[0]).length).toBeGreaterThanOrEqual(2);
+  await expect(page.getByRole('alert').filter({ hasText: 'Workspace patterns changed on another device' })).toHaveCount(0);
+
+  fixture.loseNextAssetWriteResponse = true;
+  await page.evaluate(async () => {
+    const { updateCustomPattern } = await import('/src/lib/customPatterns.js');
+    updateCustomPattern('custom-cross-device', { name: 'Divergent local replay' });
+  });
+  await expect.poll(() => fixture.assets.get('custom-patterns')?.value.customPatterns[0]?.name).toBe('Divergent local replay');
+  fixture.seedAsset('custom-patterns', {
+    version: 1,
+    customPatterns: [{ id: 'custom-cross-device', name: 'Divergent online replay', code: '', custom: true }],
+    customPatternRevisions: {},
+  });
+  await page.goto('/#screen=pattern-lab', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('alert').filter({ hasText: 'Workspace patterns changed on another device' }), { timeout: 7000 }).toBeVisible();
+});
+
+test('Keep both pre-reserves IDs and names and preserves revision-only divergence', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  const current = { id: 'custom-a', name: 'A', code: 'return rgb(1, 1, 1);', custom: true };
+  fixture.seedAsset('custom-patterns', {
+    version: 1,
+    customPatterns: [current],
+    customPatternRevisions: { 'custom-a': [{ ...current, code: 'return rgb(1, 0, 0);' }] },
+  });
+  await fixture.install(page);
+  await page.goto('/#screen=pattern-lab', { waitUntil: 'domcontentloaded' });
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.workspaceAssetsReady || '')).toBe('true');
+  await page.evaluate(async value => {
+    const { readWorkspaceAssets, writeWorkspaceAssets } = await import('/src/lib/workspaceAssets.js');
+    const snapshot = readWorkspaceAssets();
+    snapshot.customPatterns.push({ id: 'custom-a_local_copy', name: 'A (local copy)', code: '', custom: true });
+    snapshot.customPatternRevisions['custom-a'] = [{ ...value, code: 'return rgb(0, 1, 0);' }];
+    writeWorkspaceAssets(snapshot, undefined, { dispatch: false });
+  }, current);
+  fixture.seedAsset('custom-patterns', {
+    version: 1,
+    customPatterns: [current],
+    customPatternRevisions: { 'custom-a': [{ ...current, code: 'return rgb(0, 0, 1);' }] },
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  const conflict = page.getByRole('alert').filter({ hasText: 'Workspace patterns changed on another device' });
+  await expect(conflict).toBeVisible();
+  await conflict.getByRole('button', { name: 'Keep both copies' }).click();
+  await expect.poll(() => fixture.assets.get('custom-patterns')?.value.customPatterns.length).toBe(3);
+  const value = fixture.assets.get('custom-patterns')!.value;
+  expect(value.customPatterns.map((pattern: any) => pattern.id).sort())
+    .toEqual(['custom-a', 'custom-a_local_copy', 'custom-a_local_copy_2']);
+  expect(value.customPatterns.map((pattern: any) => pattern.name).sort())
+    .toEqual(['A', 'A (local copy 2)', 'A (local copy)']);
+  expect(value.customPatternRevisions['custom-a_local_copy_2'][0].code).toBe('return rgb(0, 1, 0);');
+});
+
+test('fresh Patterns resolves a project selection that exists only in cloud custom patterns', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  fixture.seedAsset('custom-patterns', {
+    version: 1,
+    customPatterns: [{
+      id: 'custom-cloud-only',
+      name: 'Cloud-only cyan',
+      code: 'return rgb(0, 1, 1);',
+      custom: true,
+    }],
+    customPatternRevisions: {},
+  });
+  const project = portable('Cloud pattern project', 'lwproj-cloud-pattern');
+  project.pattern.activePatternId = 'custom-cloud-only';
+  await page.addInitScript(savedProject => {
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
+  }, project);
+  await fixture.install(page);
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.workspaceAssetsReady || '')).toBe('true');
+  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Cloud-only cyan');
+  await expect(page.locator('.pm-cards .pmcard[data-pattern-id="custom-cloud-only"]')).toHaveClass(/\bon\b/);
 });
 
 test('turns a remembered remote revision divergence into an explicit conflict without overwriting either side', async ({ page }) => {
@@ -1140,4 +1449,47 @@ test('claims browser projects and supports individual and master import/export',
   fs.writeFileSync(oversizedBackupPath, Buffer.alloc(8 * 1024 * 1024 + 1, 0x20));
   await page.setInputFiles('[data-testid="cloud-master-restore"]', oversizedBackupPath);
   await expect(page.getByText('Master backups must be 8 MB or smaller.')).toBeVisible();
+});
+
+test('reports a master restore failure when refreshed assets cannot be read and preserves valid local assets', async ({ page }) => {
+  const fixture = new LibraryFixture('owner');
+  fixture.seedAsset('custom-patterns', {
+    version: 1,
+    customPatterns: [{ id: 'custom-valid-local', name: 'Valid local glow', code: '', custom: true }],
+    customPatternRevisions: {},
+  });
+  await fixture.install(page);
+  await openLibrary(page);
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.workspaceAssetsReady || '')).toBe('true');
+  await expect(page.getByText('owner@example.test')).toBeVisible();
+
+  const restorePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-restore-failure-')), 'restore.lw-library.json');
+  fs.writeFileSync(restorePath, JSON.stringify({
+    format: 'lightweaver.library-backup',
+    version: 1,
+    exportedAt: '2026-08-01T10:00:00.000Z',
+    projects: [],
+    workspaceAssets: [{
+      kind: 'custom-patterns',
+      currentRevision: 1,
+      revisions: [{
+        revision: 1,
+        createdAt: '2026-08-01T10:00:00.000Z',
+        value: {
+          version: 1,
+          customPatterns: [{ id: 'custom-restored-failure', name: 'Should not replace local', code: '', custom: true }],
+          customPatternRevisions: {},
+        },
+      }],
+    }],
+  }));
+  fixture.assetReadFailures.push(503, 503);
+  await page.setInputFiles('[data-testid="cloud-master-restore"]', restorePath);
+
+  await expect(page.getByText('Fixture asset read failure 503.')).toBeVisible();
+  expect(await page.evaluate(async () => {
+    const { readWorkspaceAssets } = await import('/src/lib/workspaceAssets.js');
+    return readWorkspaceAssets().customPatterns[0]?.name || '';
+  })).toBe('Valid local glow');
+  await expect(page.getByText(/Restored \d+ projects? and \d+ workspace assets?/)).toHaveCount(0);
 });

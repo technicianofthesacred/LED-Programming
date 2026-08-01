@@ -9,8 +9,10 @@ import React, { useCallback, useEffect, useId, useMemo, useReducer, useRef, useS
 import { I, PATTERN_CATS, SWATCHES, GEOMETRY, JourneyHint } from './lw-shared.jsx';
 import { REAL_PATTERNS, REAL_PATTERN_BY_ID, adaptPattern, adaptSavedLook, defaultWarmPatternId } from './v3-data.js';
 import { useProject } from '../state/ProjectContext.jsx';
+import { useCloudLibrary } from '../state/CloudLibraryContext.jsx';
 import { getCardPatternById } from '../lib/cardPatternBank.js';
 import { getPatternById } from '../lib/patternRegistry.js';
+import { loadCustomPatterns } from '../lib/customPatterns.js';
 import { compilePattern, normalizePalette, renderPixelFrame } from '../lib/frameEngine.js';
 import { applyLookColorModifiers } from '../lib/previewColorModifiers.js';
 import {
@@ -298,6 +300,7 @@ import { PatternPreview } from './PatternPreview.jsx';
   }
 
   function PatternScreen({ connected, go }) {
+    const { workspaceAssets } = useCloudLibrary();
     const {
       projectId,
       projectName,
@@ -321,6 +324,8 @@ import { PatternPreview } from './PatternPreview.jsx';
       setSymSettings,
       bpm,
       patternParams,
+      activePatternId,
+      setActivePatternId,
       gammaEnabled,
       gammaValue,
     } = useProject();
@@ -410,7 +415,8 @@ import { PatternPreview } from './PatternPreview.jsx';
       savedDefaultPatternId === FACTORY_DEFAULT_PATTERN_ID && !hasNamedProject && !hasSavedLooks;
     const hasSavedDefaultPattern = Boolean(
       standaloneController?.defaultLook &&
-      getCardPatternById(savedDefaultPatternId) &&
+      (getCardPatternById(savedDefaultPatternId)
+        || (workspaceAssets.ready && getPatternById(savedDefaultPatternId))) &&
       !looksLikeFactoryProject,
     );
     const savedGlobalLook = normalizeSectionVisualLook(
@@ -460,7 +466,20 @@ import { PatternPreview } from './PatternPreview.jsx';
       () => savedLooks.map(adaptSavedLook).filter(Boolean),
       [savedLooks],
     );
-    const ALL = useMemo(() => [...realMixes, ...REAL_PATTERNS], [realMixes]);
+    const customPatterns = useMemo(() => (
+      workspaceAssets.ready
+        ? loadCustomPatterns().map(pattern => adaptPattern({
+          ...pattern,
+          label: pattern.name || pattern.label || pattern.id,
+          description: pattern.description || 'Custom Pattern Lab pattern.',
+        }))
+        : []
+    ), [workspaceAssets.generation, workspaceAssets.ready]);
+    const customPatternById = useMemo(
+      () => new Map(customPatterns.map(pattern => [pattern.id, pattern])),
+      [customPatterns],
+    );
+    const ALL = useMemo(() => [...realMixes, ...customPatterns, ...REAL_PATTERNS], [customPatterns, realMixes]);
     // Map an adapted mix-card id back to its real saved look (adaptSavedLook
     // sets the card id to look.id when present, else `mix-${patternId}`).
     const findSavedLook = useCallback(
@@ -468,8 +487,8 @@ import { PatternPreview } from './PatternPreview.jsx';
       [savedLooks],
     );
     // The selected pattern is driven by the live look.patternId.
-    const selId = look.patternId;
-    const sel = REAL_PATTERN_BY_ID.get(selId) || adaptPattern(selId) || ALL[0];
+    const selId = customPatternById.has(activePatternId) ? activePatternId : look.patternId;
+    const sel = REAL_PATTERN_BY_ID.get(selId) || customPatternById.get(selId) || adaptPattern(selId) || ALL[0];
     const tint = sel.pal[2] || sel.pal[sel.pal.length - 1];
     const currentComboLabel = (() => {
       const sections = effectiveSectionTargets.filter(t => t.kind === 'section');
@@ -1097,6 +1116,7 @@ import { PatternPreview } from './PatternPreview.jsx';
         }
         return;
       }
+      setActivePatternId(p.id);
       const nextLook = updatePreviewLook({ patternId: p.id }, { push: false });
       scheduleBrowseLivePreview(nextLook, selectedTarget);
     };

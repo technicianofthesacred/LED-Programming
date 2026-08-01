@@ -160,15 +160,24 @@ function uniqueCollisionId(id, used) {
   return next;
 }
 
-function localCopyName(name) {
-  return `${String(name || 'Untitled').replace(/ \(local copy\)$/, '')} (local copy)`;
+function localCopyName(name, used = new Set()) {
+  const base = String(name || 'Untitled').replace(/ \(local copy(?: \d+)?\)$/, '');
+  let next = `${base} (local copy)`;
+  let suffix = 2;
+  while (used.has(next)) {
+    next = `${base} (local copy ${suffix})`;
+    suffix += 1;
+  }
+  used.add(next);
+  return next;
 }
 
 function mergeWorkspaceAssetConflict(kind, remoteValue, localValue) {
   if (kind === 'pattern-lab-drafts') {
     const remoteDrafts = Array.isArray(remoteValue.patternLabDrafts) ? remoteValue.patternLabDrafts : [];
     const localDrafts = Array.isArray(localValue.patternLabDrafts) ? localValue.patternLabDrafts : [];
-    const used = new Set(remoteDrafts.map(draft => draft.id));
+    const used = new Set([...remoteDrafts, ...localDrafts].map(draft => draft.id));
+    const usedNames = new Set([...remoteDrafts, ...localDrafts].map(draft => draft.name));
     const remoteById = new Map(remoteDrafts.map(draft => [draft.id, draft]));
     const additions = [];
     for (const draft of localDrafts) {
@@ -177,7 +186,11 @@ function mergeWorkspaceAssetConflict(kind, remoteValue, localValue) {
         used.add(draft.id);
         additions.push(draft);
       } else if (canonicalJson(remote) !== canonicalJson(draft)) {
-        additions.push({ ...draft, id: uniqueCollisionId(draft.id, used), name: localCopyName(draft.name) });
+        additions.push({
+          ...draft,
+          id: uniqueCollisionId(draft.id, used),
+          name: localCopyName(draft.name, usedNames),
+        });
       }
     }
     return {
@@ -190,7 +203,8 @@ function mergeWorkspaceAssetConflict(kind, remoteValue, localValue) {
   const localPatterns = Array.isArray(localValue.customPatterns) ? localValue.customPatterns : [];
   const remoteRevisions = remoteValue.customPatternRevisions || {};
   const localRevisions = localValue.customPatternRevisions || {};
-  const used = new Set(remotePatterns.map(pattern => pattern.id));
+  const used = new Set([...remotePatterns, ...localPatterns].map(pattern => pattern.id));
+  const usedNames = new Set([...remotePatterns, ...localPatterns].map(pattern => pattern.name));
   const remoteById = new Map(remotePatterns.map(pattern => [pattern.id, pattern]));
   const patterns = [...remotePatterns];
   const revisions = structuredClone(remoteRevisions);
@@ -202,11 +216,14 @@ function mergeWorkspaceAssetConflict(kind, remoteValue, localValue) {
       if (Array.isArray(localRevisions[pattern.id])) revisions[pattern.id] = localRevisions[pattern.id];
       continue;
     }
-    if (canonicalJson(remote) === canonicalJson(pattern)) continue;
+    const revisionsDiffer = canonicalJson(remoteRevisions[pattern.id] || [])
+      !== canonicalJson(localRevisions[pattern.id] || []);
+    if (canonicalJson(remote) === canonicalJson(pattern) && !revisionsDiffer) continue;
     const copyId = uniqueCollisionId(pattern.id, used);
-    patterns.push({ ...pattern, id: copyId, name: localCopyName(pattern.name) });
+    const copyName = localCopyName(pattern.name, usedNames);
+    patterns.push({ ...pattern, id: copyId, name: copyName });
     revisions[copyId] = (Array.isArray(localRevisions[pattern.id]) ? localRevisions[pattern.id] : [])
-      .map(revision => ({ ...revision, id: copyId, name: localCopyName(revision.name) }));
+      .map(revision => ({ ...revision, id: copyId, name: copyName }));
   }
   return {
     version: WORKSPACE_ASSETS_VERSION,
@@ -317,6 +334,8 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   const performSaveRef = useRef(null);
   const activeRemoteEpochRef = useRef(0);
   const workspaceAssetHeadsRef = useRef(readWorkspaceAssetHeads());
+  const workspaceAssetConflictsRef = useRef(new Map());
+  const workspaceAssetLoadOperationRef = useRef(0);
   const workspaceAssetsLoadedRef = useRef(false);
   const workspaceAssetTimerRef = useRef(null);
   const workspaceAssetRetryRef = useRef(null);
@@ -406,6 +425,18 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     setWorkspaceAssets(current => ({ ...current, ...patch }));
   }, []);
 
+  const publishWorkspaceAssetConflicts = useCallback((patch = {}) => {
+    if (!mountedRef.current) return;
+    const conflict = workspaceAssetConflictsRef.current.values().next().value || null;
+    setWorkspaceAssets(current => ({
+      ...current,
+      status: conflict ? 'conflict' : (patch.status || current.status),
+      conflict,
+      ...patch,
+      ...(conflict ? { status: 'conflict', conflict } : {}),
+    }));
+  }, []);
+
   const performWorkspaceAssetSync = useCallback(async suppliedOperations => {
     if (!workspaceAssetsLoadedRef.current || sessionRef.current.status !== 'authenticated') {
       workspaceAssetQueuedRef.current = true;
@@ -426,6 +457,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         return { ok: false, reason: 'local-assets-invalid', error };
       }
       operations = WORKSPACE_ASSET_KINDS.flatMap(kind => {
+        if (workspaceAssetConflictsRef.current.has(kind)) return [];
         const value = workspaceAssetValue(snapshot, kind);
         const valueHash = canonicalJson(value);
         const head = workspaceAssetHeadsRef.current[kind];
@@ -438,9 +470,10 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         }];
       });
     }
+    operations = operations.filter(operation => !workspaceAssetConflictsRef.current.has(operation.kind));
     if (!operations.length) {
       pendingWorkspaceAssetOperationsRef.current = null;
-      setWorkspaceAssetStatus({ status: 'saved', error: null });
+      publishWorkspaceAssetConflicts({ status: 'saved', error: null });
       return { ok: true, unchanged: true };
     }
     pendingWorkspaceAssetOperationsRef.current = operations;
@@ -451,6 +484,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
 
     workspaceAssetInFlightRef.current = true;
     setWorkspaceAssetStatus({ status: 'saving', error: null });
+    let encounteredConflict = false;
     try {
       for (let index = 0; index < operations.length; index += 1) {
         const operation = operations[index];
@@ -466,8 +500,43 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
           writeWorkspaceAssetHeads(workspaceAssetHeadsRef.current);
           pendingWorkspaceAssetOperationsRef.current = operations.slice(index + 1);
         } catch (rawError) {
-          const error = normalizeError(rawError);
+          let error = normalizeError(rawError);
           if (!mountedRef.current) return { ok: false, reason: 'unmounted', error };
+          if (error.code === 'idempotency_conflict') {
+            let remote;
+            try {
+              remote = await client.readAsset(operation.kind);
+            } catch (readError) {
+              const normalizedReadError = normalizeError(readError);
+              pendingWorkspaceAssetOperationsRef.current = operations.slice(index);
+              setWorkspaceAssetStatus({ status: 'error', error: normalizedReadError });
+              return { ok: false, reason: normalizedReadError.state, error: normalizedReadError };
+            }
+            if (canonicalJson(remote.value) === operation.valueHash) {
+              workspaceAssetHeadsRef.current[operation.kind] = {
+                revision: remote.revision,
+                valueHash: operation.valueHash,
+              };
+              writeWorkspaceAssetHeads(workspaceAssetHeadsRef.current);
+              pendingWorkspaceAssetOperationsRef.current = operations.slice(index + 1);
+              continue;
+            }
+            error = new CloudLibraryError(
+              'revision_conflict',
+              'Workspace assets differ from the online library.',
+              { status: 409 },
+            );
+            workspaceAssetConflictsRef.current.set(operation.kind, {
+              kind: operation.kind,
+              remote: structuredClone(remote),
+            });
+            encounteredConflict = true;
+            pendingWorkspaceAssetOperationsRef.current = operations
+              .slice(index + 1)
+              .filter(next => !workspaceAssetConflictsRef.current.has(next.kind));
+            publishWorkspaceAssetConflicts({ error });
+            continue;
+          }
           if (error.state === 'conflict') {
             let remote;
             try {
@@ -478,22 +547,16 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
               setWorkspaceAssetStatus({ status: 'error', error: normalizedReadError });
               return { ok: false, reason: normalizedReadError.state, error: normalizedReadError };
             }
-            pendingWorkspaceAssetOperationsRef.current = null;
-            workspaceAssetHeadsRef.current[operation.kind] = {
-              revision: remote.revision,
-              valueHash: canonicalJson(remote.value),
-            };
-            writeWorkspaceAssetHeads(workspaceAssetHeadsRef.current);
-            setWorkspaceAssetStatus({
-              status: 'conflict',
-              conflict: {
-                kind: operation.kind,
-                localValue: structuredClone(operation.value),
-                remote: structuredClone(remote),
-              },
-              error,
+            workspaceAssetConflictsRef.current.set(operation.kind, {
+              kind: operation.kind,
+              remote: structuredClone(remote),
             });
-            return { ok: false, reason: 'conflict', error };
+            encounteredConflict = true;
+            pendingWorkspaceAssetOperationsRef.current = operations
+              .slice(index + 1)
+              .filter(next => !workspaceAssetConflictsRef.current.has(next.kind));
+            publishWorkspaceAssetConflicts({ error });
+            continue;
           }
           if (isAuthenticationError(error)) {
             pendingWorkspaceAssetOperationsRef.current = null;
@@ -517,8 +580,8 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         }
       }
       pendingWorkspaceAssetOperationsRef.current = null;
-      setWorkspaceAssetStatus({ status: 'saved', conflict: null, error: null });
-      return { ok: true };
+      publishWorkspaceAssetConflicts({ status: 'saved', error: encounteredConflict ? undefined : null });
+      return encounteredConflict ? { ok: false, reason: 'conflict' } : { ok: true };
     } finally {
       workspaceAssetInFlightRef.current = false;
       if (mountedRef.current && workspaceAssetQueuedRef.current && !pendingWorkspaceAssetOperationsRef.current) {
@@ -529,27 +592,31 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         }, WORKSPACE_ASSET_DEBOUNCE_MS);
       }
     }
-  }, [client, demoteSession, setWorkspaceAssetStatus]);
+  }, [client, demoteSession, publishWorkspaceAssetConflicts, setWorkspaceAssetStatus]);
   performWorkspaceAssetSyncRef.current = performWorkspaceAssetSync;
 
   const queueWorkspaceAssetSync = useCallback(() => {
     workspaceAssetQueuedRef.current = true;
     if (!workspaceAssetsLoadedRef.current || sessionRef.current.status !== 'authenticated') return;
-    setWorkspaceAssetStatus({ status: onlineRef.current ? 'pending' : 'waiting', error: null });
+    if (workspaceAssetConflictsRef.current.size === WORKSPACE_ASSET_KINDS.length) {
+      publishWorkspaceAssetConflicts();
+      return;
+    }
+    publishWorkspaceAssetConflicts({ status: onlineRef.current ? 'pending' : 'waiting', error: null });
     clearTimeout(workspaceAssetTimerRef.current);
     if (!onlineRef.current || navigator.onLine === false) return;
     workspaceAssetTimerRef.current = setTimeout(() => {
       workspaceAssetQueuedRef.current = false;
       void performWorkspaceAssetSyncRef.current?.();
     }, WORKSPACE_ASSET_DEBOUNCE_MS);
-  }, [setWorkspaceAssetStatus]);
+  }, [publishWorkspaceAssetConflicts]);
 
   const loadWorkspaceAssets = useCallback(async ({ force = false, replaceLocal = false } = {}) => {
     if (!force && workspaceAssetsLoadedRef.current) return { ok: true, unchanged: true };
-    setWorkspaceAssetStatus({ status: 'loading', ready: false, conflict: null, error: null });
-    let localSnapshot;
+    const loadOperation = ++workspaceAssetLoadOperationRef.current;
+    setWorkspaceAssetStatus({ status: 'loading', ready: false, error: null });
     try {
-      localSnapshot = readWorkspaceAssets();
+      readWorkspaceAssets();
     } catch (error) {
       setWorkspaceAssetStatus({ status: 'error', ready: true, error: normalizeError(error) });
       return { ok: false, reason: 'local-assets-invalid', error };
@@ -566,53 +633,65 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         }
       }));
       if (!mountedRef.current) return { ok: false, reason: 'unmounted' };
-      let nextSnapshot = localSnapshot;
-      let bootstrapConflict = null;
+      if (loadOperation !== workspaceAssetLoadOperationRef.current) {
+        return { ok: false, reason: 'superseded' };
+      }
+      const currentSnapshot = readWorkspaceAssets();
+      let nextSnapshot = currentSnapshot;
+      let shouldSync = false;
+      const nextHeads = structuredClone(workspaceAssetHeadsRef.current);
+      const nextConflicts = replaceLocal
+        ? new Map()
+        : new Map(workspaceAssetConflictsRef.current);
       for (const [kind, remote] of remoteEntries) {
+        const localValue = workspaceAssetValue(currentSnapshot, kind);
+        const localValueHash = canonicalJson(localValue);
+        const acknowledged = workspaceAssetHeadsRef.current[kind];
+        const localIsDirty = localValueHash !== acknowledged.valueHash;
         if (remote) {
-          const localValue = workspaceAssetValue(localSnapshot, kind);
-          const localValueHash = canonicalJson(localValue);
           const remoteValueHash = canonicalJson(remote.value);
-          const acknowledgedValueHash = workspaceAssetHeadsRef.current[kind].valueHash;
-          const localIsDirty = localValueHash !== acknowledgedValueHash;
-          if (!replaceLocal && localIsDirty && localValueHash !== remoteValueHash && !bootstrapConflict) {
-            bootstrapConflict = {
-              kind,
-              localValue: structuredClone(localValue),
-              remote: structuredClone(remote),
-            };
-          } else {
+          if (replaceLocal || !localIsDirty || localValueHash === remoteValueHash) {
             nextSnapshot = applyWorkspaceAssetValue(nextSnapshot, kind, remote.value);
+            nextHeads[kind] = { revision: remote.revision, valueHash: remoteValueHash };
+            nextConflicts.delete(kind);
+          } else if (remote.revision === acknowledged.revision) {
+            // The online head has not advanced; this is a valid local/offline edit.
+            nextConflicts.delete(kind);
+            shouldSync = true;
+          } else {
+            nextConflicts.set(kind, {
+              kind,
+              remote: structuredClone(remote),
+            });
           }
-          workspaceAssetHeadsRef.current[kind] = {
-            revision: remote.revision,
-            valueHash: remoteValueHash,
-          };
         } else {
-          workspaceAssetHeadsRef.current[kind] = {
-            revision: 0,
-            valueHash: canonicalJson(emptyWorkspaceAssetValue(kind)),
-          };
+          const emptyHash = canonicalJson(emptyWorkspaceAssetValue(kind));
+          nextHeads[kind] = { revision: 0, valueHash: emptyHash };
+          nextConflicts.delete(kind);
+          if (localValueHash !== emptyHash) shouldSync = true;
         }
       }
+      if (loadOperation !== workspaceAssetLoadOperationRef.current) {
+        return { ok: false, reason: 'superseded' };
+      }
+      writeWorkspaceAssets(nextSnapshot, undefined, { dispatch: false });
+      workspaceAssetHeadsRef.current = nextHeads;
+      workspaceAssetConflictsRef.current = nextConflicts;
       writeWorkspaceAssetHeads(workspaceAssetHeadsRef.current);
       workspaceAssetsLoadedRef.current = true;
-      if (bootstrapConflict) {
-        setWorkspaceAssets(current => ({
-          ...current,
-          status: 'conflict',
+      if (nextConflicts.size) {
+        publishWorkspaceAssetConflicts({
           ready: true,
-          conflict: bootstrapConflict,
           error: new CloudLibraryError(
             'revision_conflict',
             'Workspace assets differ from the online library.',
             { status: 409 },
           ),
-          generation: current.generation + 1,
-        }));
+        });
+        setWorkspaceAssets(current => ({ ...current, generation: current.generation + 1 }));
+        if (shouldSync) queueWorkspaceAssetSync();
         return { ok: false, reason: 'conflict' };
       }
-      writeWorkspaceAssets(nextSnapshot, undefined, { dispatch: false });
       setWorkspaceAssets(current => ({
         ...current,
         status: 'saved',
@@ -621,11 +700,14 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         error: null,
         generation: current.generation + 1,
       }));
-      queueWorkspaceAssetSync();
+      if (shouldSync) queueWorkspaceAssetSync();
       return { ok: true };
     } catch (rawError) {
       const error = normalizeError(rawError);
       if (!mountedRef.current) return { ok: false, reason: 'unmounted', error };
+      if (loadOperation !== workspaceAssetLoadOperationRef.current) {
+        return { ok: false, reason: 'superseded', error };
+      }
       if (isAuthenticationError(error)) demoteSession(error);
       const status = isTransientError(error) || navigator.onLine === false ? 'waiting' : 'error';
       setWorkspaceAssetStatus({ status, ready: true, error });
@@ -637,7 +719,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       }
       return { ok: false, reason: error.state, error };
     }
-  }, [client, demoteSession, queueWorkspaceAssetSync, setWorkspaceAssetStatus]);
+  }, [client, demoteSession, publishWorkspaceAssetConflicts, queueWorkspaceAssetSync, setWorkspaceAssetStatus]);
   loadWorkspaceAssetsRef.current = loadWorkspaceAssets;
 
   const refreshProjects = useCallback(async () => {
@@ -1227,10 +1309,13 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     if (!isLibraryBackup(candidate)) return { ok: false, reason: 'invalid' };
     try {
       const summary = await client.restoreBackup(candidate);
-      await Promise.all([
+      const [, assetsResult] = await Promise.all([
         refreshProjects(),
         loadWorkspaceAssets({ force: true, replaceLocal: true }),
       ]);
+      if (!assetsResult?.ok) {
+        return { ok: false, reason: assetsResult?.reason || 'asset-refresh', error: assetsResult?.error };
+      }
       return { ok: true, summary };
     } catch (error) {
       const normalized = handleLibraryError(error);
@@ -1244,10 +1329,11 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     if (action !== 'keep-both') return { ok: false, reason: 'unknown-action' };
     try {
       const snapshot = readWorkspaceAssets();
+      const localValue = workspaceAssetValue(snapshot, currentConflict.kind);
       const mergedValue = mergeWorkspaceAssetConflict(
         currentConflict.kind,
         currentConflict.remote.value,
-        currentConflict.localValue,
+        localValue,
       );
       const mergedSnapshot = applyWorkspaceAssetValue(snapshot, currentConflict.kind, mergedValue);
       writeWorkspaceAssets(mergedSnapshot, undefined, { dispatch: false });
@@ -1256,21 +1342,19 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         valueHash: canonicalJson(currentConflict.remote.value),
       };
       writeWorkspaceAssetHeads(workspaceAssetHeadsRef.current);
-      pendingWorkspaceAssetOperationsRef.current = null;
-      setWorkspaceAssets(current => ({
-        ...current,
-        status: 'pending',
-        conflict: null,
-        error: null,
-        generation: current.generation + 1,
-      }));
+      workspaceAssetConflictsRef.current.delete(currentConflict.kind);
+      const remainingOperations = (pendingWorkspaceAssetOperationsRef.current || [])
+        .filter(operation => operation.kind !== currentConflict.kind);
+      pendingWorkspaceAssetOperationsRef.current = remainingOperations.length ? remainingOperations : null;
+      publishWorkspaceAssetConflicts({ status: 'pending', error: null });
+      setWorkspaceAssets(current => ({ ...current, generation: current.generation + 1 }));
       return performWorkspaceAssetSync();
     } catch (error) {
       const normalized = normalizeError(error);
       setWorkspaceAssetStatus({ status: 'error', error: normalized });
       return { ok: false, reason: normalized.state, error: normalized };
     }
-  }, [performWorkspaceAssetSync, setWorkspaceAssetStatus, workspaceAssets.conflict]);
+  }, [performWorkspaceAssetSync, publishWorkspaceAssetConflicts, setWorkspaceAssetStatus, workspaceAssets.conflict]);
 
   const claimBrowserProjects = useCallback(async () => {
     const claimedIds = readClaimedBrowserProjectIds();
