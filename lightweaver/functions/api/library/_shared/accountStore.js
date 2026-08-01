@@ -90,6 +90,13 @@ function accountIdentity(row) {
   };
 }
 
+function authenticatedLogin(row) {
+  return {
+    identity: accountIdentity(row),
+    observedGeneration: row.session_generation,
+  };
+}
+
 function isoTimestamp(value) {
   const date = value instanceof Date ? value : new Date(value);
   if (!Number.isFinite(date.getTime())) throw new Error('The account clock returned an invalid date.');
@@ -266,12 +273,19 @@ export function createAccountStore(repository, options = {}) {
         updated_at: current,
       });
     }
-    return accountIdentity(await requireAccount(account.id));
+    return authenticatedLogin(account);
   }
 
   async function createSession(accountId, sessionOptions = {}) {
     const account = await requireAccount(accountId);
     if (account.status !== 'active') fail('account_disabled', 'The account is disabled.', 403);
+    const expectedGeneration = sessionOptions.expectedGeneration;
+    if (!Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0) {
+      fail('invalid_request', 'An authenticated account generation is required.', 400);
+    }
+    if (expectedGeneration !== account.session_generation) {
+      fail('session_state_changed', 'The account security state changed. Sign in again.', 409);
+    }
     const ttlSeconds = positiveInteger(
       sessionOptions.ttlSeconds,
       sessionTtlSeconds,
@@ -283,11 +297,11 @@ export function createAccountStore(repository, options = {}) {
     const inserted = await repository.insertSessionForCurrentGeneration({
       token_hash: credential.digest,
       account_id: account.id,
-      account_generation: account.session_generation,
+      account_generation: expectedGeneration,
       created_at: createdAt,
       expires_at: expiresAt,
       revoked_at: null,
-    }, account.session_generation);
+    }, expectedGeneration);
     if (!inserted) {
       fail('session_state_changed', 'The account security state changed. Sign in again.', 409);
     }

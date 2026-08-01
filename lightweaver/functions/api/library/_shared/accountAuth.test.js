@@ -88,6 +88,13 @@ async function createWorker(accounts, overrides = {}) {
   });
 }
 
+function createInitialSession(accounts, account, options = {}) {
+  return accounts.createSession(account.id, {
+    ...options,
+    expectedGeneration: 0,
+  });
+}
+
 test('creates and verifies a versioned password hash without storing plaintext', async () => {
   assert.ok(PRODUCTION_PBKDF2_ITERATIONS >= 100_000);
   const encoded = await hashPassword('temporary-passphrase', { iterations: TEST_ITERATIONS });
@@ -184,12 +191,12 @@ test('applies a short failed-login lockout and clears failures after success', a
   }), { code: 'invalid_credentials' });
 
   clock.advance(30_001);
-  const identity = await accounts.verifyLogin({
+  const authenticated = await accounts.verifyLogin({
     username: ' WORKSHOP ',
     password: 'temporary-passphrase',
   });
-  assert.equal(identity.role, 'worker');
-  assert.equal(identity.mustChangePassword, true);
+  assert.equal(authenticated.identity.role, 'worker');
+  assert.equal(authenticated.identity.mustChangePassword, true);
 });
 
 test('atomically counts concurrent failed logins toward the lockout', async () => {
@@ -209,7 +216,7 @@ test('atomically counts concurrent failed logins toward the lockout', async () =
   assert.equal((await accounts.verifyLogin({
     username: 'workshop',
     password: 'temporary-passphrase',
-  })).role, 'worker');
+  })).identity.role, 'worker');
 });
 
 test('does one comparable password derivation for every rejected login state', async () => {
@@ -252,7 +259,7 @@ test('a cold account store does only one derivation for an unknown login', async
 test('persists only a session digest and authenticates active unexpired sessions', async () => {
   const { accounts, repository } = setup();
   const worker = await createWorker(accounts);
-  const session = await accounts.createSession(worker.id);
+  const session = await createInitialSession(accounts, worker);
   const storedSessions = repository.snapshot().sessions;
 
   assert.deepEqual(Object.keys(session).sort(), ['expiresAt', 'token']);
@@ -299,7 +306,7 @@ test('session inserts cannot race past account security mutations', async t => {
       const { accounts } = setup({ repository });
       const worker = await createWorker(accounts);
 
-      const pendingSession = accounts.createSession(worker.id);
+      const pendingSession = createInitialSession(accounts, worker);
       await insertStarted;
       await mutate(accounts, worker.id);
       releaseInsert();
@@ -322,21 +329,42 @@ test('authentication rejects a session captured from an older account generation
   };
   const { accounts } = setup({ repository });
   const worker = await createWorker(accounts);
-  const session = await accounts.createSession(worker.id);
+  const session = await createInitialSession(accounts, worker);
 
   returnStaleGeneration = true;
   assert.equal(await accounts.authenticateSession(session.token), null);
+});
+
+test('session creation binds to the generation whose password was verified', async () => {
+  const { accounts, repository } = setup();
+  const worker = await createWorker(accounts);
+  const authenticated = await accounts.verifyLogin({
+    username: worker.username,
+    password: 'temporary-passphrase',
+  });
+
+  assert.equal(typeof authenticated.observedGeneration, 'number');
+  assert.equal('observedGeneration' in authenticated.identity, false);
+  await accounts.resetPassword({
+    id: worker.id,
+    temporaryPassword: 'replacement-passphrase',
+  });
+
+  await assert.rejects(accounts.createSession(authenticated.identity.accountId, {
+    expectedGeneration: authenticated.observedGeneration,
+  }), { code: 'session_state_changed' });
+  assert.equal(repository.snapshot().sessions.length, 0);
 });
 
 test('denies expired or disabled sessions and revokes sessions on role changes', async () => {
   const { accounts, clock } = setup();
   const worker = await createWorker(accounts);
 
-  const expired = await accounts.createSession(worker.id, { ttlSeconds: 1 });
+  const expired = await createInitialSession(accounts, worker, { ttlSeconds: 1 });
   clock.advance(1_001);
   assert.equal(await accounts.authenticateSession(expired.token), null);
 
-  const disabled = await accounts.createSession(worker.id);
+  const disabled = await createInitialSession(accounts, worker);
   const disabledAccount = await accounts.setAccountStatus({ id: worker.id, status: 'disabled' });
   assert.equal(disabledAccount.status, 'disabled');
   assert.equal(await accounts.authenticateSession(disabled.token), null);
@@ -346,7 +374,13 @@ test('denies expired or disabled sessions and revokes sessions on role changes',
   }), { code: 'invalid_credentials' });
 
   await accounts.setAccountStatus({ id: worker.id, status: 'active' });
-  const changedRole = await accounts.createSession(worker.id);
+  const activeLogin = await accounts.verifyLogin({
+    username: worker.username,
+    password: 'temporary-passphrase',
+  });
+  const changedRole = await accounts.createSession(worker.id, {
+    expectedGeneration: activeLogin.observedGeneration,
+  });
   const customer = await accounts.setAccountRole({ id: worker.id, role: 'customer' });
   assert.equal(customer.role, 'customer');
   assert.equal(await accounts.authenticateSession(changedRole.token), null);
@@ -355,7 +389,7 @@ test('denies expired or disabled sessions and revokes sessions on role changes',
 test('password reset revokes sessions and password change clears forced-change state', async () => {
   const { accounts } = setup();
   const worker = await createWorker(accounts);
-  const beforeReset = await accounts.createSession(worker.id);
+  const beforeReset = await createInitialSession(accounts, worker);
 
   const reset = await accounts.resetPassword({
     id: worker.id,
@@ -363,12 +397,15 @@ test('password reset revokes sessions and password change clears forced-change s
   });
   assert.equal(reset.mustChangePassword, true);
   assert.equal(await accounts.authenticateSession(beforeReset.token), null);
-  assert.equal((await accounts.verifyLogin({
+  const resetLogin = await accounts.verifyLogin({
     username: worker.username,
     password: 'reset-passphrase-123',
-  })).accountId, worker.id);
+  });
+  assert.equal(resetLogin.identity.accountId, worker.id);
 
-  const beforeChange = await accounts.createSession(worker.id);
+  const beforeChange = await accounts.createSession(worker.id, {
+    expectedGeneration: resetLogin.observedGeneration,
+  });
   const changed = await accounts.changePassword({
     accountId: worker.id,
     newPassword: 'personal-passphrase-456',
@@ -378,7 +415,7 @@ test('password reset revokes sessions and password change clears forced-change s
   assert.equal((await accounts.verifyLogin({
     username: worker.username,
     password: 'personal-passphrase-456',
-  })).accountId, worker.id);
+  })).identity.accountId, worker.id);
 });
 
 test('a failed atomic reset leaves both the old password and sessions intact', async () => {
@@ -392,7 +429,7 @@ test('a failed atomic reset leaves both the old password and sessions intact', a
     },
   }).accounts;
   const worker = await createWorker(accounts);
-  const session = await accounts.createSession(worker.id);
+  const session = await createInitialSession(accounts, worker);
 
   await assert.rejects(accounts.resetPassword({
     id: worker.id,
@@ -401,7 +438,7 @@ test('a failed atomic reset leaves both the old password and sessions intact', a
   assert.equal((await accounts.verifyLogin({
     username: worker.username,
     password: 'temporary-passphrase',
-  })).accountId, worker.id);
+  })).identity.accountId, worker.id);
   assert.equal((await accounts.authenticateSession(session.token)).accountId, worker.id);
 });
 
@@ -481,7 +518,13 @@ test('D1 applies account migrations and preserves atomic lockout and reset behav
   assert.equal(typeof locked.locked_until, 'string');
 
   clock.advance(30_001);
-  const session = await accounts.createSession(worker.id);
+  const login = await accounts.verifyLogin({
+    username: worker.username,
+    password: 'temporary-passphrase',
+  });
+  const session = await accounts.createSession(worker.id, {
+    expectedGeneration: login.observedGeneration,
+  });
   await db.prepare(`
     CREATE TRIGGER fail_session_revocation
     BEFORE UPDATE OF revoked_at ON account_sessions
@@ -494,6 +537,6 @@ test('D1 applies account migrations and preserves atomic lockout and reset behav
   assert.equal((await accounts.verifyLogin({
     username: worker.username,
     password: 'temporary-passphrase',
-  })).accountId, worker.id);
+  })).identity.accountId, worker.id);
   assert.equal((await accounts.authenticateSession(session.token)).accountId, worker.id);
 });
