@@ -41,6 +41,8 @@ async function call(store, {
   path = '/projects',
   body,
   requestId = crypto.randomUUID(),
+  maxBytes = MAX_BYTES,
+  maxBackupBytes,
 } = {}) {
   const hasBody = body !== undefined;
   const response = await handleLibraryRequest({
@@ -53,7 +55,8 @@ async function call(store, {
     }),
     identity: role ? { email, role, subject: `${role}-subject` } : null,
     store,
-    maxBytes: MAX_BYTES,
+    maxBytes,
+    maxBackupBytes,
   });
   const payload = await response.json();
   assert.equal(response.headers.get('cache-control'), 'no-store');
@@ -363,9 +366,92 @@ test('validation rejects future projects, malformed backup envelopes, and oversi
     error => error.code === 'payload_too_large',
   );
   assert.throws(
-    () => validateMasterBackup({ format: LIBRARY_BACKUP_FORMAT, version: 2 }, { maxBytes: MAX_BYTES }),
+    () => validateMasterBackup(
+      { format: LIBRARY_BACKUP_FORMAT, version: 2 },
+      { maxBackupBytes: MAX_BYTES, maxEntryBytes: MAX_BYTES },
+    ),
     error => error.code === 'invalid_backup',
   );
+});
+
+test('master restore rejects duplicate workspace asset kinds without counting or overwriting them', async () => {
+  const store = createMemoryLibraryStore();
+  const duplicateAsset = {
+    kind: 'custom-patterns',
+    currentRevision: 1,
+    revisions: [{ revision: 1, value: { patterns: [] } }],
+  };
+  const backup = {
+    format: LIBRARY_BACKUP_FORMAT,
+    version: LIBRARY_BACKUP_VERSION,
+    exportedAt: '2026-08-01T00:00:00.000Z',
+    projects: [],
+    workspaceAssets: [duplicateAsset, structuredClone(duplicateAsset)],
+  };
+
+  const restored = await call(store, { method: 'POST', path: '/restore', body: backup });
+  assert.equal(restored.response.status, 400);
+  assert.equal(restored.payload.error.code, 'invalid_backup');
+  assert.equal((await call(store, { path: '/assets/custom-patterns' })).response.status, 404);
+});
+
+test('master backup enforces the normal per-revision limit separately from its whole-file limit', () => {
+  const backup = {
+    format: LIBRARY_BACKUP_FORMAT,
+    version: LIBRARY_BACKUP_VERSION,
+    exportedAt: '2026-08-01T00:00:00.000Z',
+    projects: [],
+    workspaceAssets: [{
+      kind: 'custom-patterns',
+      currentRevision: 1,
+      revisions: [{ revision: 1, value: { source: 'x'.repeat(600) } }],
+    }],
+  };
+  assert.ok(Buffer.byteLength(JSON.stringify(backup)) < 4096);
+
+  assert.throws(
+    () => validateMasterBackup(backup, { maxBackupBytes: 4096, maxEntryBytes: 256 }),
+    error => error.code === 'payload_too_large' && error.status === 413,
+  );
+});
+
+test('router rejects master backups over the default 8 MiB cap before calling the store', async () => {
+  let importCalls = 0;
+  const store = {
+    importBackup: async () => {
+      importCalls += 1;
+      return { projectsCreated: 0, assetsCreated: 0 };
+    },
+  };
+  const largeProject = portableProject();
+  largeProject.padding = 'x'.repeat(1_700_000);
+  const backup = {
+    format: LIBRARY_BACKUP_FORMAT,
+    version: LIBRARY_BACKUP_VERSION,
+    exportedAt: '2026-08-01T00:00:00.000Z',
+    projects: [{
+      id: 'large-backup',
+      title: 'Large backup',
+      archived: false,
+      currentRevision: 5,
+      revisions: Array.from({ length: 5 }, (_, index) => ({
+        revision: index + 1,
+        document: largeProject,
+      })),
+    }],
+    workspaceAssets: [],
+  };
+  assert.ok(Buffer.byteLength(JSON.stringify(backup)) > 8 * 1024 * 1024);
+
+  const restored = await call(store, {
+    method: 'POST',
+    path: '/restore',
+    body: backup,
+    maxBytes: 2 * 1024 * 1024,
+  });
+  assert.equal(restored.response.status, 413);
+  assert.equal(restored.payload.error.code, 'payload_too_large');
+  assert.equal(importCalls, 0);
 });
 
 test('reusing an accepted idempotency key is rejected without a second mutation', async () => {

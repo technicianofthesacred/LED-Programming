@@ -78,7 +78,7 @@ Expose these stable interfaces:
 ```js
 export function validatePortableProject(value, { maxBytes }) {}
 export function validateWorkspaceAsset(kind, value, { maxBytes }) {}
-export function validateMasterBackup(value, { maxBytes }) {}
+export function validateMasterBackup(value, { maxBackupBytes, maxEntryBytes }) {}
 export function createMemoryLibraryStore(seed = {}) {}
 ```
 
@@ -147,7 +147,7 @@ Use conditional revision updates. Write unique immutable R2 objects before commi
 
 - [ ] **Step 4: Add the additive D1 schema and Wrangler bindings**
 
-Create tables for projects, project revisions, asset heads, asset revisions, and library imports. Include foreign keys, unique `(project_id, revision)` and `(asset_kind, revision)` constraints, archive/deletion timestamps, hash/byte length, actor identity, and idempotency keys. Configure `PROJECTS_DB`, `PROJECT_BLOBS`, `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `OWNER_EMAILS`, and `MAX_LIBRARY_BODY_BYTES` without committing real IDs or identities to source; local tests receive deterministic test configuration.
+Create tables for projects, project revisions, asset heads, asset revisions, and library imports. Include foreign keys, unique `(project_id, revision)` and `(asset_kind, revision)` constraints, archive/deletion timestamps, an archived-state field on every project revision for immutable archive history, hash/byte length, actor identity, and idempotency keys. Configure `PROJECTS_DB`, `PROJECT_BLOBS`, `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `OWNER_EMAILS`, and `MAX_LIBRARY_BODY_BYTES` without committing real IDs or identities to source; local tests receive deterministic test configuration.
 
 - [ ] **Step 5: Add local binding smoke and scripts**
 

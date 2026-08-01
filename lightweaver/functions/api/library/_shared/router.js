@@ -1,4 +1,5 @@
 import {
+  DEFAULT_MAX_BACKUP_BYTES,
   LibraryValidationError,
   validateAssetKind,
   validateBaseRevision,
@@ -96,6 +97,7 @@ export async function handleLibraryRequest({
   identity,
   store,
   maxBytes = DEFAULT_MAX_BYTES,
+  maxBackupBytes = DEFAULT_MAX_BACKUP_BYTES,
 }) {
   const requestId = requestIdentifier(request);
   try {
@@ -239,8 +241,11 @@ export async function handleLibraryRequest({
 
     if (segments.length === 1 && segments[0] === 'restore') {
       if (method !== 'POST') return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);
-      const body = await readJson(request, maxBytes * 32);
-      const backup = validateMasterBackup(body, { maxBytes: maxBytes * 32 });
+      const body = await readJson(request, maxBackupBytes);
+      const backup = validateMasterBackup(body, {
+        maxBackupBytes,
+        maxEntryBytes: maxBytes,
+      });
       const summary = await store.importBackup({
         backup,
         ...mutationContext(identity, requestId),

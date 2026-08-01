@@ -5,6 +5,7 @@ import {
 } from './backup.js';
 
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
+export const DEFAULT_MAX_BACKUP_BYTES = 8 * 1024 * 1024;
 const MAX_JSON_DEPTH = 64;
 const MAX_BACKUP_ENTRIES = 10_000;
 const WORKSPACE_ASSET_KINDS = new Set(['custom-patterns', 'pattern-lab-drafts']);
@@ -132,8 +133,11 @@ function validateBackupAsset(entry, maxBytes) {
   return { kind: entry.kind, currentRevision, revisions };
 }
 
-export function validateMasterBackup(value, { maxBytes = 32 * DEFAULT_MAX_BYTES } = {}) {
-  const clone = assertBoundedJson(value, maxBytes);
+export function validateMasterBackup(value, {
+  maxBackupBytes = DEFAULT_MAX_BACKUP_BYTES,
+  maxEntryBytes = DEFAULT_MAX_BYTES,
+} = {}) {
+  const clone = assertBoundedJson(value, maxBackupBytes);
   if (!isRecord(clone)
     || clone.format !== LIBRARY_BACKUP_FORMAT
     || clone.version !== LIBRARY_BACKUP_VERSION
@@ -144,12 +148,19 @@ export function validateMasterBackup(value, { maxBytes = 32 * DEFAULT_MAX_BYTES 
     || clone.projects.length + clone.workspaceAssets.length > MAX_BACKUP_ENTRIES) {
     fail('invalid_backup', 'The file is not a supported Lightweaver library backup.');
   }
+  const assetKinds = new Set();
+  for (const entry of clone.workspaceAssets) {
+    if (assetKinds.has(entry?.kind)) {
+      fail('invalid_backup', 'The library backup contains a duplicate workspace asset kind.');
+    }
+    assetKinds.add(entry?.kind);
+  }
   return {
     format: LIBRARY_BACKUP_FORMAT,
     version: LIBRARY_BACKUP_VERSION,
     exportedAt: clone.exportedAt,
-    projects: clone.projects.map(entry => validateBackupProject(entry, maxBytes)),
-    workspaceAssets: clone.workspaceAssets.map(entry => validateBackupAsset(entry, maxBytes)),
+    projects: clone.projects.map(entry => validateBackupProject(entry, maxEntryBytes)),
+    workspaceAssets: clone.workspaceAssets.map(entry => validateBackupAsset(entry, maxEntryBytes)),
   };
 }
 

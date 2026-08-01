@@ -1,5 +1,6 @@
 import { createLibraryBackup } from './backup.js';
 import {
+  DEFAULT_MAX_BACKUP_BYTES,
   validateBaseRevision,
   validateMasterBackup,
   validatePortableProject,
@@ -358,7 +359,10 @@ export function createMemoryLibraryStore(seed = {}) {
 
   async function importBackup({ backup, actor, idempotencyKey }) {
     requireUnusedKey(idempotencyKey);
-    const normalized = validateMasterBackup(backup, { maxBytes: maxBytes * 32 });
+    const normalized = validateMasterBackup(backup, {
+      maxBackupBytes: DEFAULT_MAX_BACKUP_BYTES,
+      maxEntryBytes: maxBytes,
+    });
     const occupiedRemoteIds = new Set(projects.keys());
     const occupiedEmbeddedIds = new Set([...projects.values()].map(record => record.embeddedProjectId));
     const plans = [];
