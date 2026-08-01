@@ -83,6 +83,12 @@ function projectMarker(lifecycle) {
   };
 }
 
+function markerIsNewer(marker, acknowledgedMarker) {
+  if (!acknowledgedMarker) return true;
+  return marker.generation > acknowledgedMarker.generation
+    || (marker.generation === acknowledgedMarker.generation && marker.revision > acknowledgedMarker.revision);
+}
+
 function syncLabel(status) {
   if (status === 'saved') return 'Saved online';
   if (status === 'saving') return 'Saving online';
@@ -182,8 +188,25 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     return false;
   }, []);
 
+  const resumeAfterSupersededSave = useCallback(acknowledgedMarker => {
+    if (!mountedRef.current || conflictRef.current) return;
+    const currentMarker = projectMarker(lifecycleRef.current);
+    if (markerIsNewer(currentMarker, acknowledgedMarker)) {
+      queuedRef.current = true;
+      setSyncStatus('waiting');
+      setRefreshTick(value => value + 1);
+    } else if (acknowledgedMarker && markerKey(currentMarker) === markerKey(acknowledgedMarker)) {
+      queuedRef.current = false;
+      setSyncStatus('saved');
+    }
+  }, []);
+
   const setActiveRemote = useCallback((project, acknowledgedMarker = null) => {
-    if (!project || activeRemoteRef.current?.id !== project.id) {
+    const pending = pendingSaveOperationRef.current;
+    const pendingWasSuperseded = Boolean(pending && project
+      && pending.remoteId === project.id
+      && pending.baseRevision !== project.revision);
+    if (!project || activeRemoteRef.current?.id !== project.id || pendingWasSuperseded) {
       pendingSaveOperationRef.current = null;
       queuedRef.current = false;
       clearTimeout(retryRef.current);
@@ -192,7 +215,8 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     setActiveRemoteProject(project);
     writeActiveRemoteAssociation(project);
     acknowledgedMarkerRef.current = acknowledgedMarker;
-  }, []);
+    if (pendingWasSuperseded) resumeAfterSupersededSave(acknowledgedMarker);
+  }, [resumeAfterSupersededSave]);
 
   const setCurrentConflict = useCallback(next => {
     conflictRef.current = next;
@@ -362,6 +386,11 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       requestId: mutationRequestId(),
     };
     if (operation.remoteId !== remote.id || operation.baseRevision !== remote.revision) {
+      if (pendingSaveOperationRef.current?.requestId === operation.requestId) {
+        pendingSaveOperationRef.current = null;
+        clearTimeout(retryRef.current);
+        resumeAfterSupersededSave(acknowledgedMarkerRef.current);
+      }
       return { ok: false, reason: 'replaced' };
     }
     inFlightRef.current = true;
@@ -462,7 +491,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
         setRefreshTick(value => value + 1);
       }
     }
-  }, [client, demoteSession, markProjectPersisted, setCurrentConflict]);
+  }, [client, demoteSession, markProjectPersisted, resumeAfterSupersededSave, setCurrentConflict]);
   performSaveRef.current = performSave;
 
   useEffect(() => {
