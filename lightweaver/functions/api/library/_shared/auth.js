@@ -1,6 +1,7 @@
-import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { createLocalJWKSet, createRemoteJWKSet, jwtVerify } from 'jose';
 
 const ACCESS_HEADER = 'Cf-Access-Jwt-Assertion';
+const LOCAL_AUTH_MODE = 'wrangler-pages-dev';
 
 function requiredSetting(env, name) {
   const value = typeof env?.[name] === 'string' ? env[name].trim() : '';
@@ -28,13 +29,30 @@ function ownerEmails(env) {
   return new Set(configured.split(',').map(value => value.trim().toLowerCase()).filter(Boolean));
 }
 
+export function isLocalAccessJwksRequest(request, env) {
+  if (env?.LIGHTWEAVER_LOCAL_AUTH !== LOCAL_AUTH_MODE || typeof env?.LOCAL_ACCESS_JWKS !== 'string') {
+    return false;
+  }
+  const hostname = new URL(request.url).hostname;
+  return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]';
+}
+
+function localAccessJwks(request, env) {
+  if (!isLocalAccessJwksRequest(request, env)) return null;
+  const document = JSON.parse(env.LOCAL_ACCESS_JWKS);
+  if (!document || !Array.isArray(document.keys) || document.keys.length === 0) {
+    throw new Error('LOCAL_ACCESS_JWKS must contain at least one signing key.');
+  }
+  return createLocalJWKSet(document);
+}
+
 export async function authenticateAccessRequest(request, env, { jwks } = {}) {
   const token = request.headers.get(ACCESS_HEADER);
   if (!token) throw new Error('The Cloudflare Access assertion is missing.');
 
   const issuer = accessIssuer(env);
   const audience = requiredSetting(env, 'ACCESS_AUD');
-  const verificationKey = jwks || createRemoteJWKSet(
+  const verificationKey = jwks || localAccessJwks(request, env) || createRemoteJWKSet(
     new URL(`${issuer}/cdn-cgi/access/certs`),
   );
   const { payload } = await jwtVerify(token, verificationKey, {

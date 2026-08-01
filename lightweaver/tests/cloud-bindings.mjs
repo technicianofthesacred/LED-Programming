@@ -19,6 +19,7 @@ import {
 
 import {
   authenticateAccessRequest,
+  isLocalAccessJwksRequest,
 } from '../functions/api/library/_shared/auth.js';
 import {
   createD1R2LibraryStore,
@@ -116,7 +117,8 @@ async function accessFixture() {
   publicJwk.alg = 'RS256';
   publicJwk.use = 'sig';
   publicJwk.kid = 'test-access-key';
-  const jwks = createLocalJWKSet({ keys: [publicJwk] });
+  const jwksDocument = { keys: [publicJwk] };
+  const jwks = createLocalJWKSet(jwksDocument);
 
   async function token({
     audience = ACCESS_ENV.ACCESS_AUD,
@@ -136,7 +138,7 @@ async function accessFixture() {
       .sign(key);
   }
 
-  return { jwks, privateKey, token };
+  return { jwks, jwksDocument, privateKey, token };
 }
 
 test('Access authentication validates signature, exact issuer/audience, expiry, and projects roles from normalized email', async () => {
@@ -192,6 +194,22 @@ test('Access authentication validates signature, exact issuer/audience, expiry, 
       ACCESS_TEAM_DOMAIN: `${ACCESS_ENV.ACCESS_TEAM_DOMAIN}/not-an-origin`,
     }, { jwks: fixture.jwks }),
   );
+});
+
+test('local JWKS mode requires both the Wrangler-only flag and a loopback request URL', () => {
+  const localEnv = { LIGHTWEAVER_LOCAL_AUTH: 'wrangler-pages-dev', LOCAL_ACCESS_JWKS: '{"keys":[]}' };
+  assert.equal(isLocalAccessJwksRequest(
+    new Request('http://127.0.0.1:8788/api/library/session'),
+    localEnv,
+  ), true);
+  assert.equal(isLocalAccessJwksRequest(
+    new Request('https://led.mandalacodes.com/api/library/session'),
+    localEnv,
+  ), false);
+  assert.equal(isLocalAccessJwksRequest(
+    new Request('http://localhost:8788/api/library/session'),
+    { ...localEnv, LIGHTWEAVER_LOCAL_AUTH: '' },
+  ), false);
 });
 
 test('Pages adapter returns a router no-store 503 when authenticated storage bindings are missing', async () => {
@@ -523,12 +541,106 @@ test('an R2 deletion failure returns a safe router failure and preserves project
   assert.equal(payload.error.code, 'internal_error');
   assert.equal('deleted' in payload, false);
   assert.doesNotMatch(JSON.stringify(payload), /secret details|delete-fails-closed/);
-  assert.ok(await db.prepare('SELECT id FROM projects WHERE id = ?').bind(created.id).first());
+  const tombstone = await db.prepare(
+    'SELECT id, deleted_at, deletion_idempotency_key FROM projects WHERE id = ?',
+  ).bind(created.id).first();
+  assert.ok(tombstone.deleted_at);
+  assert.equal(tombstone.deletion_idempotency_key, 'failed-delete-request');
   assert.equal(
     await db.prepare('SELECT COUNT(*) AS count FROM project_revisions WHERE project_id = ?')
       .bind(created.id).first('count'),
     1,
   );
+  await assert.rejects(store.readProject({ id: created.id }), error => error.code === 'not_found');
+
+  const retryStore = createD1R2LibraryStore({ PROJECTS_DB: db, PROJECT_BLOBS: bucket });
+  assert.deepEqual(await retryStore.deleteProject({
+    id: created.id,
+    baseRevision: 1,
+    actor: identity,
+    idempotencyKey: 'failed-delete-request',
+  }), { deleted: true });
+  assert.equal(await db.prepare('SELECT id FROM projects WHERE id = ?').bind(created.id).first(), null);
+});
+
+test('a competing same-base delete that loses the tombstone CAS performs zero R2 deletes', async t => {
+  const { mf, db, bucket } = await localBindings();
+  t.after(() => mf.dispose());
+  let deleteCalls = 0;
+  const trackingBucket = {
+    get: (...args) => bucket.get(...args),
+    head: (...args) => bucket.head(...args),
+    list: (...args) => bucket.list(...args),
+    put: (...args) => bucket.put(...args),
+    async delete(...args) {
+      deleteCalls += 1;
+      return bucket.delete(...args);
+    },
+  };
+  const store = createD1R2LibraryStore({ PROJECTS_DB: db, PROJECT_BLOBS: trackingBucket });
+  const actor = { email: 'owner@example.test', role: 'owner', subject: 'owner-1' };
+  const created = await store.createProject({
+    title: 'Delete race',
+    project: portableProject({ id: 'delete-race' }),
+    actor,
+    idempotencyKey: 'delete-race-create',
+  });
+
+  const settled = await Promise.allSettled([
+    store.deleteProject({
+      id: created.id, baseRevision: 1, actor, idempotencyKey: 'delete-race-a',
+    }),
+    store.deleteProject({
+      id: created.id, baseRevision: 1, actor, idempotencyKey: 'delete-race-b',
+    }),
+  ]);
+  assert.deepEqual(settled.map(result => result.status).sort(), ['fulfilled', 'rejected']);
+  assert.equal(settled.find(result => result.status === 'rejected').reason.code, 'revision_conflict');
+  assert.equal(deleteCalls, 1);
+});
+
+test('failed D1 finalization leaves an unserved tombstone that the same delete can safely finish', async t => {
+  const { mf, db, bucket } = await localBindings();
+  t.after(() => mf.dispose());
+  const actor = { email: 'owner@example.test', role: 'owner', subject: 'owner-1' };
+  const setupStore = createD1R2LibraryStore({ PROJECTS_DB: db, PROJECT_BLOBS: bucket });
+  const created = await setupStore.createProject({
+    title: 'Finalize retry',
+    project: portableProject({ id: 'finalize-retry' }),
+    actor,
+    idempotencyKey: 'finalize-create',
+  });
+  let batches = 0;
+  const failingDb = {
+    prepare: (...args) => db.prepare(...args),
+    async batch(statements) {
+      batches += 1;
+      if (batches === 2) throw new Error('injected final D1 failure');
+      return db.batch(statements);
+    },
+  };
+  const failingStore = createD1R2LibraryStore({ PROJECTS_DB: failingDb, PROJECT_BLOBS: bucket });
+  await assert.rejects(failingStore.deleteProject({
+    id: created.id,
+    baseRevision: 1,
+    actor,
+    idempotencyKey: 'finalize-delete',
+  }), /injected final D1 failure/);
+  assert.equal((await bucket.list({ prefix: `projects/${created.id}/` })).objects.length, 0);
+  const tombstone = await db.prepare(
+    'SELECT deleted_at, deletion_idempotency_key FROM projects WHERE id = ?',
+  ).bind(created.id).first();
+  assert.ok(tombstone.deleted_at);
+  assert.equal(tombstone.deletion_idempotency_key, 'finalize-delete');
+  await assert.rejects(setupStore.readProject({ id: created.id }), error => error.code === 'not_found');
+
+  assert.deepEqual(await setupStore.deleteProject({
+    id: created.id,
+    baseRevision: 1,
+    actor,
+    idempotencyKey: 'finalize-delete',
+  }), { deleted: true });
+  assert.equal(await db.prepare('SELECT id FROM projects WHERE id = ?').bind(created.id).first(), null);
 });
 
 test('a failed multi-object import best-effort removes every object written before metadata', async t => {
@@ -579,6 +691,8 @@ test('Wrangler applies local migrations and serves the deployed Pages catch-all 
   const state = join(root, 'state');
   const site = join(root, 'site');
   await mkdir(site, { recursive: true });
+  const fixture = await accessFixture();
+  const jwt = await fixture.token();
   let child;
   try {
     const migration = await runWrangler([
@@ -605,6 +719,11 @@ test('Wrangler applies local migrations and serves the deployed Pages catch-all 
       '--port', String(port),
       '--log-level', 'error',
       '--show-interactive-dev-session=false',
+      '--binding', 'LIGHTWEAVER_LOCAL_AUTH=wrangler-pages-dev',
+      '--binding', `LOCAL_ACCESS_JWKS=${JSON.stringify(fixture.jwksDocument)}`,
+      '--binding', `ACCESS_TEAM_DOMAIN=${ACCESS_ENV.ACCESS_TEAM_DOMAIN}`,
+      '--binding', `ACCESS_AUD=${ACCESS_ENV.ACCESS_AUD}`,
+      '--binding', `OWNER_EMAILS=${ACCESS_ENV.OWNER_EMAILS}`,
     ], {
       cwd: PROJECT_DIR,
       env: { ...process.env, CI: '1', NO_COLOR: '1', WRANGLER_SEND_METRICS: 'false' },
@@ -623,6 +742,46 @@ test('Wrangler applies local migrations and serves the deployed Pages catch-all 
     assert.equal(response.headers.get('cache-control'), 'no-store');
     assert.equal(payload.error.code, 'unauthenticated');
     assert.equal(child.exitCode, null);
+
+    const authHeaders = { 'Cf-Access-Jwt-Assertion': jwt };
+    const createdResponse = await fetch(`http://127.0.0.1:${port}/api/library/projects`, {
+      method: 'POST',
+      headers: {
+        ...authHeaders,
+        'content-type': 'application/json',
+        'x-lightweaver-request': 'served-create',
+      },
+      body: JSON.stringify({
+        title: 'Served Pages project',
+        project: portableProject({ id: 'served-pages-project' }),
+      }),
+    });
+    const created = await createdResponse.json();
+    assert.equal(createdResponse.status, 201);
+    const projectId = created.project.id;
+
+    const readResponse = await fetch(
+      `http://127.0.0.1:${port}/api/library/projects/${projectId}`,
+      { headers: authHeaders },
+    );
+    const opened = await readResponse.json();
+    assert.equal(readResponse.status, 200);
+    assert.equal(opened.project.document.id, 'served-pages-project');
+
+    const deleteResponse = await fetch(
+      `http://127.0.0.1:${port}/api/library/projects/${projectId}`,
+      {
+        method: 'DELETE',
+        headers: {
+          ...authHeaders,
+          'content-type': 'application/json',
+          'x-lightweaver-request': 'served-worker-delete',
+        },
+        body: JSON.stringify({ baseRevision: 1, confirmation: 'DELETE' }),
+      },
+    );
+    assert.equal(deleteResponse.status, 403);
+    assert.equal((await deleteResponse.json()).error.code, 'forbidden');
   } finally {
     if (child) await stopChild(child);
     await rm(root, { recursive: true, force: true });
@@ -650,11 +809,13 @@ test('binding config, migration, route manifest, and package scripts are local-s
   assert.match(migration, /UNIQUE\s*\(asset_kind,\s*revision\)/i);
   assert.match(migration, /archived[^,\n]*NOT NULL/i);
   assert.match(migration, /deleted_at/i);
+  assert.match(migration, /deletion_idempotency_key\s+TEXT\s+UNIQUE/i);
   assert.match(wrangler, /binding\s*=\s*"PROJECTS_DB"/);
   assert.match(wrangler, /binding\s*=\s*"PROJECT_BLOBS"/);
   assert.match(wrangler, /ACCESS_TEAM_DOMAIN\s*=\s*""/);
   assert.match(wrangler, /ACCESS_AUD\s*=\s*""/);
   assert.match(wrangler, /OWNER_EMAILS\s*=\s*""/);
+  assert.doesNotMatch(wrangler, /LOCAL_ACCESS_JWKS|LIGHTWEAVER_LOCAL_AUTH/);
   assert.doesNotMatch(wrangler, /database_id\s*=|preview_database_id\s*=/);
 
   const pkg = JSON.parse(packageText);

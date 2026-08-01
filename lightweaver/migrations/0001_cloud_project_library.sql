@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS projects (
   updated_at TEXT NOT NULL,
   created_by TEXT NOT NULL,
   last_editor TEXT NOT NULL,
-  deleted_at TEXT
+  deleted_at TEXT,
+  deletion_idempotency_key TEXT UNIQUE
 );
 
 CREATE TABLE IF NOT EXISTS project_revisions (

@@ -182,6 +182,10 @@ export function createD1R2LibraryStore(env, options = {}) {
     return row;
   }
 
+  async function anyProjectRow(id) {
+    return db.prepare('SELECT * FROM projects WHERE id = ?').bind(id).first();
+  }
+
   async function requireProjectHead(id, baseRevision) {
     validateBaseRevision(baseRevision);
     const row = await projectRow(id);
@@ -353,42 +357,91 @@ export function createD1R2LibraryStore(env, options = {}) {
   }
 
   async function deleteProject({ id, baseRevision, actor, idempotencyKey }) {
-    await unusedKey(idempotencyKey);
-    await requireProjectHead(id, baseRevision);
+    validateBaseRevision(baseRevision);
+    if (typeof idempotencyKey !== 'string' || !idempotencyKey) {
+      fail('invalid_request', 'An idempotency key is required.', 400);
+    }
+    let deletion = await anyProjectRow(id);
+    if (!deletion) {
+      if (await acceptedKey(idempotencyKey)) {
+        fail('idempotency_conflict', 'The idempotency key was already accepted.', 409);
+      }
+      fail('not_found', 'The requested project was not found.', 404);
+    }
+    if (deletion.deleted_at) {
+      if (deletion.deletion_idempotency_key !== idempotencyKey
+        || deletion.current_revision !== baseRevision) {
+        fail('revision_conflict', 'The project deletion is already in progress.', 409);
+      }
+    } else {
+      await unusedKey(idempotencyKey);
+      if (deletion.current_revision !== baseRevision) {
+        fail('revision_conflict', 'The project changed since it was opened.', 409);
+      }
+      const deletedAt = timestamp();
+      const tombstone = [
+        mutationStatement(db, {
+          actor,
+          conditionSql: 'EXISTS (SELECT 1 FROM projects WHERE id = ? AND current_revision = ? AND deleted_at IS NULL)',
+          conditionValues: [id, baseRevision],
+          idempotencyKey,
+          kind: 'delete-project',
+          timestamp: deletedAt,
+        }),
+        db.prepare(`
+          UPDATE projects SET
+            deleted_at = ?, deletion_idempotency_key = ?, updated_at = ?, last_editor = ?
+          WHERE id = ? AND current_revision = ? AND deleted_at IS NULL
+        `).bind(
+          deletedAt, idempotencyKey, deletedAt, actorEmail(actor), id, baseRevision,
+        ),
+      ];
+      try {
+        await db.batch(tombstone);
+      } catch (error) {
+        deletion = await anyProjectRow(id);
+        if (deletion?.deleted_at
+          && deletion.deletion_idempotency_key === idempotencyKey
+          && deletion.current_revision === baseRevision) {
+          // A concurrent retry with this same key won the tombstone CAS; resume cleanup.
+        } else if (await acceptedKey(idempotencyKey)) {
+          fail('idempotency_conflict', 'The idempotency key was already accepted.', 409);
+        } else if (!deletion
+          || deletion.deleted_at
+          || deletion.current_revision !== baseRevision) {
+          fail('revision_conflict', 'The project changed since it was opened.', 409);
+        } else {
+          throw error;
+        }
+      }
+      deletion = await anyProjectRow(id);
+      if (!deletion?.deleted_at || deletion.deletion_idempotency_key !== idempotencyKey) {
+        throw new Error('The project deletion tombstone was not committed.');
+      }
+    }
+
     const { results: revisions } = await db.prepare(
       'SELECT DISTINCT object_key FROM project_revisions WHERE project_id = ?',
     ).bind(id).all();
-    const deletedAt = timestamp();
     await deleteObjectsRequired(revisions.map(row => row.object_key));
     const statements = [
-      mutationStatement(db, {
-        actor,
-        conditionSql: 'EXISTS (SELECT 1 FROM projects WHERE id = ? AND current_revision = ? AND deleted_at IS NULL)',
-        conditionValues: [id, baseRevision],
-        idempotencyKey,
-        kind: 'delete-project',
-        timestamp: deletedAt,
-      }),
       db.prepare(`
         DELETE FROM project_revisions
         WHERE project_id = ?
           AND EXISTS (
             SELECT 1 FROM projects
-            WHERE id = ? AND current_revision = ? AND deleted_at IS NULL
+            WHERE id = ? AND current_revision = ? AND deletion_idempotency_key = ?
           )
-      `).bind(id, id, baseRevision),
+      `).bind(id, id, baseRevision, idempotencyKey),
       db.prepare(`
         DELETE FROM projects
-        WHERE id = ? AND current_revision = ? AND deleted_at IS NULL
-      `).bind(id, baseRevision),
+        WHERE id = ? AND current_revision = ? AND deletion_idempotency_key = ?
+      `).bind(id, baseRevision, idempotencyKey),
     ];
-    await guardedBatch(statements, {
-      idempotencyKey,
-      onConflict: async () => {
-        const current = await db.prepare('SELECT current_revision FROM projects WHERE id = ?').bind(id).first();
-        return !current || current.current_revision !== baseRevision;
-      },
-    });
+    const results = await db.batch(statements);
+    if ((results[1]?.meta?.changes || 0) === 0 && await anyProjectRow(id)) {
+      throw new Error('The project deletion could not be finalized.');
+    }
     return { deleted: true };
   }
 
