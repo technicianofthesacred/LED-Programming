@@ -7,6 +7,7 @@ import {
   resolvePatternParams,
 } from '../lib/frameEngine.js';
 import { smoothPixelFrame } from '../lib/motionSmoothing.js';
+import { applyPatternPreviewSegmentLooks } from '../lib/patternPiecePreview.js';
 import {
   activeLedCoreAlpha,
   activeLedCoronaAlpha,
@@ -103,7 +104,7 @@ function renderFrame(canvas, t, p) {
     activeFn, blendFn, glow, dotSize, bpm, resolvedParams, patternParamsById, paletteNorm,
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
     gammaLUT, symSettings, symOverlay, audioBands, blendAmount, blendType,
-    perStripFns, vb, heat, motionSmoothing, previousPixels, frameDt,
+    perStripFns, perStripPalettes, vb, heat, motionSmoothing, previousPixels, frameDt,
   } = p;
 
   // ViewBox → canvas pixel mapping (letterbox, maintain aspect ratio)
@@ -117,8 +118,9 @@ function renderFrame(canvas, t, p) {
     t, strips: visibleStrips, patternId: p.patternId, activeFn, blendFn,
     blendAmount, blendType, params: resolvedParams, paletteNorm, bpm,
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
-    gammaLUT, symSettings, audioBands, normBounds, perStripFns, patternParamsById,
+    gammaLUT, symSettings, audioBands, normBounds, perStripFns, perStripPalettes, patternParamsById,
   });
+  applyPatternPreviewSegmentLooks(frame.pixels, visibleStrips, t * 1000);
   const framePixels = smoothPixelFrame(frame.pixels, previousPixels, {
     mode: motionSmoothing,
     dt: frameDt,
@@ -372,6 +374,7 @@ export function PatternPreview({
   targetFps = 60,
   heat = false,
   controlledTime = null,
+  ariaLabel = 'LED pattern preview',
 }) {
   const canvasRef = useRef(null);
   const rafRef    = useRef(0);
@@ -418,6 +421,13 @@ export function PatternPreview({
       }
     }
     return map;
+  }, [propStrips, useRealStrips]);
+
+  const perStripPalettes = useMemo(() => {
+    if (!useRealStrips) return new Map();
+    return new Map((propStrips || [])
+      .filter(strip => Array.isArray(strip.palette) && strip.palette.length)
+      .map(strip => [strip.id, normalizePalette(strip.palette)]));
   }, [propStrips, useRealStrips]);
 
   const realStripData = useMemo(() => {
@@ -488,7 +498,7 @@ export function PatternPreview({
   propsRef.current = {
     patternId, playing, speed, glow, dotSize, bpm, resolvedParams, patternParamsById, paletteNorm,
     activeFn, blendFn, blendAmount, blendType,
-    perStripFns, visibleStrips, normBounds, medianSpacing, pixelCount,
+    perStripFns, perStripPalettes, visibleStrips, normBounds, medianSpacing, pixelCount,
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
     gammaLUT, symSettings, symOverlay, audioBands, vb, heat,
     motionSmoothing, targetFps, controlledTime,
@@ -643,6 +653,7 @@ export function PatternPreview({
   return (
     <canvas
       ref={canvasRef}
+      aria-label={ariaLabel}
       onPointerDown={symOverlay ? handlePointerDown : undefined}
       onPointerMove={symOverlay ? handlePointerMove : undefined}
       onPointerUp={symOverlay ? endDrag : undefined}

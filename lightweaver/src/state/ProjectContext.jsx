@@ -990,6 +990,10 @@ export function ProjectProvider({ children }) {
   const markProjectPersisted = useCallback(destination => dispatchProjectLifecycle({ type: 'persisted', destination }), []);
   const markProjectEdited = useCallback(() => dispatchProjectLifecycle({ type: 'edited' }), []);
   const markProjectInstalled = useCallback(installation => dispatchProjectLifecycle({ type: 'installed', installation }), []);
+  const commitProjectStateWithoutEdit = useCallback(commit => {
+    suppressNextLifecycleEditRef.current = true;
+    commit();
+  }, []);
   const markCardLookConfirmed = useCallback(look => {
     setConfirmedCardLook(look ? JSON.parse(JSON.stringify(look)) : null);
   }, []);
@@ -1096,6 +1100,7 @@ export function ProjectProvider({ children }) {
       markProjectPersisted,
       markProjectEdited,
       markProjectInstalled,
+      commitProjectStateWithoutEdit,
       markCardLookConfirmed,
       registerProjectSnapshotContributor,
       newProject,
