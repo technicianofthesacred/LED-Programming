@@ -9,7 +9,7 @@ import {
   EmitCompass,
   InlineRename,
 } from '../shared/InspectorPrimitives.jsx';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useProject } from '../../../state/ProjectContext.jsx';
 import {
   STRIP_COLORS,
@@ -148,6 +148,7 @@ export function DrawModePanel({
   const [addLedCount, setAddLedCount] = useState(60);
   const [addDensity, setAddDensity] = useState(density);
   const [fineTuneOpenByStrip, setFineTuneOpenByStrip] = useState({});
+  const kaleidoscopeTriggerRefs = useRef(new Map());
   const [addLengthM, setAddLengthM] = useState(1);
   const [addLengthDraft, setAddLengthDraft] = useState('1.00');
   const [addGpio, setAddGpio] = useState(16);
@@ -1247,6 +1248,10 @@ export function DrawModePanel({
                                       }}>◎</button>
                             )}
                             <button className={`btn${kaleidoscopeEditor?.stripId === s.id ? ' active' : ''}`}
+                                    ref={element => {
+                                      if (element) kaleidoscopeTriggerRefs.current.set(s.id, element);
+                                      else kaleidoscopeTriggerRefs.current.delete(s.id);
+                                    }}
                                     aria-label="Edit Kaleidoscope reflection points"
                                     title="Edit Kaleidoscope reflection points"
                                     disabled={s.pixelCount < 2}
@@ -1362,6 +1367,7 @@ export function DrawModePanel({
                                     onClick={() => {
                                       setFineTuneOpenByStrip(current => ({ ...current, [s.id]: false }));
                                       onCloseKaleidoscope();
+                                      window.requestAnimationFrame(() => kaleidoscopeTriggerRefs.current.get(s.id)?.focus());
                                     }}>
                                     Save &amp; close
                                   </button>

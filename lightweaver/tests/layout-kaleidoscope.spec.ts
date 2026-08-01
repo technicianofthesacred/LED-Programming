@@ -138,6 +138,8 @@ test('Kaleidoscope editor exposes bounded count and per-point inline steppers', 
   await footer.getByRole('button', { name: 'Save and close Kaleidoscope' }).click();
   await expect(page.getByRole('region', { name: 'Kaleidoscope reflection points' })).toHaveCount(0);
   await expect(page.locator('[data-testid="kaleidoscope-marker"]')).toHaveCount(0);
+  await expect(page.locator('[data-strip-id="strip-1"]')
+    .getByRole('button', { name: 'Edit Kaleidoscope reflection points' })).toBeFocused();
 
   await page.getByRole('button', { name: 'Edit Kaleidoscope reflection points' }).click();
   await expect(page.getByTestId('kaleidoscope-summary')).toHaveText('5 points · start LED 5');
