@@ -73,6 +73,8 @@ test('selected Draw strip has a clear, non-blocking visual identity that remains
   const unselectedHitPath = hitPaths.nth(1);
   const selectedId = await selectedHitPath.getAttribute('data-strip-path');
   if (!selectedId) throw new Error('Selected strip has no id.');
+  const selectedPathData = await selectedHitPath.getAttribute('d');
+  if (!selectedPathData) throw new Error('Selected strip has no path geometry.');
   await expect.poll(() => stripDetails(page, selectedId)).not.toBeNull();
   const selected = await stripDetails(page, selectedId);
   if (!selected) throw new Error('Selected strip was not saved.');
@@ -84,16 +86,46 @@ test('selected Draw strip has a clear, non-blocking visual identity that remains
   const halo = page.getByTestId('selected-strip-halo');
   const core = page.getByTestId('selected-strip-core');
   const badge = page.getByTestId('selected-strip-badge');
-  await expect(halo).toBeVisible();
-  await expect(core).toBeVisible();
+  await expect(halo).toHaveCount(1);
+  await expect(core).toHaveCount(1);
+  await expect(halo).toHaveAttribute('d', selectedPathData);
+  await expect(core).toHaveAttribute('d', selectedPathData);
+  await expect(halo).toHaveAttribute('stroke', 'oklch(0.78 0.16 205)');
+  await expect(core).toHaveAttribute('stroke', 'white');
+  for (const path of [halo, core]) {
+    await expect(path).toHaveAttribute('fill', 'none');
+    await expect(path).toHaveAttribute('stroke-linecap', 'round');
+    await expect(path).toHaveAttribute('stroke-linejoin', 'round');
+  }
   await expect(badge).toContainText(selected.name);
   await expect(badge).toContainText(new RegExp(`${selected.pixelCount}\\s*LEDs?`));
+  const badgeRect = badge.locator('rect');
+  await expect(badgeRect).toHaveAttribute('fill', 'oklch(0.18 0.02 220 / 0.88)');
+  await expect(badgeRect).toHaveAttribute('stroke', 'oklch(0.78 0.16 205)');
+  const badgeDimensions = await badgeRect.evaluate(rect => ({
+    width: Number(rect.getAttribute('width')),
+    height: Number(rect.getAttribute('height')),
+  }));
+  expect(badgeDimensions.width).toBeGreaterThan(0);
+  expect(badgeDimensions.height).toBeGreaterThan(0);
 
   for (const overlay of [halo, core, badge]) {
     await expect(overlay).toHaveCSS('pointer-events', 'none');
   }
   await expect(selectedHitPath).toHaveCSS('cursor', 'grab');
   await expect(unselectedHitPath).toHaveCSS('cursor', 'pointer');
+
+  const selectedPathBox = await selectedHitPath.boundingBox();
+  if (!selectedPathBox) throw new Error('Selected strip has no pointer target.');
+  await page.mouse.move(
+    selectedPathBox.x + selectedPathBox.width / 2,
+    selectedPathBox.y + selectedPathBox.height / 2,
+  );
+  await page.mouse.down();
+  await expect(selectedHitPath).toHaveCSS('cursor', 'grabbing');
+  await page.mouse.up();
+  await expect(page.locator('.la-strip-row').first()).toHaveClass(/sel/);
+  await expect(halo).toHaveCount(1);
 
   // Selection weight is intentionally screen-legible rather than shrinking
   // away with the drawing as the maker zooms out to the supported minimum.
