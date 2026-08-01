@@ -33,18 +33,18 @@ export function WiringRunRow({
         if (event.key === 'Delete') { event.preventDefault(); if (!locked) setConfirmRemove(true); }
       }}
     >
-      <button className="lw-wire-drag" aria-label={`Drag ${label}`} aria-pressed={dragging} title="Drag to reorder. Alt+arrow keys also move this run." disabled={locked} onPointerDown={event => { event.stopPropagation(); onRowPointerDown(run.id, event); }} onClick={event => event.stopPropagation()}>⋮⋮</button>
-      <button className="lw-wire-port lw-run-in" data-wire-in={run.id} aria-label={`${label} IN port`} title="LED strip data input" onPointerEnter={() => onCordTargetEnter(run.id)} onClick={event => { event.stopPropagation(); onPort('in'); }}>IN</button>
+      <button className="lw-wire-drag" aria-label={`Drag ${label}`} aria-pressed={dragging} title="Reorder this run on its output; Alt+Up/Down moves it one position." data-tooltip="Reorder this run on its output; Alt+Up/Down moves it one position." disabled={locked} onPointerDown={event => { event.stopPropagation(); onRowPointerDown(run.id, event); }} onClick={event => event.stopPropagation()}>⋮⋮</button>
+      <button className="lw-wire-port lw-run-in" data-wire-in={run.id} aria-label={`${label} IN port`} title={`Connect incoming LED data to the start of ${label}.`} data-tooltip={`Connect incoming LED data to the start of ${label}.`} onPointerEnter={() => onCordTargetEnter(run.id)} onClick={event => { event.stopPropagation(); onPort('in'); }}>IN</button>
       <span className="lw-wiring-run-name">{label}</span>
       <span className="lw-run-tools">
         {run.type === 'strip' ? (
           <span className="lw-inline-pixel-count" onClick={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()}>
-            <button aria-label={`Remove one LED from ${label}`} disabled={locked || count <= 1} onClick={() => onAdjustCount(-1)}>−</button>
+            <button aria-label={`Remove one LED from ${label}`} title={`Shorten ${label} by one LED, moving its end address earlier.`} data-tooltip={`Shorten ${label} by one LED, moving its end address earlier.`} disabled={locked || count <= 1} onClick={() => onAdjustCount(-1)}>−</button>
             <strong data-testid="inline-run-count">{count}</strong>
-            <button aria-label={`Add one LED to ${label}`} disabled={locked} onClick={() => onAdjustCount(1)}>+</button>
+            <button aria-label={`Add one LED to ${label}`} title={`Extend ${label} by one LED, moving its end address later.`} data-tooltip={`Extend ${label} by one LED, moving its end address later.`} disabled={locked} onClick={() => onAdjustCount(1)}>+</button>
           </span>
         ) : <span className="lw-wiring-run-count">{run.type === 'cable' ? 'wire' : `${count} LEDs`}</span>}
-        {run.type === 'strip' && <button className="lw-run-flip" aria-label="Flip" title={`Flip ${label} mapping direction`} disabled={locked || run.directionPolicy === 'fixed'} onClick={event => { event.stopPropagation(); onReverse(); }}>Flip</button>}
+        {run.type === 'strip' && <button className="lw-run-flip" aria-label="Flip" title={`Reverse ${label} in the artwork mapping; its electrical data direction stays the same.`} data-tooltip={`Reverse ${label} in the artwork mapping; its electrical data direction stays the same.`} disabled={locked || run.directionPolicy === 'fixed'} onClick={event => { event.stopPropagation(); onReverse(); }}>Flip</button>}
       </span>
       <button
         className="lw-wire-port lw-run-out"
@@ -54,12 +54,14 @@ export function WiringRunRow({
         onPointerDown={event => { event.stopPropagation(); onCordPointerDown(run.id, event); }}
         onPointerUp={event => { event.stopPropagation(); onCordPointerUp(run.id, event); }}
         onClick={event => { event.stopPropagation(); onPort('out'); }}
-        title="LED strip data output"
+        title={`Continue LED data from ${label} to the next run.`}
+        data-tooltip={`Continue LED data from ${label} to the next run.`}
       >OUT</button>
       <button
         className={`lw-wire-remove lw-run-remove${confirmRemove ? ' is-confirming' : ''}`}
         aria-label={confirmRemove ? `Confirm remove ${label}` : `Remove ${label}`}
-        title={`Remove ${label} from this LED output`}
+        title={`Remove ${label} from this LED output after confirmation.`}
+        data-tooltip={`Remove ${label} from this LED output after confirmation.`}
         disabled={locked}
         onBlur={() => setConfirmRemove(false)}
         onClick={event => { event.stopPropagation(); if (confirmRemove) onRemove(); else setConfirmRemove(true); }}

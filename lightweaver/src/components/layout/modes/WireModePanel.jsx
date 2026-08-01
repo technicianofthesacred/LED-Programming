@@ -3,6 +3,7 @@ import { useProject } from '../../../state/ProjectContext.jsx';
 import { normalizePatchBoard } from '../../../lib/patchBoard.js';
 import { CARD_HARDWARE_CAPABILITIES } from '../../../lib/cardRuntimeContract.js';
 import { CardPushControl } from '../shared/CardPushControl.jsx';
+import { WireHoverDescription } from '../shared/WireHoverDescription.jsx';
 import { WiringPreflight } from '../wire/WiringPreflight.jsx';
 import { WiringBenchTest } from '../wire/WiringBenchTest.jsx';
 import { StripColorOrderCheck } from '../wire/StripColorOrderCheck.jsx';
@@ -321,7 +322,7 @@ export function WireModePanel({ state, connected, cardHost }) {
   };
 
   return (
-    <div className="lw-wire-path is-embedded la-wire-panel" data-testid="layout-wire-panel">
+    <WireHoverDescription className="lw-wire-path is-embedded la-wire-panel" data-testid="layout-wire-panel">
       <div className="panel-head lww-plan-head">
         <span className="ttl">Test &amp; Install</span>
         <span className="meta">{physicalStripCount} {stripWord} · {compiledWiring.totalPixels} LEDs · from Wire</span>
@@ -343,7 +344,7 @@ export function WireModePanel({ state, connected, cardHost }) {
                 : 'Every strip needs a GPIO and a place in the first-to-last wiring order.'}
             </p>
             <WiringPreflight compiled={compiledWiring} mutationError={mutationError} />
-            <button type="button" className="btn primary lww-cta" onClick={editInWire}>Edit in Wire</button>
+            <button type="button" className="btn primary lww-cta" title="Open the Wire workspace to assign GPIOs and arrange the physical LED order." data-tooltip="Open the Wire workspace to assign GPIOs and arrange the physical LED order." onClick={editInWire}>Edit in Wire</button>
           </>
         ) : !commissioningVerified ? (
           wiring.locked ? (
@@ -371,7 +372,7 @@ export function WireModePanel({ state, connected, cardHost }) {
                 controller={standaloneController}
                 setController={setStandaloneController}
               />
-              <button type="button" className="btn btn-ghost" onClick={() => setCheckFlowOpen(false)}>Do this later</button>
+              <button type="button" className="btn btn-ghost" title="Leave the color check for now; the LED color order remains unconfirmed." data-tooltip="Leave the color check for now; the LED color order remains unconfirmed." onClick={() => setCheckFlowOpen(false)}>Do this later</button>
             </>
           ) : (
             <>
@@ -380,7 +381,7 @@ export function WireModePanel({ state, connected, cardHost }) {
                   This check lights the real LEDs — use <b>Connect Lightweaver</b> in the footer first.
                 </p>
               )}
-              <button type="button" className="btn primary lww-cta" data-testid="start-led-check" onClick={() => setCheckFlowOpen(true)}>
+              <button type="button" className="btn primary lww-cta" data-testid="start-led-check" title="Begin or resume the guided check that lights the real LEDs to verify each run." data-tooltip="Begin or resume the guided check that lights the real LEDs to verify each run." onClick={() => setCheckFlowOpen(true)}>
                 {physicallyVerified ? 'Finish the LED check' : 'Start LED check'}
               </button>
             </>
@@ -409,21 +410,22 @@ export function WireModePanel({ state, connected, cardHost }) {
           {wiring.locked && (
             <div className="lww-unlock">
               <span>Wiring locked after the check — unlocking clears the verification.</span>
-              <button type="button" className="btn" data-testid="unlock-wiring" onClick={unlockWiring}>Unlock to edit</button>
+              <button type="button" className="btn" data-testid="unlock-wiring" title="Reopen wiring edits and clear the completed verification before changing connections." data-tooltip="Reopen wiring edits and clear the completed verification before changing connections." onClick={unlockWiring}>Unlock to edit</button>
             </div>
           )}
           <WireDiscovery outputs={wiring.outputs} cardHost={cardHost} disabled={wiring.locked} onPinConfirmed={changeOutputPin}/>
-          {compiledWiring.sendReady && <button className="btn lw-open-assembly" onClick={() => setShowAssembly(value => !value)}>{showAssembly ? 'Hide assembly map' : 'Open assembly map'}</button>}
+          {compiledWiring.sendReady && <button className="btn lw-open-assembly" title="Show or hide the assembly map used to build the verified LED wiring." data-tooltip="Show or hide the assembly map used to build the verified LED wiring." onClick={() => setShowAssembly(value => !value)}>{showAssembly ? 'Hide assembly map' : 'Open assembly map'}</button>}
           {showAssembly && compiledWiring.sendReady && <WiringAssemblyMap wiring={wiring} compiled={compiledWiring} strips={strips} physicalScale={Number(pxPerMm) > 0 ? { pxPerMm: Number(pxPerMm) } : null} onClose={() => setShowAssembly(false)}/>}
           {mutationError && <p className="lw-wiring-error" role="alert">{mutationError}</p>}
           <details className="lww-custom-mapping">
             <summary>Custom mapping</summary>
             <div className="lww-specialist-actions">
-              <button className="btn" disabled={wiring.locked} aria-pressed={wireOverlayMode === 'chop'} onClick={toggleSplitTool}>Split a strip mid-wire</button>
+              <button className="btn" disabled={wiring.locked} aria-pressed={wireOverlayMode === 'chop'} title="Turn on the canvas tool for dividing the selected LED strip at a physical cut point." data-tooltip="Turn on the canvas tool for dividing the selected LED strip at a physical cut point." onClick={toggleSplitTool}>Split a strip mid-wire</button>
               <button
                 className="btn"
                 disabled={wiring.locked || !selectedRunPlacement?.canAddCable}
-                title={selectedRunPlacement?.canAddCable ? 'Insert a zero-address cable jump after the selected strip.' : 'Select a strip that has another physical run after it.'}
+                title={selectedRunPlacement?.canAddCable ? 'Insert an unlit cable section after the selected strip without consuming LED addresses.' : 'Select a strip that has another physical run after it.'}
+                data-tooltip={selectedRunPlacement?.canAddCable ? 'Insert an unlit cable section after the selected strip without consuming LED addresses.' : 'Select a strip that has another physical run after it.'}
                 onClick={addCableJump}
               >Add a cable jump</button>
             </div>
@@ -432,22 +434,22 @@ export function WireModePanel({ state, connected, cardHost }) {
                 {cableJumps.map(({ run, previousRun, followingRun }) => (
                   <div className="lww-cable-jump-row" data-testid="cable-jump-row" key={run.id}>
                     <span><strong>Cable jump</strong><small>{runName(previousRun)} → {runName(followingRun)}</small></span>
-                    <button type="button" className="btn btn-ghost" disabled={wiring.locked} aria-label="Remove cable jump" onClick={() => removeCableJump(run.id)}>Remove</button>
+                    <button type="button" className="btn btn-ghost" disabled={wiring.locked} aria-label="Remove cable jump" title="Remove this cable section so the neighboring physical runs connect directly in the plan." data-tooltip="Remove this cable section so the neighboring physical runs connect directly in the plan." onClick={() => removeCableJump(run.id)}>Remove</button>
                   </div>
                 ))}
               </div>
             )}
             <div className="lw-wiring-additions">
-              <button className="btn" disabled={wiring.locked} aria-label="Add skipped LEDs" onClick={addInactive}>Add skipped LEDs</button>
+              <button className="btn" disabled={wiring.locked} aria-label="Add skipped LEDs" title="Reserve an unlit LED position in the output order for LEDs that are intentionally skipped." data-tooltip="Reserve an unlit LED position in the output order for LEDs that are intentionally skipped." onClick={addInactive}>Add skipped LEDs</button>
             </div>
             {derivedCut && (
               <section className="lw-wire-selected-detail">
                 <div className="lw-wire-section-title"><span>Selected split</span><strong>LED {derivedCut.cutLed}</strong></div>
                 <div className="lw-wire-tool-row">
-                  <button className="btn" disabled={wiring.locked} aria-label="Move split earlier" onClick={() => nudgeSelectedWireCut(-1, derivedCut)}>−</button>
-                  <button className="btn" disabled={wiring.locked} aria-label="Move split later" onClick={() => nudgeSelectedWireCut(1, derivedCut)}>+</button>
-                  <button className="btn" disabled={wiring.locked} aria-label="Merge split runs" onClick={() => deleteSelectedWireCut(derivedCut)}>Merge</button>
-                  <button className="btn lw-btn-danger" disabled={wiring.locked} aria-label="Delete split" onClick={() => deleteSelectedWireCut(derivedCut)}>Delete</button>
+                  <button className="btn" disabled={wiring.locked} aria-label="Move split earlier" title="Move this split one LED toward the start of the strip." data-tooltip="Move this split one LED toward the start of the strip." onClick={() => nudgeSelectedWireCut(-1, derivedCut)}>−</button>
+                  <button className="btn" disabled={wiring.locked} aria-label="Move split later" title="Move this split one LED toward the end of the strip." data-tooltip="Move this split one LED toward the end of the strip." onClick={() => nudgeSelectedWireCut(1, derivedCut)}>+</button>
+                  <button className="btn" disabled={wiring.locked} aria-label="Merge split runs" title="Rejoin the split sections into one continuous LED run." data-tooltip="Rejoin the split sections into one continuous LED run." onClick={() => deleteSelectedWireCut(derivedCut)}>Merge</button>
+                  <button className="btn lw-btn-danger" disabled={wiring.locked} aria-label="Delete split" title="Remove this split and merge its LED sections back together." data-tooltip="Remove this split and merge its LED sections back together." onClick={() => deleteSelectedWireCut(derivedCut)}>Delete</button>
                 </div>
               </section>
             )}
@@ -536,6 +538,6 @@ export function WireModePanel({ state, connected, cardHost }) {
           </details>
         </div>
       </details>
-    </div>
+    </WireHoverDescription>
   );
 }

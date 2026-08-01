@@ -229,7 +229,7 @@ export function StripColorOrderCheck({ cardHost, controller, setController, auto
               in primary copy). */}
           <span className="lwb-detail">{confirmed ? 'Colors confirmed' : 'Colors not checked yet'}</span>
         </div>
-        {!open && <button type="button" className="btn lwb-quiz-open" disabled={busy} onClick={startCheck}>Check colors</button>}
+        {!open && <button type="button" className="btn lwb-quiz-open" title="Light the strip with test colors so you can confirm its real color order." data-tooltip="Light the strip with test colors so you can confirm its real color order." disabled={busy} onClick={startCheck}>Check colors</button>}
       </div>
       {open && (
         <div className="lwb-quiz-body">
@@ -245,13 +245,15 @@ export function StripColorOrderCheck({ cardHost, controller, setController, auto
               : 'The whole strip just lit up. Tap the color you actually see.'}
           </p>
           <p className="lwb-detail" role="note">Light test warning: colors will change at a reduced, power-limited brightness.</p>
-          <button type="button" className="btn" disabled={busy} onClick={stopLights}>Stop lights</button>
+          <button type="button" className="btn" title="Turn off the color test on the real LEDs." data-tooltip="Turn off the color test on the real LEDs." disabled={busy} onClick={stopLights}>Stop lights</button>
           <div className="lwb-quiz-answers" role="group" aria-label="What color do you see?" style={{ gridTemplateColumns: `repeat(${answers.length}, 1fr)` }}>
             {answers.map(test => (
               <button
                 key={test.id}
                 type="button"
                 className={`lwb-quiz-answer is-${test.id}`}
+                title={`Record that the LEDs appear ${test.label.toLowerCase()}; Lightweaver confirms or changes the saved color order.`}
+                data-tooltip={`Record that the LEDs appear ${test.label.toLowerCase()}; Lightweaver confirms or changes the saved color order.`}
                 disabled={busy}
                 onClick={() => answerColor(test.id)}
               >{test.label}</button>
@@ -265,13 +267,15 @@ export function StripColorOrderCheck({ cardHost, controller, setController, auto
                   type="button"
                   className={`lwb-quiz-mini${activeTestId === test.id ? ' is-active' : ''}`}
                   aria-label={`Send ${test.label} test`}
+                  title={`Light the strip ${test.label.toLowerCase()} to compare the real LEDs with the test.`}
+                  data-tooltip={`Light the strip ${test.label.toLowerCase()} to compare the real LEDs with the test.`}
                   aria-pressed={activeTestId === test.id}
                   disabled={busy}
                   onClick={() => void playTest(test.id)}
                 >{test.short}</button>
               ))}
             </div>
-            <button type="button" className="btn btn-ghost lwb-quiz-cycle" disabled={busy} onClick={() => void tryNextOrder()}>Try next order</button>
+            <button type="button" className="btn btn-ghost lwb-quiz-cycle" title="Apply the next color-order option and retest the active color on the real LEDs." data-tooltip="Apply the next color-order option and retest the active color on the real LEDs." disabled={busy} onClick={() => void tryNextOrder()}>Try next order</button>
           </div>
           {status && <p className={`lwb-quiz-status${statusKind ? ` is-${statusKind}` : ''}`} role={statusKind === 'err' ? 'alert' : 'status'}>{status}</p>}
           <p className="lwb-detail lwb-quiz-order">

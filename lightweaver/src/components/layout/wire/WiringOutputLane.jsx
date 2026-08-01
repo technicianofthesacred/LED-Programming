@@ -14,7 +14,7 @@ export function WiringOutputLane({
   return (
     <section className={`lw-wiring-output${dropTarget && !dropTargetRunId ? ' is-drop-target' : ''}${outputDragging ? ' is-output-dragging' : ''}${outputDropPlacement ? ` is-output-drop-${outputDropPlacement}` : ''}`} data-testid="wiring-output-lane" data-output-id={output.id}>
       <header>
-        <button className="lw-output-drag" aria-label={`Drag ${output.name}`} aria-pressed={outputDragging} title="Drag output lane. Alt+arrow keys also reorder it." disabled={locked} onPointerDown={event => { event.stopPropagation(); onOutputPointerDown(output.id, event); }} onClick={event => event.stopPropagation()} onKeyDown={event => {
+        <button className="lw-output-drag" aria-label={`Drag ${output.name}`} aria-pressed={outputDragging} title="Reorder this output lane; Alt+Up/Down moves it one position." data-tooltip="Reorder this output lane; Alt+Up/Down moves it one position." disabled={locked} onPointerDown={event => { event.stopPropagation(); onOutputPointerDown(output.id, event); }} onClick={event => event.stopPropagation()} onKeyDown={event => {
           if (event.altKey && event.key === 'ArrowUp') { event.preventDefault(); onMoveOutput(-1); }
           if (event.altKey && event.key === 'ArrowDown') { event.preventDefault(); onMoveOutput(1); }
         }}>⋮⋮</button>
@@ -26,7 +26,8 @@ export function WiringOutputLane({
           onPointerDown={event => onCordPointerDown(`output:${output.id}`, event)}
           onPointerUp={event => onCordPointerUp(`output:${output.id}`, event)}
           onClick={() => onPort(`output:${output.id}`, 'out')}
-          title="LED data leaves the card here"
+          title="Start a data connection from this card output to an LED strip."
+          data-tooltip="Start a data connection from this card output to an LED strip."
         >DATA</button>
         <h3>{output.name || output.id}</h3>
         <span>{runs.reduce((sum, run) => sum + (compiledById.get(run.id)?.count || 0), 0)} LEDs</span>
@@ -38,7 +39,8 @@ export function WiringOutputLane({
         <button
           className={`lw-wire-remove${confirmRemove ? ' is-confirming' : ''}`}
           aria-label={confirmRemove ? `Confirm remove ${output.name}` : `Remove ${output.name}`}
-          title={runs.length ? `Move every LED strip before removing ${output.name}` : `Remove ${output.name}`}
+          title="Remove this empty output after confirmation; move its LED strips first."
+          data-tooltip="Remove this empty output after confirmation; move its LED strips first."
           disabled={locked || runs.length > 0}
           onBlur={() => setConfirmRemove(false)}
           onClick={() => { if (confirmRemove) onRemoveOutput(); else setConfirmRemove(true); }}

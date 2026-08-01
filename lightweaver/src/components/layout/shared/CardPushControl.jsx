@@ -227,7 +227,8 @@ export function CardPushControl({
           data-testid="layout-send-to-card"
           disabled={disabled || pushing || wiringTransactionActive}
           onClick={() => pushToCard()}
-          title={connected ? `Install this project on ${pushHost}` : `Card link idle — try ${pushHost} anyway (discovery + fallback)`}
+          title="Send this verified project to the card, replacing its active project after card verification."
+          data-tooltip="Send this verified project to the card, replacing its active project after card verification."
         >
           <span className={`la-card-push-dot${connected ? ' on' : ' off'}`}/>
           <span className="la-card-push-label">{pushing ? `Sending to ${pushHost}…` : 'Install on card'}<small>{connected ? 'Ready to install' : 'Connect the card first'}</small></span>
@@ -242,11 +243,11 @@ export function CardPushControl({
           {pushFallbackJson && (
             <div className="lw-wire-recovery" role="group" aria-label="Mixed-content recovery">
               <textarea readOnly value={pushFallbackJson} onClick={e => e.target.select()} className="la-card-push-fallback"/>
-              <button className="btn" onClick={() => navigator.clipboard?.writeText(pushFallbackJson)}>Copy payload</button>
-              <button className="btn" onClick={openInstaller}>Open installer</button>
+              <button className="btn" title="Copy the installer JSON so it can be pasted into the card's onboard page." data-tooltip="Copy the installer JSON so it can be pasted into the card's onboard page." onClick={() => navigator.clipboard?.writeText(pushFallbackJson)}>Copy payload</button>
+              <button className="btn" title="Open the paired card's local installer with this project ready to apply." data-tooltip="Open the paired card's local installer with this project ready to apply." onClick={openInstaller}>Open installer</button>
             </div>
           )}
-          {action.status === 'failed' && <button className="btn" onClick={() => pushToCard(failedAttemptRef.current)}>Retry</button>}
+          {action.status === 'failed' && <button className="btn" title="Try the failed card installation again using the same prepared project." data-tooltip="Try the failed card installation again using the same prepared project." onClick={() => pushToCard(failedAttemptRef.current)}>Retry</button>}
         </div>
       )}
       {wiringCandidate && (
@@ -254,9 +255,9 @@ export function CardPushControl({
           <strong>{wiringTestState === 'testing' ? 'Do you see the expected lights?' : 'Test the new wiring'}</strong>
           <p>{wiringTestState === 'testing' ? 'Check every connected output. Confirm only when the real LEDs match the blue first pixel and red final pixel test.' : 'The current working wiring remains stored until this test succeeds.'}</p>
           {wiringTestState === 'staged' || wiringTestState === 'failed' ? (
-            <div><button className="btn primary" onClick={startWiringTest}>Start light test</button><button className="btn" onClick={() => finishWiringTest(false)}>Cancel change</button></div>
+            <div><button className="btn primary" title="Restart the card using the staged wiring so you can check the real LEDs before committing it." data-tooltip="Restart the card using the staged wiring so you can check the real LEDs before committing it." onClick={startWiringTest}>Start light test</button><button className="btn" title="Discard the staged wiring change and keep the card's last working setup." data-tooltip="Discard the staged wiring change and keep the card's last working setup." onClick={() => finishWiringTest(false)}>Cancel change</button></div>
           ) : wiringTestState === 'testing' ? (
-            <div><button className="btn primary" onClick={() => finishWiringTest(true)}>Yes, everything lights correctly</button><button className="btn" onClick={() => finishWiringTest(false)}>No, restore working setup</button></div>
+            <div><button className="btn primary" title="Confirm the real LED test passed and make this wiring the card's working setup." data-tooltip="Confirm the real LED test passed and make this wiring the card's working setup." onClick={() => finishWiringTest(true)}>Yes, everything lights correctly</button><button className="btn" title="Reject the tested wiring and restore the card's last working setup." data-tooltip="Reject the tested wiring and restore the card's last working setup." onClick={() => finishWiringTest(false)}>No, restore working setup</button></div>
           ) : <p>Working…</p>}
         </section>
       )}

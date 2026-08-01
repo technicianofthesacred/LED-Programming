@@ -218,6 +218,8 @@ export function WiringBenchTest({
               type="button"
               className="btn primary lwb-btn"
               aria-label="I can see the LED strips"
+              title="Begin the real-light LED check after confirming you can watch the strips safely."
+              data-tooltip="Begin the real-light LED check after confirming you can watch the strips safely."
               disabled={!compiled.ok}
               onClick={acknowledgeAndStart}
             >I can see them</button>
@@ -225,6 +227,8 @@ export function WiringBenchTest({
               <button
                 type="button"
                 className="btn btn-ghost lwb-btn lwb-btn-row"
+                title="Leave the LED check without verifying the wiring; you can return before installation."
+                data-tooltip="Leave the LED check without verifying the wiring; you can return before installation."
                 onClick={onDefer}
               >Do this later</button>
             )}
@@ -233,15 +237,15 @@ export function WiringBenchTest({
           <>
             <h4 className="lwb-question">Ready when you are</h4>
             <p className="lwb-hint">You said you can see the strips. Start the check whenever you’re ready.</p>
-            <button type="button" className="btn primary lwb-btn" disabled={!compiled.ok} onClick={() => { if (acknowledged) startChase(); }}>Start the check</button>
-            <button type="button" className="btn btn-ghost lwb-btn lwb-btn-row" onClick={() => setAcknowledged(false)}>Do this later</button>
+            <button type="button" className="btn primary lwb-btn" title="Start the real-light wiring check; LEDs will show dim blue, green, and red markers." data-tooltip="Start the real-light wiring check; LEDs will show dim blue, green, and red markers." disabled={!compiled.ok} onClick={() => { if (acknowledged) startChase(); }}>Start the check</button>
+            <button type="button" className="btn btn-ghost lwb-btn lwb-btn-row" title="Return to the visibility step without starting the LED check." data-tooltip="Return to the visibility step without starting the LED check." onClick={() => setAcknowledged(false)}>Do this later</button>
           </>
         )}
         {featureGap && (
           <UiCard
             tone="warning"
             description={featureGap.message}
-            footer={<button type="button" className="btn lwb-btn-compact" onClick={() => { openCardBridge(); window.location.hash = '#screen=flash'; }}>Open Flash</button>}
+            footer={<button type="button" className="btn lwb-btn-compact" title="Open Flash to update the card so it can run this LED check." data-tooltip="Open Flash to update the card so it can run this LED check." onClick={() => { openCardBridge(); window.location.hash = '#screen=flash'; }}>Open Flash</button>}
           />
         )}
       </section>
@@ -282,21 +286,23 @@ export function WiringBenchTest({
       <h4 className="lwb-question">{question}</h4>
       <LedIllustration variant={illusVariant} />
       <p className="lwb-hint">{hint}</p>
-      <button type="button" className="btn lwb-btn-compact" onClick={stopLights}>Stop lights</button>
+      <button type="button" className="btn lwb-btn-compact" title="Turn off the active wiring test and leave the check." data-tooltip="Turn off the active wiring test and leave the check." onClick={stopLights}>Stop lights</button>
       {state.delivery === 'idle' && <p className="lwb-sending" role="status">Lighting up the LEDs…</p>}
       {state.delivery === 'failed' && (
         <UiCard
           tone="warning"
           title="The lights didn’t reach the card"
           description={state.error}
-          footer={<button type="button" className="btn primary lwb-btn-compact" onClick={retry}>Try again</button>}
+          footer={<button type="button" className="btn primary lwb-btn-compact" title="Send the current test frame to the card again." data-tooltip="Send the current test frame to the card again." onClick={retry}>Try again</button>}
         />
       )}
-      <button type="button" className="btn primary lwb-btn" disabled={!confirmedDelivery} onClick={onPrimary}>{primaryLabel}</button>
+      <button type="button" className="btn primary lwb-btn" title={`Confirm the observed result for ${activeOutputLabel || activeLabel} and advance to the next wiring check.`} data-tooltip={`Confirm the observed result for ${activeOutputLabel || activeLabel} and advance to the next wiring check.`} disabled={!confirmedDelivery} onClick={onPrimary}>{primaryLabel}</button>
       <button
         type="button"
         className="btn btn-ghost lwb-btn lwb-btn-row"
         aria-expanded={troubleOpen}
+        title="Show fixes for this test result before you continue."
+        data-tooltip="Show fixes for this test result before you continue."
         onClick={() => setTroubleOpen(open => !open)}
       >Something’s wrong</button>
       {troubleOpen && (
@@ -306,14 +312,14 @@ export function WiringBenchTest({
             <>
               <div className="lwb-trouble-item">
                 <span>Blue is at the wrong end of the strip</span>
-                <button type="button" className="btn lwb-btn-compact" disabled={!confirmedDelivery} onClick={correctDirection}>Flip the direction</button>
+                <button type="button" className="btn lwb-btn-compact" title={`Reverse ${activeLabel} in the artwork mapping so blue marks its physical start.`} data-tooltip={`Reverse ${activeLabel} in the artwork mapping so blue marks its physical start.`} disabled={!confirmedDelivery} onClick={correctDirection}>Flip the direction</button>
               </div>
               <div className="lwb-trouble-item">
                 <span>Red isn’t on the strip’s last LED</span>
                 <div className="lw-bench-count-adjust">
-                  <button type="button" className="lw-bench-nudge" aria-label={`Remove one LED from ${activeLabel}`} disabled={!confirmedDelivery || !adjustableRunIds.includes(activeStep.runId) || activeStep.count <= 1} onClick={() => adjustBoundary(-1)}>−</button>
+                  <button type="button" className="lw-bench-nudge" aria-label={`Remove one LED from ${activeLabel}`} title={`Shorten ${activeLabel} by one LED so its red marker reaches the physical end.`} data-tooltip={`Shorten ${activeLabel} by one LED so its red marker reaches the physical end.`} disabled={!confirmedDelivery || !adjustableRunIds.includes(activeStep.runId) || activeStep.count <= 1} onClick={() => adjustBoundary(-1)}>−</button>
                   <strong data-testid="active-run-count">{activeStep.count} LEDs</strong>
-                  <button type="button" className="lw-bench-nudge" aria-label={`Add one LED to ${activeLabel}`} disabled={!confirmedDelivery || !adjustableRunIds.includes(activeStep.runId)} onClick={() => adjustBoundary(1)}>+</button>
+                  <button type="button" className="lw-bench-nudge" aria-label={`Add one LED to ${activeLabel}`} title={`Extend ${activeLabel} by one LED so its red marker reaches the physical end.`} data-tooltip={`Extend ${activeLabel} by one LED so its red marker reaches the physical end.`} disabled={!confirmedDelivery || !adjustableRunIds.includes(activeStep.runId)} onClick={() => adjustBoundary(1)}>+</button>
                 </div>
               </div>
               <p className="lwb-detail">Blue and red set the artwork mapping; electrical data direction does not change.</p>
@@ -324,9 +330,9 @@ export function WiringBenchTest({
               <div className="lwb-trouble-item">
                 <span>Red isn’t on this wire’s last LED</span>
                 <div className="lw-bench-count-adjust">
-                  <button type="button" className="lw-bench-nudge" aria-label={`Remove one LED from ${activeOutputLabel}`} disabled={!confirmedDelivery || !adjustableOutputIds.includes(activeStep.outputId) || activeStep.count <= 1} onClick={() => adjustOutput(-1)}>−</button>
+                  <button type="button" className="lw-bench-nudge" aria-label={`Remove one LED from ${activeOutputLabel}`} title={`Reduce ${activeOutputLabel} by one LED so its red marker reaches the final physical LED.`} data-tooltip={`Reduce ${activeOutputLabel} by one LED so its red marker reaches the final physical LED.`} disabled={!confirmedDelivery || !adjustableOutputIds.includes(activeStep.outputId) || activeStep.count <= 1} onClick={() => adjustOutput(-1)}>−</button>
                   <strong data-testid="active-output-count">{activeStep.count} LEDs</strong>
-                  <button type="button" className="lw-bench-nudge" aria-label={`Add one LED to ${activeOutputLabel}`} disabled={!confirmedDelivery || !adjustableOutputIds.includes(activeStep.outputId)} onClick={() => adjustOutput(1)}>+</button>
+                  <button type="button" className="lw-bench-nudge" aria-label={`Add one LED to ${activeOutputLabel}`} title={`Extend ${activeOutputLabel} by one LED so its red marker reaches the final physical LED.`} data-tooltip={`Extend ${activeOutputLabel} by one LED so its red marker reaches the final physical LED.`} disabled={!confirmedDelivery || !adjustableOutputIds.includes(activeStep.outputId)} onClick={() => adjustOutput(1)}>+</button>
                 </div>
               </div>
               <p className="lwb-detail">GPIO {activeStep.pin} · Move red to this wire’s final LED.</p>
@@ -338,10 +344,10 @@ export function WiringBenchTest({
         </div>
       )}
       <div className="lwb-nav">
-        <button type="button" className="btn btn-ghost" disabled={state.stepIndex === 0} onClick={() => dispatch({ type: 'previous' })}>Back</button>
-        <button type="button" className="btn btn-ghost" disabled={state.stepIndex === state.steps.length - 1} onClick={() => dispatch({ type: 'next' })}>Skip</button>
-        <button type="button" className="btn btn-ghost" onClick={cancel}>Do this later</button>
-        <button type="button" className="btn primary" disabled={!state.canComplete} onClick={complete}>Finish</button>
+        <button type="button" className="btn btn-ghost" title="Reopen the previous wiring check without marking this step complete." data-tooltip="Reopen the previous wiring check without marking this step complete." disabled={state.stepIndex === 0} onClick={() => dispatch({ type: 'previous' })}>Back</button>
+        <button type="button" className="btn btn-ghost" title="Leave this check unconfirmed and continue to the next step." data-tooltip="Leave this check unconfirmed and continue to the next step." disabled={state.stepIndex === state.steps.length - 1} onClick={() => dispatch({ type: 'next' })}>Skip</button>
+        <button type="button" className="btn btn-ghost" title="Stop the LED check and return to Wire without completing verification." data-tooltip="Stop the LED check and return to Wire without completing verification." onClick={cancel}>Do this later</button>
+        <button type="button" className="btn primary" title="Save the confirmed wiring checks and mark the wiring verified." data-tooltip="Save the confirmed wiring checks and mark the wiring verified." disabled={!state.canComplete} onClick={complete}>Finish</button>
       </div>
     </section>
   );
