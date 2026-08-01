@@ -321,6 +321,7 @@ import { PatternPreview } from './PatternPreview.jsx';
       setStandaloneController,
       markProjectEdited,
       markProjectInstalled,
+      commitProjectStateWithoutEdit,
       markCardLookConfirmed,
       symSettings,
       setSymSettings,
@@ -381,6 +382,7 @@ import { PatternPreview } from './PatternPreview.jsx';
     const cardReturnConsumed = useRef(false);
     const latestPreviewIntent = useRef(null);
     const syncedPreviewSelectionRef = useRef('');
+    const installIntentRef = useRef(null);
 
     const invalidatePendingPreview = useCallback(() => {
       browsePreviewSeq.current += 1;
@@ -426,6 +428,10 @@ import { PatternPreview } from './PatternPreview.jsx';
     const savedLooks = normalizeSavedLooks(standaloneController?.looks);
     const activeLookId = standaloneController?.activeLookId || '';
     const board = useMemo(() => normalizePatchBoard(patchBoard, strips), [patchBoard, strips]);
+    const latestBoardRef = useRef(board);
+    const latestControllerRef = useRef(standaloneController);
+    latestBoardRef.current = board;
+    latestControllerRef.current = standaloneController;
 
     const sectionTargets = useMemo(
       () => deriveSectionTargets({ strips, patchBoard: board, defaultLook: savedGlobalLook }),
@@ -1002,37 +1008,42 @@ import { PatternPreview } from './PatternPreview.jsx';
     };
 
     const savePreviewToCard = async () => {
-      const requestedRevision = projectLifecycle.editedRevision;
-      const requestedGeneration = projectLifecycle.generation;
-      const { nextLook, nextBoard, nextController: draftController } = buildCurrentHardwareState();
-      const nextController = promotePatternFirst(draftController, nextLook.patternId);
-      const commitCreatesRevision = JSON.stringify(nextBoard) !== JSON.stringify(board)
-        || JSON.stringify(nextController) !== JSON.stringify(standaloneController);
-      const prepared = prepareCardDeployment({
-        projectId,
-        projectName,
-        projectRevision: requestedRevision,
-        strips,
-        patchBoard: nextBoard,
-        standaloneController: nextController,
-      });
-      const nextPackage = prepared.runtimePackage;
-      // Test strip mode (see src/lib/testStrip.js): the saved design (project
-      // state below) is untouched — only what actually goes to the card is
-      // collapsed to the single bench-strip output/zone.
-      // TODO(test-strip): checkCardLayoutWriteSafety's pixel-mismatch guard
-      // was written for "default template vs. real card" detection and isn't
-      // test-strip aware; it can misfire if the card is already on a test
-      // strip of the same length as a previous session. Revisit if that
-      // proves to be a real annoyance on the bench.
-      const testStrip = readTestStrip();
-      const packageForCard = testStrip.enabled
-        ? applyTestStripToRuntimePackage(nextPackage, testStrip.length)
-        : nextPackage;
-      setHandoffUrl('');
-      setStatusKind('');
-      setStatus('');
+      if (installIntentRef.current) return;
+      const installIntent = {};
+      installIntentRef.current = installIntent;
+      let packageForCard = null;
       try {
+        const requestedRevision = projectLifecycle.editedRevision;
+        const requestedGeneration = projectLifecycle.generation;
+        const requestedDraftLooks = { ...draftLooks };
+        const requestedBoard = board;
+        const requestedController = standaloneController;
+        const { nextLook, nextBoard, nextController: draftController } = buildCurrentHardwareState();
+        const nextController = promotePatternFirst(draftController, nextLook.patternId);
+        const prepared = prepareCardDeployment({
+          projectId,
+          projectName,
+          projectRevision: requestedRevision,
+          strips,
+          patchBoard: nextBoard,
+          standaloneController: nextController,
+        });
+        const nextPackage = prepared.runtimePackage;
+        // Test strip mode (see src/lib/testStrip.js): the saved design (project
+        // state below) is untouched — only what actually goes to the card is
+        // collapsed to the single bench-strip output/zone.
+        // TODO(test-strip): checkCardLayoutWriteSafety's pixel-mismatch guard
+        // was written for "default template vs. real card" detection and isn't
+        // test-strip aware; it can misfire if the card is already on a test
+        // strip of the same length as a previous session. Revisit if that
+        // proves to be a real annoyance on the bench.
+        const testStrip = readTestStrip();
+        packageForCard = testStrip.enabled
+          ? applyTestStripToRuntimePackage(nextPackage, testStrip.length)
+          : nextPackage;
+        setHandoffUrl('');
+        setStatusKind('');
+        setStatus('');
         prepareCardStoragePayload(packageForCard);
         const safety = await checkCardLayoutWriteSafety(packageForCard, 'saving');
         if (!safety.ok) return;
@@ -1053,16 +1064,25 @@ import { PatternPreview } from './PatternPreview.jsx';
           readEvidence: () => readCardProjectEvidence({ host: safety.host || cardHost }),
         });
         dispatchCardSave({ type: 'confirm' });
-        setPatchBoard(nextBoard);
-        setStandaloneController(nextController);
-        setDraftLooks({});
+        const commitBoard = JSON.stringify(latestBoardRef.current) === JSON.stringify(requestedBoard)
+          && JSON.stringify(latestBoardRef.current) !== JSON.stringify(nextBoard);
+        const commitController = JSON.stringify(latestControllerRef.current) === JSON.stringify(requestedController)
+          && JSON.stringify(latestControllerRef.current) !== JSON.stringify(nextController);
+        if (commitBoard || commitController) {
+          commitProjectStateWithoutEdit(() => {
+            if (commitBoard) setPatchBoard(nextBoard);
+            if (commitController) setStandaloneController(nextController);
+          });
+        }
+        setDraftLooks(currentDrafts => Object.fromEntries(
+          Object.entries(currentDrafts).filter(([targetId, currentLook]) => (
+            !Object.prototype.hasOwnProperty.call(requestedDraftLooks, targetId)
+            || JSON.stringify(currentLook) !== JSON.stringify(requestedDraftLooks[targetId])
+          )),
+        ));
         if (!testStrip.enabled) {
           markProjectInstalled({
-            // The audition already owns requestedRevision. Promoting that
-            // verified draft into canonical project state changes the project
-            // fingerprint once more; acknowledge that exact committed state,
-            // while any concurrent edit still remains ahead and therefore dirty.
-            revision: requestedRevision + (commitCreatesRevision ? 1 : 0),
+            revision: requestedRevision,
             generation: requestedGeneration,
             cardId: verification.cardId,
             projectRevision: exactPrepared.config.projectRevision,
@@ -1099,6 +1119,8 @@ import { PatternPreview } from './PatternPreview.jsx';
           setStatusKind('err');
           setStatus('Saved in the Studio, but could not reach the card. Copy or download the setup JSON and paste it on the card page.');
         }
+      } finally {
+        if (installIntentRef.current === installIntent) installIntentRef.current = null;
       }
     };
 

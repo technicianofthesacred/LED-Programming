@@ -66,7 +66,7 @@ function createPiecePreviewProject(id = 'piece-preview-fixture') {
   return project;
 }
 
-async function mockVerifiedInstallCard(page, project, cardId = 'lw-pattern-install') {
+async function mockVerifiedInstallCard(page, project, cardId = 'lw-pattern-install', options: any = {}) {
   let installedConfig = buildCardRuntimePackageFromProject({
     projectId: project.id,
     projectName: project.name,
@@ -74,8 +74,9 @@ async function mockVerifiedInstallCard(page, project, cardId = 'lw-pattern-insta
     patchBoard: project.layout.patchBoard,
     standaloneController: project.devices.standaloneController,
   }).config;
-  await page.route('**/api/firmware-info', route => route.fulfill({
-    json: {
+  await page.route('**/api/firmware-info', async route => {
+    if (options.verificationGate && options.posted?.()) await options.verificationGate();
+    await route.fulfill({ json: {
       app: 'Lightweaver',
       cardId,
       firmwareVersion: '1.0.0',
@@ -83,17 +84,25 @@ async function mockVerifiedInstallCard(page, project, cardId = 'lw-pattern-insta
       projectRevision: installedConfig.projectRevision,
       projectFingerprint: installedConfig.projectFingerprint,
       outputs: installedConfig.led.outputs,
-    },
-  }));
+    } });
+  });
   await page.route('**/api/status', route => route.fulfill({
     json: { ok: true, cardId, firmwareVersion: '1.0.0', led: { pixels: installedConfig.led.pixels } },
   }));
   await page.route('**/api/config', async route => {
     if (route.request().method() === 'GET') {
+      if (options.verificationGate && options.posted?.()) await options.verificationGate();
       await route.fulfill({ json: installedConfig });
       return;
     }
-    installedConfig = JSON.parse(route.request().postData() || '{}');
+    const requestedConfig = JSON.parse(route.request().postData() || '{}');
+    options.onConfigRequest?.(structuredClone(requestedConfig));
+    if (options.configGate) await options.configGate();
+    if (options.failConfig) {
+      await route.fulfill({ status: 503, json: { ok: false } });
+      return;
+    }
+    installedConfig = requestedConfig;
     await route.fulfill({ json: { ok: true, requiresReboot: false } });
   });
   await page.route('**/api/control', async route => {
@@ -296,6 +305,87 @@ test('verified Install persists the auditioned section assignment in Studio', as
   expect(saved.layout.patchBoard.patches[0].playback.patternId).toBe('fire');
   expect(saved.layout.patchBoard.patches[1].playback).toMatchObject({ patternId: 'plasma', brightness: 0.42 });
   expect(saved.devices.standaloneController.playlist[0].patternId).toBe('plasma');
+});
+
+test('rapid duplicate Install clicks start only one card write', async ({ page }) => {
+  const project = createPiecePreviewProject('piece-preview-single-install');
+  const configRequests: any[] = [];
+  let releaseConfig: (() => void) | null = null;
+  const configGate = new Promise<void>(resolve => { releaseConfig = resolve; });
+  await mockVerifiedInstallCard(page, project, 'lw-pattern-single-install', {
+    onConfigRequest: config => configRequests.push(config),
+    configGate: () => configGate,
+  });
+  await gotoSavedProjectPatterns(page, project);
+
+  const install = page.getByTitle('Install the current look on the card');
+  await expect(install).toBeEnabled();
+  await Promise.all([
+    install.dispatchEvent('click'),
+    install.dispatchEvent('click'),
+  ]);
+  await expect.poll(() => configRequests.length).toBeGreaterThan(0);
+  await page.waitForTimeout(200);
+  expect(configRequests).toHaveLength(1);
+  releaseConfig?.();
+  await expect(install).toBeEnabled();
+});
+
+test('an edit made during verification remains a draft above the installed snapshot', async ({ page }) => {
+  const project = createPiecePreviewProject('piece-preview-install-newer-draft');
+  let posted = false;
+  let releaseVerification: (() => void) | null = null;
+  const verificationGate = new Promise<void>(resolve => { releaseVerification = resolve; });
+  await mockVerifiedInstallCard(page, project, 'lw-pattern-newer-draft', {
+    onConfigRequest: () => { posted = true; },
+    posted: () => posted,
+    verificationGate: () => verificationGate,
+  });
+  await gotoSavedProjectPatterns(page, project);
+
+  const innerTarget = page.getByTestId('section-target-patch-default-inner-circle');
+  const install = page.getByTitle('Install the current look on the card');
+  await innerTarget.click();
+  await page.getByLabel('Preview taps on the LED card').uncheck();
+  await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
+  await install.click();
+  await expect.poll(() => posted).toBe(true);
+  await expect(install).toBeDisabled();
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ripple"]').click();
+  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Ripple');
+  releaseVerification?.();
+  await expect(install).toBeEnabled();
+  await page.waitForTimeout(300);
+
+  await expect(page.locator('.savechip')).toContainText('Unsaved changes');
+  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Ripple');
+  await expect(innerTarget).toHaveClass(/\bon\b/);
+  await expect.poll(() => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
+    return saved.layout?.patchBoard?.patches?.[1]?.playback?.patternId;
+  })).toBe('plasma');
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}'));
+  expect(saved.devices.standaloneController.playlist[0].patternId).toBe('plasma');
+});
+
+test('a rejected Install preserves canonical Studio state and the current draft', async ({ page }) => {
+  const project = createPiecePreviewProject('piece-preview-rejected-install');
+  const canonicalBefore = JSON.stringify(project.layout.patchBoard);
+  await mockVerifiedInstallCard(page, project, 'lw-pattern-rejected-install', { failConfig: true });
+  await gotoSavedProjectPatterns(page, project);
+
+  await page.getByTestId('section-target-patch-default-inner-circle').click();
+  await page.getByLabel('Preview taps on the LED card').uncheck();
+  await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
+  await page.getByTitle('Install the current look on the card').click();
+
+  await expect(page.getByTitle('Install the current look on the card')).toHaveText(/Retry install/);
+  await expect(page.getByTestId('card-live-preview-label')).toHaveText('Plasma');
+  await page.waitForTimeout(650);
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}'));
+  expect(JSON.stringify(saved.layout.patchBoard)).toBe(canonicalBefore);
+  expect(saved.devices.standaloneController.playlist).toHaveLength(0);
 });
 
 test('v3 patterns mounts the mockup shell with a chip-ready catalog', async ({ page }) => {
