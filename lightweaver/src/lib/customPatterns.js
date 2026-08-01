@@ -1,6 +1,7 @@
 export const CUSTOM_PATTERNS_KEY = 'lw_custom_patterns';
 export const CUSTOM_PATTERN_REVISIONS_KEY = 'lw_custom_pattern_revisions';
 export const CUSTOM_PATTERNS_EVENT = 'lw:custom-updated';
+export const WORKSPACE_ASSETS_EVENT = 'lw:workspace-assets-changed';
 
 function getStorage(storage) {
   if (storage) return storage;
@@ -29,9 +30,8 @@ function safeWriteJson(key, value, storage) {
 
 function dispatchCustomPatternsEvent(options = {}) {
   if (options.dispatch === false || typeof window === 'undefined') return;
-  try {
-    window.dispatchEvent(new CustomEvent(CUSTOM_PATTERNS_EVENT));
-  } catch {}
+  try { window.dispatchEvent(new CustomEvent(CUSTOM_PATTERNS_EVENT)); } catch {}
+  try { window.dispatchEvent(new CustomEvent(WORKSPACE_ASSETS_EVENT)); } catch {}
 }
 
 export function buildCustomPatternId(name = '', existingIds = []) {

@@ -2,6 +2,14 @@ import { PATTERN_LAB_RECIPE_VERSION, assertPatternLabJsonSafe, normalizePatternL
 
 export const PATTERN_LAB_DRAFTS_KEY = 'lw_pattern_lab_drafts_v1';
 export const PATTERN_LAB_DRAFTS_BACKUP_KEY = 'lw_pattern_lab_drafts_v1_backup';
+export const WORKSPACE_ASSETS_EVENT = 'lw:workspace-assets-changed';
+
+function dispatchWorkspaceAssetsEvent(options = {}) {
+  if (options.dispatch === false || typeof globalThis.window?.dispatchEvent !== 'function') return;
+  try {
+    globalThis.window.dispatchEvent(new CustomEvent(WORKSPACE_ASSETS_EVENT));
+  } catch {}
+}
 
 function defaultStorage() {
   try {
@@ -68,6 +76,7 @@ export function writePatternLabDrafts(drafts, options = {}) {
   } catch {
     // A successful primary write remains useful when storage is nearly full.
   }
+  dispatchWorkspaceAssetsEvent(options);
   return normalized;
 }
 
