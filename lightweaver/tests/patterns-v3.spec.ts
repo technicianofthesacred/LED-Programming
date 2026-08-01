@@ -126,6 +126,135 @@ async function mockVerifiedInstallCard(page, project, cardId = 'lw-pattern-insta
   }, cardId);
 }
 
+test('Shift colors immediately tries the next order and opens direct correction controls', async ({ page }) => {
+  const project = createDefaultProject();
+  project.devices.standaloneController.led.colorOrder = 'RGB';
+  project.devices.standaloneController.led.colorOrderConfirmed = true;
+  project.devices.standaloneController.led.confirmedColorOrder = 'RGB';
+  const cardId = 'lw-pattern-color-shift';
+  const controlRequests: Record<string, unknown>[] = [];
+  const recoveryRequests: Record<string, unknown>[] = [];
+
+  await page.addInitScript((id) => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id }));
+  }, cardId);
+  await page.route('**/api/firmware-info', route => route.fulfill({ json: {
+    app: 'Lightweaver', cardId, firmwareVersion: '1.0.0', buildId: 'pattern-color-shift-build',
+  } }));
+  await page.route('**/api/status', route => route.fulfill({ json: {
+    app: 'Lightweaver', ok: true, cardId, firmwareVersion: '1.0.0', buildId: 'pattern-color-shift-build',
+    runtimePhase: 'ready', commandReady: true, outputReady: true,
+  } }));
+  await page.route('**/api/control', async route => {
+    const body = JSON.parse(route.request().postData() || '{}');
+    controlRequests.push(body);
+    await route.fulfill({ json: { ok: true, cardId, colorOrder: body.colorOrder || 'RGB' } });
+  });
+  await page.route('**/api/recover-lights', async route => {
+    recoveryRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ json: {
+      ok: true,
+      accepted: true,
+      diagnostics: { frameSubmitted: true, nonBlackPixels: 1, brightnessByte: 89 },
+    } });
+  });
+  await gotoSavedProjectPatterns(page, project);
+
+  const trigger = page.getByRole('button', { name: 'Shift colors' });
+  await trigger.click();
+
+  const popover = page.getByRole('dialog', { name: 'Shift colors' });
+  await expect(popover).toBeVisible();
+  await expect(popover.getByText('What color do you see?')).toHaveCount(0);
+  await expect(popover.getByRole('button', { name: 'Try next order' })).toBeVisible();
+  await expect(popover.getByRole('button', { name: 'Red is correct' })).toBeVisible();
+  await expect(popover.getByRole('button', { name: 'Looks right' })).toHaveCount(0);
+  await expect(popover.getByRole('button', { name: 'Green is correct' })).toHaveCount(0);
+  await expect.poll(() => controlRequests.some(request => request.colorOrder === 'GRB')).toBe(true);
+  await expect.poll(() => recoveryRequests.some(request => request.patternId === 'test-red')).toBe(true);
+  await expect(popover.getByTestId('strip-color-order')).toHaveText('GRB');
+  await expect(popover.getByRole('button', { name: 'Red is correct' })).toBeEnabled();
+  await popover.getByRole('button', { name: 'Red is correct' }).click();
+  await expect(popover.getByRole('button', { name: 'Red is correct' })).toHaveCount(0);
+  await expect(popover.getByRole('button', { name: 'Try other match' })).toBeVisible();
+  await expect(popover.getByRole('button', { name: 'Green is correct' })).toBeVisible();
+  await expect.poll(() => recoveryRequests.some(request => request.patternId === 'test-green')).toBe(true);
+  await expect.poll(() => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
+    return saved.devices?.standaloneController?.led?.colorOrderConfirmed;
+  })).toBe(false);
+
+  const greenTestsBeforePair = recoveryRequests.filter(request => request.patternId === 'test-green').length;
+  await popover.getByRole('button', { name: 'Try other match' }).click();
+  await expect.poll(() => controlRequests.some(request => request.colorOrder === 'BRG')).toBe(true);
+  await expect.poll(() => recoveryRequests.filter(request => request.patternId === 'test-green').length).toBeGreaterThan(greenTestsBeforePair);
+  await expect(popover.getByTestId('strip-color-order')).toHaveText('BRG');
+  await expect(popover.getByRole('button', { name: 'Green is correct' })).toBeEnabled();
+  await popover.getByRole('button', { name: 'Green is correct' }).click();
+  await expect(popover.locator('.lwb-quiz-order')).toContainText('BRG · confirmed');
+  await expect.poll(() => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
+    return saved.devices?.standaloneController?.led?.confirmedColorOrder;
+  })).toBe('BRG');
+
+  await trigger.dispatchEvent('click');
+  await expect(popover).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+
+  await trigger.click();
+  await expect(popover.getByTestId('strip-color-order')).toHaveText('BGR');
+  await page.keyboard.press('Escape');
+  await expect(popover).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+
+  await page.setViewportSize({ width: 390, height: 260 });
+  await trigger.click();
+  await expect(popover.getByTestId('strip-color-order')).toHaveText('RBG');
+  const popoverBox = await popover.boundingBox();
+  expect(popoverBox).toBeTruthy();
+  expect(popoverBox!.x).toBeGreaterThanOrEqual(0);
+  expect(popoverBox!.x + popoverBox!.width).toBeLessThanOrEqual(390);
+  expect(popoverBox!.y).toBeGreaterThanOrEqual(0);
+  expect(popoverBox!.y + popoverBox!.height).toBeLessThanOrEqual(260);
+  await page.locator('.pm-menu-backdrop').click({ position: { x: 8, y: 8 } });
+  await expect(popover).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+});
+
+test('a failed quick color shift keeps the last card-confirmed order', async ({ page }) => {
+  const project = createDefaultProject();
+  project.devices.standaloneController.led.colorOrder = 'RGB';
+  project.devices.standaloneController.led.colorOrderConfirmed = true;
+  project.devices.standaloneController.led.confirmedColorOrder = 'RGB';
+  const cardId = 'lw-pattern-color-shift-failure';
+
+  await page.addInitScript((id) => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id }));
+  }, cardId);
+  await page.route('**/api/firmware-info', route => route.fulfill({ json: {
+    app: 'Lightweaver', cardId, firmwareVersion: '1.0.0', buildId: 'pattern-color-shift-failure-build',
+  } }));
+  await page.route('**/api/status', route => route.fulfill({ json: {
+    app: 'Lightweaver', ok: true, cardId, firmwareVersion: '1.0.0', buildId: 'pattern-color-shift-failure-build',
+    runtimePhase: 'ready', commandReady: true, outputReady: true,
+  } }));
+  await page.route('**/api/control', route => route.fulfill({ status: 503, json: { ok: false } }));
+  await gotoSavedProjectPatterns(page, project);
+
+  await page.getByRole('button', { name: 'Shift colors' }).click();
+  const popover = page.getByRole('dialog', { name: 'Shift colors' });
+  await expect(popover.getByRole('alert')).toBeVisible();
+  await expect(popover.getByTestId('strip-color-order')).toHaveText('RGB');
+  await expect.poll(() => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
+    return saved.devices?.standaloneController?.led;
+  })).toMatchObject({
+    colorOrder: 'RGB',
+    colorOrderConfirmed: true,
+    confirmedColorOrder: 'RGB',
+  });
+});
+
 test('fresh strip preview and design target stay synchronized without committing the audition', async ({ page }) => {
   await gotoFreshPatterns(page);
 
