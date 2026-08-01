@@ -6,12 +6,21 @@ import { downloadJsonFile, downloadTextFile } from '../lib/downloadFile.js';
 import { canonicalProjectFileName } from '../lib/projectFiles.js';
 import { createProjectId, migrateProject } from '../lib/projectModel.js';
 import { listProjectLibraryRecords } from '../lib/projectStorage.js';
+import {
+  WORKSPACE_ASSETS_EVENT,
+  WORKSPACE_ASSETS_VERSION,
+  readWorkspaceAssets,
+  writeWorkspaceAssets,
+} from '../lib/workspaceAssets.js';
 import { useProject } from './ProjectContext.jsx';
 
 const ACTIVE_REMOTE_KEY = 'lw_cloud_active_project_v1';
 const BROWSER_CLAIMS_KEY = 'lw_cloud_claimed_browser_projects_v1';
+const WORKSPACE_ASSET_HEADS_KEY = 'lw_cloud_workspace_asset_heads_v1';
 const CLOUD_SAVE_DEBOUNCE_MS = 900;
 const CLOUD_RETRY_MS = 2500;
+const WORKSPACE_ASSET_DEBOUNCE_MS = 220;
+const WORKSPACE_ASSET_KINDS = ['custom-patterns', 'pattern-lab-drafts'];
 
 const CloudLibraryContext = createContext(null);
 
@@ -74,6 +83,136 @@ function canonicalJson(value) {
     return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
   }
   return JSON.stringify(value);
+}
+
+function workspaceAssetValue(snapshot, kind) {
+  if (kind === 'custom-patterns') {
+    return {
+      version: WORKSPACE_ASSETS_VERSION,
+      customPatterns: snapshot.customPatterns,
+      customPatternRevisions: snapshot.customPatternRevisions,
+    };
+  }
+  return {
+    version: WORKSPACE_ASSETS_VERSION,
+    patternLabDrafts: snapshot.patternLabDrafts,
+  };
+}
+
+function emptyWorkspaceAssetValue(kind) {
+  return kind === 'custom-patterns'
+    ? { version: WORKSPACE_ASSETS_VERSION, customPatterns: [], customPatternRevisions: {} }
+    : { version: WORKSPACE_ASSETS_VERSION, patternLabDrafts: [] };
+}
+
+function defaultWorkspaceAssetHeads() {
+  return Object.fromEntries(WORKSPACE_ASSET_KINDS.map(kind => [kind, {
+    revision: 0,
+    valueHash: canonicalJson(emptyWorkspaceAssetValue(kind)),
+  }]));
+}
+
+function readWorkspaceAssetHeads() {
+  try {
+    const value = JSON.parse(localStorage.getItem(WORKSPACE_ASSET_HEADS_KEY) || 'null');
+    const defaults = defaultWorkspaceAssetHeads();
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return defaults;
+    for (const kind of WORKSPACE_ASSET_KINDS) {
+      const head = value[kind];
+      if (Number.isInteger(head?.revision) && head.revision >= 0 && typeof head.valueHash === 'string') {
+        defaults[kind] = { revision: head.revision, valueHash: head.valueHash };
+      }
+    }
+    return defaults;
+  } catch {
+    return defaultWorkspaceAssetHeads();
+  }
+}
+
+function writeWorkspaceAssetHeads(heads) {
+  try {
+    localStorage.setItem(WORKSPACE_ASSET_HEADS_KEY, JSON.stringify(heads));
+  } catch {
+    // The in-memory heads still keep this tab synchronized.
+  }
+}
+
+function applyWorkspaceAssetValue(snapshot, kind, value) {
+  if (kind === 'custom-patterns') {
+    return {
+      ...snapshot,
+      customPatterns: value.customPatterns,
+      customPatternRevisions: value.customPatternRevisions,
+    };
+  }
+  return { ...snapshot, patternLabDrafts: value.patternLabDrafts };
+}
+
+function uniqueCollisionId(id, used) {
+  const base = `${id}_local_copy`;
+  let next = base;
+  let suffix = 2;
+  while (used.has(next)) {
+    next = `${base}_${suffix}`;
+    suffix += 1;
+  }
+  used.add(next);
+  return next;
+}
+
+function localCopyName(name) {
+  return `${String(name || 'Untitled').replace(/ \(local copy\)$/, '')} (local copy)`;
+}
+
+function mergeWorkspaceAssetConflict(kind, remoteValue, localValue) {
+  if (kind === 'pattern-lab-drafts') {
+    const remoteDrafts = Array.isArray(remoteValue.patternLabDrafts) ? remoteValue.patternLabDrafts : [];
+    const localDrafts = Array.isArray(localValue.patternLabDrafts) ? localValue.patternLabDrafts : [];
+    const used = new Set(remoteDrafts.map(draft => draft.id));
+    const remoteById = new Map(remoteDrafts.map(draft => [draft.id, draft]));
+    const additions = [];
+    for (const draft of localDrafts) {
+      const remote = remoteById.get(draft.id);
+      if (!remote) {
+        used.add(draft.id);
+        additions.push(draft);
+      } else if (canonicalJson(remote) !== canonicalJson(draft)) {
+        additions.push({ ...draft, id: uniqueCollisionId(draft.id, used), name: localCopyName(draft.name) });
+      }
+    }
+    return {
+      version: WORKSPACE_ASSETS_VERSION,
+      patternLabDrafts: [...remoteDrafts, ...additions],
+    };
+  }
+
+  const remotePatterns = Array.isArray(remoteValue.customPatterns) ? remoteValue.customPatterns : [];
+  const localPatterns = Array.isArray(localValue.customPatterns) ? localValue.customPatterns : [];
+  const remoteRevisions = remoteValue.customPatternRevisions || {};
+  const localRevisions = localValue.customPatternRevisions || {};
+  const used = new Set(remotePatterns.map(pattern => pattern.id));
+  const remoteById = new Map(remotePatterns.map(pattern => [pattern.id, pattern]));
+  const patterns = [...remotePatterns];
+  const revisions = structuredClone(remoteRevisions);
+  for (const pattern of localPatterns) {
+    const remote = remoteById.get(pattern.id);
+    if (!remote) {
+      used.add(pattern.id);
+      patterns.push(pattern);
+      if (Array.isArray(localRevisions[pattern.id])) revisions[pattern.id] = localRevisions[pattern.id];
+      continue;
+    }
+    if (canonicalJson(remote) === canonicalJson(pattern)) continue;
+    const copyId = uniqueCollisionId(pattern.id, used);
+    patterns.push({ ...pattern, id: copyId, name: localCopyName(pattern.name) });
+    revisions[copyId] = (Array.isArray(localRevisions[pattern.id]) ? localRevisions[pattern.id] : [])
+      .map(revision => ({ ...revision, id: copyId, name: localCopyName(revision.name) }));
+  }
+  return {
+    version: WORKSPACE_ASSETS_VERSION,
+    customPatterns: patterns,
+    customPatternRevisions: revisions,
+  };
 }
 
 function projectMarker(lifecycle) {
@@ -152,6 +291,13 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   const [conflict, setConflict] = useState(null);
   const [online, setOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine !== false);
   const [refreshTick, setRefreshTick] = useState(0);
+  const [workspaceAssets, setWorkspaceAssets] = useState({
+    status: 'loading',
+    ready: false,
+    conflict: null,
+    error: null,
+    generation: 0,
+  });
   const [, setBrowserClaimRevision] = useState(0);
 
   const lifecycleRef = useRef(projectLifecycle);
@@ -170,6 +316,15 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
   const pendingSaveOperationRef = useRef(null);
   const performSaveRef = useRef(null);
   const activeRemoteEpochRef = useRef(0);
+  const workspaceAssetHeadsRef = useRef(readWorkspaceAssetHeads());
+  const workspaceAssetsLoadedRef = useRef(false);
+  const workspaceAssetTimerRef = useRef(null);
+  const workspaceAssetRetryRef = useRef(null);
+  const workspaceAssetInFlightRef = useRef(false);
+  const workspaceAssetQueuedRef = useRef(false);
+  const pendingWorkspaceAssetOperationsRef = useRef(null);
+  const performWorkspaceAssetSyncRef = useRef(null);
+  const loadWorkspaceAssetsRef = useRef(null);
 
   lifecycleRef.current = projectLifecycle;
   documentRef.current = serializeProject();
@@ -246,6 +401,245 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     return error;
   }, [demoteSession]);
 
+  const setWorkspaceAssetStatus = useCallback(patch => {
+    if (!mountedRef.current) return;
+    setWorkspaceAssets(current => ({ ...current, ...patch }));
+  }, []);
+
+  const performWorkspaceAssetSync = useCallback(async suppliedOperations => {
+    if (!workspaceAssetsLoadedRef.current || sessionRef.current.status !== 'authenticated') {
+      workspaceAssetQueuedRef.current = true;
+      return { ok: false, reason: 'not-ready' };
+    }
+    if (workspaceAssetInFlightRef.current) {
+      workspaceAssetQueuedRef.current = true;
+      return { ok: false, reason: 'queued' };
+    }
+
+    let operations = suppliedOperations || pendingWorkspaceAssetOperationsRef.current;
+    if (!operations) {
+      let snapshot;
+      try {
+        snapshot = readWorkspaceAssets();
+      } catch (error) {
+        setWorkspaceAssetStatus({ status: 'error', error: normalizeError(error) });
+        return { ok: false, reason: 'local-assets-invalid', error };
+      }
+      operations = WORKSPACE_ASSET_KINDS.flatMap(kind => {
+        const value = workspaceAssetValue(snapshot, kind);
+        const valueHash = canonicalJson(value);
+        const head = workspaceAssetHeadsRef.current[kind];
+        return valueHash === head.valueHash ? [] : [{
+          kind,
+          baseRevision: head.revision,
+          value,
+          valueHash,
+          requestId: mutationRequestId(),
+        }];
+      });
+    }
+    if (!operations.length) {
+      pendingWorkspaceAssetOperationsRef.current = null;
+      setWorkspaceAssetStatus({ status: 'saved', error: null });
+      return { ok: true, unchanged: true };
+    }
+    pendingWorkspaceAssetOperationsRef.current = operations;
+    if (!onlineRef.current || navigator.onLine === false) {
+      setWorkspaceAssetStatus({ status: 'waiting', error: null });
+      return { ok: false, reason: 'offline' };
+    }
+
+    workspaceAssetInFlightRef.current = true;
+    setWorkspaceAssetStatus({ status: 'saving', error: null });
+    try {
+      for (let index = 0; index < operations.length; index += 1) {
+        const operation = operations[index];
+        try {
+          const acknowledged = await client.writeAsset(operation.kind, {
+            baseRevision: operation.baseRevision,
+            value: operation.value,
+          }, { requestId: operation.requestId });
+          workspaceAssetHeadsRef.current[operation.kind] = {
+            revision: acknowledged.revision,
+            valueHash: operation.valueHash,
+          };
+          writeWorkspaceAssetHeads(workspaceAssetHeadsRef.current);
+          pendingWorkspaceAssetOperationsRef.current = operations.slice(index + 1);
+        } catch (rawError) {
+          const error = normalizeError(rawError);
+          if (!mountedRef.current) return { ok: false, reason: 'unmounted', error };
+          if (error.state === 'conflict') {
+            let remote;
+            try {
+              remote = await client.readAsset(operation.kind);
+            } catch (readError) {
+              const normalizedReadError = normalizeError(readError);
+              pendingWorkspaceAssetOperationsRef.current = operations.slice(index);
+              setWorkspaceAssetStatus({ status: 'error', error: normalizedReadError });
+              return { ok: false, reason: normalizedReadError.state, error: normalizedReadError };
+            }
+            pendingWorkspaceAssetOperationsRef.current = null;
+            workspaceAssetHeadsRef.current[operation.kind] = {
+              revision: remote.revision,
+              valueHash: canonicalJson(remote.value),
+            };
+            writeWorkspaceAssetHeads(workspaceAssetHeadsRef.current);
+            setWorkspaceAssetStatus({
+              status: 'conflict',
+              conflict: {
+                kind: operation.kind,
+                localValue: structuredClone(operation.value),
+                remote: structuredClone(remote),
+              },
+              error,
+            });
+            return { ok: false, reason: 'conflict', error };
+          }
+          if (isAuthenticationError(error)) {
+            pendingWorkspaceAssetOperationsRef.current = null;
+            demoteSession(error);
+            setWorkspaceAssetStatus({ status: 'error', error });
+            return { ok: false, reason: error.state, error };
+          }
+          pendingWorkspaceAssetOperationsRef.current = operations.slice(index);
+          if (isTransientError(error) || navigator.onLine === false) {
+            setWorkspaceAssetStatus({ status: 'waiting', error });
+            clearTimeout(workspaceAssetRetryRef.current);
+            workspaceAssetRetryRef.current = setTimeout(() => {
+              if (mountedRef.current) void performWorkspaceAssetSyncRef.current?.(
+                pendingWorkspaceAssetOperationsRef.current,
+              );
+            }, CLOUD_RETRY_MS);
+          } else {
+            setWorkspaceAssetStatus({ status: 'error', error });
+          }
+          return { ok: false, reason: error.state, error };
+        }
+      }
+      pendingWorkspaceAssetOperationsRef.current = null;
+      setWorkspaceAssetStatus({ status: 'saved', conflict: null, error: null });
+      return { ok: true };
+    } finally {
+      workspaceAssetInFlightRef.current = false;
+      if (mountedRef.current && workspaceAssetQueuedRef.current && !pendingWorkspaceAssetOperationsRef.current) {
+        workspaceAssetQueuedRef.current = false;
+        clearTimeout(workspaceAssetTimerRef.current);
+        workspaceAssetTimerRef.current = setTimeout(() => {
+          void performWorkspaceAssetSyncRef.current?.();
+        }, WORKSPACE_ASSET_DEBOUNCE_MS);
+      }
+    }
+  }, [client, demoteSession, setWorkspaceAssetStatus]);
+  performWorkspaceAssetSyncRef.current = performWorkspaceAssetSync;
+
+  const queueWorkspaceAssetSync = useCallback(() => {
+    workspaceAssetQueuedRef.current = true;
+    if (!workspaceAssetsLoadedRef.current || sessionRef.current.status !== 'authenticated') return;
+    setWorkspaceAssetStatus({ status: onlineRef.current ? 'pending' : 'waiting', error: null });
+    clearTimeout(workspaceAssetTimerRef.current);
+    if (!onlineRef.current || navigator.onLine === false) return;
+    workspaceAssetTimerRef.current = setTimeout(() => {
+      workspaceAssetQueuedRef.current = false;
+      void performWorkspaceAssetSyncRef.current?.();
+    }, WORKSPACE_ASSET_DEBOUNCE_MS);
+  }, [setWorkspaceAssetStatus]);
+
+  const loadWorkspaceAssets = useCallback(async ({ force = false, replaceLocal = false } = {}) => {
+    if (!force && workspaceAssetsLoadedRef.current) return { ok: true, unchanged: true };
+    setWorkspaceAssetStatus({ status: 'loading', ready: false, conflict: null, error: null });
+    let localSnapshot;
+    try {
+      localSnapshot = readWorkspaceAssets();
+    } catch (error) {
+      setWorkspaceAssetStatus({ status: 'error', ready: true, error: normalizeError(error) });
+      return { ok: false, reason: 'local-assets-invalid', error };
+    }
+
+    try {
+      const remoteEntries = await Promise.all(WORKSPACE_ASSET_KINDS.map(async kind => {
+        try {
+          return [kind, await client.readAsset(kind)];
+        } catch (rawError) {
+          const error = normalizeError(rawError);
+          if (error.status === 404) return [kind, null];
+          throw error;
+        }
+      }));
+      if (!mountedRef.current) return { ok: false, reason: 'unmounted' };
+      let nextSnapshot = localSnapshot;
+      let bootstrapConflict = null;
+      for (const [kind, remote] of remoteEntries) {
+        if (remote) {
+          const localValue = workspaceAssetValue(localSnapshot, kind);
+          const localValueHash = canonicalJson(localValue);
+          const remoteValueHash = canonicalJson(remote.value);
+          const acknowledgedValueHash = workspaceAssetHeadsRef.current[kind].valueHash;
+          const localIsDirty = localValueHash !== acknowledgedValueHash;
+          if (!replaceLocal && localIsDirty && localValueHash !== remoteValueHash && !bootstrapConflict) {
+            bootstrapConflict = {
+              kind,
+              localValue: structuredClone(localValue),
+              remote: structuredClone(remote),
+            };
+          } else {
+            nextSnapshot = applyWorkspaceAssetValue(nextSnapshot, kind, remote.value);
+          }
+          workspaceAssetHeadsRef.current[kind] = {
+            revision: remote.revision,
+            valueHash: remoteValueHash,
+          };
+        } else {
+          workspaceAssetHeadsRef.current[kind] = {
+            revision: 0,
+            valueHash: canonicalJson(emptyWorkspaceAssetValue(kind)),
+          };
+        }
+      }
+      writeWorkspaceAssetHeads(workspaceAssetHeadsRef.current);
+      workspaceAssetsLoadedRef.current = true;
+      if (bootstrapConflict) {
+        setWorkspaceAssets(current => ({
+          ...current,
+          status: 'conflict',
+          ready: true,
+          conflict: bootstrapConflict,
+          error: new CloudLibraryError(
+            'revision_conflict',
+            'Workspace assets differ from the online library.',
+            { status: 409 },
+          ),
+          generation: current.generation + 1,
+        }));
+        return { ok: false, reason: 'conflict' };
+      }
+      writeWorkspaceAssets(nextSnapshot, undefined, { dispatch: false });
+      setWorkspaceAssets(current => ({
+        ...current,
+        status: 'saved',
+        ready: true,
+        conflict: null,
+        error: null,
+        generation: current.generation + 1,
+      }));
+      queueWorkspaceAssetSync();
+      return { ok: true };
+    } catch (rawError) {
+      const error = normalizeError(rawError);
+      if (!mountedRef.current) return { ok: false, reason: 'unmounted', error };
+      if (isAuthenticationError(error)) demoteSession(error);
+      const status = isTransientError(error) || navigator.onLine === false ? 'waiting' : 'error';
+      setWorkspaceAssetStatus({ status, ready: true, error });
+      if (status === 'waiting') {
+        clearTimeout(workspaceAssetRetryRef.current);
+        workspaceAssetRetryRef.current = setTimeout(() => {
+          if (mountedRef.current) void loadWorkspaceAssetsRef.current?.({ force: true });
+        }, CLOUD_RETRY_MS);
+      }
+      return { ok: false, reason: error.state, error };
+    }
+  }, [client, demoteSession, queueWorkspaceAssetSync, setWorkspaceAssetStatus]);
+  loadWorkspaceAssetsRef.current = loadWorkspaceAssets;
+
   const refreshProjects = useCallback(async () => {
     const [active, archived] = await Promise.all([
       client.listProjects({ state: 'active' }),
@@ -280,6 +674,10 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       const identity = await client.getSession();
       if (!mountedRef.current) return;
       const authenticated = { status: 'authenticated', ...identity, error: null };
+      sessionRef.current = authenticated;
+      setSession(authenticated);
+      const assetResult = await loadWorkspaceAssets();
+      if (!mountedRef.current || isAuthenticationError(assetResult?.error)) return;
       sessionRef.current = authenticated;
       setSession(authenticated);
       const lists = await refreshProjects();
@@ -329,8 +727,15 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       setSession(next);
       setProjectsByState({ active: [], archived: [] });
       setSyncStatus(error.state === 'offline' ? 'waiting' : 'idle');
+      setWorkspaceAssets(current => ({
+        ...current,
+        status: error.state === 'offline' ? 'waiting' : 'local',
+        ready: true,
+        error: error.state === 'offline' ? error : null,
+        generation: current.generation + 1,
+      }));
     }
-  }, [client, handleLibraryError, markProjectPersisted, refreshProjects, setActiveRemote, setCurrentConflict]);
+  }, [client, handleLibraryError, loadWorkspaceAssets, markProjectPersisted, refreshProjects, setActiveRemote, setCurrentConflict]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -339,8 +744,21 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       mountedRef.current = false;
       clearTimeout(saveTimerRef.current);
       clearTimeout(retryRef.current);
+      clearTimeout(workspaceAssetTimerRef.current);
+      clearTimeout(workspaceAssetRetryRef.current);
     };
   }, [loadSession]);
+
+  useEffect(() => {
+    const onWorkspaceAssetsChanged = () => queueWorkspaceAssetSync();
+    window.addEventListener(WORKSPACE_ASSETS_EVENT, onWorkspaceAssetsChanged);
+    return () => window.removeEventListener(WORKSPACE_ASSETS_EVENT, onWorkspaceAssetsChanged);
+  }, [queueWorkspaceAssetSync]);
+
+  useEffect(() => {
+    document.documentElement.dataset.workspaceAssetsReady = workspaceAssets.ready ? 'true' : 'false';
+    return () => { delete document.documentElement.dataset.workspaceAssetsReady; };
+  }, [workspaceAssets.ready]);
 
   useEffect(() => {
     const onOnline = () => {
@@ -353,11 +771,22 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       } else {
         setRefreshTick(value => value + 1);
       }
+      clearTimeout(workspaceAssetRetryRef.current);
+      if (!workspaceAssetsLoadedRef.current) void loadWorkspaceAssetsRef.current?.({ force: true });
+      else if (pendingWorkspaceAssetOperationsRef.current) {
+        void performWorkspaceAssetSyncRef.current?.(pendingWorkspaceAssetOperationsRef.current);
+      } else if (workspaceAssetQueuedRef.current) {
+        workspaceAssetQueuedRef.current = false;
+        void performWorkspaceAssetSyncRef.current?.();
+      }
     };
     const onOffline = () => {
       onlineRef.current = false;
       setOnline(false);
       if (activeRemoteRef.current) setSyncStatus('waiting');
+      if (workspaceAssetQueuedRef.current || pendingWorkspaceAssetOperationsRef.current) {
+        setWorkspaceAssetStatus({ status: 'waiting' });
+      }
     };
     window.addEventListener('online', onOnline);
     window.addEventListener('offline', onOffline);
@@ -365,7 +794,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
     };
-  }, []);
+  }, [setWorkspaceAssetStatus]);
 
   const performSave = useCallback(async suppliedOperation => {
     const remote = activeRemoteRef.current;
@@ -798,13 +1227,50 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     if (!isLibraryBackup(candidate)) return { ok: false, reason: 'invalid' };
     try {
       const summary = await client.restoreBackup(candidate);
-      await refreshProjects();
+      await Promise.all([
+        refreshProjects(),
+        loadWorkspaceAssets({ force: true, replaceLocal: true }),
+      ]);
       return { ok: true, summary };
     } catch (error) {
       const normalized = handleLibraryError(error);
       return { ok: false, error: normalized };
     }
-  }, [client, handleLibraryError, refreshProjects]);
+  }, [client, handleLibraryError, loadWorkspaceAssets, refreshProjects]);
+
+  const resolveWorkspaceAssetConflict = useCallback(async action => {
+    const currentConflict = workspaceAssets.conflict;
+    if (!currentConflict) return { ok: false, reason: 'no-conflict' };
+    if (action !== 'keep-both') return { ok: false, reason: 'unknown-action' };
+    try {
+      const snapshot = readWorkspaceAssets();
+      const mergedValue = mergeWorkspaceAssetConflict(
+        currentConflict.kind,
+        currentConflict.remote.value,
+        currentConflict.localValue,
+      );
+      const mergedSnapshot = applyWorkspaceAssetValue(snapshot, currentConflict.kind, mergedValue);
+      writeWorkspaceAssets(mergedSnapshot, undefined, { dispatch: false });
+      workspaceAssetHeadsRef.current[currentConflict.kind] = {
+        revision: currentConflict.remote.revision,
+        valueHash: canonicalJson(currentConflict.remote.value),
+      };
+      writeWorkspaceAssetHeads(workspaceAssetHeadsRef.current);
+      pendingWorkspaceAssetOperationsRef.current = null;
+      setWorkspaceAssets(current => ({
+        ...current,
+        status: 'pending',
+        conflict: null,
+        error: null,
+        generation: current.generation + 1,
+      }));
+      return performWorkspaceAssetSync();
+    } catch (error) {
+      const normalized = normalizeError(error);
+      setWorkspaceAssetStatus({ status: 'error', error: normalized });
+      return { ok: false, reason: normalized.state, error: normalized };
+    }
+  }, [performWorkspaceAssetSync, setWorkspaceAssetStatus, workspaceAssets.conflict]);
 
   const claimBrowserProjects = useCallback(async () => {
     const claimedIds = readClaimedBrowserProjectIds();
@@ -884,6 +1350,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     archivedProjects: projectsByState.archived,
     activeRemoteProject,
     syncState,
+    workspaceAssets,
     browserProjects,
     signIn,
     retrySession: loadSession,
@@ -903,13 +1370,15 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     importProject,
     exportMaster,
     restoreMaster,
+    resolveWorkspaceAssetConflict,
     claimBrowserProjects,
     resolveConflict,
   }), [
     activeRemoteProject, archiveProject, browserProjects, claimBrowserProjects, createProject,
     deleteProject, duplicateProject, exportMaster, exportProject, importProject, listHistory,
     detachProject, loadSession, openProject, projectsByState, refreshProjects, renameProject, resolveConflict,
-    restoreHistory, restoreMaster, saveNow, session, signIn, syncState, unarchiveProject,
+    resolveWorkspaceAssetConflict, restoreHistory, restoreMaster, saveNow, session, signIn, syncState,
+    unarchiveProject, workspaceAssets,
   ]);
 
   return <CloudLibraryContext.Provider value={value}>{children}</CloudLibraryContext.Provider>;

@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test, type Browser, type Page, type Route } from '@playwright/test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,6 +28,18 @@ type StoredProject = {
   lastEditor: string;
   document: PortableProject;
   revisions: Revision[];
+};
+
+type StoredAsset = {
+  kind: string;
+  revision: number;
+  value: Record<string, any>;
+  revisions: Array<{
+    revision: number;
+    createdAt: string;
+    editor: string;
+    value: Record<string, any>;
+  }>;
 };
 
 function json(route: Route, body: unknown, status = 200) {
@@ -72,6 +84,7 @@ class LibraryFixture {
   role: Role;
   email: string;
   projects = new Map<string, StoredProject>();
+  assets = new Map<string, StoredAsset>();
   nextId = 1;
   delayNextUpdate = false;
   delayedUpdateStarted: Promise<void> | null = null;
@@ -82,6 +95,8 @@ class LibraryFixture {
   updateFailures: number[] = [];
   updateRequestIds: string[] = [];
   updateCount = 0;
+  assetWriteCount = 0;
+  assetWriteFailures: number[] = [];
   loseNextUpdateResponse = false;
   acceptedUpdateRequestIds = new Set<string>();
   signInNavigations: string[] = [];
@@ -127,6 +142,40 @@ class LibraryFixture {
     };
     this.projects.set(id, project);
     return project;
+  }
+
+  seedAsset(kind: string, value: Record<string, any>) {
+    const current = this.assets.get(kind);
+    const revision = (current?.revision || 0) + 1;
+    const stored = {
+      kind,
+      revision,
+      value: structuredClone(value),
+      revisions: [
+        ...(current?.revisions || []),
+        {
+          revision,
+          createdAt: `2026-08-01T${String(revision).padStart(2, '0')}:15:00.000Z`,
+          editor: 'other-worker@example.test',
+          value: structuredClone(value),
+        },
+      ],
+    };
+    this.assets.set(kind, stored);
+    return stored;
+  }
+
+  assetResponse(asset: StoredAsset) {
+    const head = asset.revisions.at(-1)!;
+    return {
+      kind: asset.kind,
+      revision: asset.revision,
+      hash: `fixture-${asset.kind}-${asset.revision}`,
+      bytes: JSON.stringify(asset.value).length,
+      updatedAt: head.createdAt,
+      lastEditor: head.editor,
+      value: structuredClone(asset.value),
+    };
   }
 
   holdNextUpdate() {
@@ -191,6 +240,35 @@ class LibraryFixture {
       if (segments[0] === 'session' && method === 'GET') {
         await json(route, { session: { email: this.email, role: this.role } });
         return;
+      }
+      if (segments[0] === 'assets' && segments.length === 2) {
+        const kind = segments[1];
+        const asset = this.assets.get(kind);
+        if (method === 'GET') {
+          if (!asset) {
+            await json(route, { error: { code: 'not_found', message: 'Workspace asset not found.', requestId: 'fixture-asset-404' } }, 404);
+            return;
+          }
+          await json(route, { asset: this.assetResponse(asset) });
+          return;
+        }
+        if (method === 'PUT') {
+          this.assetWriteCount += 1;
+          const failure = this.assetWriteFailures.shift();
+          if (failure) {
+            await json(route, { error: { code: `fixture_${failure}`, message: `Fixture asset failure ${failure}.`, requestId: `fixture-asset-${failure}` } }, failure);
+            return;
+          }
+          const body = request.postDataJSON();
+          if (body.baseRevision !== (asset?.revision || 0)) {
+            await json(route, { error: { code: 'revision_conflict', message: 'The workspace asset changed online.', requestId: 'fixture-asset-409' } }, 409);
+            return;
+          }
+          const updated = this.seedAsset(kind, body.value);
+          updated.revisions[updated.revisions.length - 1].editor = this.email;
+          await json(route, { asset: this.assetResponse(updated) });
+          return;
+        }
       }
       if (segments[0] === 'projects' && segments.length === 1 && method === 'GET') {
         const archived = url.searchParams.get('state') === 'archived';
@@ -361,7 +439,15 @@ class LibraryFixture {
               document: revision.document,
             })),
           })),
-          workspaceAssets: [],
+          workspaceAssets: [...this.assets.values()].map(asset => ({
+            kind: asset.kind,
+            currentRevision: asset.revision,
+            revisions: asset.revisions.map(revision => ({
+              revision: revision.revision,
+              createdAt: revision.createdAt,
+              value: structuredClone(revision.value),
+            })),
+          })),
         });
         return;
       }
@@ -370,6 +456,10 @@ class LibraryFixture {
         for (const item of backup.projects || []) {
           const source = item.revisions.find((revision: any) => revision.revision === item.currentRevision);
           this.seed(`${item.title} (restored)`, { archived: item.archived, revisions: [source.document] });
+        }
+        for (const item of backup.workspaceAssets || []) {
+          const source = item.revisions.find((revision: any) => revision.revision === item.currentRevision);
+          this.seedAsset(item.kind, source.value);
         }
         await json(route, { summary: { projectsCreated: backup.projects?.length || 0, assetsCreated: backup.workspaceAssets?.length || 0 } });
         return;
@@ -384,6 +474,40 @@ async function openLibrary(page: Page) {
   await expect(page.getByTestId('project-library-panel')).toBeVisible();
 }
 
+async function waitForAuthenticatedAssets(page: Page) {
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.workspaceAssetsReady || '')).toBe('true');
+  await expect(page.getByText('worker@example.test')).toBeVisible();
+}
+
+async function saveWorkspaceFixture(page: Page, suffix = '') {
+  await page.evaluate(async fixtureSuffix => {
+    const { saveCustomPattern, updateCustomPattern } = await import('/src/lib/customPatterns.js');
+    const { createPatternLabRecipe } = await import('/src/lib/patternLabRecipe.js');
+    const { savePatternLabDraft } = await import('/src/lib/patternLabStorage.js');
+    saveCustomPattern({
+      id: 'custom-cross-device',
+      name: `Cross-device glow${fixtureSuffix}`,
+      code: 'return rgb(0.1, 0.2, 0.3);',
+      palette: ['#112233', '#445566'],
+    });
+    updateCustomPattern('custom-cross-device', {
+      code: 'return rgb(0.4, 0.5, 0.6);',
+    });
+    savePatternLabDraft(createPatternLabRecipe({
+      id: 'draft-cross-device',
+      name: `Cross-device study${fixtureSuffix}`,
+    }));
+  }, suffix);
+}
+
+async function freshWorkspacePage(browser: Browser, fixture: LibraryFixture, hash = '#screen=pattern-lab') {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await fixture.install(page);
+  await page.goto(`/${hash}`, { waitUntil: 'domcontentloaded' });
+  return { context, page };
+}
+
 test('signs in with a top-level Access navigation and returns to the Studio', async ({ page }) => {
   const fixture = new LibraryFixture(null);
   await fixture.install(page);
@@ -394,6 +518,83 @@ test('signs in with a top-level Access navigation and returns to the Studio', as
   await expect(page.getByText('worker@example.test')).toBeVisible();
   await expect(page.getByText('Worker', { exact: true })).toBeVisible();
   expect(fixture.signInNavigations).toEqual(['/#screen=card&section=preferences']);
+});
+
+test('syncs custom patterns, revision history, and Pattern Lab drafts into a fresh browser before selection', async ({ page, browser }) => {
+  const fixture = new LibraryFixture('worker');
+  await fixture.install(page);
+  await openLibrary(page);
+  await waitForAuthenticatedAssets(page);
+
+  await saveWorkspaceFixture(page);
+  await expect.poll(() => fixture.assets.size).toBe(2);
+  await expect.poll(() => fixture.assets.get('custom-patterns')?.value.customPatternRevisions['custom-cross-device']?.length).toBe(1);
+  expect(fixture.assetWriteCount).toBe(2);
+
+  const fresh = await freshWorkspacePage(browser, fixture);
+  try {
+    await expect.poll(() => fresh.page.evaluate(() => document.documentElement.dataset.workspaceAssetsReady || '')).toBe('true');
+    await expect(fresh.page.getByLabel('Base pattern')).toContainText('Cross-device glow');
+    await expect(fresh.page.getByRole('button', { name: 'Open Cross-device study' })).toBeVisible();
+    const snapshot = await fresh.page.evaluate(async () => {
+      const { readWorkspaceAssets } = await import('/src/lib/workspaceAssets.js');
+      return readWorkspaceAssets();
+    });
+    expect(snapshot.customPatterns[0].id).toBe('custom-cross-device');
+    expect(snapshot.customPatternRevisions['custom-cross-device']).toHaveLength(1);
+    expect(snapshot.patternLabDrafts[0].id).toBe('draft-cross-device');
+  } finally {
+    await fresh.context.close();
+  }
+});
+
+test('keeps valid local workspace assets through an offline save and retries after reconnect', async ({ page, context }) => {
+  const fixture = new LibraryFixture('worker');
+  await fixture.install(page);
+  await openLibrary(page);
+  await waitForAuthenticatedAssets(page);
+
+  await context.setOffline(true);
+  await saveWorkspaceFixture(page, ' offline');
+  await expect.poll(() => page.evaluate(async () => {
+    const { readWorkspaceAssets } = await import('/src/lib/workspaceAssets.js');
+    return readWorkspaceAssets().customPatterns[0]?.name || '';
+  })).toBe('Cross-device glow offline');
+  expect(fixture.assets.size).toBe(0);
+
+  await context.setOffline(false);
+  await expect.poll(() => fixture.assets.get('custom-patterns')?.value.customPatterns[0]?.name).toBe('Cross-device glow offline');
+  await expect.poll(() => fixture.assets.get('pattern-lab-drafts')?.value.patternLabDrafts[0]?.name).toBe('Cross-device study offline');
+});
+
+test('makes stale workspace asset revisions explicit and keeps both named copies on resolution', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  fixture.seedAsset('custom-patterns', {
+    version: 1,
+    customPatterns: [{ id: 'custom-collision', name: 'Shared glow', code: 'return rgb(1, 0, 0);', custom: true }],
+    customPatternRevisions: {},
+  });
+  await fixture.install(page);
+  await page.goto('/#screen=pattern-lab', { waitUntil: 'domcontentloaded' });
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.workspaceAssetsReady || '')).toBe('true');
+
+  fixture.seedAsset('custom-patterns', {
+    version: 1,
+    customPatterns: [{ id: 'custom-collision', name: 'Shared glow online', code: 'return rgb(0, 0, 1);', custom: true }],
+    customPatternRevisions: {},
+  });
+  await page.evaluate(async () => {
+    const { updateCustomPattern } = await import('/src/lib/customPatterns.js');
+    updateCustomPattern('custom-collision', { name: 'Shared glow from this device', code: 'return rgb(0, 1, 0);' });
+  });
+
+  const notice = page.getByRole('alert').filter({ hasText: 'Workspace patterns changed on another device' });
+  await expect(notice).toBeVisible();
+  await notice.getByRole('button', { name: 'Keep both copies' }).click();
+  await expect.poll(() => fixture.assets.get('custom-patterns')?.value.customPatterns.length).toBe(2);
+  const names = fixture.assets.get('custom-patterns')!.value.customPatterns.map((pattern: any) => pattern.name).sort();
+  expect(names).toEqual(['Shared glow from this device (local copy)', 'Shared glow online']);
+  expect(new Set(fixture.assets.get('custom-patterns')!.value.customPatterns.map((pattern: any) => pattern.id)).size).toBe(2);
 });
 
 test('turns a remembered remote revision divergence into an explicit conflict without overwriting either side', async ({ page }) => {
@@ -854,6 +1055,11 @@ test('history and delete dialogs trap focus, close on Escape, isolate the backgr
 test('claims browser projects and supports individual and master import/export', async ({ page }) => {
   const fixture = new LibraryFixture('worker');
   fixture.seed('Download me');
+  fixture.seedAsset('custom-patterns', {
+    version: 1,
+    customPatterns: [{ id: 'custom-backed-up', name: 'Backed up glow', code: 'return rgb(1, 1, 1);', custom: true }],
+    customPatternRevisions: {},
+  });
   const browserProject = portable('Browser-only piece', 'lwproj-browser-only');
   await page.addInitScript((project) => {
     localStorage.setItem('lw_project_library_v1', JSON.stringify({
@@ -903,11 +1109,27 @@ test('claims browser projects and supports individual and master import/export',
       currentRevision: 1,
       revisions: [{ revision: 1, archived: false, createdAt: '2026-08-01T10:00:00.000Z', document: portable('Backup project') }],
     }],
-    workspaceAssets: [],
+    workspaceAssets: [{
+      kind: 'custom-patterns',
+      currentRevision: 1,
+      revisions: [{
+        revision: 1,
+        createdAt: '2026-08-01T10:00:00.000Z',
+        value: {
+          version: 1,
+          customPatterns: [{ id: 'custom-restored', name: 'Restored glow', code: 'return rgb(0, 1, 1);', custom: true }],
+          customPatternRevisions: {},
+        },
+      }],
+    }],
   }));
   await page.setInputFiles('[data-testid="cloud-master-restore"]', restorePath);
-  await expect(page.getByText('Restored 1 project and 0 workspace assets')).toBeVisible();
+  await expect(page.getByText('Restored 1 project and 1 workspace asset')).toBeVisible();
   await expect(page.getByText('Backup project (restored)', { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(async () => {
+    const { readWorkspaceAssets } = await import('/src/lib/workspaceAssets.js');
+    return readWorkspaceAssets().customPatterns[0]?.name || '';
+  })).toBe('Restored glow');
 
   const oversizedProjectPath = path.join(temp, 'oversized.lw.json');
   fs.writeFileSync(oversizedProjectPath, Buffer.alloc(2 * 1024 * 1024 + 1, 0x20));
