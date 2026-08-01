@@ -105,6 +105,10 @@ class LibraryFixture {
   private releaseDelayedAssetWrite: (() => void) | null = null;
   delayedAssetWriteStarted: Promise<void> | null = null;
   private signalDelayedAssetWriteStarted: (() => void) | null = null;
+  private delayedAssetSuccessGate: Promise<void> | null = null;
+  private releaseDelayedAssetSuccess: (() => void) | null = null;
+  delayedAssetSuccessStarted: Promise<void> | null = null;
+  private signalDelayedAssetSuccessStarted: (() => void) | null = null;
   private heldAssetReadsRemaining = 0;
   private delayedAssetReadGate: Promise<void> | null = null;
   private releaseDelayedAssetReads: (() => void) | null = null;
@@ -199,6 +203,16 @@ class LibraryFixture {
   releaseAssetWrite() {
     this.releaseDelayedAssetWrite?.();
     this.releaseDelayedAssetWrite = null;
+  }
+
+  holdNextAssetSuccessResponse() {
+    this.delayedAssetSuccessStarted = new Promise(resolve => { this.signalDelayedAssetSuccessStarted = resolve; });
+    this.delayedAssetSuccessGate = new Promise<void>(resolve => { this.releaseDelayedAssetSuccess = resolve; });
+  }
+
+  releaseAssetSuccessResponse() {
+    this.releaseDelayedAssetSuccess?.();
+    this.releaseDelayedAssetSuccess = null;
   }
 
   holdNextAssetLoad() {
@@ -324,6 +338,11 @@ class LibraryFixture {
           const updated = this.seedAsset(kind, body.value);
           updated.revisions[updated.revisions.length - 1].editor = this.email;
           this.acceptedAssetRequests.set(requestId, { kind, value: structuredClone(body.value) });
+          if (this.delayedAssetSuccessGate) {
+            this.signalDelayedAssetSuccessStarted?.();
+            await this.delayedAssetSuccessGate;
+            this.delayedAssetSuccessGate = null;
+          }
           if (this.loseNextAssetWriteResponse) {
             this.loseNextAssetWriteResponse = false;
             await route.abort('failed');
@@ -879,6 +898,57 @@ test('Keep both pre-reserves IDs and names and preserves revision-only divergenc
   expect(value.customPatterns.map((pattern: any) => pattern.name).sort())
     .toEqual(['A', 'A (local copy 2)', 'A (local copy)']);
   expect(value.customPatternRevisions['custom-a_local_copy_2'][0].code).toBe('return rgb(0, 1, 0);');
+});
+
+test('Keep both preserves a remote tombstone history and copies a stale local recreation', async ({ page, browser }) => {
+  const fixture = new LibraryFixture('worker');
+  const original = { id: 'custom-tombstone', name: 'Tombstone glow', code: 'return rgb(1, 0, 0);', custom: true };
+  const remoteHistory = [{ ...original, name: 'Remote archived glow', code: 'return rgb(0.5, 0, 0);' }];
+  fixture.seedAsset('custom-patterns', {
+    version: 1,
+    customPatterns: [original],
+    customPatternRevisions: { 'custom-tombstone': remoteHistory },
+  });
+  await fixture.install(page);
+  await page.goto('/#screen=pattern-lab', { waitUntil: 'domcontentloaded' });
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.workspaceAssetsReady || '')).toBe('true');
+
+  const stale = await freshWorkspacePage(browser, fixture);
+  try {
+    await expect.poll(() => stale.page.evaluate(() => document.documentElement.dataset.workspaceAssetsReady || '')).toBe('true');
+    await page.evaluate(async () => {
+      const { deleteCustomPattern } = await import('/src/lib/customPatterns.js');
+      deleteCustomPattern('custom-tombstone');
+    });
+    await expect.poll(() => fixture.assets.get('custom-patterns')?.value.customPatterns.length).toBe(0);
+    expect(fixture.assets.get('custom-patterns')?.value.customPatternRevisions['custom-tombstone']).toEqual(remoteHistory);
+
+    await stale.page.evaluate(async () => {
+      const { updateCustomPattern } = await import('/src/lib/customPatterns.js');
+      updateCustomPattern('custom-tombstone', {
+        name: 'Stale local recreation',
+        code: 'return rgb(0, 1, 0);',
+      });
+    });
+    const conflict = stale.page.getByRole('alert').filter({ hasText: 'Workspace patterns changed on another device' });
+    await expect(conflict).toBeVisible();
+    await conflict.getByRole('button', { name: 'Keep both copies' }).click();
+
+    await expect.poll(() => fixture.assets.get('custom-patterns')?.value.customPatterns.length).toBe(1);
+    const value = fixture.assets.get('custom-patterns')!.value;
+    expect(value.customPatterns[0]).toMatchObject({
+      id: 'custom-tombstone_local_copy',
+      name: 'Stale local recreation (local copy)',
+    });
+    expect(value.customPatternRevisions['custom-tombstone']).toEqual(remoteHistory);
+    expect(value.customPatternRevisions['custom-tombstone_local_copy']).toHaveLength(2);
+    expect(value.customPatternRevisions['custom-tombstone_local_copy'].every((revision: any) => (
+      revision.id === 'custom-tombstone_local_copy'
+      && revision.name === 'Stale local recreation (local copy)'
+    ))).toBe(true);
+  } finally {
+    await stale.context.close();
+  }
 });
 
 test('fresh Patterns resolves a project selection that exists only in cloud custom patterns', async ({ page }) => {
@@ -1492,4 +1562,65 @@ test('reports a master restore failure when refreshed assets cannot be read and 
     return readWorkspaceAssets().customPatterns[0]?.name || '';
   })).toBe('Valid local glow');
   await expect(page.getByText(/Restored \d+ projects? and \d+ workspace assets?/)).toHaveCount(0);
+});
+
+test('a master restore supersedes a committed PUT whose success response arrives late', async ({ page }) => {
+  const fixture = new LibraryFixture('owner');
+  fixture.seedAsset('custom-patterns', {
+    version: 1,
+    customPatterns: [{ id: 'custom-epoch', name: 'Epoch base', code: 'return rgb(1, 0, 0);', custom: true }],
+    customPatternRevisions: {},
+  });
+  await fixture.install(page);
+  await openLibrary(page);
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.workspaceAssetsReady || '')).toBe('true');
+  await expect(page.getByText('owner@example.test')).toBeVisible();
+
+  fixture.holdNextAssetSuccessResponse();
+  await page.evaluate(async () => {
+    const { updateCustomPattern } = await import('/src/lib/customPatterns.js');
+    updateCustomPattern('custom-epoch', { name: 'Committed before restore' });
+  });
+  await fixture.delayedAssetSuccessStarted;
+  expect(fixture.assets.get('custom-patterns')?.revision).toBe(2);
+
+  const restorePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-restore-epoch-')), 'restore.lw-library.json');
+  fs.writeFileSync(restorePath, JSON.stringify({
+    format: 'lightweaver.library-backup',
+    version: 1,
+    exportedAt: '2026-08-01T10:00:00.000Z',
+    projects: [],
+    workspaceAssets: [{
+      kind: 'custom-patterns',
+      currentRevision: 1,
+      revisions: [{
+        revision: 1,
+        createdAt: '2026-08-01T10:00:00.000Z',
+        value: {
+          version: 1,
+          customPatterns: [{ id: 'custom-epoch', name: 'Restore wins', code: 'return rgb(0, 0, 1);', custom: true }],
+          customPatternRevisions: {},
+        },
+      }],
+    }],
+  }));
+  await page.setInputFiles('[data-testid="cloud-master-restore"]', restorePath);
+  await expect.poll(() => page.evaluate(async () => {
+    const { readWorkspaceAssets } = await import('/src/lib/workspaceAssets.js');
+    return readWorkspaceAssets().customPatterns[0]?.name || '';
+  })).toBe('Restore wins');
+  expect(fixture.assets.get('custom-patterns')?.revision).toBe(3);
+
+  fixture.releaseAssetSuccessResponse();
+  await expect.poll(() => page.evaluate(() => (
+    JSON.parse(localStorage.getItem('lw_cloud_workspace_asset_heads_v1') || '{}')['custom-patterns']?.revision
+  ))).toBe(3);
+
+  await page.goto('/#screen=pattern-lab', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(async () => {
+    const { updateCustomPattern } = await import('/src/lib/customPatterns.js');
+    updateCustomPattern('custom-epoch', { name: 'Edit after restore' });
+  });
+  await expect.poll(() => fixture.assets.get('custom-patterns')?.value.customPatterns[0]?.name).toBe('Edit after restore');
+  await expect(page.getByRole('alert').filter({ hasText: 'Workspace patterns changed on another device' })).toHaveCount(0);
 });
