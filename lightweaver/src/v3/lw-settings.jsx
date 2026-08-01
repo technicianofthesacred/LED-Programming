@@ -13,6 +13,8 @@
 import React, { createContext, useContext, useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
 import { I, SWATCHES } from './lw-shared.jsx';
 import { useProject } from '../state/ProjectContext.jsx';
+import { useCloudLibrary } from '../state/CloudLibraryContext.jsx';
+import { ProjectLibraryPanel } from '../components/projects/ProjectLibraryPanel.jsx';
 import { useTweaks } from '../components/Tweaks.jsx';
 import { MOTION_SMOOTHING_MODES } from '../lib/motionSmoothing.js';
 import { STANDALONE_RUNTIME_MODES, DEFAULT_STANDALONE_OUTPUTS } from '../lib/standaloneController.js';
@@ -36,16 +38,7 @@ import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard, readCardP
 import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
 import { pushLiveHardwareToCard } from '../lib/cardLiveControl.js';
 import { downloadJsonFile } from '../lib/downloadFile.js';
-import {
-  createProjectLibraryRecord,
-  deleteProjectLibraryRecord,
-  duplicateProjectLibraryRecord,
-  listProjectLibraryRecords,
-  PROJECT_LIBRARY_CHANGED_EVENT,
-  readActiveProjectLibraryRecordId,
-  saveProjectLibraryRecord,
-  writeActiveProjectLibraryRecordId,
-} from '../lib/projectStorage.js';
+import { writeActiveProjectLibraryRecordId } from '../lib/projectStorage.js';
 import { cardActionReducer, createCardActionState } from '../lib/cardAction.js';
 import { canonicalProjectFileName, PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
 import { openLocalCardPage } from '../lib/cardBridge.js';
@@ -126,11 +119,6 @@ const SettingsFieldContext = createContext(null);
     return `recovery copy ${new Date(lastSaved).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
   }
 
-  function formatLibraryTime(updatedAt) {
-    if (!updatedAt) return 'not dated';
-    return new Date(updatedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-  }
-
   // ── Ring hardware summary (live RingSummary visual) ──────────────────
   function RingSummary({ sections, targets, activeLookLabel }) {
     const sectionRows = sections.slice(0, 5).map((section, index) => {
@@ -179,11 +167,12 @@ const SettingsFieldContext = createContext(null);
       strips,
       patchBoard,
       standaloneController, setStandaloneController,
-      serializeProject, replaceProject, replaceWithNewProject,
+      serializeProject, replaceProject,
       markProjectPersisted, markProjectInstalled, markCardLookConfirmed,
       lastSaved,
       autosaveStatus,
     } = useProject();
+    const cloudLibrary = useCloudLibrary();
     const { tweaks, set: setTweak } = useTweaks();
     useEffect(() => {
       document.documentElement.dataset.theme = tweaks.theme === 'daylight' ? 'daylight' : 'studio';
@@ -195,8 +184,6 @@ const SettingsFieldContext = createContext(null);
     const [statusKind, setStatusKind] = useState('');
     const [cardWrite, dispatchCardWrite] = useReducer(cardActionReducer, undefined, createCardActionState);
     const [advancedOpen, setAdvancedOpen] = useState(false);
-    const [projectLibrary, setProjectLibrary] = useState(() => listProjectLibraryRecords());
-    const [activeProjectRecordId, setActiveProjectRecordId] = useState(() => readActiveProjectLibraryRecordId());
     const liveHardwareSeq = useRef(0);
 
     // ── Derived card / hardware data (mirrors the old ChipScreen) ──────
@@ -382,7 +369,7 @@ const SettingsFieldContext = createContext(null);
       }
     };
 
-    // ── Project file + library (verbatim from ChipScreen) ──────────────
+    // ── Portable project files (online library is mounted below) ───────
     const saveProjectFile = async () => {
       const data = serializeProject();
       const ok = await downloadJsonFile(canonicalProjectFileName(projectName), data);
@@ -406,7 +393,7 @@ const SettingsFieldContext = createContext(null);
           }
           if (!result.ok) return;
           writeActiveProjectLibraryRecordId('');
-          setActiveProjectRecordId('');
+          cloudLibrary.detachProject();
           setStatusKind('ok');
           setStatus('Project opened in Studio.');
         } catch {
@@ -417,95 +404,6 @@ const SettingsFieldContext = createContext(null);
       reader.readAsText(file);
       event.target.value = '';
     };
-
-    const refreshProjectLibrary = () => {
-      setProjectLibrary(listProjectLibraryRecords());
-      setActiveProjectRecordId(readActiveProjectLibraryRecordId());
-    };
-
-    const saveProjectToLibrary = () => {
-      try {
-        const record = saveProjectLibraryRecord(createProjectLibraryRecord(serializeProject()));
-        markProjectPersisted('browser');
-        writeActiveProjectLibraryRecordId(record.id);
-        setActiveProjectRecordId(record.id);
-        refreshProjectLibrary();
-        setStatusKind('ok');
-        setStatus(`Saved ${record.name} in this browser.`);
-      } catch (error) {
-        setStatusKind('err');
-        setStatus(error.message || 'Could not save this Studio project.');
-      }
-    };
-
-    const updateProjectInLibrary = () => {
-      if (!activeProjectRecordId) { saveProjectToLibrary(); return; }
-      try {
-        const record = saveProjectLibraryRecord(createProjectLibraryRecord(serializeProject(), { id: activeProjectRecordId }));
-        markProjectPersisted('browser');
-        writeActiveProjectLibraryRecordId(record.id);
-        refreshProjectLibrary();
-        setStatusKind('ok');
-        setStatus(`Updated ${record.name} in this browser.`);
-      } catch (error) {
-        setStatusKind('err');
-        setStatus(error.message || 'Could not update this Studio project.');
-      }
-    };
-
-    const openProjectFromLibrary = async (record) => {
-      if (!record) return;
-      const result = await replaceProject(record.project);
-      if (result.reason === 'invalid') {
-        setStatusKind('err');
-        setStatus('That saved project could not be opened.');
-        return;
-      }
-      if (!result.ok) return;
-      writeActiveProjectLibraryRecordId(record.id);
-      setActiveProjectRecordId(record.id);
-      setStatusKind('ok');
-      setStatus(`Opened ${record.name}.`);
-    };
-
-    const duplicateProjectInLibrary = (record) => {
-      if (!record) return;
-      const copy = duplicateProjectLibraryRecord(record.id);
-      if (!copy) {
-        setStatusKind('err');
-        setStatus('That saved project could not be duplicated.');
-        return;
-      }
-      refreshProjectLibrary();
-      setStatusKind('ok');
-      setStatus(`Duplicated ${record.name}.`);
-    };
-
-    const deleteProjectFromLibrary = (record) => {
-      if (!record) return;
-      if (!window.confirm(`Delete ${record.name} from this browser?`)) return;
-      deleteProjectLibraryRecord(record.id);
-      if (activeProjectRecordId === record.id) {
-        writeActiveProjectLibraryRecordId('');
-        setActiveProjectRecordId('');
-      }
-      refreshProjectLibrary();
-      setStatusKind('ok');
-      setStatus(`Deleted ${record.name} from this browser.`);
-    };
-
-    const startNewProject = async () => {
-      const result = await replaceWithNewProject();
-      if (!result.ok) return;
-      writeActiveProjectLibraryRecordId('');
-      setActiveProjectRecordId('');
-    };
-
-    useEffect(() => {
-      const onLibraryChange = () => refreshProjectLibrary();
-      window.addEventListener?.(PROJECT_LIBRARY_CHANGED_EVENT, onLibraryChange);
-      return () => window.removeEventListener?.(PROJECT_LIBRARY_CHANGED_EVENT, onLibraryChange);
-    }, []);
 
     // ── Mockup-card live values ─────────────────────────────────────────
     const themeLabel = THEME_LABEL[tweaks.theme] || 'Studio';
@@ -667,30 +565,7 @@ const SettingsFieldContext = createContext(null);
                     <button className="btn" onClick={() => importRef.current?.click()}>{I.doc}Import project</button>
                     <FieldInput ref={importRef} type="file" accept={PROJECT_IMPORT_ACCEPT} className="set-file-input" onChange={importProjectFile} />
                   </Row>
-                  <Row label="Browser library" hint="Editable Studio projects in this browser" stack>
-                    <div className="set-actions">
-                      <button className="btn" onClick={saveProjectToLibrary}>Save current</button>
-                      <button className="btn ghost-sm" onClick={updateProjectInLibrary} disabled={!activeProjectRecordId}>Update opened</button>
-                      <button className="btn ghost-sm" onClick={startNewProject}>New</button>
-                    </div>
-                  </Row>
-                  <div className="set-lib">
-                    {projectLibrary.length ? projectLibrary.map(record => (
-                      <div key={record.id} className={`set-lib-row${record.id === activeProjectRecordId ? ' is-active' : ''}`}>
-                        <div className="set-lib-main">
-                          <strong>{record.name}</strong>
-                          <span>{formatLibraryTime(record.updatedAt)} · project v{record.projectVersion}</span>
-                        </div>
-                        <div className="set-lib-actions">
-                          <button className="btn ghost-sm" onClick={() => openProjectFromLibrary(record)}>Open</button>
-                          <button className="btn ghost-sm" onClick={() => duplicateProjectInLibrary(record)}>Duplicate</button>
-                          <button className="btn ghost-sm" onClick={() => deleteProjectFromLibrary(record)}>Delete</button>
-                        </div>
-                      </div>
-                    )) : (
-                      <div className="set-lib-empty">No saved Studio projects in this browser yet.</div>
-                    )}
-                  </div>
+                  <ProjectLibraryPanel />
                 </section>}
               </div>
 
