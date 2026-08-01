@@ -174,6 +174,7 @@ export function createAccountStore(repository, options = {}) {
       failed_login_attempts: 0,
       last_failed_login_at: null,
       locked_until: null,
+      session_generation: 0,
       created_at: createdAt,
       updated_at: createdAt,
     };
@@ -210,12 +211,7 @@ export function createAccountStore(repository, options = {}) {
     const account = await requireAccount(id);
     const nextStatus = cleanStatus(status);
     const updatedAt = timestamp();
-    await repository.updateStatusAndRevokeSessions(
-      account.id,
-      nextStatus,
-      updatedAt,
-      nextStatus === 'disabled',
-    );
+    await repository.updateStatusAndRevokeSessions(account.id, nextStatus, updatedAt);
     return publicAccount(await requireAccount(account.id));
   }
 
@@ -223,12 +219,7 @@ export function createAccountStore(repository, options = {}) {
     const account = await requireAccount(id);
     const nextRole = cleanRole(role);
     const updatedAt = timestamp();
-    await repository.updateRoleAndRevokeSessions(
-      account.id,
-      nextRole,
-      updatedAt,
-      nextRole !== account.role,
-    );
+    await repository.updateRoleAndRevokeSessions(account.id, nextRole, updatedAt);
     return publicAccount(await requireAccount(account.id));
   }
 
@@ -289,13 +280,17 @@ export function createAccountStore(repository, options = {}) {
     const createdAt = timestamp();
     const expiresAt = new Date(Date.parse(createdAt) + ttlSeconds * 1000).toISOString();
     const credential = await createSessionCredential({ crypto: options.crypto });
-    await repository.insertSession({
+    const inserted = await repository.insertSessionForCurrentGeneration({
       token_hash: credential.digest,
       account_id: account.id,
+      account_generation: account.session_generation,
       created_at: createdAt,
       expires_at: expiresAt,
       revoked_at: null,
-    });
+    }, account.session_generation);
+    if (!inserted) {
+      fail('session_state_changed', 'The account security state changed. Sign in again.', 409);
+    }
     return { token: credential.token, expiresAt };
   }
 
@@ -307,7 +302,8 @@ export function createAccountStore(repository, options = {}) {
     const currentMs = Date.parse(timestamp());
     if (result.session.revoked_at
       || Date.parse(result.session.expires_at) <= currentMs
-      || result.account.status !== 'active') {
+      || result.account.status !== 'active'
+      || result.session.account_generation !== result.account.session_generation) {
       return null;
     }
     return accountIdentity(result.account);
@@ -356,8 +352,8 @@ export function createD1AccountRepository(db) {
         INSERT INTO accounts (
           id, username, normalized_username, display_name, role, status, password_hash,
           must_change_password, failed_login_attempts, last_failed_login_at, locked_until,
-          created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          session_generation, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(
         row.id,
         row.username,
@@ -370,6 +366,7 @@ export function createD1AccountRepository(db) {
         row.failed_login_attempts,
         row.last_failed_login_at,
         row.locked_until,
+        row.session_generation,
         row.created_at,
         row.updated_at,
       ).run();
@@ -407,7 +404,8 @@ export function createD1AccountRepository(db) {
       await db.batch([
         db.prepare(`
           UPDATE accounts SET password_hash = ?, must_change_password = ?,
-            failed_login_attempts = ?, last_failed_login_at = ?, locked_until = ?, updated_at = ?
+            failed_login_attempts = ?, last_failed_login_at = ?, locked_until = ?,
+            session_generation = session_generation + 1, updated_at = ?
           WHERE id = ?
         `).bind(
           values.password_hash,
@@ -424,31 +422,31 @@ export function createD1AccountRepository(db) {
         `).bind(revokedAt, id),
       ]);
     },
-    async updateStatusAndRevokeSessions(id, status, updatedAt, revokeSessions) {
-      const statements = [
-        db.prepare('UPDATE accounts SET status = ?, updated_at = ? WHERE id = ?')
+    async updateStatusAndRevokeSessions(id, status, updatedAt) {
+      await db.batch([
+        db.prepare(`
+          UPDATE accounts SET status = ?, session_generation = session_generation + 1,
+            updated_at = ? WHERE id = ?
+        `)
           .bind(status, updatedAt, id),
-      ];
-      if (revokeSessions) {
-        statements.push(db.prepare(`
+        db.prepare(`
           UPDATE account_sessions SET revoked_at = ?
           WHERE account_id = ? AND revoked_at IS NULL
-        `).bind(updatedAt, id));
-      }
-      await db.batch(statements);
+        `).bind(updatedAt, id),
+      ]);
     },
-    async updateRoleAndRevokeSessions(id, role, updatedAt, revokeSessions) {
-      const statements = [
-        db.prepare('UPDATE accounts SET role = ?, updated_at = ? WHERE id = ?')
+    async updateRoleAndRevokeSessions(id, role, updatedAt) {
+      await db.batch([
+        db.prepare(`
+          UPDATE accounts SET role = ?, session_generation = session_generation + 1,
+            updated_at = ? WHERE id = ?
+        `)
           .bind(role, updatedAt, id),
-      ];
-      if (revokeSessions) {
-        statements.push(db.prepare(`
+        db.prepare(`
           UPDATE account_sessions SET revoked_at = ?
           WHERE account_id = ? AND revoked_at IS NULL
-        `).bind(updatedAt, id));
-      }
-      await db.batch(statements);
+        `).bind(updatedAt, id),
+      ]);
     },
     async updateLoginState(id, values) {
       await db.prepare(`
@@ -489,23 +487,29 @@ export function createD1AccountRepository(db) {
         id,
       ).run();
     },
-    async insertSession(row) {
-      await db.prepare(`
-        INSERT INTO account_sessions (token_hash, account_id, created_at, expires_at, revoked_at)
-        VALUES (?, ?, ?, ?, ?)
+    async insertSessionForCurrentGeneration(row, generation) {
+      const result = await db.prepare(`
+        INSERT INTO account_sessions (
+          token_hash, account_id, account_generation, created_at, expires_at, revoked_at
+        )
+        SELECT ?, id, session_generation, ?, ?, ? FROM accounts
+        WHERE id = ? AND status = 'active' AND session_generation = ?
       `).bind(
         row.token_hash,
-        row.account_id,
         row.created_at,
         row.expires_at,
         row.revoked_at,
+        row.account_id,
+        generation,
       ).run();
+      return (result?.meta?.changes || 0) > 0;
     },
     async findSessionWithAccount(tokenHash) {
       const row = await db.prepare(`
         SELECT
           s.token_hash AS session_token_hash,
           s.account_id AS session_account_id,
+          s.account_generation AS session_account_generation,
           s.created_at AS session_created_at,
           s.expires_at AS session_expires_at,
           s.revoked_at AS session_revoked_at,
@@ -519,6 +523,7 @@ export function createD1AccountRepository(db) {
         session: {
           token_hash: row.session_token_hash,
           account_id: row.session_account_id,
+          account_generation: row.session_account_generation,
           created_at: row.session_created_at,
           expires_at: row.session_expires_at,
           revoked_at: row.session_revoked_at,
@@ -532,12 +537,6 @@ export function createD1AccountRepository(db) {
         WHERE token_hash = ? AND revoked_at IS NULL
       `).bind(revokedAt, tokenHash).run();
       return (result?.meta?.changes || 0) > 0;
-    },
-    async revokeSessionsForAccount(accountId, revokedAt) {
-      await db.prepare(`
-        UPDATE account_sessions SET revoked_at = ?
-        WHERE account_id = ? AND revoked_at IS NULL
-      `).bind(revokedAt, accountId).run();
     },
   };
 }
@@ -586,16 +585,22 @@ export function createMemoryAccountRepository(seed = {}) {
       Object.assign(account(id), structuredClone(values));
     },
     async resetPasswordAndRevokeSessions(id, values, revokedAt) {
-      Object.assign(account(id), structuredClone(values));
+      const row = account(id);
+      Object.assign(row, structuredClone(values));
+      row.session_generation += 1;
       revokeAccountSessions(id, revokedAt);
     },
-    async updateStatusAndRevokeSessions(id, status, updatedAt, revokeSessions) {
-      Object.assign(account(id), { status, updated_at: updatedAt });
-      if (revokeSessions) revokeAccountSessions(id, updatedAt);
+    async updateStatusAndRevokeSessions(id, status, updatedAt) {
+      const row = account(id);
+      Object.assign(row, { status, updated_at: updatedAt });
+      row.session_generation += 1;
+      revokeAccountSessions(id, updatedAt);
     },
-    async updateRoleAndRevokeSessions(id, role, updatedAt, revokeSessions) {
-      Object.assign(account(id), { role, updated_at: updatedAt });
-      if (revokeSessions) revokeAccountSessions(id, updatedAt);
+    async updateRoleAndRevokeSessions(id, role, updatedAt) {
+      const row = account(id);
+      Object.assign(row, { role, updated_at: updatedAt });
+      row.session_generation += 1;
+      revokeAccountSessions(id, updatedAt);
     },
     async updateLoginState(id, values) {
       Object.assign(account(id), structuredClone(values));
@@ -612,8 +617,11 @@ export function createMemoryAccountRepository(seed = {}) {
         : null;
       row.updated_at = values.updated_at;
     },
-    async insertSession(row) {
+    async insertSessionForCurrentGeneration(row, generation) {
+      const owner = account(row.account_id);
+      if (!owner || owner.status !== 'active' || owner.session_generation !== generation) return false;
       sessions.set(row.token_hash, structuredClone(row));
+      return true;
     },
     async findSessionWithAccount(tokenHash) {
       const session = sessions.get(tokenHash);
@@ -627,9 +635,6 @@ export function createMemoryAccountRepository(seed = {}) {
       if (!session || session.revoked_at) return false;
       session.revoked_at = revokedAt;
       return true;
-    },
-    async revokeSessionsForAccount(accountId, revokedAt) {
-      revokeAccountSessions(accountId, revokedAt);
     },
     snapshot() {
       return {

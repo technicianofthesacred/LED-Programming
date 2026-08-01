@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
+import { Miniflare } from 'miniflare';
+
 import {
   PRODUCTION_PBKDF2_ITERATIONS,
   SESSION_COOKIE_NAME,
@@ -16,6 +18,7 @@ import {
 import {
   AccountStoreError,
   createAccountStore,
+  createD1AccountStore,
   createMemoryAccountRepository,
 } from './accountStore.js';
 
@@ -262,6 +265,69 @@ test('persists only a session digest and authenticates active unexpired sessions
   assert.equal(await accounts.authenticateSession(session.token), null);
 });
 
+test('session inserts cannot race past account security mutations', async t => {
+  const mutations = [
+    ['password reset', (accounts, id) => accounts.resetPassword({
+      id,
+      temporaryPassword: 'replacement-passphrase',
+    })],
+    ['status change', (accounts, id) => accounts.setAccountStatus({
+      id,
+      status: 'disabled',
+    })],
+    ['role change', (accounts, id) => accounts.setAccountRole({
+      id,
+      role: 'customer',
+    })],
+  ];
+
+  for (const [name, mutate] of mutations) {
+    await t.test(name, async () => {
+      const baseRepository = createMemoryAccountRepository();
+      let releaseInsert;
+      let signalInsertStarted;
+      const insertStarted = new Promise(resolve => { signalInsertStarted = resolve; });
+      const insertReleased = new Promise(resolve => { releaseInsert = resolve; });
+      const repository = {
+        ...baseRepository,
+        async insertSessionForCurrentGeneration(row, generation) {
+          signalInsertStarted();
+          await insertReleased;
+          return baseRepository.insertSessionForCurrentGeneration(row, generation);
+        },
+      };
+      const { accounts } = setup({ repository });
+      const worker = await createWorker(accounts);
+
+      const pendingSession = accounts.createSession(worker.id);
+      await insertStarted;
+      await mutate(accounts, worker.id);
+      releaseInsert();
+
+      await assert.rejects(pendingSession, { code: 'session_state_changed' });
+    });
+  }
+});
+
+test('authentication rejects a session captured from an older account generation', async () => {
+  const baseRepository = createMemoryAccountRepository();
+  let returnStaleGeneration = false;
+  const repository = {
+    ...baseRepository,
+    async findSessionWithAccount(tokenHash) {
+      const result = await baseRepository.findSessionWithAccount(tokenHash);
+      if (returnStaleGeneration && result) result.account.session_generation += 1;
+      return result;
+    },
+  };
+  const { accounts } = setup({ repository });
+  const worker = await createWorker(accounts);
+  const session = await accounts.createSession(worker.id);
+
+  returnStaleGeneration = true;
+  assert.equal(await accounts.authenticateSession(session.token), null);
+});
+
 test('denies expired or disabled sessions and revokes sessions on role changes', async () => {
   const { accounts, clock } = setup();
   const worker = await createWorker(accounts);
@@ -340,10 +406,13 @@ test('a failed atomic reset leaves both the old password and sessions intact', a
 });
 
 test('migration adds constrained accounts, hashed sessions, assignments, and draft markers', async () => {
-  const migration = await readFile(
-    new URL('../../../../migrations/0002_account_access.sql', import.meta.url),
+  const migration = (await Promise.all([
+    '0002_account_access.sql',
+    '0003_account_session_generation.sql',
+  ].map(name => readFile(
+    new URL(`../../../../migrations/${name}`, import.meta.url),
     'utf8',
-  );
+  )))).join('\n');
 
   assert.match(migration, /CREATE TABLE IF NOT EXISTS accounts/i);
   assert.match(migration, /normalized_username TEXT NOT NULL UNIQUE/i);
@@ -351,16 +420,80 @@ test('migration adds constrained accounts, hashed sessions, assignments, and dra
   assert.match(migration, /status TEXT NOT NULL[^;]*CHECK \(status IN \('active', 'disabled'\)\)/is);
   assert.match(migration, /must_change_password INTEGER NOT NULL/i);
   assert.match(migration, /failed_login_attempts INTEGER NOT NULL/i);
+  assert.match(migration, /session_generation INTEGER NOT NULL/i);
   assert.match(migration, /locked_until TEXT/i);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS account_sessions/i);
   assert.match(migration, /token_hash TEXT PRIMARY KEY/i);
   assert.doesNotMatch(migration, /(?:^|\s)token TEXT/i);
   assert.match(migration, /expires_at TEXT NOT NULL/i);
   assert.match(migration, /revoked_at TEXT/i);
+  assert.match(migration, /account_generation INTEGER NOT NULL/i);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS project_assignments/i);
   assert.match(migration, /UNIQUE \(customer_account_id, project_id\)/i);
   assert.match(migration, /ADD COLUMN draft_of_project_id TEXT/i);
   assert.match(migration, /ADD COLUMN draft_owner_account_id TEXT/i);
   assert.match(migration, /CREATE (?:UNIQUE )?INDEX[^;]*draft_of_project_id/is);
   assert.match(migration, /CREATE (?:UNIQUE )?INDEX[^;]*draft_owner_account_id/is);
+});
+
+test('D1 applies account migrations and preserves atomic lockout and reset behavior', async t => {
+  const miniflare = new Miniflare({
+    compatibilityDate: '2026-07-15',
+    modules: true,
+    script: 'export default { fetch() { return new Response("ok") } }',
+    d1Databases: ['PROJECTS_DB'],
+  });
+  t.after(() => miniflare.dispose());
+  const db = await miniflare.getD1Database('PROJECTS_DB');
+  for (const migrationName of [
+    '0001_cloud_project_library.sql',
+    '0002_account_access.sql',
+    '0003_account_session_generation.sql',
+  ]) {
+    const migration = await readFile(
+      new URL(`../../../../migrations/${migrationName}`, import.meta.url),
+      'utf8',
+    );
+    for (const statement of migration.split(';').map(value => value.trim()).filter(Boolean)) {
+      await db.prepare(statement).run();
+    }
+  }
+
+  const accountColumns = (await db.prepare('PRAGMA table_info(accounts)').all()).results;
+  const sessionColumns = (await db.prepare('PRAGMA table_info(account_sessions)').all()).results;
+  assert.equal(accountColumns.some(column => column.name === 'session_generation'), true);
+  assert.equal(sessionColumns.some(column => column.name === 'account_generation'), true);
+
+  const clock = createClock();
+  const accounts = createD1AccountStore({ PROJECTS_DB: db }, {
+    lockoutAttempts: 3,
+    lockoutMs: 30_000,
+    now: clock.now,
+    passwordIterations: TEST_ITERATIONS,
+  });
+  const worker = await createWorker(accounts);
+  await Promise.all(Array.from({ length: 10 }, () => assert.rejects(accounts.verifyLogin({
+    username: worker.username,
+    password: 'wrong-passphrase',
+  }), { code: 'invalid_credentials' })));
+  const locked = await db.prepare('SELECT * FROM accounts WHERE id = ?').bind(worker.id).first();
+  assert.ok(locked.failed_login_attempts >= 3);
+  assert.equal(typeof locked.locked_until, 'string');
+
+  clock.advance(30_001);
+  const session = await accounts.createSession(worker.id);
+  await db.prepare(`
+    CREATE TRIGGER fail_session_revocation
+    BEFORE UPDATE OF revoked_at ON account_sessions
+    BEGIN SELECT RAISE(FAIL, 'injected revocation failure'); END
+  `).run();
+  await assert.rejects(accounts.resetPassword({
+    id: worker.id,
+    temporaryPassword: 'replacement-passphrase',
+  }), /injected revocation failure/);
+  assert.equal((await accounts.verifyLogin({
+    username: worker.username,
+    password: 'temporary-passphrase',
+  })).accountId, worker.id);
+  assert.equal((await accounts.authenticateSession(session.token)).accountId, worker.id);
 });

@@ -30,7 +30,7 @@
     "firmware:check-bin": "node ../firmware/lightweaver-controller/tests/factory-bin-freshness.mjs",
     "check:prod": "node scripts/check-prod-freshness.mjs",
     "test:unit": "node --test src/lib/*.test.js",
-    "test:projects": "node --test functions/api/library/library-api.test.js tests/cloud-bindings.mjs src/lib/cloudLibraryClient.test.js src/lib/libraryBackup.test.js src/lib/workspaceAssets.test.js",
+    "test:projects": "node --test functions/api/library/_shared/accountAuth.test.js functions/api/library/library-api.test.js tests/cloud-bindings.mjs src/lib/cloudLibraryClient.test.js src/lib/libraryBackup.test.js src/lib/workspaceAssets.test.js",
     "test:cloud-bindings": "node tests/cloud-bindings.mjs",
     "test:server": "node tests/ai-pattern-server.mjs",
     "test:ai": "npm run test:server && npm run test:core && npx playwright test tests/ai-pattern-assistant.spec.ts",
@@ -57,6 +57,7 @@
   "devDependencies": {
     "@playwright/test": "^1.59.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "miniflare": "4.20260708.1",
     "playwright": "^1.59.1",
     "vite": "^6.3.2",
     "wrangler": "4.110.0"
