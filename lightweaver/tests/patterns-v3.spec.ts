@@ -20,13 +20,34 @@ async function setRangeValue(locator, value: string) {
   }, value);
 }
 
+async function mockDefaultCardZones(page) {
+  await page.route('**/api/zones', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      zones: [
+        { id: 'patch-default-outer-circle' },
+        { id: 'patch-default-inner-circle' },
+      ],
+    }),
+  }));
+}
+
 async function gotoFreshPatterns(page) {
+  await mockDefaultCardZones(page);
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
 }
 
 async function gotoSavedProjectPatterns(page, project) {
+  await page.route('**/api/zones', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      zones: (project.layout?.patchBoard?.patches || []).map(patch => ({ id: patch.id })),
+    }),
+  }));
   await page.addInitScript((savedProject) => {
     localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
   }, project);
@@ -44,6 +65,41 @@ function createPiecePreviewProject(id = 'piece-preview-fixture') {
   project.layout.patchBoard.patches[1].playback.patternId = 'ocean';
   return project;
 }
+
+test('fresh strip preview and design target stay synchronized without committing the audition', async ({ page }) => {
+  await gotoFreshPatterns(page);
+
+  const targetSelect = page.getByLabel('Preview target');
+  const outerTarget = page.getByTestId('section-target-patch-default-outer-circle');
+  const stage = page.getByTestId('pattern-piece-preview');
+  const previewHeading = page.locator('.pm-preview-pane .sec-h .m');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_autosave_v3'))).not.toBeNull();
+  const savedBefore = await page.evaluate(() => {
+    const project = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
+    return JSON.stringify(project.layout?.patchBoard || null);
+  });
+
+  await expect(targetSelect).toHaveValue('patch-default-outer-circle');
+  await expect(outerTarget).toHaveClass(/\bon\b/);
+  await expect(page.getByTestId('card-target-label')).toHaveText('Outer circle');
+  await expect(previewHeading).toHaveText('Outer circle · Lava Lamp');
+  await expect(stage).toHaveAttribute('data-preview-patterns', 'lava');
+
+  await page.getByLabel('Preview taps on the LED card').uncheck();
+  await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
+  await expect(previewHeading).toHaveText('Outer circle · Plasma');
+  await expect(stage).toHaveAttribute('data-preview-patterns', 'plasma');
+
+  await page.getByRole('button', { name: 'On my piece' }).click();
+  await expect(page.getByTestId('card-target-label')).toHaveText('Outer circle');
+  await expect(stage).toHaveAttribute('data-preview-patterns', 'plasma,lava');
+  await page.waitForTimeout(650);
+  const savedAfter = await page.evaluate(() => {
+    const project = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
+    return JSON.stringify(project.layout?.patchBoard || null);
+  });
+  expect(savedAfter).toBe(savedBefore);
+});
 
 test('mapped preview lists LED-backed targets only and crops to the selected geometry', async ({ page }) => {
   const project = createPiecePreviewProject();
@@ -457,6 +513,7 @@ test('production bridge transport sends only the newest selection to the source-
       return popup;
     }) as typeof window.open;
   });
+  await mockDefaultCardZones(page);
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => {
     localStorage.clear();
@@ -539,6 +596,7 @@ test('latest pattern waits through bridge identity verification instead of being
       return popup;
     }) as typeof window.open;
   });
+  await mockDefaultCardZones(page);
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => {
     localStorage.clear();
@@ -743,6 +801,7 @@ test('an already-verified legacy bridge is gated before sending a pattern', asyn
     };
     window.open = (() => bridge as any) as typeof window.open;
   });
+  await mockDefaultCardZones(page);
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => {
     localStorage.clear();

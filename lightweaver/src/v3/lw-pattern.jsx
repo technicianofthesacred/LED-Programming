@@ -319,7 +319,6 @@ import { PatternPreview } from './PatternPreview.jsx';
       setPatchBoard,
       standaloneController,
       setStandaloneController,
-      registerProjectSnapshotContributor,
       markProjectEdited,
       markProjectInstalled,
       markCardLookConfirmed,
@@ -381,8 +380,7 @@ import { PatternPreview } from './PatternPreview.jsx';
     const savedComboSeq = useRef(0);
     const cardReturnConsumed = useRef(false);
     const latestPreviewIntent = useRef(null);
-    const draftProjectSnapshotRef = useRef(project => project);
-    const restoredPreviewSelectionRef = useRef('');
+    const syncedPreviewSelectionRef = useRef('');
 
     const invalidatePendingPreview = useCallback(() => {
       browsePreviewSeq.current += 1;
@@ -707,14 +705,13 @@ import { PatternPreview } from './PatternPreview.jsx';
     useEffect(() => {
       if (
         previewUiState.projectId !== projectId ||
-        !previewUiState.restored ||
         !previewTargetIds.includes(lastPreviewTargetId)
       ) return;
       const restoreKey = `${projectId}:${lastPreviewTargetId}`;
-      if (restoredPreviewSelectionRef.current === restoreKey) return;
-      restoredPreviewSelectionRef.current = restoreKey;
+      if (syncedPreviewSelectionRef.current === restoreKey) return;
+      syncedPreviewSelectionRef.current = restoreKey;
       setSelectedTargetId(lastPreviewTargetId);
-    }, [lastPreviewTargetId, previewTargetKey, previewUiState.projectId, previewUiState.restored, projectId]);
+    }, [lastPreviewTargetId, previewTargetKey, previewUiState.projectId, projectId]);
 
     useEffect(() => {
       if (cardReturnConsumed.current || typeof window === 'undefined') return;
@@ -938,20 +935,6 @@ import { PatternPreview } from './PatternPreview.jsx';
       });
       return { nextLook, nextBoard, nextController, nextTargets };
     };
-
-    draftProjectSnapshotRef.current = (project) => {
-      if (!Object.keys(draftLooks).length) return project;
-      const { nextBoard, nextController } = buildCurrentHardwareState();
-      return {
-        ...project,
-        layout: { ...(project.layout || {}), patchBoard: nextBoard },
-        devices: { ...(project.devices || {}), standaloneController: nextController },
-      };
-    };
-    useEffect(() => {
-      if (!registerProjectSnapshotContributor) return undefined;
-      return registerProjectSnapshotContributor((project) => draftProjectSnapshotRef.current(project));
-    }, [registerProjectSnapshotContributor]);
 
     // ── handlers ────────────────────────────────────────────────────────
     const promotePatternFirst = (controller, patternId) => {
