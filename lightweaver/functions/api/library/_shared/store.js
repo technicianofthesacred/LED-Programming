@@ -129,6 +129,13 @@ export function createD1R2LibraryStore(env, options = {}) {
     }
   }
 
+  async function deleteObjectsRequired(keys) {
+    for (let index = 0; index < keys.length; index += 1000) {
+      const chunk = keys.slice(index, index + 1000);
+      await bucket.delete(chunk.length === 1 ? chunk[0] : chunk);
+    }
+  }
+
   async function guardedBatch(statements, {
     cleanup = [],
     idempotencyKey,
@@ -352,19 +359,28 @@ export function createD1R2LibraryStore(env, options = {}) {
       'SELECT DISTINCT object_key FROM project_revisions WHERE project_id = ?',
     ).bind(id).all();
     const deletedAt = timestamp();
+    await deleteObjectsRequired(revisions.map(row => row.object_key));
     const statements = [
-      db.prepare(`
-        UPDATE projects SET deleted_at = ?, updated_at = ?, last_editor = ?
-        WHERE id = ? AND current_revision = ? AND deleted_at IS NULL
-      `).bind(deletedAt, deletedAt, actorEmail(actor), id, baseRevision),
       mutationStatement(db, {
         actor,
-        conditionSql: 'EXISTS (SELECT 1 FROM projects WHERE id = ? AND deleted_at = ?)',
-        conditionValues: [id, deletedAt],
+        conditionSql: 'EXISTS (SELECT 1 FROM projects WHERE id = ? AND current_revision = ? AND deleted_at IS NULL)',
+        conditionValues: [id, baseRevision],
         idempotencyKey,
         kind: 'delete-project',
         timestamp: deletedAt,
       }),
+      db.prepare(`
+        DELETE FROM project_revisions
+        WHERE project_id = ?
+          AND EXISTS (
+            SELECT 1 FROM projects
+            WHERE id = ? AND current_revision = ? AND deleted_at IS NULL
+          )
+      `).bind(id, id, baseRevision),
+      db.prepare(`
+        DELETE FROM projects
+        WHERE id = ? AND current_revision = ? AND deleted_at IS NULL
+      `).bind(id, baseRevision),
     ];
     await guardedBatch(statements, {
       idempotencyKey,
@@ -373,7 +389,6 @@ export function createD1R2LibraryStore(env, options = {}) {
         return !current || current.current_revision !== baseRevision;
       },
     });
-    await cleanupObjects(revisions.map(row => row.object_key));
     return { deleted: true };
   }
 

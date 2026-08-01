@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:functions": "mkdir -p .pages/functions-build && wrangler pages functions build functions --outdir .pages/functions-build --project-directory . --output-routes-path .pages/functions-build/_routes.json",
     "stage:pages": "rm -rf .pages/lightweaver && mkdir -p .pages/lightweaver && cp -R dist/. .pages/lightweaver/ && node scripts/generate-studio-build-graph.mjs .pages/lightweaver",
     "verify:pages": "node tests/pages-staging.mjs --artifact",
     "deploy:pages": "npm run build && npm run stage:pages && npm run verify:pages && wrangler pages deploy .pages/lightweaver --project-name lightweaver --branch main",

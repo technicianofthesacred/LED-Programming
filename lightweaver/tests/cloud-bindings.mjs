@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 
 import { Miniflare } from 'miniflare';
 import {
@@ -19,6 +26,7 @@ import {
 import {
   handleLibraryPagesRequest,
 } from '../functions/api/library/[[path]].js';
+import { handleLibraryRequest } from '../functions/api/library/_shared/router.js';
 
 const ACCESS_ENV = {
   ACCESS_TEAM_DOMAIN: 'https://lightweaver-test.cloudflareaccess.com',
@@ -26,6 +34,68 @@ const ACCESS_ENV = {
   OWNER_EMAILS: ' owner@example.test,SECOND-owner@example.test ',
   MAX_LIBRARY_BODY_BYTES: '1048576',
 };
+const PROJECT_DIR = fileURLToPath(new URL('..', import.meta.url));
+const WRANGLER_BIN = join(PROJECT_DIR, 'node_modules', '.bin', 'wrangler');
+
+function runWrangler(args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(WRANGLER_BIN, args, {
+      cwd: PROJECT_DIR,
+      env: { ...process.env, CI: '1', NO_COLOR: '1', WRANGLER_SEND_METRICS: 'false' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.once('error', reject);
+    child.once('close', code => resolve({ code, stderr, stdout }));
+  });
+}
+
+async function availablePort() {
+  const server = createServer();
+  server.unref();
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const { port } = server.address();
+  await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  return port;
+}
+
+async function stopChild(child) {
+  if (child.exitCode !== null) return;
+  const exited = once(child, 'exit');
+  child.kill('SIGTERM');
+  let timer;
+  const forced = new Promise(resolve => {
+    timer = setTimeout(() => {
+      if (child.exitCode === null) child.kill('SIGKILL');
+      resolve();
+    }, 3_000);
+    timer.unref();
+  });
+  await Promise.race([exited, forced]);
+  clearTimeout(timer);
+  if (child.exitCode === null) await once(child, 'exit');
+}
+
+async function waitForResponse(url, child, output) {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      throw new Error(`wrangler pages dev exited early (${child.exitCode})\n${output()}`);
+    }
+    try {
+      return await fetch(url);
+    } catch {
+      await delay(100);
+    }
+  }
+  throw new Error(`wrangler pages dev did not become ready\n${output()}`);
+}
 
 function portableProject({ id = 'lwproj-cloud', name = 'Cloud Project', brightness = 1 } = {}) {
   return {
@@ -370,6 +440,97 @@ test('D1/R2 store implements assets, duplicate, restore, backup/import, deletion
   assert.equal((await bucket.list()).objects.every(object => !object.key.includes('http')), true);
 });
 
+test('permanent delete removes every project and revision row plus every immutable R2 body', async t => {
+  const { mf, db, bucket } = await localBindings();
+  t.after(() => mf.dispose());
+  const store = createD1R2LibraryStore({ PROJECTS_DB: db, PROJECT_BLOBS: bucket });
+  const actor = { email: 'owner@example.test', role: 'owner', subject: 'owner-1' };
+  const created = await store.createProject({
+    title: 'Delete completely',
+    project: portableProject({ id: 'delete-completely' }),
+    actor,
+    idempotencyKey: 'delete-create',
+  });
+  await store.updateProject({
+    id: created.id,
+    baseRevision: 1,
+    project: portableProject({ id: 'delete-completely', brightness: 0.5 }),
+    actor,
+    idempotencyKey: 'delete-update',
+  });
+  await store.restoreRevision({
+    id: created.id,
+    revision: 1,
+    baseRevision: 2,
+    actor,
+    idempotencyKey: 'delete-restore',
+  });
+  assert.equal((await bucket.list({ prefix: `projects/${created.id}/` })).objects.length, 3);
+
+  assert.deepEqual(await store.deleteProject({
+    id: created.id,
+    baseRevision: 3,
+    actor,
+    idempotencyKey: 'delete-final',
+  }), { deleted: true });
+  assert.equal(await db.prepare('SELECT id FROM projects WHERE id = ?').bind(created.id).first(), null);
+  assert.equal(
+    await db.prepare('SELECT COUNT(*) AS count FROM project_revisions WHERE project_id = ?')
+      .bind(created.id).first('count'),
+    0,
+  );
+  assert.equal((await bucket.list({ prefix: `projects/${created.id}/` })).objects.length, 0);
+  assert.ok(await db.prepare(
+    'SELECT idempotency_key FROM library_mutations WHERE idempotency_key = ?',
+  ).bind('delete-final').first());
+});
+
+test('an R2 deletion failure returns a safe router failure and preserves project metadata', async t => {
+  const { mf, db, bucket } = await localBindings();
+  t.after(() => mf.dispose());
+  const failingBucket = {
+    get: (...args) => bucket.get(...args),
+    head: (...args) => bucket.head(...args),
+    list: (...args) => bucket.list(...args),
+    put: (...args) => bucket.put(...args),
+    async delete() {
+      throw new Error('private storage failure with secret details');
+    },
+  };
+  const store = createD1R2LibraryStore({ PROJECTS_DB: db, PROJECT_BLOBS: failingBucket });
+  const identity = { email: 'owner@example.test', role: 'owner', subject: 'owner-1' };
+  const created = await store.createProject({
+    title: 'Delete must fail closed',
+    project: portableProject({ id: 'delete-fails-closed' }),
+    actor: identity,
+    idempotencyKey: 'failed-delete-create',
+  });
+  const response = await handleLibraryRequest({
+    request: new Request(`https://led.mandalacodes.com/api/library/projects/${created.id}`, {
+      method: 'DELETE',
+      headers: {
+        'content-type': 'application/json',
+        'x-lightweaver-request': 'failed-delete-request',
+      },
+      body: JSON.stringify({ baseRevision: 1, confirmation: 'DELETE' }),
+    }),
+    identity,
+    store,
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 500);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.equal(payload.error.code, 'internal_error');
+  assert.equal('deleted' in payload, false);
+  assert.doesNotMatch(JSON.stringify(payload), /secret details|delete-fails-closed/);
+  assert.ok(await db.prepare('SELECT id FROM projects WHERE id = ?').bind(created.id).first());
+  assert.equal(
+    await db.prepare('SELECT COUNT(*) AS count FROM project_revisions WHERE project_id = ?')
+      .bind(created.id).first('count'),
+    1,
+  );
+});
+
 test('a failed multi-object import best-effort removes every object written before metadata', async t => {
   const { mf, db, bucket } = await localBindings();
   t.after(() => mf.dispose());
@@ -411,6 +572,63 @@ test('a failed multi-object import best-effort removes every object written befo
   assert.equal((await bucket.list()).objects.length, 0);
 });
 
+test('Wrangler applies local migrations and serves the deployed Pages catch-all without remote access', {
+  timeout: 30_000,
+}, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'lightweaver-cloud-bindings-'));
+  const state = join(root, 'state');
+  const site = join(root, 'site');
+  await mkdir(site, { recursive: true });
+  let child;
+  try {
+    const migration = await runWrangler([
+      'd1', 'migrations', 'apply', 'PROJECTS_DB', '--local', '--persist-to', state,
+    ]);
+    assert.equal(migration.code, 0, `${migration.stdout}\n${migration.stderr}`);
+    assert.match(`${migration.stdout}\n${migration.stderr}`, /0001_cloud_project_library\.sql/);
+
+    const schema = await runWrangler([
+      'd1', 'execute', 'PROJECTS_DB', '--local', '--persist-to', state,
+      '--command', "SELECT COUNT(*) AS project_tables FROM sqlite_master WHERE type='table' AND name='projects'",
+      '--json',
+    ]);
+    assert.equal(schema.code, 0, `${schema.stdout}\n${schema.stderr}`);
+    assert.equal(JSON.parse(schema.stdout)[0].results[0].project_tables, 1);
+
+    const port = await availablePort();
+    let stdout = '';
+    let stderr = '';
+    child = spawn(WRANGLER_BIN, [
+      'pages', 'dev', site,
+      '--persist-to', state,
+      '--ip', '127.0.0.1',
+      '--port', String(port),
+      '--log-level', 'error',
+      '--show-interactive-dev-session=false',
+    ], {
+      cwd: PROJECT_DIR,
+      env: { ...process.env, CI: '1', NO_COLOR: '1', WRANGLER_SEND_METRICS: 'false' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+
+    const response = await waitForResponse(
+      `http://127.0.0.1:${port}/api/library/session`,
+      child,
+      () => `${stdout}\n${stderr}`,
+    );
+    const payload = await response.json();
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.equal(payload.error.code, 'unauthenticated');
+    assert.equal(child.exitCode, null);
+  } finally {
+    if (child) await stopChild(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('binding config, migration, route manifest, and package scripts are local-safe and complete', async () => {
   const [routesText, migration, wrangler, packageText, gitignore] = await Promise.all([
     readFile(new URL('../public/_routes.json', import.meta.url), 'utf8'),
@@ -443,6 +661,8 @@ test('binding config, migration, route manifest, and package scripts are local-s
   assert.match(pkg.scripts['test:projects'], /library-api\.test\.js/);
   assert.match(pkg.scripts['test:projects'], /cloud-bindings\.mjs/);
   assert.equal(pkg.scripts['test:cloud-bindings'], 'node tests/cloud-bindings.mjs');
+  assert.match(pkg.scripts['build:functions'] || '', /^mkdir -p \.pages\/functions-build && wrangler pages functions build /);
+  assert.match(pkg.scripts['build:functions'] || '', /--output-routes-path \.pages\/functions-build\/_routes\.json/);
   assert.match(gitignore, /\.wrangler/);
   assert.match(gitignore, /\.dev\.vars/);
   assert.match(gitignore, /\.env/);

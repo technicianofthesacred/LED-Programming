@@ -155,7 +155,7 @@ Add:
 
 ```json
 {
-  "test:projects": "node --test functions/api/library/library-api.test.js src/lib/cloudLibraryClient.test.js src/lib/libraryBackup.test.js src/lib/workspaceAssets.test.js",
+  "test:projects": "node --test functions/api/library/library-api.test.js tests/cloud-bindings.mjs",
   "test:cloud-bindings": "node tests/cloud-bindings.mjs"
 }
 ```
@@ -212,6 +212,8 @@ Expose `canonicalLibraryBackupFileName(date)`, `isLibraryBackup(value)`, `readWo
 Run: `cd lightweaver && node --test src/lib/cloudLibraryClient.test.js src/lib/libraryBackup.test.js src/lib/workspaceAssets.test.js src/lib/customPatterns.test.js src/lib/patternLabStorage.test.js`
 
 Expected: all tests pass.
+
+Extend `test:projects` here, after those client files exist, so it covers the server API/auth/store suite plus `src/lib/cloudLibraryClient.test.js`, `src/lib/libraryBackup.test.js`, and `src/lib/workspaceAssets.test.js`.
 
 Commit: `git add lightweaver/src/lib && git commit -m "Add cloud library client and portable workspace assets"`
 
