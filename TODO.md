@@ -107,6 +107,8 @@ The 2026-06-16 audit fixes (firmware C1/H1/H2/M1/M4, Studio C2/H3/M3/M5/M6, Pi/m
 
 ## Future
 
+- [ ] **Client project sharing** — add private, revocable read-only links for previewing and downloading selected artwork projects; keep editing owner-only, and defer accounts, collaborators, and public discovery until Lightweaver is intentionally expanded beyond Adrian's single-user Studio _(agent · deep)_
+  This is explicitly outside the current personal project-library scope. Done when a selected project can be shared without exposing the rest of the library, access can be revoked, and recipients cannot modify the source project.
 - [ ] **Live Host runtime** — build the runtime for laptop, Pi, Madrix, and sound-reactive streaming _(agent · deep)_
   This is the live-performance control path that drives the card from a host machine, including audio-reactive output for installations. Done when the runtime streams live and sound-reactive frames across the laptop, Pi, and Madrix modes. → Plan: [docs/superpowers/plans/2026-05-28-lightweaver-esp32-three-mode-runtime.md](docs/superpowers/plans/2026-05-28-lightweaver-esp32-three-mode-runtime.md)
 
