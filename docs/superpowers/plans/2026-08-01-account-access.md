@@ -293,7 +293,7 @@ Expected: every command exits 0.
 
 - [ ] **Step 5: Production cutover and smoke test**
 
-Apply migrations 0002 and 0003, deploy dual-auth code, bootstrap the owner account through the existing Access session, and verify all three roles in preview. Then remove the `/api/account*` and `/api/library*` Access application rules, set `LIGHTWEAVER_NATIVE_AUTH_READY=confirmed`, and redeploy so native login can reach the API without the legacy Access settings. Verify signed-out denial, owner account administration, worker create/edit and delete denial, customer assignment isolation, draft save, promotion, logout, and master backup.
+Apply migrations 0002 and 0003, deploy dual-auth code, bootstrap the owner account through the existing Access session, and verify all three roles in preview. Then remove the `/api/library*` Access application rule, set `LIGHTWEAVER_NATIVE_AUTH_READY=confirmed`, and redeploy so native login can reach the API without the legacy Access settings. Verify signed-out denial, owner account administration, worker create/edit and delete denial, customer assignment isolation, draft save, promotion, logout, and master backup.
 
 - [x] **Step 6: Commit final deployment changes**
 

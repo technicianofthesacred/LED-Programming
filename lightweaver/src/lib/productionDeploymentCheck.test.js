@@ -245,11 +245,12 @@ test('mutable firmware metadata cannot be cached while immutable releases can be
   assert.match(headers, /\/firmware\/releases\/\*\n  Cache-Control: public, max-age=31536000, immutable/);
 });
 
-test('Studio root must contain the root application shell', async () => {
+test('Studio root requires exact HTTP 200 and the root application shell', async () => {
   assert.deepEqual(
     await assertStudioRoot(response(200, '<div id="root"></div>'), 'https://example.test/'),
     new Uint8Array(Buffer.from('<div id="root"></div>')),
   );
+  await assert.rejects(assertStudioRoot(response(204), 'https://example.test/'), /HTTP 204/);
   await assert.rejects(assertStudioRoot(response(200, '<h1>Other site</h1>'), 'https://example.test/'), /does not contain/);
   await assert.rejects(assertStudioRoot(response(500), 'https://example.test/'), /HTTP 500/);
 });
