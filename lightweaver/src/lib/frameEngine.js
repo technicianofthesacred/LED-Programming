@@ -184,6 +184,7 @@ export function renderPixelFrame({
   audioBands = null,
   normBounds = null,
   perStripFns = new Map(),
+  perStripPalettes = new Map(),
   patternParamsById = {},
 }) {
   const visibleStrips = strips.filter(s => s && !s.hidden);
@@ -215,6 +216,7 @@ export function renderPixelFrame({
     const stripTime = (stripT / 65.536) % 1;
     const stripFn = (s.patternId ? perStripFns.get(s.patternId) : null) ?? fnA;
     const stripParams = s.patternId ? paramsForPattern.get(s.patternId) || resolvedParams : resolvedParams;
+    const stripPalette = perStripPalettes.get(s.id) || paletteNorm;
     const leds = [];
     let rSum = 0, gSum = 0, bSum = 0;
 
@@ -239,7 +241,7 @@ export function renderPixelFrame({
 
       let r = 0, g = 0, b = 0;
       if (stripFn) {
-        const colA = evalPixel(stripFn, evalIndex, nx, ny, stripT, stripTime, pixelCount, paletteNorm, beat, beatSin, stripParams, s.id, stripProgress, bass, mid, hi);
+        const colA = evalPixel(stripFn, evalIndex, nx, ny, stripT, stripTime, pixelCount, stripPalette, beat, beatSin, stripParams, s.id, stripProgress, bass, mid, hi);
         r = colA.r; g = colA.g; b = colA.b;
 
         if (fnB && blendAmount > 0) {

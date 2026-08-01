@@ -63,6 +63,12 @@ import {
 } from '../lib/cardAction.js';
 import { createProjectPreviewStrip } from '../lib/previewVisuals.js';
 import {
+  buildPatternPreviewSegments,
+  fitPreviewViewBox,
+  readPatternPreviewUiState,
+  writePatternPreviewUiState,
+} from '../lib/patternPiecePreview.js';
+import {
   CARD_BRIDGE_CHANGED_EVENT,
   acquireCardBridgeFromGesture,
   cardBridgeFeatureGap,
@@ -376,6 +382,7 @@ import { PatternPreview } from './PatternPreview.jsx';
     const cardReturnConsumed = useRef(false);
     const latestPreviewIntent = useRef(null);
     const draftProjectSnapshotRef = useRef(project => project);
+    const restoredPreviewSelectionRef = useRef('');
 
     const invalidatePendingPreview = useCallback(() => {
       browsePreviewSeq.current += 1;
@@ -449,6 +456,61 @@ import { PatternPreview } from './PatternPreview.jsx';
       () => sectionTargets.map(target => ({ ...target, look: resolveDraftTargetLook(target) })),
       [resolveDraftTargetLook, sectionTargets],
     );
+    const patternPreviewSegments = useMemo(
+      () => buildPatternPreviewSegments({
+        strips,
+        patchBoard: board,
+        targets: effectiveSectionTargets,
+        resolvePatternId: resolveCodePatternId,
+        paletteForPattern: patternId => (
+          REAL_PATTERN_BY_ID.get(patternId)?.pal || adaptPattern(patternId)?.pal
+        ),
+      }),
+      [board, effectiveSectionTargets, strips],
+    );
+    const previewTargetIds = useMemo(
+      () => patternPreviewSegments.map(segment => segment.id),
+      [patternPreviewSegments],
+    );
+    const previewTargetKey = previewTargetIds.join('|');
+    const [previewUiState, setPreviewUiState] = useState(() => ({
+      projectId,
+      ...readPatternPreviewUiState({ projectId, targetIds: previewTargetIds }),
+    }));
+    useEffect(() => {
+      setPreviewUiState(previous => {
+        if (previous.projectId !== projectId) {
+          return {
+            projectId,
+            ...readPatternPreviewUiState({ projectId, targetIds: previewTargetIds }),
+          };
+        }
+        if (previewTargetIds.includes(previous.lastTargetId)) return previous;
+        return { ...previous, lastTargetId: previewTargetIds[0] || '' };
+      });
+    }, [projectId, previewTargetKey]); // eslint-disable-line react-hooks/exhaustive-deps
+    const previewMode = previewUiState.projectId === projectId && previewUiState.mode === 'piece'
+      ? 'piece'
+      : 'strip';
+    const lastPreviewTargetId = previewTargetIds.includes(previewUiState.lastTargetId)
+      ? previewUiState.lastTargetId
+      : (previewTargetIds[0] || '');
+    useEffect(() => {
+      if (previewUiState.projectId !== projectId) return;
+      writePatternPreviewUiState({
+        projectId,
+        state: { mode: previewMode, lastTargetId: lastPreviewTargetId },
+      });
+    }, [lastPreviewTargetId, previewMode, previewUiState.projectId, projectId]);
+    const visiblePatternPreviewSegments = previewMode === 'piece'
+      ? patternPreviewSegments
+      : patternPreviewSegments.filter(segment => segment.id === lastPreviewTargetId);
+    const patternPreviewViewBox = previewMode === 'piece'
+      ? viewBox
+      : fitPreviewViewBox(visiblePatternPreviewSegments, viewBox);
+    const previewTargetName = previewMode === 'piece'
+      ? 'Whole piece'
+      : (visiblePatternPreviewSegments[0]?.label || 'LED strip');
 
     const rawPlaylist = isImplicitDefaultPatternPlaylist(standaloneController?.playlist)
       ? []
@@ -643,6 +705,18 @@ import { PatternPreview } from './PatternPreview.jsx';
     }, [invalidatePendingPreview, projectRevision]);
 
     useEffect(() => {
+      if (
+        previewUiState.projectId !== projectId ||
+        !previewUiState.restored ||
+        !previewTargetIds.includes(lastPreviewTargetId)
+      ) return;
+      const restoreKey = `${projectId}:${lastPreviewTargetId}`;
+      if (restoredPreviewSelectionRef.current === restoreKey) return;
+      restoredPreviewSelectionRef.current = restoreKey;
+      setSelectedTargetId(lastPreviewTargetId);
+    }, [lastPreviewTargetId, previewTargetKey, previewUiState.projectId, previewUiState.restored, projectId]);
+
+    useEffect(() => {
       if (cardReturnConsumed.current || typeof window === 'undefined') return;
       const params = new URLSearchParams(window.location.search);
       const requestedPatternId = String(params.get('editPattern') || '').trim().toLowerCase();
@@ -781,6 +855,14 @@ import { PatternPreview } from './PatternPreview.jsx';
       if (!target) return;
       invalidatePendingPreview();
       setSelectedTargetId(target.id);
+      setPreviewUiState(previous => ({
+        ...previous,
+        projectId,
+        mode: target.kind === 'section' ? 'strip' : 'piece',
+        lastTargetId: target.kind === 'section' && previewTargetIds.includes(target.id)
+          ? target.id
+          : (previewTargetIds.includes(previous.lastTargetId) ? previous.lastTargetId : previewTargetIds[0] || ''),
+      }));
       // Picking a target only changes what the controls edit — with live
       // preview off nothing is sent, so there is nothing to report. The
       // "Live preview is off…" note belongs to actual look changes only.
@@ -791,6 +873,33 @@ import { PatternPreview } from './PatternPreview.jsx';
         return;
       }
       scheduleLivePreview(resolveDraftTargetLook(target), target, 150);
+    };
+
+    const choosePatternPreviewTarget = (value) => {
+      if (value === 'piece') {
+        setPreviewUiState(previous => ({ ...previous, projectId, mode: 'piece' }));
+        return;
+      }
+      const target = sectionTargets.find(candidate => candidate.id === value && candidate.kind === 'section');
+      if (target && previewTargetIds.includes(target.id)) selectTarget(target);
+    };
+
+    const stepPatternPreviewTarget = (direction) => {
+      if (previewMode !== 'strip') return;
+      const currentIndex = previewTargetIds.indexOf(lastPreviewTargetId);
+      const nextId = previewTargetIds[currentIndex + direction];
+      if (nextId) choosePatternPreviewTarget(nextId);
+    };
+
+    const togglePatternPiecePreview = () => {
+      setPreviewUiState(previous => ({
+        ...previous,
+        projectId,
+        mode: previewMode === 'piece' ? 'strip' : 'piece',
+        lastTargetId: previewTargetIds.includes(previous.lastTargetId)
+          ? previous.lastTargetId
+          : previewTargetIds[0] || '',
+      }));
     };
 
     const buildCurrentHardwareState = ({ saveNamedLook = false, label = '', uniqueLookId = false } = {}) => {
@@ -1260,7 +1369,7 @@ import { PatternPreview } from './PatternPreview.jsx';
       else patchGeo({ center: fit.center });
     };
 
-    const targetTotal = Math.max(0, sectionTargets.length - 1) || 1;
+    const targetTotal = previewTargetIds.length || 1;
     const selectedTargetName = selectedTarget ? targetLabel(selectedTarget) : 'All sections';
     const showFlashAction = statusKind === 'err' && status === cardBridgeFeatureGap('frame')?.message;
     const hasPreviewFailureAction = previewAction.status === 'failed' && Boolean(previewFailure?.actionId);
@@ -1400,11 +1509,11 @@ import { PatternPreview } from './PatternPreview.jsx';
 
                 {/* design target */}
                 <div className="pm-target">
-                  <div className="sec-h"><span className="t">Design target</span><span className="m">{Math.max(1, sectionTargets.length - 1)} section · card limit 10</span><span className="line" /></div>
+                  <div className="sec-h"><span className="t">Design target</span><span className="m">{Math.max(1, previewTargetIds.length)} section · card limit 10</span><span className="line" /></div>
                   {/* multi-section target tabs (live): All sections / Section 1 / ... */}
                   {sectionTargets.length > 1 &&
                     <div className="chips" style={{ marginBottom: 8 }} aria-label="Target sections">
-                      {sectionTargets.map((t) =>
+                      {sectionTargets.filter(t => t.kind === 'all' || previewTargetIds.includes(t.id)).map((t) =>
                         <button key={t.id} data-testid={`section-target-${t.id}`} className={"chip" + (t.id === selectedTarget?.id ? " on" : "")} onClick={() => selectTarget(t)}>{targetLabel(t)}</button>
                       )}
                     </div>
@@ -1477,8 +1586,87 @@ import { PatternPreview } from './PatternPreview.jsx';
               {/* ASIDE */}
               <aside className="pm-aside">
                 <div className="card pm-pane pm-preview-pane">
-                  <div className="sec-h"><span className="t">Preview</span><span className="m">{selectedTargetName} · {sel.label}</span></div>
-                  <LedStage patternId={sel.id} pal={sel.pal} look={look} previewStrip={projectPreviewStrip} symSettings={symSettings} />
+                  <div className="sec-h"><span className="t">Preview</span><span className="m">{previewTargetName} · {sel.label}</span></div>
+                  <div className="pm-preview-controls" aria-label="Pattern preview controls">
+                    <button
+                      type="button"
+                      className="pm-preview-step"
+                      aria-label="Previous LED target"
+                      disabled={previewMode !== 'strip' || previewTargetIds.indexOf(lastPreviewTargetId) <= 0}
+                      onClick={() => stepPatternPreviewTarget(-1)}
+                    >‹</button>
+                    <label className="pm-preview-select">
+                      <span className="sr-only">Preview target</span>
+                      <select
+                        aria-label="Preview target"
+                        value={previewMode === 'piece' ? 'piece' : lastPreviewTargetId}
+                        onChange={event => choosePatternPreviewTarget(event.target.value)}
+                      >
+                        <option value="piece">Whole piece</option>
+                        {patternPreviewSegments.map(segment => (
+                          <option key={segment.id} value={segment.id}>{segment.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      className="pm-preview-step"
+                      aria-label="Next LED target"
+                      disabled={previewMode !== 'strip' || previewTargetIds.indexOf(lastPreviewTargetId) >= previewTargetIds.length - 1}
+                      onClick={() => stepPatternPreviewTarget(1)}
+                    >›</button>
+                    <button
+                      type="button"
+                      className={`pm-piece-toggle${previewMode === 'piece' ? ' on' : ''}`}
+                      aria-pressed={previewMode === 'piece'}
+                      onClick={togglePatternPiecePreview}
+                    >On my piece</button>
+                  </div>
+                  <div
+                    data-testid="pattern-project-preview"
+                    data-preview-led-count={projectPreviewStrip?.pts?.length || 0}
+                    data-preview-order={(projectPreviewStrip?.order || []).join(',')}
+                    data-preview-symmetry={symSettings?.enabled ? symSettings.type : 'none'}
+                  >
+                    <div
+                      className="pm-piece-stage"
+                      data-testid="pattern-piece-preview"
+                      data-preview-mode={previewMode}
+                      data-preview-target={previewMode === 'piece' ? 'piece' : lastPreviewTargetId}
+                      data-preview-led-count={visiblePatternPreviewSegments.reduce((sum, segment) => sum + segment.pixels.length, 0)}
+                      data-preview-view-box={patternPreviewViewBox}
+                      data-preview-targets={visiblePatternPreviewSegments.map(segment => segment.id).join(',')}
+                      data-preview-patterns={visiblePatternPreviewSegments.map(segment => segment.sourcePatternId).join(',')}
+                    >
+                      {visiblePatternPreviewSegments.length ? (
+                        <PatternPreview
+                          strips={visiblePatternPreviewSegments}
+                          hidden={{}}
+                          viewBox={patternPreviewViewBox}
+                          patternId={visiblePatternPreviewSegments[0].patternId}
+                          playing={true}
+                          palette={visiblePatternPreviewSegments[0].palette}
+                          params={patternParams?.[visiblePatternPreviewSegments[0].patternId] || {}}
+                          patternParamsById={patternParams}
+                          bpm={bpm}
+                          masterSpeed={1}
+                          masterBrightness={1}
+                          masterSaturation={1}
+                          masterHueShift={0}
+                          gammaEnabled={gammaEnabled}
+                          gammaValue={gammaValue}
+                          symSettings={symSettings?.enabled ? symSettings : null}
+                          glow={1.1}
+                          dotSize={3}
+                          motionSmoothing="soft"
+                          targetFps={30}
+                          ariaLabel={`${previewTargetName} animated LED preview`}
+                        />
+                      ) : (
+                        <p className="pm-preview-empty">Add LEDs in Layout to preview this piece.</p>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
                 <div className="card pm-pane">

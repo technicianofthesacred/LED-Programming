@@ -33,6 +33,129 @@ async function gotoSavedProjectPatterns(page, project) {
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
 }
 
+function createPiecePreviewProject(id = 'piece-preview-fixture') {
+  const project = createDefaultProject();
+  project.id = id;
+  project.name = 'Piece preview fixture';
+  project.layout.layers = [
+    { id: 'art-only-layer', name: 'Artwork only — no LEDs', visible: true },
+  ];
+  project.layout.patchBoard.patches[0].playback.patternId = 'fire';
+  project.layout.patchBoard.patches[1].playback.patternId = 'ocean';
+  return project;
+}
+
+test('mapped preview lists LED-backed targets only and crops to the selected geometry', async ({ page }) => {
+  const project = createPiecePreviewProject();
+  await gotoSavedProjectPatterns(page, project);
+
+  const targetSelect = page.getByLabel('Preview target');
+  await expect(targetSelect.locator('option')).toHaveText(['Whole piece', 'Outer circle', 'Inner circle']);
+  await expect(targetSelect.locator('option', { hasText: 'Artwork only — no LEDs' })).toHaveCount(0);
+  await expect(targetSelect).toHaveValue('patch-default-outer-circle');
+
+  const stage = page.getByTestId('pattern-piece-preview');
+  await expect(stage).toHaveAttribute('data-preview-mode', 'strip');
+  await expect(stage).toHaveAttribute('data-preview-target', 'patch-default-outer-circle');
+  await expect(stage).toHaveAttribute('data-preview-led-count', '27');
+  await expect(stage).not.toHaveAttribute('data-preview-view-box', project.layout.viewBox);
+});
+
+test('preview dropdown and chevrons move through LED targets without wrapping', async ({ page }) => {
+  const project = createPiecePreviewProject();
+  const savedBefore = JSON.stringify(project.layout.patchBoard);
+  await gotoSavedProjectPatterns(page, project);
+
+  const previous = page.getByRole('button', { name: 'Previous LED target' });
+  const next = page.getByRole('button', { name: 'Next LED target' });
+  const targetSelect = page.getByLabel('Preview target');
+  await expect(previous).toBeDisabled();
+  await expect(next).toBeEnabled();
+
+  await next.click();
+  await expect(targetSelect).toHaveValue('patch-default-inner-circle');
+  await expect(previous).toBeEnabled();
+  await expect(next).toBeDisabled();
+
+  await targetSelect.selectOption('patch-default-outer-circle');
+  await expect(previous).toBeDisabled();
+  await targetSelect.selectOption('piece');
+  await expect(page.getByTestId('pattern-piece-preview')).toHaveAttribute('data-preview-mode', 'piece');
+  await expect(previous).toBeDisabled();
+  await expect(next).toBeDisabled();
+  await page.waitForTimeout(650);
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}'));
+  expect(JSON.stringify(saved.layout.patchBoard)).toBe(savedBefore);
+});
+
+test('On my piece returns to the last strip and restores preview state per project', async ({ page, browser }) => {
+  const project = createPiecePreviewProject('piece-preview-restore');
+  await gotoSavedProjectPatterns(page, project);
+
+  const targetSelect = page.getByLabel('Preview target');
+  const toggle = page.getByRole('button', { name: 'On my piece' });
+  await targetSelect.selectOption('patch-default-inner-circle');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(targetSelect).toHaveValue('piece');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await expect(targetSelect).toHaveValue('patch-default-inner-circle');
+
+  await toggle.click();
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('button', { name: 'On my piece' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByLabel('Preview target')).toHaveValue('piece');
+  await expect(page.getByTestId('card-target-label')).toHaveText('Inner circle');
+
+  const anotherProject = createPiecePreviewProject('piece-preview-other');
+  const otherContext = await browser.newContext();
+  const otherPage = await otherContext.newPage();
+  await otherPage.addInitScript(({ savedProject, previousProjectId }) => {
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
+    localStorage.setItem(`lw_pattern_piece_preview_v1:${previousProjectId}`, JSON.stringify({
+      mode: 'piece',
+      lastTargetId: 'patch-default-inner-circle',
+    }));
+  }, { savedProject: anotherProject, previousProjectId: project.id });
+  await otherPage.goto(new URL('/#screen=patterns', page.url()).toString(), { waitUntil: 'domcontentloaded' });
+  await expect(otherPage.getByRole('button', { name: 'On my piece' })).toHaveAttribute('aria-pressed', 'false');
+  await expect(otherPage.getByLabel('Preview target')).toHaveValue('patch-default-outer-circle');
+  await otherContext.close();
+});
+
+test('deleted remembered target falls back to the first LED-backed target', async ({ page }) => {
+  const project = createPiecePreviewProject('piece-preview-deleted');
+  await page.addInitScript(({ savedProject, key }) => {
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
+    localStorage.setItem(key, JSON.stringify({ mode: 'strip', lastTargetId: 'deleted-target' }));
+  }, {
+    savedProject: project,
+    key: `lw_pattern_piece_preview_v1:${project.id}`,
+  });
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+
+  await expect(page.getByLabel('Preview target')).toHaveValue('patch-default-outer-circle');
+  await expect(page.getByTestId('pattern-piece-preview')).toHaveAttribute('data-preview-target', 'patch-default-outer-circle');
+});
+
+test('whole-piece preview composites saved assignments plus the unsaved selected draft without saving it', async ({ page }) => {
+  const project = createPiecePreviewProject('piece-preview-draft');
+  const savedBefore = JSON.stringify(project.layout.patchBoard);
+  await gotoSavedProjectPatterns(page, project);
+
+  await page.getByTestId('section-target-patch-default-inner-circle').click();
+  await page.getByLabel('Preview taps on the LED card').uncheck();
+  await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
+  await page.getByRole('button', { name: 'On my piece' }).click();
+
+  const stage = page.getByTestId('pattern-piece-preview');
+  await expect(stage).toHaveAttribute('data-preview-mode', 'piece');
+  await expect(stage).toHaveAttribute('data-preview-patterns', 'fire,plasma');
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}'));
+  expect(JSON.stringify(saved.layout.patchBoard)).toBe(savedBefore);
+});
+
 test('v3 patterns mounts the mockup shell with a chip-ready catalog', async ({ page }) => {
   await gotoFreshPatterns(page);
 
