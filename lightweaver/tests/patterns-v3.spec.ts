@@ -66,6 +66,45 @@ function createPiecePreviewProject(id = 'piece-preview-fixture') {
   return project;
 }
 
+async function mockVerifiedInstallCard(page, project, cardId = 'lw-pattern-install') {
+  let installedConfig = buildCardRuntimePackageFromProject({
+    projectId: project.id,
+    projectName: project.name,
+    strips: project.layout.strips,
+    patchBoard: project.layout.patchBoard,
+    standaloneController: project.devices.standaloneController,
+  }).config;
+  await page.route('**/api/firmware-info', route => route.fulfill({
+    json: {
+      app: 'Lightweaver',
+      cardId,
+      firmwareVersion: '1.0.0',
+      buildId: 'pattern-install-build',
+      projectRevision: installedConfig.projectRevision,
+      projectFingerprint: installedConfig.projectFingerprint,
+      outputs: installedConfig.led.outputs,
+    },
+  }));
+  await page.route('**/api/status', route => route.fulfill({
+    json: { ok: true, cardId, firmwareVersion: '1.0.0', led: { pixels: installedConfig.led.pixels } },
+  }));
+  await page.route('**/api/config', async route => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({ json: installedConfig });
+      return;
+    }
+    installedConfig = JSON.parse(route.request().postData() || '{}');
+    await route.fulfill({ json: { ok: true, requiresReboot: false } });
+  });
+  await page.route('**/api/control', async route => {
+    const body = JSON.parse(route.request().postData() || '{}');
+    await route.fulfill({ json: { ok: true, cardId, patternId: body.patternId, revision: body.revision } });
+  });
+  await page.addInitScript((id) => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id }));
+  }, cardId);
+}
+
 test('fresh strip preview and design target stay synchronized without committing the audition', async ({ page }) => {
   await gotoFreshPatterns(page);
 
@@ -210,6 +249,53 @@ test('whole-piece preview composites saved assignments plus the unsaved selected
   await expect(stage).toHaveAttribute('data-preview-patterns', 'fire,plasma');
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}'));
   expect(JSON.stringify(saved.layout.patchBoard)).toBe(savedBefore);
+});
+
+test('leaving whole-piece preview restores the remembered strip as the edit target', async ({ page }) => {
+  const project = createPiecePreviewProject('piece-preview-all-toggle');
+  await gotoSavedProjectPatterns(page, project);
+
+  const innerTarget = page.getByTestId('section-target-patch-default-inner-circle');
+  const allTarget = page.getByTestId('section-target-all');
+  const toggle = page.getByRole('button', { name: 'On my piece' });
+  const stage = page.getByTestId('pattern-piece-preview');
+  await page.getByLabel('Preview taps on the LED card').uncheck();
+  await innerTarget.click();
+  await allTarget.click();
+  await expect(stage).toHaveAttribute('data-preview-mode', 'piece');
+  await expect(page.getByTestId('card-target-label')).toHaveText('All sections');
+
+  await toggle.click();
+  await expect(stage).toHaveAttribute('data-preview-target', 'patch-default-inner-circle');
+  await expect(innerTarget).toHaveClass(/\bon\b/);
+  await expect(page.getByTestId('card-target-label')).toHaveText('Inner circle');
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
+  await setRangeValue(page.getByTestId('look-brightness-slider'), '0.42');
+  await toggle.click();
+  await expect(page.getByTestId('pattern-piece-preview')).toHaveAttribute('data-preview-patterns', 'fire,plasma');
+});
+
+test('verified Install persists the auditioned section assignment in Studio', async ({ page }) => {
+  const project = createPiecePreviewProject('piece-preview-install');
+  await mockVerifiedInstallCard(page, project);
+  await gotoSavedProjectPatterns(page, project);
+
+  await page.getByTestId('section-target-patch-default-inner-circle').click();
+  await page.getByLabel('Preview taps on the LED card').uncheck();
+  await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
+  await setRangeValue(page.getByTestId('look-brightness-slider'), '0.42');
+  await page.getByTitle('Install the current look on the card').click();
+
+  await expect(page.locator('.savechip')).toContainText('Installed on card');
+  await expect.poll(() => page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
+    return saved.layout?.patchBoard?.patches?.[1]?.playback?.patternId;
+  })).toBe('plasma');
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}'));
+  expect(saved.layout.patchBoard.patches[0].playback.patternId).toBe('fire');
+  expect(saved.layout.patchBoard.patches[1].playback).toMatchObject({ patternId: 'plasma', brightness: 0.42 });
+  expect(saved.devices.standaloneController.playlist[0].patternId).toBe('plasma');
 });
 
 test('v3 patterns mounts the mockup shell with a chip-ready catalog', async ({ page }) => {

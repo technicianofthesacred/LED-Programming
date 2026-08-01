@@ -889,10 +889,14 @@ import { PatternPreview } from './PatternPreview.jsx';
     };
 
     const togglePatternPiecePreview = () => {
+      const nextMode = previewMode === 'piece' ? 'strip' : 'piece';
+      if (nextMode === 'strip' && previewTargetIds.includes(lastPreviewTargetId)) {
+        setSelectedTargetId(lastPreviewTargetId);
+      }
       setPreviewUiState(previous => ({
         ...previous,
         projectId,
-        mode: previewMode === 'piece' ? 'strip' : 'piece',
+        mode: nextMode,
         lastTargetId: previewTargetIds.includes(previous.lastTargetId)
           ? previous.lastTargetId
           : previewTargetIds[0] || '',
@@ -1002,6 +1006,8 @@ import { PatternPreview } from './PatternPreview.jsx';
       const requestedGeneration = projectLifecycle.generation;
       const { nextLook, nextBoard, nextController: draftController } = buildCurrentHardwareState();
       const nextController = promotePatternFirst(draftController, nextLook.patternId);
+      const commitCreatesRevision = JSON.stringify(nextBoard) !== JSON.stringify(board)
+        || JSON.stringify(nextController) !== JSON.stringify(standaloneController);
       const prepared = prepareCardDeployment({
         projectId,
         projectName,
@@ -1047,9 +1053,16 @@ import { PatternPreview } from './PatternPreview.jsx';
           readEvidence: () => readCardProjectEvidence({ host: safety.host || cardHost }),
         });
         dispatchCardSave({ type: 'confirm' });
+        setPatchBoard(nextBoard);
+        setStandaloneController(nextController);
+        setDraftLooks({});
         if (!testStrip.enabled) {
           markProjectInstalled({
-            revision: requestedRevision,
+            // The audition already owns requestedRevision. Promoting that
+            // verified draft into canonical project state changes the project
+            // fingerprint once more; acknowledge that exact committed state,
+            // while any concurrent edit still remains ahead and therefore dirty.
+            revision: requestedRevision + (commitCreatesRevision ? 1 : 0),
             generation: requestedGeneration,
             cardId: verification.cardId,
             projectRevision: exactPrepared.config.projectRevision,
