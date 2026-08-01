@@ -45,12 +45,14 @@ async function callAccount(accountStore, path, {
   const requestBody = rawBody === undefined
     ? body === undefined ? undefined : JSON.stringify(body)
     : rawBody;
+  const requestOptions = {
+    method,
+    headers,
+    body: requestBody,
+  };
+  if (requestBody instanceof ReadableStream) requestOptions.duplex = 'half';
   const response = await handleAccountPagesRequest({
-    request: new Request(`https://led.mandalacodes.com/api/account${path}`, {
-      method,
-      headers,
-      body: requestBody,
-    }),
+    request: new Request(`https://led.mandalacodes.com/api/account${path}`, requestOptions),
     env: {},
     params: {},
   }, { accountStore });
@@ -154,6 +156,41 @@ test('account login rejects declared and actual oversized JSON before credential
   });
   assert.equal(actual.response.status, 413);
   assert.equal(actual.payload.error.code, 'payload_too_large');
+  assert.equal(loginCalls, 0);
+});
+
+test('account login cancels an oversized stream without pulling later chunks', async () => {
+  const chunkSizes = [4 * 1024, 4 * 1024, 1, 1024];
+  let pulls = 0;
+  let cancellations = 0;
+  let loginCalls = 0;
+  const stream = new ReadableStream({
+    pull(controller) {
+      controller.enqueue(new Uint8Array(chunkSizes[pulls]));
+      pulls += 1;
+      if (pulls === chunkSizes.length) controller.close();
+    },
+    cancel() {
+      cancellations += 1;
+    },
+  }, { highWaterMark: 0 });
+  const accountStore = {
+    async verifyLogin() {
+      loginCalls += 1;
+      throw new Error('credential work must not run');
+    },
+  };
+
+  const denied = await callAccount(accountStore, '/login', {
+    method: 'POST',
+    rawBody: stream,
+    contentType: 'application/json',
+  });
+
+  assert.equal(denied.response.status, 413);
+  assert.equal(denied.payload.error.code, 'payload_too_large');
+  assert.equal(pulls, 3);
+  assert.equal(cancellations, 1);
   assert.equal(loginCalls, 0);
 });
 

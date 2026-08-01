@@ -48,6 +48,52 @@ function requireSameOrigin(request) {
   return request.headers.get('origin') === new URL(request.url).origin;
 }
 
+function payloadTooLargeError() {
+  return Object.assign(new Error('The JSON payload is too large.'), {
+    code: 'payload_too_large',
+    status: 413,
+  });
+}
+
+async function readBoundedBody(request) {
+  const reader = request.body?.getReader();
+  if (!reader) return new Uint8Array();
+  const chunks = [];
+  let total = 0;
+  let fullyRead = false;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        fullyRead = true;
+        break;
+      }
+      if (value.byteLength > MAX_ACCOUNT_BODY_BYTES - total) {
+        throw payloadTooLargeError();
+      }
+      chunks.push(value);
+      total += value.byteLength;
+    }
+  } finally {
+    if (!fullyRead) {
+      try {
+        await reader.cancel();
+      } catch {
+        // Preserve the original read or size error.
+      }
+    }
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
 async function readJson(request) {
   if (!(request.headers.get('content-type') || '').toLowerCase().startsWith('application/json')) {
     throw Object.assign(new Error('A JSON request body is required.'), {
@@ -57,18 +103,9 @@ async function readJson(request) {
   }
   const declaredLength = Number(request.headers.get('content-length'));
   if (Number.isFinite(declaredLength) && declaredLength > MAX_ACCOUNT_BODY_BYTES) {
-    throw Object.assign(new Error('The JSON payload is too large.'), {
-      code: 'payload_too_large',
-      status: 413,
-    });
+    throw payloadTooLargeError();
   }
-  const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.byteLength > MAX_ACCOUNT_BODY_BYTES) {
-    throw Object.assign(new Error('The JSON payload is too large.'), {
-      code: 'payload_too_large',
-      status: 413,
-    });
-  }
+  const bytes = await readBoundedBody(request);
   try {
     const body = JSON.parse(new TextDecoder().decode(bytes));
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error();
