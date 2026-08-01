@@ -181,7 +181,10 @@ export function ProjectLibraryPanel() {
         <div className="cloud-library-guidance">
           <strong>The online library is unavailable</strong>
           <p>{library.session.error?.message || 'Your browser recovery copy is still safe.'}</p>
-          <button type="button" className="btn" onClick={library.retrySession}>Try again</button>
+          <div className="set-actions">
+            <button type="button" className="btn primary" onClick={library.signIn}>Sign in</button>
+            <button type="button" className="btn" onClick={library.retrySession}>Try again</button>
+          </div>
         </div>
       )}
 
