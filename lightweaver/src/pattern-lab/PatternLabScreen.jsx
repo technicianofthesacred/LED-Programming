@@ -19,7 +19,8 @@ import { recipeFromPattern } from '../lib/patternLabPatternAdapter.js';
 import { normalizePatternLabRecipe, PATTERN_LAB_RECIPE_VERSION } from '../lib/patternLabRecipe.js';
 import { readPatternLabDraftState, savePatternLabDraft } from '../lib/patternLabStorage.js';
 import { PATTERN_LAB_WORKER_BUDGETS } from '../lib/patternLabWorkerProtocol.js';
-import { isBuiltInPattern, listBuiltInPatterns } from '../lib/patternRegistry.js';
+import { isBuiltInPattern, listPatterns } from '../lib/patternRegistry.js';
+import { useCloudLibrary } from '../state/CloudLibraryContext.jsx';
 import { useProject } from '../state/ProjectContext.jsx';
 import PatternLabControls from './PatternLabControls.jsx';
 import PatternLabDiagnostics from './PatternLabDiagnostics.jsx';
@@ -306,7 +307,8 @@ function SculpturePlaceholder() {
 
 export default function PatternLabScreen() {
   const project = useProject();
-  const patterns = useMemo(() => listBuiltInPatterns(), []);
+  const { workspaceAssets, resolveWorkspaceAssetConflict } = useCloudLibrary();
+  const [patterns, setPatterns] = useState([]);
   const importRef = useRef(null);
   const drawerRef = useRef(null);
   const previewStageRef = useRef(null);
@@ -342,10 +344,12 @@ export default function PatternLabScreen() {
   const previewDuration = draft?.evolution?.durationSeconds ?? 600;
 
   useEffect(() => {
+    if (!workspaceAssets.ready) return;
+    setPatterns(listPatterns());
     const state = readPatternLabDraftState();
     setDrafts(state.drafts);
     setDraftState(state.status === 'empty' || state.status === 'restored' ? 'ready' : state.status);
-  }, []);
+  }, [workspaceAssets.generation, workspaceAssets.ready]);
 
   useEffect(() => {
     if (!playing || !previewRecipe) return undefined;
@@ -1141,6 +1145,18 @@ export default function PatternLabScreen() {
               </details>
             )}
 
+            {workspaceAssets.conflict && (
+              <div className="plab-import-errors" role="alert">
+                <strong>Workspace patterns changed on another device.</strong>
+                <p>Keep the online version and preserve this device&apos;s colliding work as named local copies.</p>
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={() => resolveWorkspaceAssetConflict('keep-both')}
+                >Keep both copies</button>
+              </div>
+            )}
+
             <section className="plab-private-library" aria-labelledby="plab-private-heading">
               <div className="plab-library-heading">
                 <div><span className="plab-section-index">Saved</span><h2 id="plab-private-heading">Private drafts</h2></div>
@@ -1149,7 +1165,7 @@ export default function PatternLabScreen() {
               {draftState === 'loading' && <p>Loading private drafts…</p>}
               {draftState === 'unavailable' && <p role="alert">Private draft storage is unavailable in this browser.</p>}
               {draftState === 'unrecoverable' && <p role="alert">Private drafts could not be recovered. Existing data was left untouched.</p>}
-              {draftState === 'ready' && drafts.length === 0 && <p>No saved drafts yet. Your first save stays only in this browser.</p>}
+              {draftState === 'ready' && drafts.length === 0 && <p>No saved drafts yet. Your first save will be kept in your private workspace.</p>}
               {drafts.length > 0 && (
                 <ul>
                   {drafts.map(saved => (

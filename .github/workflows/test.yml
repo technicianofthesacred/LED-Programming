@@ -33,9 +33,11 @@ on:
       - 'docs/card-provisioning-fixes.md'
       - 'docs/new-card-checklist.md'
       - 'docs/deployment-checklist.md'
+      - 'docs/led-mandalacodes-setup.md'
       - 'docs/worker-flash-runbook.md'
       - 'docs/worker-job-card.md'
       - 'docs/roadmap.md'
+      - 'TODO.md'
       - '.github/workflows/**'
   pull_request:
     paths:
@@ -59,9 +61,11 @@ on:
       - 'docs/card-provisioning-fixes.md'
       - 'docs/new-card-checklist.md'
       - 'docs/deployment-checklist.md'
+      - 'docs/led-mandalacodes-setup.md'
       - 'docs/worker-flash-runbook.md'
       - 'docs/worker-job-card.md'
       - 'docs/roadmap.md'
+      - 'TODO.md'
       - '.github/workflows/**'
   # Lets deploy-site.yml reuse this exact test job as its deploy gate instead
   # of maintaining a near-copy of these steps.
@@ -108,6 +112,10 @@ jobs:
         # which needs a browser binary. `npm ci` does not fetch it, so without this
         # the e2e step fails with "Executable doesn't exist" and reddens main.
         run: npx playwright install --with-deps chromium
+
+      - name: Apply D1 migrations to isolated local CI state
+        working-directory: lightweaver
+        run: npm exec -- wrangler d1 migrations apply PROJECTS_DB --config wrangler.local.toml --local --persist-to .wrangler/ci-state
 
       # Feature branches cannot use the protected firmware signing key. They
       # still run every source/runtime/browser/build/staging check; only main

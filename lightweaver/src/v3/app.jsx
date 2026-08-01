@@ -3,6 +3,7 @@
    keeps the mockup markup; data/handlers are threaded in from project state. */
 import React, { Component, lazy, Suspense, useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
 import { ProjectProvider, useProject } from '../state/ProjectContext.jsx';
+import { CloudLibraryProvider, useCloudLibrary } from '../state/CloudLibraryContext.jsx';
 import { useCardStatus } from '../hooks/useCardStatus.js';
 import { CardConnectionCenter } from '../components/card/CardConnectionCenter.jsx';
 import { CardStatusControl } from '../components/card/CardStatusControl.jsx';
@@ -367,6 +368,7 @@ function Shell() {
     projectLifecycle, projectLifecycleLabel, markProjectPersisted,
     strips, layoutDensity,
   } = useProject();
+  const cloudLibrary = useCloudLibrary();
   const [saveLabel, setSaveLabel] = useState('');
   const fileInputRef = useRef(null);
   useEffect(() => {
@@ -562,14 +564,21 @@ function Shell() {
   }, []);
 
   // real project actions
-  const onSave = useCallback(() => {
+  const onSave = useCallback(async () => {
+    if (cloudLibrary.session.status === 'authenticated' && cloudLibrary.activeRemoteProject) {
+      const result = await cloudLibrary.saveNow();
+      if (!result.ok && !['queued', 'conflict', 'offline'].includes(result.reason)) setSaveLabel('Online save failed');
+      return;
+    }
     try {
       const record = saveCurrentProjectToLibrary(serializeProject());
       markProjectPersisted('browser');
       setSaveLabel(formatBrowserProjectSaveLabel(record));
+      openCardSection('preferences');
+    } catch {
+      setSaveLabel('save failed');
     }
-    catch { setSaveLabel('save failed'); }
-  }, [markProjectPersisted, serializeProject]);
+  }, [cloudLibrary, markProjectPersisted, openCardSection, serializeProject]);
   const onLaunchBridge = useCallback(async operation => {
     await launchBridgeOperation(operation, {
       persistProject: async () => {
@@ -606,8 +615,9 @@ function Shell() {
     const result = await replaceWithNewProject();
     if (result.ok) {
       writeActiveProjectLibraryRecordId('');
+      cloudLibrary.detachProject();
     }
-  }, [replaceWithNewProject]);
+  }, [cloudLibrary, replaceWithNewProject]);
   const onFile = useCallback((e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -616,13 +626,16 @@ function Shell() {
       try {
         const data = JSON.parse(ev.target.result);
         const result = await replaceProject(data);
-        if (result.ok) writeActiveProjectLibraryRecordId('');
+        if (result.ok) {
+          writeActiveProjectLibraryRecordId('');
+          cloudLibrary.detachProject();
+        }
         if (result.reason === 'invalid') alert('Invalid project file (version mismatch).');
       } catch { alert('Could not parse project file.'); }
     };
     reader.readAsText(file);
     e.target.value = '';
-  }, [replaceProject]);
+  }, [cloudLibrary, replaceProject]);
 
   const Screen = SCREEN_BY_ID[view];
 
@@ -630,7 +643,7 @@ function Shell() {
     <div className="app">
       <TopBar
         projectName={projectName || 'Untitled'}
-        saveLabel={saveLabel || projectLifecycleLabel}
+        saveLabel={saveLabel || (cloudLibrary.activeRemoteProject ? cloudLibrary.syncState.label : projectLifecycleLabel)}
         onNew={onNew} onLoad={onLoad} onDownload={onDownload} onSave={onSave}
         onPreferences={() => openCardSection('preferences')}
       />
@@ -680,7 +693,9 @@ function Shell() {
 function App() {
   return (
     <ProjectProvider>
-      <Shell />
+      <CloudLibraryProvider>
+        <Shell />
+      </CloudLibraryProvider>
     </ProjectProvider>
   );
 }

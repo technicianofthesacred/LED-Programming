@@ -14,9 +14,10 @@ the live deploy; there is no separate mandalacodes step for the LED surface.
   included) directly at `/` and runs `wrangler pages deploy … --branch main`.
   `.github/workflows/deploy-site.yml` runs it automatically on every push to
   `main` that touches `lightweaver/**`.
-- **Gate:** the deploy only publishes when `CLOUDFLARE_API_TOKEN` (Pages: Edit)
-  and `CLOUDFLARE_ACCOUNT_ID` are set as **Actions secrets on this repo**. Until
-  then the deploy step skips cleanly and pushes never reach the live domain.
+- **Gate:** the deploy only publishes when the complete credential, resource,
+  and readiness set in [Production publish gate configuration](#production-publish-gate-configuration)
+  is configured on **this repo**. Until then the deploy step skips cleanly and
+  pushes never reach the live domain.
 - **Do not** let the mandalacodes repo also publish to the `lightweaver` Pages
   project — the two would overwrite each other on the production branch. The
   mandalacodes site stays its own project serving `mandalacodes.com`.
@@ -26,6 +27,27 @@ the live deploy; there is no separate mandalacodes step for the LED surface.
 Trade-off of this repo owning production: `led.mandalacodes.com/` is the Studio;
 there is no separate marketing landing page unless one is folded into this
 repo's staged bundle (`stage:pages`).
+
+## Production publish gate configuration
+
+Production publishing stays disabled unless every item below exists and both
+readiness values equal `confirmed`. Names may appear in source; their real
+values must not.
+
+- Credentials: `CLOUDFLARE_API_TOKEN` (Pages-only),
+  `CLOUDFLARE_MIGRATION_API_TOKEN` (D1-only), and
+  `CLOUDFLARE_ACCOUNT_ID`.
+- Preview proof: `LIGHTWEAVER_PREVIEW_ACCESS_READY=confirmed` after the
+  protected preview acceptance passes.
+- Production readiness: `LIGHTWEAVER_PRODUCTION_LIBRARY_READY=confirmed`.
+- Private storage: `PROJECTS_DB_DATABASE_ID`,
+  `PROJECTS_DB_DATABASE_NAME`, and `PROJECT_BLOBS_BUCKET_NAME`.
+- Access and roles: `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, and `OWNER_EMAILS`.
+- Bounds: `MAX_LIBRARY_BODY_BYTES`, `MAX_LIBRARY_BACKUP_BYTES`, and
+  `MAX_LIBRARY_BACKUP_REVISIONS`.
+
+The GitHub Actions credential gate checks this complete set before it exposes
+either operational credential to a migration or deployment command.
 
 ## Current recommended setup
 
@@ -71,6 +93,217 @@ Status on 2026-05-29:
 - `https://led.mandalacodes.com/` returns HTTP 200 and opens Studio v3
 - `/api/lw/*` is intentionally excluded from Pages Functions and the old KV namespace has been deleted
 
+## Private cloud project library
+
+The Studio assets, installer, and card support routes stay public. Only
+`/api/library*` is protected by Cloudflare Access and handled by Pages
+Functions. The route manifest invokes Functions for `/api/library` and
+`/api/library/*` only. No card URL, command, credential, local hostname, or
+firmware request goes through `/api/library`; card control remains on
+`lightweaver.local`, `192.168.4.1`, Web Serial, or the card-page bridge.
+
+### Current provisioning blocker
+
+As of 2026-08-01, source and local release gates can be verified, but the cloud
+library is not authorized for production deployment until the preview and
+production D1/R2 resources, Access application, Pages bindings, and separate CI
+credentials below exist. Keep
+`LIGHTWEAVER_PRODUCTION_LIBRARY_READY` unset until the preview proof passes.
+Keep `LIGHTWEAVER_PREVIEW_ACCESS_READY` unset until Pages Preview Access and
+the preview Function audience have both been verified as described below.
+There are intentionally no account IDs, database IDs, Access audience values,
+email addresses, API tokens, or bucket credentials in this repository. Do not
+run a remote migration or deployment merely to make an automated check green.
+
+### One-time resource creation
+
+Use the pinned Wrangler installed by `npm ci`. These are the canonical resource
+names:
+
+```bash
+cd lightweaver
+npm exec -- wrangler d1 create lightweaver-projects-preview
+npm exec -- wrangler d1 create lightweaver-projects-production
+npm exec -- wrangler r2 bucket create lightweaver-project-blobs-preview
+npm exec -- wrangler r2 bucket create lightweaver-project-blobs-production
+```
+
+Do not paste the returned IDs into a tracked file. In **Workers & Pages →
+lightweaver → Settings → Bindings**, configure both environments with these
+exact binding names:
+
+| Pages environment | `PROJECTS_DB` | `PROJECT_BLOBS` |
+| --- | --- | --- |
+| Preview | `lightweaver-projects-preview` | `lightweaver-project-blobs-preview` |
+| Production | `lightweaver-projects-production` | `lightweaver-project-blobs-production` |
+
+The buckets are private. In each R2 bucket's Settings, leave the public
+development URL disabled and attach no custom domain. The Function accesses
+objects only through the `PROJECT_BLOBS` binding; there are no public or
+presigned object URLs.
+
+For both Pages environments, configure `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`,
+`OWNER_EMAILS`, `MAX_LIBRARY_BODY_BYTES`, `MAX_LIBRARY_BACKUP_BYTES`, and
+`MAX_LIBRARY_BACKUP_REVISIONS`. `OWNER_EMAILS` is the comma-separated,
+normalized exact identity list that receives the owner role; every other
+identity admitted by Access is a worker. Missing Access, D1, or R2 configuration
+fails closed rather than falling back to public data or browser-supplied role
+headers.
+
+### Cloudflare Access
+
+Create one self-hosted Access application for
+`led.mandalacodes.com/api/library*`. Its Allow policy must use **Include →
+Emails** with each approved exact email identity. Do not use Everyone, Login
+Methods, an email-domain suffix, or any rule that admits every valid email.
+Copy the application's audience into the protected `ACCESS_AUD` configuration
+and the team origin into `ACCESS_TEAM_DOMAIN`; do not commit either value.
+
+The Function validates the Access assertion's signature, exact issuer, exact
+audience, subject, and expiry on every request. Workers can use every project
+workflow except permanent delete; the server returns `403` for a worker delete
+even if someone manually calls the endpoint. Log out at:
+
+```text
+https://led.mandalacodes.com/cdn-cgi/access/logout
+```
+
+### CI credentials and configuration
+
+Create two different account-scoped API tokens and restrict each to the
+Lightweaver account:
+
+- `CLOUDFLARE_API_TOKEN`: Pages Write only; no D1 administrative permission.
+- `CLOUDFLARE_MIGRATION_API_TOKEN`: D1 Edit only (called D1 Write in the newer
+  permission labels); no Pages or R2 administrative permission.
+
+Add those as GitHub Actions secrets. Also add `CLOUDFLARE_ACCOUNT_ID`,
+`PROJECTS_DB_DATABASE_ID`, `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, and
+`OWNER_EMAILS` as Actions secrets. Add the non-secret resource names and limits
+as Actions variables: `PROJECTS_DB_DATABASE_NAME`,
+`PROJECT_BLOBS_BUCKET_NAME`, `MAX_LIBRARY_BODY_BYTES`,
+`MAX_LIBRARY_BACKUP_BYTES`, and `MAX_LIBRARY_BACKUP_REVISIONS`. Set the Actions
+variable `LIGHTWEAVER_PREVIEW_ACCESS_READY=confirmed` only after the protected
+preview acceptance below, then set
+`LIGHTWEAVER_PRODUCTION_LIBRARY_READY=confirmed` when the complete production
+configuration is ready. The workflow never prints any value and never gives
+the normal Pages deploy token D1 migration authority.
+
+### Migrations, preview, and production
+
+Apply migrations locally before local binding tests:
+
+```bash
+cd lightweaver
+npm exec -- wrangler d1 migrations apply PROJECTS_DB --config wrangler.local.toml --local
+npm run test:cloud-bindings
+```
+
+Apply the same additive migration to preview, then deploy a non-`main` Pages
+branch after its Preview bindings and variables are configured. The committed
+`wrangler.toml` deliberately has no remote IDs, so do not deploy preview with
+that bare configuration. Create the ignored, mode-`0600` file
+`.wrangler/deploy/lightweaver-preview.toml` from this template, replacing every
+angle-bracket placeholder locally:
+
+```toml
+name = "lightweaver"
+compatibility_date = "2026-07-15"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = "<absolute-lightweaver-path>/.pages/lightweaver"
+
+[[d1_databases]]
+binding = "PROJECTS_DB"
+database_name = "lightweaver-projects-preview"
+database_id = "<preview-d1-id>"
+migrations_dir = "<absolute-lightweaver-path>/migrations"
+
+[[r2_buckets]]
+binding = "PROJECT_BLOBS"
+bucket_name = "lightweaver-project-blobs-preview"
+
+[vars]
+ACCESS_TEAM_DOMAIN = "<access-team-origin>"
+ACCESS_AUD = "<preview-access-audience>"
+OWNER_EMAILS = "<approved-owner-identities>"
+MAX_LIBRARY_BODY_BYTES = "<bounded-project-bytes>"
+MAX_LIBRARY_BACKUP_BYTES = "<bounded-backup-bytes>"
+MAX_LIBRARY_BACKUP_REVISIONS = "<bounded-revision-count>"
+```
+
+Create the ignored `.wrangler/deploy/config.json` with mode `0600` so Wrangler
+uses that file for this one preview upload:
+
+```json
+{ "configPath": "lightweaver-preview.toml" }
+```
+
+Neither file may be committed. Delete both immediately after the preview
+upload; the production deploy script creates and removes its equivalent
+configuration automatically.
+
+```bash
+cd lightweaver
+npm exec -- wrangler d1 migrations apply PROJECTS_DB --config .wrangler/deploy/lightweaver-preview.toml --remote
+npm run build
+npm run stage:pages
+npm run verify:pages
+npm exec -- wrangler pages deploy .pages/lightweaver --project-name lightweaver --branch library-preview
+```
+
+Preview deployment URLs are public by default. Before uploading any library
+preview, open **Workers & Pages → lightweaver → Settings → General → Enable access
+policy**. Manage the generated preview Access application, replace any
+broad account/everyone rule with the approved exact-email identities, and
+confirm it covers both hash and branch-alias preview URLs. Set the preview
+Function's `ACCESS_AUD` to the preview Access application's audience—not the
+production application's audience. A protected preview custom domain with its
+own exact-email Access application is acceptable only when its actual audience
+is used in the preview config.
+
+On the protected preview URL, prove an approved worker can sign in, create, edit, reopen
+history, download a master backup, and receives `403` for a direct permanent
+delete. In a private browser with no Access session, request
+`/api/library/session`; it must be denied and must include `Cache-Control:
+no-store`. Confirm the signed-out preview root is also denied, and confirm the
+staged `_routes.json` has only the two library includes. Only after these checks
+may `LIGHTWEAVER_PREVIEW_ACCESS_READY=confirmed` be set.
+
+Production is ordered and non-interchangeable: apply the expand-only migration
+with the D1-only credential, deploy the exact compatible commit with the
+Pages-only credential, then run the live smoke. `.github/workflows/deploy-site.yml`
+enforces migration before deployment. For a manual recovery run, dispatch that
+workflow on the exact `main` commit. It validates the canonical production D1
+name and ID, generates a mode-`0600` temporary Wrangler config with the absolute
+migration directory, applies `PROJECTS_DB` through that config, removes it, and
+then deploys with the separate Pages credential:
+
+```bash
+gh workflow run deploy-site.yml --ref main
+```
+
+Never run the production migration until the preview proof has passed and the
+compatible source commit is the intended release.
+
+### Backup restore and rollback
+
+Before release, download the dated master `.lw-library.json` backup. In preview,
+create a disposable project and reusable pattern, download another master
+backup, restore it, and verify the restore is additive: existing records remain,
+collisions become restored copies, every retained revision opens, and no card
+or authentication data appears in the file. Keep an independent copy outside
+browser storage and Cloudflare.
+
+A Pages rollback changes code and static assets only; it does not undo D1
+migrations or delete immutable R2 revisions. This release therefore permits
+expand-only migrations, and every rolled-back Function must remain compatible
+with the expanded schema. Master restore is additive and is not a database
+rollback. For data recovery, first preserve the current master backup and R2
+objects, then use D1 Time Travel only as an explicit incident operation; do not
+assume it rewinds R2. Re-run authenticated create/open/history/backup,
+unauthenticated denial, worker-delete denial, and live freshness proof after
+any rollback or restore.
+
 One-time project creation:
 
 ```bash
@@ -99,13 +332,11 @@ https://lightweaver-edw.pages.dev
 
 Cloudflare's Pages custom-domain flow must associate the domain with the Pages project. If the domain is under Cloudflare DNS, Cloudflare can usually create the DNS record during that flow. If not, create a CNAME manually.
 
-The local `wrangler pages` command in use here does not expose a custom-domain subcommand, so the terminal path is Cloudflare's Pages API. Use a Cloudflare API token with `Pages Write` permission:
+The local `wrangler pages` command in use here does not expose a custom-domain subcommand, so the terminal path is Cloudflare's Pages API. Use a short-lived Cloudflare API token with `Pages Write` permission. Substitute local shell variables without committing or printing them:
 
 ```bash
-export CLOUDFLARE_API_TOKEN="paste-token-with-pages-write"
-
 curl --request POST \
-  "https://api.cloudflare.com/client/v4/accounts/fea8f6648edae8cf1e35032a3ae43611/pages/projects/lightweaver/domains" \
+  "https://api.cloudflare.com/client/v4/accounts/<account-id>/pages/projects/lightweaver/domains" \
   --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
   --header "Content-Type: application/json" \
   --data '{"name":"led.mandalacodes.com"}'

@@ -27,6 +27,7 @@ plan is a reference library, not one large job to execute.
 
 ## Soon
 
+- [ ] **Provision and prove the private cloud project library.** _(you-required)_ Source/local gates can be integrated without remote access, but release is blocked until separate preview/production D1 and private R2 resources, exact-email Access at `/api/library*`, owner configuration, and the separate Pages-only and D1-only CI credentials are provisioned. Run preview migration/deploy and authenticated, unauthenticated, worker-delete, backup/restore proof before setting `LIGHTWEAVER_PRODUCTION_LIBRARY_READY=confirmed`; then migrate production before deploying the exact compatible commit. No card command or local URL may pass through the library API. → Runbook: [docs/led-mandalacodes-setup.md#private-cloud-project-library](docs/led-mandalacodes-setup.md#private-cloud-project-library), gate: [docs/deployment-checklist.md#private-project-library-release-evidence](docs/deployment-checklist.md#private-project-library-release-evidence)
 - [ ] **Card OTA decision.** _(you-required)_ Decide whether cards should self-update from the signed release feed (infrastructure exists: signed manifest + verification) or stay USB-flash-only; USB-only is the deliberate current model — see THINKING.md 2026-07-26 for the tradeoff before building anything.
 - [ ] **Studio build stamp.** _(agent-runnable)_ Small always-visible build id + date in the Studio (Vite define from git sha) so "which version am I looking at" is answerable at a glance — repeated mobile-Chrome cache confusion on 2026-07-18/26 cost real debugging time.
 
@@ -80,8 +81,6 @@ Building the sound-reactive effect set for the backlit laser-cut mandala (675 LE
 
 - [ ] **Bench-test WiFi recovery firmware** — flash the rebuilt factory binary to a bench card and verify the new WiFi recovery chain end-to-end _(you · moderate)_
   The 2026-06-11 batch (WiFi auto-rejoin, Change-WiFi/factory-reset buttons, scan polling, CORS allowlist, multi-range zones) was written and reviewed without hardware. Done when: wrong-password setup shows the "WiFi isn't connecting" banner and Re-enter WiFi works; power-cycling the router while the card runs makes the card rejoin within ~2 minutes on its own; the captive portal stays usable during retry attempts (watch for AP hiccups from STA channel switching); Studio push and mapper live push still work from localhost and led.mandalacodes.com. → Changes: `firmware/lightweaver-controller/src/`, review at [docs/project-review-2026-06-11.md](docs/project-review-2026-06-11.md)
-- [ ] **Redeploy the mandalacodes production bundle** — rebuild and deploy the landing+/design bundle so production picks up the new Studio dist and firmware binary _(you · quick)_
-  Deploy ownership was settled 2026-06-11: this repo deploys only to the `studio` Pages preview branch; production at led.mandalacodes.com ships from the mandalacodes repo. Done when led.mandalacodes.com/design and /firmware/…factory.bin serve the new builds. → Plan: [docs/led-mandalacodes-setup.md](docs/led-mandalacodes-setup.md)
 
 ### Security hardening (2026-06-16 audit)
 
@@ -107,6 +106,8 @@ The 2026-06-16 audit fixes (firmware C1/H1/H2/M1/M4, Studio C2/H3/M3/M5/M6, Pi/m
 
 ## Future
 
+- [ ] **Client project sharing** — add private, revocable read-only links for previewing and downloading selected artwork projects; keep editing owner-only, and defer accounts, collaborators, and public discovery until Lightweaver is intentionally expanded beyond Adrian's single-user Studio _(agent · deep)_
+  This is explicitly outside the current personal project-library scope. Done when a selected project can be shared without exposing the rest of the library, access can be revoked, and recipients cannot modify the source project.
 - [ ] **Live Host runtime** — build the runtime for laptop, Pi, Madrix, and sound-reactive streaming _(agent · deep)_
   This is the live-performance control path that drives the card from a host machine, including audio-reactive output for installations. Done when the runtime streams live and sound-reactive frames across the laptop, Pi, and Madrix modes. → Plan: [docs/superpowers/plans/2026-05-28-lightweaver-esp32-three-mode-runtime.md](docs/superpowers/plans/2026-05-28-lightweaver-esp32-three-mode-runtime.md)
 

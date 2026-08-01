@@ -16,8 +16,10 @@ keys:
 1. Merge reviewed source to protected `main`.
 2. The always-on Tests workflow runs `npm run launch:source`. It verifies
    source contracts, Production Setup, production-job consistency, the Studio
-   build, staged Pages artifact, and build graph. Firmware source changes are
-   expected to make the signed-binary freshness gate red at this point.
+   build, cloud project/API contracts, local D1/R2 bindings and migrations,
+   compiled Pages Functions, staged Pages artifact, and build graph. Firmware
+   source changes are expected to make the signed-binary freshness gate red at
+   this point.
 3. The protected `build-firmware.yml` workflow compiles the merged ESP32-S3
    factory image, creates and signs its manifest/provenance, regenerates every
    production job against that exact release, and commits the complete release
@@ -26,13 +28,16 @@ keys:
    commits do not re-trigger it.
 4. On the protected release commit, `npm run launch:check` must pass. It repeats
    the source gate and proves the committed signed factory binary is fresh.
-5. `deploy-site.yml` builds and publishes the root Studio to the `lightweaver`
-   Cloudflare Pages production branch. On HTTPS, Studio automatically uses the
-   card-page bridge for local commands; workers never install or operate a
-   separate Bridge product.
+5. `deploy-site.yml` applies the expand-only production D1 migration with the
+   separate D1-only credential, then builds and publishes the compatible Studio
+   and Pages Function to the `lightweaver` production branch with the Pages-only
+   credential. On HTTPS, Studio automatically uses the card-page bridge for
+   local commands; no card URL routes through `/api/library` and workers never
+   install or operate a separate Bridge product.
 6. The deploy runs `PROD_CHECK_REQUIRED=1 npm run check:prod`. The live check
    verifies the signed release, production-job index/artifacts, cache policy,
-   root Studio, and the published build graph plus every reachable JS/CSS asset.
+   root Studio, the unauthenticated/no-store library denial, and the published
+   build graph plus every reachable JS/CSS asset.
 7. One fully erased physical card completes the live Production Setup route and
    [`new-card-checklist.md`](new-card-checklist.md). Only then may a batch begin.
 
@@ -54,6 +59,49 @@ steps 5–7. A human manual deploy with missing credentials fails loudly.
       every file in the live Studio build graph.
 - [ ] Live `https://led.mandalacodes.com/#screen=production` opens the current
       root Studio and verified `bench-fixture-44` job.
+
+## Private project-library release evidence
+
+The exact one-time resource, binding, Access, migration, credential, backup,
+and rollback procedure is in
+[`led-mandalacodes-setup.md`](led-mandalacodes-setup.md#private-cloud-project-library).
+The library cannot be declared released while that document's current
+provisioning blocker remains.
+
+- [ ] `npm run test:projects` and `npm run test:cloud-bindings` pass from
+      `lightweaver/`; the latter applies the migration only to isolated local
+      state and proves unauthenticated `401`, `Cache-Control: no-store`, an
+      authenticated project round-trip, and worker delete `403`.
+- [ ] `npm run build`, `npm run stage:pages`, and `npm run verify:pages` pass;
+      the staged artifact contains the exact `_routes.json` and the Pages
+      Function compilation artifact exists.
+- [ ] Preview D1 and private R2 bindings use `PROJECTS_DB` and `PROJECT_BLOBS`;
+      production has separate resources with the same binding names.
+- [ ] Pages Preview Access is enabled because preview deployment URLs are public
+      by default. Its Access application allows only the approved exact-email
+      identities, covers hash and branch-alias URLs, and the preview Function
+      uses that preview application's audience. Set
+      `LIGHTWEAVER_PREVIEW_ACCESS_READY=confirmed` only after signed-out root
+      and `/api/library/session` requests are denied.
+- [ ] Access protects `led.mandalacodes.com/api/library*` with an exact-email
+      allow policy, and the deployed owner identity configuration is correct.
+- [ ] Preview migration completes before preview deploy. An approved worker
+      proves create/edit/history/master-backup restore, direct worker delete is
+      denied, and a signed-out/private browser is denied with `no-store`.
+- [ ] A master backup is stored outside browser storage and Cloudflare before
+      production migration.
+- [ ] The production workflow used `CLOUDFLARE_MIGRATION_API_TOKEN` for the
+      additive migration before the Pages deploy; the Pages credential has no
+      D1 administrative permission.
+- [ ] The exact verified commit is live. Repeat authenticated
+      create/edit/history/backup, unauthenticated denial, worker-delete denial,
+      and `PROD_CHECK_REQUIRED=1 npm run check:prod` against production.
+- [ ] The logout URL clears the Access session and the next library request is
+      denied: `https://led.mandalacodes.com/cdn-cgi/access/logout`.
+
+Do not use a Pages rollback as a database rollback. Expanded D1 schema and
+private R2 revisions remain in place; roll back only to code compatible with
+that schema, or follow the explicit backup/Time Travel incident procedure.
 
 The manifest `buildId` and provenance source revision must identify the exact
 source compiled by the protected workflow. Do not copy a local binary over the

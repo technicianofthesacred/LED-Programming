@@ -1,0 +1,17 @@
+name = "lightweaver-local"
+compatibility_date = "2026-07-15"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = "dist"
+
+# Local smoke resources only. Production bindings live in Cloudflare Pages settings.
+[[d1_databases]]
+binding = "PROJECTS_DB"
+database_name = "lightweaver-projects-local"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "PROJECT_BLOBS"
+bucket_name = "lightweaver-projects-local"
+
+[vars]
+MAX_LIBRARY_BODY_BYTES = "2097152"

@@ -363,7 +363,10 @@ export function ProjectProvider({ children }) {
   const [confirmedCardLook, setConfirmedCardLook] = useState(null);
   const [projectLifecycle, dispatchProjectLifecycle] = useReducer((state, action) => {
     if (action.type === 'edited') return markEdited(state);
-    if (action.type === 'persisted') return markPersisted(state, action.destination);
+    if (action.type === 'persisted') {
+      if (Number.isSafeInteger(action.generation) && action.generation !== state.generation) return state;
+      return markPersisted(state, action.destination, action.revision);
+    }
     if (action.type === 'installed') return markInstalled(state, action.installation);
     if (action.type === 'replaced') return replaceProjectLifecycle(state);
     // Startup restore sets the whole lifecycle at once (New project vs
@@ -987,7 +990,12 @@ export function ProjectProvider({ children }) {
     quarantine: autosaveQuarantine,
     dismissQuarantine,
   }), [lastSaved, autosaveRestoredFrom, autosaveQuarantine, dismissQuarantine]);
-  const markProjectPersisted = useCallback(destination => dispatchProjectLifecycle({ type: 'persisted', destination }), []);
+  const markProjectPersisted = useCallback((destination, marker = {}) => dispatchProjectLifecycle({
+    type: 'persisted',
+    destination,
+    generation: marker?.generation,
+    revision: marker?.revision,
+  }), []);
   const markProjectEdited = useCallback(() => dispatchProjectLifecycle({ type: 'edited' }), []);
   const markProjectInstalled = useCallback(installation => dispatchProjectLifecycle({ type: 'installed', installation }), []);
   const commitProjectStateWithoutEdit = useCallback(commit => {

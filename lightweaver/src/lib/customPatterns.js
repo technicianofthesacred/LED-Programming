@@ -1,6 +1,12 @@
+import {
+  readCommittedWorkspaceSnapshot,
+  updateCommittedWorkspaceSnapshot,
+} from './workspaceAssetsStorage.js';
+
 export const CUSTOM_PATTERNS_KEY = 'lw_custom_patterns';
 export const CUSTOM_PATTERN_REVISIONS_KEY = 'lw_custom_pattern_revisions';
 export const CUSTOM_PATTERNS_EVENT = 'lw:custom-updated';
+export const WORKSPACE_ASSETS_EVENT = 'lw:workspace-assets-changed';
 
 function getStorage(storage) {
   if (storage) return storage;
@@ -21,17 +27,19 @@ function safeReadJson(key, fallback, storage) {
 
 function safeWriteJson(key, value, storage) {
   const target = getStorage(storage);
-  if (!target) return;
+  if (!target) return false;
   try {
     target.setItem(key, JSON.stringify(value));
-  } catch {}
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function dispatchCustomPatternsEvent(options = {}) {
   if (options.dispatch === false || typeof window === 'undefined') return;
-  try {
-    window.dispatchEvent(new CustomEvent(CUSTOM_PATTERNS_EVENT));
-  } catch {}
+  try { window.dispatchEvent(new CustomEvent(CUSTOM_PATTERNS_EVENT)); } catch {}
+  try { window.dispatchEvent(new CustomEvent(WORKSPACE_ASSETS_EVENT)); } catch {}
 }
 
 export function buildCustomPatternId(name = '', existingIds = []) {
@@ -57,13 +65,50 @@ export function previewFromPalette(palette = []) {
 }
 
 export function loadCustomPatterns(options = {}) {
+  const target = getStorage(options.storage);
+  if (target) {
+    try {
+      const committed = readCommittedWorkspaceSnapshot(target);
+      if (committed) return Array.isArray(committed.customPatterns) ? committed.customPatterns : [];
+    } catch {}
+  }
   const patterns = safeReadJson(CUSTOM_PATTERNS_KEY, [], options.storage);
   return Array.isArray(patterns) ? patterns : [];
 }
 
 export function writeCustomPatterns(patterns, options = {}) {
-  safeWriteJson(CUSTOM_PATTERNS_KEY, Array.isArray(patterns) ? patterns : [], options.storage);
+  const nextPatterns = Array.isArray(patterns) ? patterns : [];
+  const target = getStorage(options.storage);
+  if (target) {
+    updateCommittedWorkspaceSnapshot(target, snapshot => ({
+      ...snapshot,
+      customPatterns: nextPatterns,
+      customPatternRevisions: Object.hasOwn(options, 'workspaceRevisions')
+        ? options.workspaceRevisions
+        : snapshot.customPatternRevisions,
+    }));
+  }
+  if (Object.hasOwn(options, 'workspaceRevisions')) {
+    safeWriteJson(CUSTOM_PATTERN_REVISIONS_KEY, options.workspaceRevisions, options.storage);
+  }
+  safeWriteJson(CUSTOM_PATTERNS_KEY, nextPatterns, options.storage);
   dispatchCustomPatternsEvent(options);
+}
+
+function loadCustomPatternRevisions(options = {}) {
+  const target = getStorage(options.storage);
+  if (target) {
+    try {
+      const committed = readCommittedWorkspaceSnapshot(target);
+      if (committed?.customPatternRevisions
+        && typeof committed.customPatternRevisions === 'object'
+        && !Array.isArray(committed.customPatternRevisions)) {
+        return committed.customPatternRevisions;
+      }
+    } catch {}
+  }
+  const revisions = safeReadJson(CUSTOM_PATTERN_REVISIONS_KEY, {}, options.storage);
+  return revisions && typeof revisions === 'object' && !Array.isArray(revisions) ? revisions : {};
 }
 
 export function buildCustomPatternEntry(pattern = {}) {
@@ -90,15 +135,16 @@ export function updateCustomPattern(id, updates = {}, options = {}) {
   const existing = current.find(pattern => pattern.id === id);
   if (!existing) return saveCustomPattern({ ...updates, id }, options);
 
-  const revisions = safeReadJson(CUSTOM_PATTERN_REVISIONS_KEY, {}, options.storage);
-  const nextRevisions = revisions && typeof revisions === 'object' && !Array.isArray(revisions) ? revisions : {};
+  const nextRevisions = loadCustomPatternRevisions(options);
   nextRevisions[id] = [existing, ...(Array.isArray(nextRevisions[id]) ? nextRevisions[id] : [])];
-  safeWriteJson(CUSTOM_PATTERN_REVISIONS_KEY, nextRevisions, options.storage);
 
   const merged = { ...existing, ...updates, id };
   if (updates.palette && !Object.hasOwn(updates, 'preview')) delete merged.preview;
   const updated = buildCustomPatternEntry(merged);
-  writeCustomPatterns(current.map(pattern => pattern.id === id ? updated : pattern), options);
+  writeCustomPatterns(current.map(pattern => pattern.id === id ? updated : pattern), {
+    ...options,
+    workspaceRevisions: nextRevisions,
+  });
   return updated;
 }
 

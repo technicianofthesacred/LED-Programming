@@ -87,6 +87,18 @@ test('generic Studio migration rejects mapper project payloads instead of invent
   assert.equal(migrateProject(foreign), null);
 });
 
+test('generic Studio migration rejects canonical library backup envelopes', () => {
+  const masterBackup = {
+    format: 'lightweaver.library-backup',
+    version: 1,
+    exportedAt: '2026-08-01T00:00:00.000Z',
+    projects: [],
+    workspaceAssets: [],
+  };
+
+  assert.equal(migrateProject(masterBackup), null);
+});
+
 test('current-format imports reject duplicate strip ids before reference maps can collapse them', () => {
   const saved = createDefaultProject();
   const first = { ...saved.layout.strips[0], id: 'strip-7', name: 'First' };

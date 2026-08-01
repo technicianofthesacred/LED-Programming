@@ -19,3 +19,11 @@ led-art-mapper/reference-repos/PixelblazePatterns/
 led-art-mapper/reference-repos/WLED-Ledmap-Generator/
 led-art-mapper/reference-repos/led-mapper/
 led-art-mapper/reference-repos/pixelblaze/
+.wrangler/
+**/.wrangler/
+.dev.vars
+**/.dev.vars
+.env
+.env.*
+**/.env
+**/.env.*

@@ -304,7 +304,7 @@ test('existing Studio routes remain available beside Pattern Lab', async ({ page
     { label: 'Patterns', mountedContent: 'pattern-project-preview' },
     { label: 'Playlist', mountedContent: 'playlist-physical-preview-status' },
     { label: 'Show', mountedContent: 'show-stage' },
-    { label: 'Card', mountedContent: 'card-setup-steps' },
+    { label: 'Hardware', mountedContent: 'card-setup-steps' },
   ];
 
   for (const route of routes) {

@@ -47,6 +47,7 @@ const {
   studioBuildGraphUrl,
 } = resolveProductionUrls(process.env);
 const productionOrigin = new URL(studioUrl).origin;
+const librarySessionUrl = new URL('/api/library/session', productionOrigin);
 const productionFetch = (input, init = {}) => fetch(new URL(String(input), productionOrigin), {
   ...init,
   signal: AbortSignal.timeout(20_000),
@@ -102,6 +103,32 @@ try {
   studioRootBytes = await assertStudioRoot(studioResponse, studioUrl);
 } catch (err) {
   fail(err.message);
+}
+
+let libraryResponse;
+try {
+  libraryResponse = await fetch(librarySessionUrl, {
+    cache: 'no-store',
+    redirect: 'manual',
+    signal: AbortSignal.timeout(20_000),
+  });
+} catch (err) {
+  fail(`Production root is reachable, but the unauthenticated library request failed at\n  ${librarySessionUrl}\n  ${err?.cause?.code ?? err?.name ?? err?.message ?? err}`);
+}
+const libraryCacheControl = libraryResponse.headers.get('cache-control') || '';
+const isAccessRedirect = [301, 302, 303, 307, 308].includes(libraryResponse.status)
+  && /(?:cloudflareaccess\.com|\/cdn-cgi\/access\/)/i.test(libraryResponse.headers.get('location') || '');
+if (![401, 403].includes(libraryResponse.status) && !isAccessRedirect) {
+  fail(
+    `Production allowed or misrouted an unauthenticated library request.\n` +
+      `  ${librarySessionUrl}\n  expected Access redirect, HTTP 401, or HTTP 403; received HTTP ${libraryResponse.status}`,
+  );
+}
+if (!/(?:^|,)\s*no-store(?:\s*(?:,|$))/i.test(libraryCacheControl)) {
+  fail(
+    `The private library denial is cacheable.\n  ${librarySessionUrl}\n` +
+      `  expected Cache-Control to contain no-store; received ${JSON.stringify(libraryCacheControl)}`,
+  );
 }
 
 let studioBuildFileCount = 0;
@@ -162,4 +189,5 @@ console.log(
   `check-prod-freshness OK — production serves the signed committed factory binary\n  sha256 ${localHash}  (${local.length} bytes)\n  ${new URL(release.manifest.image.url, productionOrigin)}\n  legacy alias: ${legacyAliasUrl}`,
   `\n  Studio build graph: ${studioBuildFileCount} verified files\n  ${studioBuildGraphUrl}`,
   `\n  Production Setup: ${productionSetupUrl}\n  verified production jobs: ${productionJobCount}\n  job index: ${productionJobIndexUrl}`,
+  `\n  Private library: unauthenticated HTTP ${libraryResponse.status}, Cache-Control ${libraryCacheControl}\n  ${librarySessionUrl}`,
 );

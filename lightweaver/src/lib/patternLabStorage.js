@@ -1,7 +1,19 @@
 import { PATTERN_LAB_RECIPE_VERSION, assertPatternLabJsonSafe, normalizePatternLabRecipe } from './patternLabRecipe.js';
+import {
+  readCommittedWorkspaceSnapshot,
+  updateCommittedWorkspaceSnapshot,
+} from './workspaceAssetsStorage.js';
 
 export const PATTERN_LAB_DRAFTS_KEY = 'lw_pattern_lab_drafts_v1';
 export const PATTERN_LAB_DRAFTS_BACKUP_KEY = 'lw_pattern_lab_drafts_v1_backup';
+export const WORKSPACE_ASSETS_EVENT = 'lw:workspace-assets-changed';
+
+function dispatchWorkspaceAssetsEvent(options = {}) {
+  if (options.dispatch === false || typeof globalThis.window?.dispatchEvent !== 'function') return;
+  try {
+    globalThis.window.dispatchEvent(new CustomEvent(WORKSPACE_ASSETS_EVENT));
+  } catch {}
+}
 
 function defaultStorage() {
   try {
@@ -30,6 +42,14 @@ function normalizeEnvelope(value) {
 export function readPatternLabDraftState(options = {}) {
   const storage = storageFrom(options);
   if (!storage) return { status: 'unavailable', drafts: [] };
+  try {
+    const committed = readCommittedWorkspaceSnapshot(storage);
+    if (committed) {
+      return { status: 'restored', drafts: committed.patternLabDrafts.map(normalizePatternLabRecipe) };
+    }
+  } catch {
+    // Legacy primary/backup copies may still be recoverable.
+  }
   let recoveryFailed = false;
   for (const key of [PATTERN_LAB_DRAFTS_KEY, PATTERN_LAB_DRAFTS_BACKUP_KEY]) {
     let raw;
@@ -62,12 +82,23 @@ export function writePatternLabDrafts(drafts, options = {}) {
   const normalized = drafts.map(normalizePatternLabRecipe);
   assertPatternLabJsonSafe(normalized);
   const text = JSON.stringify({ version: PATTERN_LAB_RECIPE_VERSION, drafts: normalized });
+  const committed = updateCommittedWorkspaceSnapshot(storage, snapshot => ({
+    ...snapshot,
+    patternLabDrafts: normalized,
+  }));
+  if (committed) {
+    try { storage.setItem(PATTERN_LAB_DRAFTS_KEY, text); } catch {}
+    try { storage.setItem(PATTERN_LAB_DRAFTS_BACKUP_KEY, text); } catch {}
+    dispatchWorkspaceAssetsEvent(options);
+    return normalized;
+  }
   storage.setItem(PATTERN_LAB_DRAFTS_KEY, text);
   try {
     storage.setItem(PATTERN_LAB_DRAFTS_BACKUP_KEY, text);
   } catch {
     // A successful primary write remains useful when storage is nearly full.
   }
+  dispatchWorkspaceAssetsEvent(options);
   return normalized;
 }
 
