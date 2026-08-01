@@ -165,6 +165,28 @@ test('mapped preview lists LED-backed targets only and crops to the selected geo
   await expect(stage).not.toHaveAttribute('data-preview-view-box', project.layout.viewBox);
 });
 
+test('desktop preview keeps target navigation above a full-width piece toggle', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const project = createPiecePreviewProject('piece-preview-desktop-controls');
+  await gotoSavedProjectPatterns(page, project);
+
+  const controls = page.getByLabel('Pattern preview controls');
+  const previous = page.getByRole('button', { name: 'Previous LED target' });
+  const target = page.getByLabel('Preview target');
+  const next = page.getByRole('button', { name: 'Next LED target' });
+  const toggle = page.getByRole('button', { name: 'On my piece' });
+  const boxes = await Promise.all([
+    controls.boundingBox(), previous.boundingBox(), target.boundingBox(), next.boundingBox(), toggle.boundingBox(),
+  ]);
+  const [controlsBox, previousBox, targetBox, nextBox, toggleBox] = boxes;
+  expect(controlsBox && previousBox && targetBox && nextBox && toggleBox).toBeTruthy();
+  expect(toggleBox!.y).toBeGreaterThan(targetBox!.y + 4);
+  expect(toggleBox!.width).toBeGreaterThanOrEqual(controlsBox!.width - 1);
+  expect(targetBox!.width).toBeGreaterThanOrEqual(120);
+  expect(previousBox!.width).toBeGreaterThanOrEqual(44);
+  expect(nextBox!.width).toBeGreaterThanOrEqual(44);
+});
+
 test('preview dropdown and chevrons move through LED targets without wrapping', async ({ page }) => {
   const project = createPiecePreviewProject();
   const savedBefore = JSON.stringify(project.layout.patchBoard);
