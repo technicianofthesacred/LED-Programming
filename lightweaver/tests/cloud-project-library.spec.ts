@@ -117,6 +117,7 @@ class LibraryFixture {
   loseNextUpdateResponse = false;
   acceptedUpdateRequestIds = new Set<string>();
   signInNavigations: string[] = [];
+  sessionProbeFailures = 0;
   delayNextCreate = false;
   delayedCreateStarted: Promise<void> | null = null;
   private signalDelayedCreateStarted: (() => void) | null = null;
@@ -278,6 +279,12 @@ class LibraryFixture {
           store: null,
         });
         await fulfillResponse(route, response);
+        return;
+      }
+
+      if (segments[0] === 'session' && method === 'GET' && this.sessionProbeFailures > 0) {
+        this.sessionProbeFailures -= 1;
+        await route.abort('failed');
         return;
       }
 
@@ -595,6 +602,19 @@ test('signs in with a top-level Access navigation and returns to the Studio', as
   await fixture.install(page);
   await openLibrary(page);
   await expect(page.getByText('Sign in to use the online project library')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByText('worker@example.test')).toBeVisible();
+  await expect(page.getByText('Worker', { exact: true })).toBeVisible();
+  expect(fixture.signInNavigations).toEqual(['/#screen=card&section=preferences']);
+});
+
+test('offers top-level Access sign-in when the session probe fails before Access authentication', async ({ page }) => {
+  const fixture = new LibraryFixture(null);
+  fixture.sessionProbeFailures = 1;
+  await fixture.install(page);
+  await openLibrary(page);
+  await expect(page.getByText('The online library is unavailable')).toBeVisible();
 
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page.getByText('worker@example.test')).toBeVisible();
