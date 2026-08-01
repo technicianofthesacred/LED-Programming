@@ -228,7 +228,7 @@ jobs:
         run: |
           if [ "$PUBLISH_ENABLED" != "true" ]; then
             echo "## Production publish: NOT RUN" >> "$GITHUB_STEP_SUMMARY"
-            echo "Cloudflare provisioning or credentials were unavailable. This CI result is not a deployment." >> "$GITHUB_STEP_SUMMARY"
+            echo "Cloudflare provisioning or credentials were unavailable. This CI result is not a deployment and must not be used as shipment evidence." >> "$GITHUB_STEP_SUMMARY"
             echo "::warning::No production publish occurred. Shipment still requires a credentialed deploy and passing live freshness check."
           elif [ "$MIGRATION_OUTCOME" != "success" ]; then
             echo "## Production publish failed before upload" >> "$GITHUB_STEP_SUMMARY"
