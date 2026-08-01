@@ -65,6 +65,7 @@ export class CanvasManager {
     this.selectedId    = null;
     this._strips       = new Map(); // id → { g, pathEl, data }
     this._artworkOpacity = 0.5;    // artwork background opacity (0–1)
+    this._zoom          = 1;
 
     this._palette = [
       '#ff6b6b','#ffd166','#06d6a0','#118ab2',
@@ -100,6 +101,13 @@ export class CanvasManager {
     this.svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
     this.svg.setAttribute('width',  w);
     this.svg.setAttribute('height', h);
+  }
+
+  /** Keep selection chrome at a stable screen size as the canvas zoom changes. */
+  setZoom(zoom) {
+    const nextZoom = Number(zoom);
+    this._zoom = Number.isFinite(nextZoom) && nextZoom > 0 ? nextZoom : 1;
+    if (this.selectedId) this._updateStripSelectionVisual(this.selectedId);
   }
 
   // ── Events ────────────────────────────────────────────────────────────────
@@ -356,6 +364,49 @@ export class CanvasManager {
     return c;
   }
 
+  _makeStripSelectionBadge() {
+    const ns = 'http://www.w3.org/2000/svg';
+    const badge = document.createElementNS(ns, 'g');
+
+    const background = document.createElementNS(ns, 'rect');
+    background.setAttribute('x', '-48');
+    background.setAttribute('y', '-12');
+    background.setAttribute('width', '96');
+    background.setAttribute('height', '24');
+    background.setAttribute('rx', '12');
+    background.setAttribute('fill', '#d9f7ff');
+    background.setAttribute('stroke', '#4cc9f0');
+    background.setAttribute('stroke-width', '1');
+
+    const indexCircle = document.createElementNS(ns, 'circle');
+    indexCircle.setAttribute('cx', '-34');
+    indexCircle.setAttribute('cy', '0');
+    indexCircle.setAttribute('r', '9');
+    indexCircle.setAttribute('fill', '#0891b2');
+
+    const indexText = document.createElementNS(ns, 'text');
+    indexText.setAttribute('x', '-34');
+    indexText.setAttribute('y', '0');
+    indexText.setAttribute('text-anchor', 'middle');
+    indexText.setAttribute('dominant-baseline', 'central');
+    indexText.setAttribute('fill', '#fff');
+    indexText.setAttribute('font-family', 'system-ui, sans-serif');
+    indexText.setAttribute('font-size', '10');
+    indexText.setAttribute('font-weight', '700');
+
+    const countText = document.createElementNS(ns, 'text');
+    countText.setAttribute('x', '-20');
+    countText.setAttribute('y', '0');
+    countText.setAttribute('dominant-baseline', 'central');
+    countText.setAttribute('fill', '#071418');
+    countText.setAttribute('font-family', 'system-ui, sans-serif');
+    countText.setAttribute('font-size', '10');
+    countText.setAttribute('font-weight', '700');
+
+    badge.append(background, indexCircle, indexText, countText);
+    return { badge, indexText, countText };
+  }
+
   _makeConnector(cx, cy, fill, role) {
     const ns = 'http://www.w3.org/2000/svg';
     const g  = document.createElementNS(ns, 'g');
@@ -457,6 +508,22 @@ export class CanvasManager {
     pathEl.setAttribute('pointer-events', 'none');
     g.appendChild(pathEl);
 
+    // ── Selected-state overlay ────────────────────────────────────────────────
+    // Its geometry follows the strip, while setZoom inversely scales its chrome
+    // so the halo and badge remain legible when the artwork is far zoomed out.
+    const selectionG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    selectionG.dataset.stripSelection = strip.id;
+    selectionG.setAttribute('pointer-events', 'none');
+    selectionG.style.display = 'none';
+
+    const selectionHalo = this._makePath(strip.pathData, '#4cc9f0', 8);
+    selectionHalo.setAttribute('stroke-opacity', '0.38');
+    const selectionCore = this._makePath(strip.pathData, '#ffffff', 2);
+    const { badge: selectionBadge, indexText: selectionIndex, countText: selectionCount } =
+      this._makeStripSelectionBadge();
+    selectionG.append(selectionHalo, selectionCore, selectionBadge);
+    g.appendChild(selectionG);
+
     // ── Wide invisible hit target ─────────────────────────────────────────────
     // Sits on top of pathEl; catches clicks/hover across a generous stroke area.
     const hitPath = this._makePath(strip.pathData, strip.color, 14);
@@ -503,7 +570,22 @@ export class CanvasManager {
     g.appendChild(tailC);
 
     layer.appendChild(g);
-    this._strips.set(strip.id, { g, pathEl, hitPath, dotsG, labelEl, headC, tailC, data: strip });
+    this._strips.set(strip.id, {
+      g,
+      pathEl,
+      hitPath,
+      dotsG,
+      labelEl,
+      headC,
+      tailC,
+      selectionG,
+      selectionHalo,
+      selectionCore,
+      selectionBadge,
+      selectionIndex,
+      selectionCount,
+      data: strip,
+    });
 
     // Apply stored drag offset (from saved project or prior move)
     this.setStripOffset(strip.id, strip.offsetX || 0, strip.offsetY || 0);
@@ -543,6 +625,7 @@ export class CanvasManager {
       headC.style.display = 'none';
       tailC.style.display = 'none';
       labelEl.setAttribute('opacity', '0');
+      this._updateStripSelectionVisual(id);
       return;
     }
 
@@ -570,6 +653,39 @@ export class CanvasManager {
     const lenMm   = data.svgLength ? Math.round(data.svgLength / pxPerMm) : '?';
     labelEl.textContent = `${pixels.length} LEDs · ${lenMm}mm`;
     labelEl.setAttribute('opacity', selected ? '1' : '0.35');
+    this._updateStripSelectionVisual(id);
+  }
+
+  _updateStripSelectionVisual(id) {
+    const entry = this._strips.get(id);
+    if (!entry) return;
+
+    const selected = this.selectedId === id;
+    entry.selectionG.style.display = selected ? '' : 'none';
+    entry.hitPath.style.cursor = this.tool === 'select'
+      ? (selected ? 'grab' : 'pointer')
+      : '';
+    if (!selected) return;
+
+    const inverseZoom = 1 / this._zoom;
+    entry.selectionHalo.setAttribute('stroke-width', String(8 * inverseZoom));
+    entry.selectionCore.setAttribute('stroke-width', String(2 * inverseZoom));
+
+    const sectionNumber = Array.from(this._strips.keys()).indexOf(id) + 1;
+    const ledCount = entry._pixels?.length ?? entry.data.pixelCount ?? 0;
+    entry.selectionIndex.textContent = String(sectionNumber);
+    entry.selectionCount.textContent = `${ledCount} LEDs`;
+
+    try {
+      const midpoint = entry.pathEl.getPointAtLength(entry.pathEl.getTotalLength() * 0.5);
+      entry.selectionBadge.style.display = '';
+      entry.selectionBadge.setAttribute(
+        'transform',
+        `translate(${midpoint.x} ${midpoint.y}) scale(${inverseZoom}) translate(0 -24)`,
+      );
+    } catch {
+      entry.selectionBadge.style.display = 'none';
+    }
   }
 
   // ── Strip drag-to-move ────────────────────────────────────────────────────
@@ -900,25 +1016,30 @@ export class CanvasManager {
   }
 
   selectStrip(id) {
+    const previousId = this.selectedId;
+
     // Deselect previous
-    if (this.selectedId && this.selectedId !== id) {
-      const prev = this._strips.get(this.selectedId);
+    if (previousId && previousId !== id) {
+      const prev = this._strips.get(previousId);
       if (prev) prev.pathEl.setAttribute('stroke-width', 3);
     }
 
+    this.selectedId = id;
+
     // Dim dots on previously selected strip
-    if (this.selectedId && this.selectedId !== id) {
-      const prevEntry = this._strips.get(this.selectedId);
+    if (previousId && previousId !== id) {
+      const prevEntry = this._strips.get(previousId);
       if (prevEntry) {
         prevEntry.headC.style.display = 'none';
         prevEntry.tailC.style.display = 'none';
         prevEntry.labelEl.setAttribute('opacity', '0.35');
-        if (prevEntry._pixels) this.setStripDots(this.selectedId, prevEntry._pixels);
+        if (prevEntry._pixels) this.setStripDots(previousId, prevEntry._pixels);
+        else this._updateStripSelectionVisual(previousId);
       }
     }
-    this.selectedId = id;
     const entry = this._strips.get(id);
     if (entry?._pixels) this.setStripDots(id, entry._pixels);
+    else this._updateStripSelectionVisual(id);
 
     if (entry) {
       entry.pathEl.setAttribute('stroke-width', 5);
@@ -938,19 +1059,22 @@ export class CanvasManager {
   }
 
   deselectAll() {
-    if (this.selectedId) {
-      const entry = this._strips.get(this.selectedId);
+    const previousId = this.selectedId;
+    this.selectedId = null;
+
+    if (previousId) {
+      const entry = this._strips.get(previousId);
       if (entry) {
         entry.headC.style.display = 'none';
         entry.tailC.style.display = 'none';
         entry.labelEl.setAttribute('opacity', '0.35');
-        if (entry._pixels) this.setStripDots(this.selectedId, entry._pixels);
+        if (entry._pixels) this.setStripDots(previousId, entry._pixels);
+        else this._updateStripSelectionVisual(previousId);
       }
     }
-    if (this.selectedId) {
-      const prev = this._strips.get(this.selectedId);
+    if (previousId) {
+      const prev = this._strips.get(previousId);
       if (prev) prev.pathEl.setAttribute('stroke-width', 3);
-      this.selectedId = null;
     }
     this.clearLayerHighlight();
     this.onStripSelected?.(null);
@@ -999,6 +1123,7 @@ export class CanvasManager {
     if (tool !== 'draw') this._cancelDraw();
     const cursors = { draw: 'crosshair', select: 'default', delete: 'no-drop' };
     this.svg.style.cursor = cursors[tool] ?? 'default';
+    this._strips.forEach((_, id) => this._updateStripSelectionVisual(id));
   }
 
   // ── Artwork layer highlighting ─────────────────────────────────────────────

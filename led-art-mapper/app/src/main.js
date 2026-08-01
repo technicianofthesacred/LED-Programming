@@ -2848,6 +2848,7 @@ function _updateMultiSelectBar() {
 function _applyCanvasTransform() {
   svgEl.style.transformOrigin = '0 0';
   svgEl.style.transform = `translate(${state.canvasPanX}px, ${state.canvasPanY}px) scale(${state.canvasZoom})`;
+  canvasManager.setZoom(state.canvasZoom);
   if (previewRenderer.setTransform) previewRenderer.setTransform(state.canvasPanX, state.canvasPanY, state.canvasZoom);
   const zl = document.getElementById('zoom-level');
   if (zl) zl.textContent = Math.round(state.canvasZoom * 100) + '%';
