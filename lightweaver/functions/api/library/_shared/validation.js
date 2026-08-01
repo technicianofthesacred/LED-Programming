@@ -92,6 +92,7 @@ function validateBackupProject(entry, maxBytes) {
     seen.add(item.revision);
     return {
       revision: item.revision,
+      archived: item.archived === true,
       createdAt: typeof item.createdAt === 'string' ? item.createdAt : null,
       document: validatePortableProject(item.document, { maxBytes }),
     };
@@ -100,6 +101,7 @@ function validateBackupProject(entry, maxBytes) {
   if (!seen.has(currentRevision)) {
     fail('invalid_backup', 'The backed-up project head revision is missing.');
   }
+  revisions.find(item => item.revision === currentRevision).archived = entry.archived === true;
   return {
     id: entry.id,
     title: validateProjectTitle(entry.title),

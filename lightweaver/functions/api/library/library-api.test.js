@@ -238,15 +238,28 @@ test('workers can duplicate and archive projects, and active/archived lists stay
   });
   assert.equal(archived.response.status, 200);
   assert.equal(archived.payload.project.archived, true);
+  assert.equal(archived.payload.project.revision, 2);
   assert.deepEqual((await call(store, { path: '/projects?state=active' })).payload.projects.map(p => p.id), [duplicate.payload.project.id]);
   assert.deepEqual((await call(store, { path: '/projects?state=archived' })).payload.projects.map(p => p.id), [created.id]);
 
   const unarchived = await call(store, {
     method: 'POST',
     path: `/projects/${created.id}/unarchive`,
-    body: { baseRevision: 1 },
+    body: { baseRevision: 2 },
   });
   assert.equal(unarchived.payload.project.archived, false);
+  assert.equal(unarchived.payload.project.revision, 3);
+
+  const history = await call(store, { path: `/projects/${created.id}/revisions` });
+  assert.deepEqual(
+    history.payload.revisions.map(({ revision, archived }) => ({ revision, archived })),
+    [
+      { revision: 3, archived: false },
+      { revision: 2, archived: true },
+      { revision: 1, archived: false },
+    ],
+  );
+  assert.equal(new Set(history.payload.revisions.map(item => item.hash)).size, 1);
 });
 
 test('router forbids worker permanent deletion and permits confirmed owner deletion', async () => {
@@ -374,6 +387,63 @@ test('reusing an accepted idempotency key is rejected without a second mutation'
   assert.equal(first.response.status, 201);
   assert.equal(second.response.status, 409);
   assert.equal(second.payload.error.code, 'idempotency_conflict');
+  assert.equal((await call(store, { path: '/projects' })).payload.projects.length, 1);
+});
+
+test('concurrent same-base updates atomically accept one revision and reject one stale write', async () => {
+  const store = createMemoryLibraryStore();
+  const created = await createRemoteProject(store);
+
+  const settled = await Promise.allSettled([
+    call(store, {
+      method: 'PUT',
+      path: `/projects/${created.id}`,
+      body: { baseRevision: 1, project: portableProject({ brightness: 0.2 }) },
+    }),
+    call(store, {
+      method: 'PUT',
+      path: `/projects/${created.id}`,
+      body: { baseRevision: 1, project: portableProject({ brightness: 0.8 }) },
+    }),
+  ]);
+
+  assert.deepEqual(settled.map(result => result.status), ['fulfilled', 'fulfilled']);
+  assert.deepEqual(
+    settled.map(result => result.value.response.status).sort((left, right) => left - right),
+    [200, 409],
+  );
+  const history = await call(store, { path: `/projects/${created.id}/revisions` });
+  assert.deepEqual(history.payload.revisions.map(item => item.revision), [2, 1]);
+});
+
+test('concurrent creates atomically reserve an idempotency key for exactly one mutation', async () => {
+  const store = createMemoryLibraryStore();
+  const requestId = crypto.randomUUID();
+
+  const settled = await Promise.allSettled([
+    call(store, {
+      method: 'POST',
+      path: '/projects',
+      requestId,
+      body: { title: 'First contender', project: portableProject({ id: 'first-contender' }) },
+    }),
+    call(store, {
+      method: 'POST',
+      path: '/projects',
+      requestId,
+      body: { title: 'Second contender', project: portableProject({ id: 'second-contender' }) },
+    }),
+  ]);
+
+  assert.deepEqual(settled.map(result => result.status), ['fulfilled', 'fulfilled']);
+  assert.deepEqual(
+    settled.map(result => result.value.response.status).sort((left, right) => left - right),
+    [201, 409],
+  );
+  assert.equal(
+    settled.find(result => result.value.response.status === 409).value.payload.error.code,
+    'idempotency_conflict',
+  );
   assert.equal((await call(store, { path: '/projects' })).payload.projects.length, 1);
 });
 

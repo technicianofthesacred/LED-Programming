@@ -61,6 +61,7 @@ function publicMetadata(record) {
 function publicRevision(revision) {
   return {
     revision: revision.revision,
+    archived: revision.archived,
     hash: revision.hash,
     bytes: revision.bytes,
     createdAt: revision.createdAt,
@@ -72,6 +73,7 @@ export function createMemoryLibraryStore(seed = {}) {
   const projects = new Map();
   const assets = new Map();
   const usedIdempotencyKeys = new Set(seed.idempotencyKeys || []);
+  let mutationTail = Promise.resolve();
   const maxBytes = seed.maxBytes || DEFAULT_MAX_BYTES;
   const now = typeof seed.now === 'function' ? seed.now : () => new Date().toISOString();
 
@@ -118,11 +120,21 @@ export function createMemoryLibraryStore(seed = {}) {
     }
   }
 
-  async function makeRevision(revision, document, actor, createdAt = timestamp()) {
+  function serializeMutation(operation) {
+    const result = mutationTail.then(operation, operation);
+    mutationTail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  async function makeRevision(revision, document, actor, {
+    createdAt = timestamp(),
+    archived = false,
+  } = {}) {
     const normalized = validatePortableProject(document, { maxBytes });
     const details = await contentDetails(normalized);
     return {
       revision,
+      archived,
       document: normalized,
       ...details,
       createdAt,
@@ -144,7 +156,7 @@ export function createMemoryLibraryStore(seed = {}) {
     const document = validatePortableProject(project, { maxBytes });
     const id = crypto.randomUUID();
     const createdAt = timestamp();
-    const revision = await makeRevision(1, document, actor, createdAt);
+    const revision = await makeRevision(1, document, actor, { createdAt });
     const record = {
       id,
       embeddedProjectId: revision.document.id,
@@ -180,7 +192,7 @@ export function createMemoryLibraryStore(seed = {}) {
       throw new LibraryStoreError('invalid_project', 'An update cannot change the embedded project identity.', 400);
     }
     const nextRevision = record.revision + 1;
-    const revision = await makeRevision(nextRevision, document, actor);
+    const revision = await makeRevision(nextRevision, document, actor, { archived: record.archived });
     record.revisions.push(revision);
     record.title = cleanTitle;
     record.revision = nextRevision;
@@ -202,7 +214,7 @@ export function createMemoryLibraryStore(seed = {}) {
     document.name = cleanTitle;
     const remoteId = crypto.randomUUID();
     const createdAt = timestamp();
-    const revision = await makeRevision(1, document, actor, createdAt);
+    const revision = await makeRevision(1, document, actor, { createdAt });
     const record = {
       id: remoteId,
       embeddedProjectId: revision.document.id,
@@ -226,8 +238,17 @@ export function createMemoryLibraryStore(seed = {}) {
     requireUnusedKey(idempotencyKey);
     const record = requireProject(id);
     requireHead(record, baseRevision);
-    record.archived = archived === true;
-    record.updatedAt = timestamp();
+    const nextArchived = archived === true;
+    const head = record.revisions.find(item => item.revision === record.revision);
+    const revision = await makeRevision(record.revision + 1, head.document, actor, {
+      archived: nextArchived,
+    });
+    record.revisions.push(revision);
+    record.archived = nextArchived;
+    record.revision = revision.revision;
+    record.hash = revision.hash;
+    record.bytes = revision.bytes;
+    record.updatedAt = revision.createdAt;
     record.lastEditor = editor(actor);
     acceptKey(idempotencyKey);
     return publicMetadata(record);
@@ -255,7 +276,9 @@ export function createMemoryLibraryStore(seed = {}) {
     requireHead(record, baseRevision);
     const source = record.revisions.find(item => item.revision === revision);
     if (!source) throw new LibraryStoreError('revision_not_found', 'The requested revision was not found.', 404);
-    const next = await makeRevision(record.revision + 1, source.document, actor);
+    const next = await makeRevision(record.revision + 1, source.document, actor, {
+      archived: record.archived,
+    });
     record.revisions.push(next);
     record.revision = next.revision;
     record.hash = next.hash;
@@ -316,6 +339,7 @@ export function createMemoryLibraryStore(seed = {}) {
       currentRevision: record.revision,
       revisions: record.revisions.map(revision => ({
         revision: revision.revision,
+        archived: revision.archived,
         createdAt: revision.createdAt,
         document: clone(revision.document),
       })),
@@ -356,7 +380,10 @@ export function createMemoryLibraryStore(seed = {}) {
           sourceRevision.revision,
           document,
           actor,
-          sourceRevision.createdAt || timestamp(),
+          {
+            createdAt: sourceRevision.createdAt || timestamp(),
+            archived: sourceRevision.archived,
+          },
         );
         importedRevisions.push(importedRevision);
       }
@@ -416,17 +443,17 @@ export function createMemoryLibraryStore(seed = {}) {
 
   return {
     listProjects,
-    createProject,
+    createProject: args => serializeMutation(() => createProject(args)),
     readProject,
-    updateProject,
-    duplicateProject,
-    setArchived,
-    deleteProject,
+    updateProject: args => serializeMutation(() => updateProject(args)),
+    duplicateProject: args => serializeMutation(() => duplicateProject(args)),
+    setArchived: args => serializeMutation(() => setArchived(args)),
+    deleteProject: args => serializeMutation(() => deleteProject(args)),
     listRevisions,
-    restoreRevision,
+    restoreRevision: args => serializeMutation(() => restoreRevision(args)),
     readAsset,
-    writeAsset,
+    writeAsset: args => serializeMutation(() => writeAsset(args)),
     exportBackup,
-    importBackup,
+    importBackup: args => serializeMutation(() => importBackup(args)),
   };
 }
