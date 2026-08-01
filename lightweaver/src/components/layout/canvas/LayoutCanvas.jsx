@@ -316,13 +316,6 @@ export function LayoutCanvas({
               const railColor = isHid
                 ? 'oklch(40% 0.01 75)'
                 : (effectiveShowLight ? stripColor : 'oklch(62% 0.012 75)');
-              // SVG geometry bounds exclude stroke width. Give perfectly horizontal
-              // or vertical strips a one-scale-unit midpoint segment so selection
-              // paths retain a real paint bound without changing their visual route.
-              const selectionMid = s.pixels?.[Math.floor(s.pixels.length / 2)];
-              const selectionPathData = selectionMid
-                ? `${s.pathData} M ${selectionMid.x} ${selectionMid.y} v ${selectionVbScale}`
-                : s.pathData;
               return (
                 <g key={s.id} transform={`translate(${s.x || 0} ${s.y || 0})`}>
                   <path d={s.pathData}
@@ -377,7 +370,7 @@ export function LayoutCanvas({
                     <>
                       <path
                         data-testid="selected-strip-halo"
-                        d={selectionPathData}
+                        d={s.pathData}
                         fill="none"
                         stroke="oklch(0.78 0.16 205)"
                         strokeWidth={selectionVbScale * 10}
@@ -388,7 +381,7 @@ export function LayoutCanvas({
                       />
                       <path
                         data-testid="selected-strip-core"
-                        d={selectionPathData}
+                        d={s.pathData}
                         fill="none"
                         stroke="white"
                         strokeWidth={selectionVbScale * 2.25}
