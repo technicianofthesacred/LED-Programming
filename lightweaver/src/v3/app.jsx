@@ -584,7 +584,6 @@ function Shell() {
     if (cloudLibrary.session.status === 'authenticated' && cloudLibrary.activeRemoteProject) {
       const result = await cloudLibrary.saveNow();
       if (result.ok) showWorkspaceEvent('Saved online');
-      else if (!['queued', 'conflict', 'offline'].includes(result.reason)) showWorkspaceEvent('Online save failed', { kind: 'error', persistent: true, review: true });
       return;
     }
     if (cloudLibrary.session.status === 'authenticated' && cloudLibrary.session.role !== 'customer') {
@@ -750,6 +749,12 @@ function Shell() {
         <ProjectLoadDialog
           onClose={() => setLoadDialogOpen(false)}
           onImport={onImport}
+          onOpenFailure={result => showWorkspaceEvent(
+            result?.error?.message || (result?.reason === 'stale-session'
+              ? 'Your session changed. Sign in again from Preferences.'
+              : 'The online project could not be opened.'),
+            { kind: 'error', persistent: true, review: true },
+          )}
           onOpenPreferences={() => openCardSection('preferences')}
         />
       )}

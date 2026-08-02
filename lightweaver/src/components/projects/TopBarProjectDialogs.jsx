@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useCloudLibrary } from '../../state/CloudLibraryContext.jsx';
 import { CloudLibraryDialogPortal } from './ProjectHistoryDialog.jsx';
 
-export function ProjectLoadDialog({ onClose, onImport, onOpenPreferences }) {
+export function ProjectLoadDialog({ onClose, onImport, onOpenFailure, onOpenPreferences }) {
   const library = useCloudLibrary();
   const [query, setQuery] = useState('');
   const dialogRef = useRef(null);
@@ -18,7 +18,8 @@ export function ProjectLoadDialog({ onClose, onImport, onOpenPreferences }) {
   const openProject = async project => {
     const opening = library.openProject(project);
     onClose();
-    await opening;
+    const result = await opening;
+    if (!result?.ok && !['cancelled', 'superseded'].includes(result?.reason)) onOpenFailure(result);
   };
 
   return (
@@ -111,7 +112,8 @@ export function ProjectSaveDialog({ projectName, onClose }) {
     const result = await library.createProject(cleanTitle);
     setSaving(false);
     if (result.ok) onClose({ saved: true, project: result.project });
-    else if (result.reason !== 'stale-session') setError(result.error?.message || 'The project could not be saved online.');
+    else if (result.reason === 'stale-session') setError('Your session changed. Sign in again from Preferences.');
+    else setError(result.error?.message || 'The project could not be saved online.');
   };
 
   return (

@@ -113,6 +113,7 @@ class LibraryFixture {
   private delayedUpdateGate: Promise<void> | null = null;
   private releaseDelayedUpdate: (() => void) | null = null;
   forceNextConflict = false;
+  projectReadFailures: number[] = [];
   updateFailures: number[] = [];
   updateRequestIds: string[] = [];
   updateCount = 0;
@@ -672,6 +673,11 @@ class LibraryFixture {
             await json(route, { error: { code: 'not_found', message: 'Project not found.' } }, 404);
             return;
           }
+          const failure = this.projectReadFailures.shift();
+          if (failure) {
+            await json(route, { error: { code: `fixture_${failure}`, message: `Fixture read failure ${failure}.`, requestId: `fixture-read-${failure}` } }, failure);
+            return;
+          }
           if (this.delayedReadId === project.id) {
             this.delayedReadId = '';
             this.signalDelayedReadStarted?.();
@@ -1010,6 +1016,27 @@ test('Load closes with Escape and restores focus to the top-bar action', async (
   await expect(load).toBeFocused();
 });
 
+test('Load closes immediately and reports a failed online project read persistently', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  fixture.seed('Unavailable Project');
+  fixture.projectReadFailures.push(503);
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Load project' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Load project' });
+  await dialog.getByRole('button', { name: 'Open Unavailable Project' }).click();
+  await expect(dialog).toHaveCount(0);
+
+  const notice = page.getByTestId('workspace-notice');
+  await expect(notice).toContainText('Fixture read failure 503.');
+  await expect(notice.getByRole('button', { name: 'Review' })).toBeVisible();
+  await page.waitForTimeout(2400);
+  await expect(notice).toBeVisible();
+  await notice.getByRole('button', { name: 'Dismiss notice' }).click();
+  await expect(notice).toHaveCount(0);
+});
+
 test('first authenticated top-bar Save prompts for a title and creates an associated online project', async ({ page }) => {
   const fixture = new LibraryFixture('worker');
   await fixture.install(page);
@@ -1030,6 +1057,32 @@ test('first authenticated top-bar Save prompts for a title and creates an associ
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_cloud_active_project_v1') || 'null')?.revision)).toBe(1);
 });
 
+test('first online Save explains a session change while keeping the dialog usable', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('Preferences').first().click();
+  await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+
+  fixture.holdNextCreate();
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Save project online' });
+  await dialog.getByLabel('Project title').fill('Stale Session Project');
+  await dialog.getByRole('button', { name: 'Save online' }).click();
+  await fixture.delayedCreateStarted;
+  await page.evaluate(() => {
+    const signOut = [...document.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Sign out');
+    if (!(signOut instanceof HTMLButtonElement)) throw new Error('Sign out action not found');
+    signOut.click();
+  });
+  await expect.poll(() => fixture.role).toBeNull();
+  fixture.releaseCreate();
+
+  await expect(dialog.getByRole('alert')).toHaveText('Your session changed. Sign in again from Preferences.');
+  await expect(dialog.getByLabel('Project title')).toBeEnabled();
+  await expect(dialog.getByRole('button', { name: 'Save online' })).toBeEnabled();
+});
+
 test('top-bar Save writes an associated authenticated project through the online revision path', async ({ page }) => {
   const fixture = new LibraryFixture('worker');
   const remote = fixture.seed('Associated Project');
@@ -1045,6 +1098,30 @@ test('top-bar Save writes an associated authenticated project through the online
   await expect.poll(() => fixture.updateCount).toBe(1);
   await expect.poll(() => fixture.projects.get(remote.id)?.revision).toBe(2);
   expect(fixture.projects.get(remote.id)?.document.name).toBe('Associated Project Revised');
+});
+
+test('associated Save error dismissal and recovery do not reveal a stale workspace error', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  const remote = fixture.seed('Recoverable Save');
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Load project' }).click();
+  await page.getByRole('dialog', { name: 'Load project' }).getByRole('button', { name: 'Open Recoverable Save' }).click();
+  await page.getByLabel('Preferences').first().click();
+  await page.getByLabel('Project name').fill('Recoverable Save Revised');
+  fixture.updateFailures.push(400);
+
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  const notice = page.getByTestId('workspace-notice');
+  await expect(notice).toContainText('Online save needs attention.');
+  await notice.getByRole('button', { name: 'Dismiss notice' }).click();
+  await expect(notice).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  await expect.poll(() => fixture.projects.get(remote.id)?.revision).toBe(2);
+  await expect(notice).toContainText('Saved online');
+  await expect(notice).not.toContainText('Online save failed');
+  await expect(notice).toHaveCount(0, { timeout: 3500 });
 });
 
 test('signed-out top-bar Save uses the browser library without leaving the active artboard', async ({ page }) => {
