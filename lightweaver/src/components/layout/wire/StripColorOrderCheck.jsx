@@ -199,13 +199,13 @@ export function StripColorOrderCheck({ cardHost, controller, setController, auto
           <div className="lwb-quick-actions">
             {quickStage === 'red' ? (
               <>
-                <button type="button" className="btn" disabled={busy} onClick={() => void tryNextOrder()}>Try next order</button>
-                <button type="button" className="btn primary" disabled={busy || activeTestId !== 'r' || !liveTestReady} onClick={acceptQuickRed}>Red is correct</button>
+                <button type="button" className="btn" title="Apply the next color-order option and retest red on the real LEDs." data-tooltip="Apply the next color-order option and retest red on the real LEDs." disabled={busy} onClick={() => void tryNextOrder()}>Try next order</button>
+                <button type="button" className="btn primary" title="Accept the visible red position and continue by testing green." data-tooltip="Accept the visible red position and continue by testing green." disabled={busy || activeTestId !== 'r' || !liveTestReady} onClick={acceptQuickRed}>Red is correct</button>
               </>
             ) : (
               <>
-                <button type="button" className="btn" disabled={busy} onClick={tryOtherQuickMatch}>Try other match</button>
-                <button type="button" className="btn primary" disabled={busy || activeTestId !== 'g' || !liveTestReady} onClick={confirmQuickOrder}>Green is correct</button>
+                <button type="button" className="btn" title="Try the other color order with this red position and retest green." data-tooltip="Try the other color order with this red position and retest green." disabled={busy} onClick={tryOtherQuickMatch}>Try other match</button>
+                <button type="button" className="btn primary" title="Confirm the current color order after the green check." data-tooltip="Confirm the current color order after the green check." disabled={busy || activeTestId !== 'g' || !liveTestReady} onClick={confirmQuickOrder}>Green is correct</button>
               </>
             )}
           </div>
