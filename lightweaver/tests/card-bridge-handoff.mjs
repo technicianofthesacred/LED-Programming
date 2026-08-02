@@ -504,6 +504,46 @@ assert.equal(popupState.verified, true);
 assert.equal(popupState.host, popupHost);
 assert.equal(popupHarness.win.focusCalls, 1);
 
+// Pairing takeover is intentionally allowed to stop at fresh read-only card
+// discovery. A new Studio profile has no persisted identity yet, so ordinary
+// acquisition cannot become identityVerified until the explicit pairing step
+// adopts the card. The takeover gesture must still reclaim the named card tab
+// and return the freshly discovered identity for that explicit step.
+const takeoverHost = '192.168.18.78';
+let takeoverHarness;
+const takeoverBridge = {
+  closed: false,
+  postMessage(message) {
+    if (message.type !== 'firmware-info') return;
+    setTimeout(() => takeoverHarness.emitMessage({
+      origin: `http://${takeoverHost}`,
+      source: takeoverBridge,
+      data: {
+        app: 'LightweaverCardBridge', id: message.id, ok: true,
+        response: { cardId: 'lw-takeover-card', firmwareVersion: '1.0.0' },
+      },
+    }), 0);
+  },
+};
+takeoverHarness = bridgeWindowHarness({ host: takeoverHost, openResult: takeoverBridge });
+takeoverHarness.storageValues.delete('lw_card_identity_v1');
+globalThis.window = takeoverHarness.win;
+const takeoverAttempt = acquireCardBridgeFromGesture(takeoverHost, {
+  timeoutMs: 100,
+  acceptDiscovered: true,
+});
+assert.equal(takeoverHarness.opened.length, 1, 'takeover reclaims the named card window from the user gesture');
+takeoverHarness.emitMessage({
+  origin: `http://${takeoverHost}`,
+  source: takeoverBridge,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: takeoverHost, version: 1 },
+});
+const takeoverState = await takeoverAttempt.ready;
+assert.equal(takeoverState.verified, true, 'the replacement card page completed a fresh origin handshake');
+assert.equal(takeoverState.identityVerified, false, 'discovery alone never grants command authority');
+assert.equal(takeoverState.discoveredCard?.id, 'lw-takeover-card', 'takeover returns only the freshly discovered card');
+globalThis.window = popupHarness.win;
+
 // A bridge tab that was verified and later closed is not reusable; the next
 // gesture must synchronously reopen the named tab and wait for a new handshake.
 popupBridge.closed = true;

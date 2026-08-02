@@ -161,6 +161,33 @@ test('opening after a blocked popup renders the retry action directly', async ({
   await expect(page.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
 });
 
+test('stale pairing offers to take over the card connection', async ({ page }) => {
+  await installCardPopupMock(page, 'lw-stale-pairing');
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  await dispatchCardLinkEvents(page, [{
+    type: 'bridge-discovered',
+    host: 'lightweaver.local',
+    card: { id: 'lw-stale-pairing', name: 'Workshop card' },
+    bridgeLifecycle: 4,
+  }]);
+
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click();
+
+  await expect(dialog).toContainText('Take over that connection to use the card in this Studio.');
+  await expect(dialog.getByRole('button', { name: 'Take over connection' })).toBeVisible();
+  await expect(dialog).not.toContainText('belongs to an older bridge host');
+
+  await dialog.getByRole('button', { name: 'Take over connection' }).click();
+  await expect.poll(() => page.evaluate(() => (
+    JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null')?.id
+  ))).toBe('lw-stale-pairing');
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
+});
+
 test('opening with old firmware renders the card update directly', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: {} });
