@@ -1124,6 +1124,47 @@ test('associated Save error dismissal and recovery do not reveal a stale workspa
   await expect(notice).toHaveCount(0, { timeout: 3500 });
 });
 
+test('associated Save reports a queued transient failure until its automatic retry succeeds', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  const remote = fixture.seed('Transient Save');
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Load project' }).click();
+  await page.getByRole('dialog', { name: 'Load project' }).getByRole('button', { name: 'Open Transient Save' }).click();
+  await page.getByLabel('Preferences').first().click();
+  await page.getByLabel('Project name').fill('Transient Save Revised');
+  fixture.updateFailures.push(503);
+
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  const notice = page.getByTestId('workspace-notice');
+  await expect(notice).toContainText('Save queued — waiting to retry online.');
+  await expect(notice.getByRole('button', { name: 'Review' })).toBeVisible();
+  await expect.poll(() => fixture.updateCount, { timeout: 6000 }).toBe(2);
+  await expect.poll(() => fixture.projects.get(remote.id)?.revision).toBe(2);
+  await expect(notice).toHaveCount(0);
+});
+
+test('associated Save authentication rejection reports a persistent sign-in error', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  fixture.seed('Expired Save');
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Load project' }).click();
+  await page.getByRole('dialog', { name: 'Load project' }).getByRole('button', { name: 'Open Expired Save' }).click();
+  await page.getByLabel('Preferences').first().click();
+  await page.getByLabel('Project name').fill('Expired Save Revised');
+  fixture.updateFailures.push(401);
+
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  const notice = page.getByTestId('workspace-notice');
+  await expect(notice).toContainText('Your session changed. Sign in again from Preferences.');
+  await expect(notice.getByRole('button', { name: 'Review' })).toBeVisible();
+  await page.waitForTimeout(2400);
+  await expect(notice).toBeVisible();
+  await notice.getByRole('button', { name: 'Dismiss notice' }).click();
+  await expect(notice).toHaveCount(0);
+});
+
 test('signed-out top-bar Save uses the browser library without leaving the active artboard', async ({ page }) => {
   const fixture = new LibraryFixture(null);
   await fixture.install(page);

@@ -379,7 +379,7 @@ function Shell() {
   const fileInputRef = useRef(null);
   const showWorkspaceEvent = useCallback((message, options = {}) => {
     workspaceEventIdRef.current += 1;
-    setWorkspaceEvent({ id: workspaceEventIdRef.current, message, kind: options.kind || 'success', persistent: options.persistent === true, review: options.review === true });
+    setWorkspaceEvent({ id: workspaceEventIdRef.current, message, kind: options.kind || 'success', persistent: options.persistent === true, review: options.review === true, source: options.source || '' });
   }, []);
   useEffect(() => {
     const channel = createBridgeResultChannel({
@@ -507,6 +507,11 @@ function Shell() {
     recoveryAnnouncedRef.current = true;
     showWorkspaceEvent('Restored from recovery copy', { kind: 'recovery' });
   }, [projectLifecycleLabel, showWorkspaceEvent]);
+  useEffect(() => {
+    if (workspaceEvent?.source === 'cloud-save-waiting' && cloudLibrary.syncState.status === 'saved') {
+      setWorkspaceEvent(null);
+    }
+  }, [cloudLibrary.syncState.status, workspaceEvent?.source]);
 
   // real card status — every screen and the footer read the cardLink state
   // machine, which merges direct HTTP polling (http/file pages) with the
@@ -584,6 +589,11 @@ function Shell() {
     if (cloudLibrary.session.status === 'authenticated' && cloudLibrary.activeRemoteProject) {
       const result = await cloudLibrary.saveNow();
       if (result.ok) showWorkspaceEvent('Saved online');
+      else if (result.reason === 'queued' || Number(result.error?.status) >= 500) {
+        showWorkspaceEvent('Save queued — waiting to retry online.', { kind: 'offline', persistent: true, review: true, source: 'cloud-save-waiting' });
+      } else if (result.reason === 'stale-session' || [401, 403].includes(Number(result.error?.status))) {
+        showWorkspaceEvent('Your session changed. Sign in again from Preferences.', { kind: 'error', persistent: true, review: true, source: 'cloud-save-session' });
+      }
       return;
     }
     if (cloudLibrary.session.status === 'authenticated' && cloudLibrary.session.role !== 'customer') {
