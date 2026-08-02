@@ -220,7 +220,8 @@ test('a successful push is pending until acknowledgement and records the exact i
   await expect(banner).toHaveClass(/is-ok/);
   await expect(banner).toContainText(/Installed revision \d+ on card/);
   await expect(banner).toContainText(/zone/i);
-  await expect(page.locator('.savechip')).toContainText('Installed on card');
+  await expect.poll(() => page.evaluate(() => Boolean(JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').installation))).toBe(true);
+  await expect(page.getByTestId('workspace-notice')).toHaveCount(0);
   expect(card.operations).toContain('config');
   expect(card.savedConfig).not.toBeNull();
 });

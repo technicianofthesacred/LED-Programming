@@ -10,9 +10,22 @@ const DEFAULT_RUNTIME = buildCardRuntimePackageFromProject({
   patchBoard: DEFAULT_PROJECT.layout.patchBoard,
   standaloneController: DEFAULT_PROJECT.devices.standaloneController,
 }).config;
+const CURRENT_TEST_OUTPUTS = [{
+  id: 'out1',
+  pin: 16,
+  pixels: 44,
+  direction: 'forward',
+  segments: [{ id: 'out1-full', count: 44, direction: 'forward' }],
+}];
 
 async function mockConnectedCard(page: any, cardId = 'lw-studio-hardening', options: any = {}) {
-  let installedConfig: any = DEFAULT_RUNTIME;
+  let installedConfig: any = {
+    ...structuredClone(DEFAULT_RUNTIME),
+    led: { ...structuredClone(DEFAULT_RUNTIME.led), outputs: structuredClone(CURRENT_TEST_OUTPUTS) },
+  };
+  let candidateConfig: any = null;
+  let wiringState = 'known-good';
+  const activationId = 'studio-hardening-activation';
   await page.route('**/api/firmware-info', route => route.fulfill({
     json: {
       app: 'Lightweaver',
@@ -40,6 +53,37 @@ async function mockConnectedCard(page: any, cardId = 'lw-studio-hardening', opti
     if (options.configGate) await options.configGate();
     if (options.configDelayMs) await new Promise(resolve => setTimeout(resolve, options.configDelayMs));
     await route.fulfill({ json: { ok: true, requiresReboot: false } });
+  });
+  await page.route('**/api/wiring/candidate', async route => {
+    candidateConfig = JSON.parse(route.request().postData() || '{}').candidate;
+    installedConfig = candidateConfig;
+    options.onConfigRequest?.(structuredClone(installedConfig));
+    if (options.configGate) await options.configGate();
+    if (options.configDelayMs) await new Promise(resolve => setTimeout(resolve, options.configDelayMs));
+    wiringState = 'known-good';
+    await route.fulfill({ json: {
+      ok: true,
+      state: wiringState,
+      activationId,
+      currentOutputs: installedConfig?.led?.outputs || [],
+    } });
+  });
+  await page.route('**/api/wiring/activate', async route => {
+    wiringState = 'testing';
+    await route.fulfill({ json: { ok: true, state: wiringState, activationId, remainingProbationMs: 90000, currentOutputs: candidateConfig?.led?.outputs || [] } });
+  });
+  await page.route('**/api/wiring/status', async route => {
+    await route.fulfill({ json: { ok: true, state: wiringState, activationId, remainingProbationMs: wiringState === 'testing' ? 84000 : 0, currentOutputs: (candidateConfig || installedConfig)?.led?.outputs || [] } });
+  });
+  await page.route('**/api/wiring/confirm', async route => {
+    if (candidateConfig) installedConfig = candidateConfig;
+    wiringState = 'known-good';
+    await route.fulfill({ json: { ok: true, state: wiringState, activationId, currentOutputs: installedConfig?.led?.outputs || [] } });
+  });
+  await page.route('**/api/wiring/rollback', async route => {
+    candidateConfig = null;
+    wiringState = 'rolled-back';
+    await route.fulfill({ json: { ok: true, state: wiringState, activationId, currentOutputs: installedConfig?.led?.outputs || [] } });
   });
   await page.route('**/api/control', async route => {
     const body = JSON.parse(route.request().postData() || '{}');
@@ -71,6 +115,31 @@ async function seedBrowserProjectLibrary(page: any) {
     localStorage.setItem('lw_project_active_record_v1', 'current-record');
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
+}
+
+async function importSeededProjectFileThroughTopBar(page: any, recordId: string) {
+  const project = await page.evaluate(id => {
+    const records = JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records || [];
+    return records.find((record: any) => record.id === id)?.project;
+  }, recordId);
+  await page.getByRole('button', { name: 'Load project' }).click();
+  const loadDialog = page.getByRole('dialog', { name: 'Load project' });
+  const chooserPromise = page.waitForEvent('filechooser');
+  await loadDialog.getByRole('button', { name: 'Import from computer' }).click();
+  const chooser = await chooserPromise;
+  await chooser.setFiles({
+    name: `${recordId}.lw.json`,
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(project)),
+  });
+}
+
+async function readBrowserFallbackStorage(page: any) {
+  return page.evaluate(() => ({
+    activeRecordId: localStorage.getItem('lw_project_active_record_v1'),
+    library: localStorage.getItem('lw_project_library_v1'),
+    backup: localStorage.getItem('lw_project_library_v1_backup'),
+  }));
 }
 
 // The old standalone Settings and Installer rail entries were consolidated
@@ -171,7 +240,7 @@ test('Settings installs the exact requested revision when an edit happens during
   await page.getByRole('button', { name: 'Preferences', exact: true }).click();
   const name = page.locator('.set-row', { hasText: 'Project name' }).locator('input');
   await name.fill('Revision one');
-  await expect(page.locator('.savechip')).toContainText('Unsaved changes');
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').dirty)).toBe(true);
   await page.getByRole('navigation', { name: 'Hardware sections' }).getByRole('button', { name: 'Hardware settings' }).click();
   const save = page.locator('.set-row', { hasText: 'Install on card' }).getByRole('button', { name: 'Install on card' });
   await save.click();
@@ -181,7 +250,7 @@ test('Settings installs the exact requested revision when an edit happens during
   releaseConfig?.();
   await page.getByRole('navigation', { name: 'Hardware sections' }).getByRole('button', { name: 'Hardware settings' }).click();
   await expect(page.getByTestId('settings-card-status')).toContainText('Installed on card');
-  await expect(page.locator('.savechip')).toContainText('Unsaved changes');
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').dirty)).toBe(true);
 });
 
 test('Settings records a current install only after exact card read-back', async ({ page }) => {
@@ -193,7 +262,8 @@ test('Settings records a current install only after exact card read-back', async
   await page.locator('.set-row', { hasText: 'Install on card' }).getByRole('button', { name: 'Install on card' }).click();
 
   await expect(page.getByTestId('settings-card-status')).toContainText('Installed on card');
-  await expect(page.locator('.savechip')).toContainText('Installed on card');
+  await expect.poll(() => page.evaluate(() => Boolean(JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').installation))).toBe(true);
+  await expect(page.getByTestId('workspace-notice')).toHaveCount(0);
 });
 
 test('a stale revision-zero install acknowledgement cannot label a replacement project installed', async ({ page }) => {
@@ -210,11 +280,13 @@ test('a stale revision-zero install acknowledgement cannot label a replacement p
   await expect.poll(() => configRequested).toBe(true);
 
   await page.getByRole('button', { name: 'New project' }).click();
-  await expect(page.locator('.savechip')).toContainText('New project');
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').dirty)).toBe(false);
+  await expect(page.getByTestId('workspace-notice')).toHaveCount(0);
   releaseConfig?.();
 
   await expect(page.getByTestId('settings-card-status')).toContainText('Installed on card');
-  await expect(page.locator('.savechip')).toContainText('New project');
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').dirty)).toBe(false);
+  await expect(page.getByTestId('workspace-notice')).toHaveCount(0);
 });
 
 test('Pattern card write is pending, disables conflicts, and exposes retry after failure', async ({ page }) => {
@@ -237,10 +309,12 @@ test('Pattern confirms the exact draft revision installed on the card', async ({
     onConfigRequest: (config: any) => { installedConfig = config; },
   });
   await page.getByPlaceholder('Search chip patterns').fill('ocean');
+  await page.getByRole('button', { name: 'All sections' }).click();
   await page.locator('[data-pattern-id="ocean"]').click();
-  await expect(page.locator('.savechip')).toContainText('Unsaved changes');
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').dirty)).toBe(true);
   await page.getByTitle('Install the current look on the card').click();
-  await expect(page.locator('.savechip')).toContainText('Installed on card');
+  await expect.poll(() => page.evaluate(() => Boolean(JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').installation))).toBe(true);
+  await expect(page.getByTestId('workspace-notice')).toHaveCount(0);
   expect(installedConfig?.startupPatternId).toBe('ocean');
   // The storage compactor omits a redundant preset when it equals the look id;
   // firmware restores that as the same exact Ocean preset.
@@ -263,7 +337,7 @@ test('Pattern acknowledgement does not install an unrelated edit made while pend
   const name = page.locator('.set-row', { hasText: 'Project name' }).locator('input');
   await name.fill('Edited during card write');
   await acknowledged;
-  await expect(page.locator('.savechip')).toContainText('Unsaved changes');
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').dirty)).toBe(true);
 });
 
 test('bench chase restores the last Studio-confirmed look after transport failure', async ({ page }) => {
@@ -279,7 +353,8 @@ test('bench chase restores the last Studio-confirmed look after transport failur
   await page.getByPlaceholder('Search chip patterns').fill('ocean');
   await page.locator('[data-pattern-id="ocean"]').click();
   await page.getByTitle('Install the current look on the card').click();
-  await expect(page.locator('.savechip')).toContainText('Installed on card');
+  await expect.poll(() => page.evaluate(() => Boolean(JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').installation))).toBe(true);
+  await expect(page.getByTestId('workspace-notice')).toHaveCount(0);
   await expect.poll(() => controls.length).toBeGreaterThan(0);
   controls.length = 0;
 
@@ -470,7 +545,8 @@ test('installer invalidates signoff when the installed revision changes', async 
   await markInstallerReady(page);
   await page.locator('.rail-item', { hasText: 'Patterns' }).click();
   await page.getByTitle('Install the current look on the card').click();
-  await expect(page.locator('.savechip')).toContainText('Installed on card');
+  await expect.poll(() => page.evaluate(() => Boolean(JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').installation))).toBe(true);
+  await expect(page.getByTestId('workspace-notice')).toHaveCount(0);
   await openInstallerGuide(page);
   await expect(page.locator('.inst-signoff input[type="checkbox"]:checked')).toHaveCount(0);
   await expect(page.getByText('Ready to ship', { exact: true })).toHaveCount(0);
@@ -604,28 +680,30 @@ test('replacement guard names both projects and keeps editing until explicitly r
   await expect(projectName).toHaveValue('Incoming Lotus');
 });
 
-test('browser library Keep editing leaves the current record active', async ({ page }) => {
+test('top-bar file import Keep editing preserves the active browser-library record', async ({ page }) => {
   await seedBrowserProjectLibrary(page);
+  const browserFallbackBefore = await readBrowserFallbackStorage(page);
   await openPreferences(page);
   await page.getByRole('textbox', { name: 'Project name' }).fill('Current Mandala edited');
-  await page.locator('.set-lib-row', { hasText: 'Incoming Lotus' }).getByRole('button', { name: 'Open' }).click();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').dirty)).toBe(true);
+  await importSeededProjectFileThroughTopBar(page, 'incoming-record');
   await page.getByRole('dialog', { name: 'Replace current project?' }).getByRole('button', { name: 'Keep editing' }).click();
   await expect(page.getByRole('textbox', { name: 'Project name' })).toHaveValue('Current Mandala edited');
-  await expect(page.locator('.set-lib-row.is-active')).toContainText('Current Mandala');
-  await expect(page.getByText('Opened Incoming Lotus.', { exact: true })).toHaveCount(0);
-  expect(await page.evaluate(() => localStorage.getItem('lw_project_active_record_v1'))).toBe('current-record');
+  await expect(page.locator('.crumb .proj')).toHaveText('Current Mandala edited');
+  expect(await readBrowserFallbackStorage(page)).toEqual(browserFallbackBefore);
 });
 
-test('browser library Escape leaves the current record active', async ({ page }) => {
+test('top-bar file import Escape preserves the active browser-library record', async ({ page }) => {
   await seedBrowserProjectLibrary(page);
+  const browserFallbackBefore = await readBrowserFallbackStorage(page);
   await openPreferences(page);
   await page.getByRole('textbox', { name: 'Project name' }).fill('Current Mandala edited');
-  await page.locator('.set-lib-row', { hasText: 'Incoming Lotus' }).getByRole('button', { name: 'Open' }).click();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').dirty)).toBe(true);
+  await importSeededProjectFileThroughTopBar(page, 'incoming-record');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('textbox', { name: 'Project name' })).toHaveValue('Current Mandala edited');
-  await expect(page.locator('.set-lib-row.is-active')).toContainText('Current Mandala');
-  await expect(page.getByText('Opened Incoming Lotus.', { exact: true })).toHaveCount(0);
-  expect(await page.evaluate(() => localStorage.getItem('lw_project_active_record_v1'))).toBe('current-record');
+  await expect(page.locator('.crumb .proj')).toHaveText('Current Mandala edited');
+  expect(await readBrowserFallbackStorage(page)).toEqual(browserFallbackBefore);
 });
 
 test('replacement dialog traps keyboard focus and restores its trigger', async ({ page }) => {

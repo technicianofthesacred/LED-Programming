@@ -7,6 +7,8 @@ import { CloudLibraryProvider, useCloudLibrary } from '../state/CloudLibraryCont
 import { useCardStatus } from '../hooks/useCardStatus.js';
 import { CardConnectionCenter } from '../components/card/CardConnectionCenter.jsx';
 import { CardStatusControl } from '../components/card/CardStatusControl.jsx';
+import { ProjectLoadDialog, ProjectSaveDialog } from '../components/projects/TopBarProjectDialogs.jsx';
+import { WorkspaceNotice } from '../components/projects/WorkspaceNotice.jsx';
 import { canPushDirectlyToCard } from '../lib/cardConnection.js';
 import {
   bootstrapBridgeCallback,
@@ -220,7 +222,7 @@ const I = {
 };
 
 /* ---------- Top bar (wired to real project state via props) ---------- */
-function TopBar({ projectName, saveLabel, onNew, onLoad, onDownload, onSave, onPreferences }) {
+function TopBar({ projectName, onNew, onLoad, onDownload, onSave, onPreferences }) {
   const action = ({ label, title, icon, primary = false, tooltipAlign, onClick }) => (
     <button
       type="button"
@@ -240,11 +242,10 @@ function TopBar({ projectName, saveLabel, onNew, onLoad, onDownload, onSave, onP
       <div className="brand" role="img" aria-label="Lightweaver"><span className="glyph" /><span className="name">Lightweaver</span></div>
       <nav className="crumb">
         <span>Projects</span><span className="sep">/</span><span className="proj">{projectName}</span>
-        {saveLabel && <span className="savechip"><span className="dot" />{saveLabel}</span>}
       </nav>
       <div className="top-right">
         {action({ label: 'New project', title: 'Start a new empty project', icon: I.newProject, onClick: onNew })}
-        {action({ label: 'Import project', title: 'Open a project file from your computer', icon: I.importProject, onClick: onLoad })}
+        {action({ label: 'Load project', title: 'Open an online project or import from your computer', icon: I.importProject, onClick: onLoad })}
         {action({ label: 'Preferences', title: 'Open Studio preferences', icon: I.preferences, onClick: onPreferences })}
         <span className="top-div" />
         {action({ label: 'Export project', title: 'Download a portable project file to your computer (import it anytime)', icon: I.exportProject, onClick: onDownload })}
@@ -369,8 +370,17 @@ function Shell() {
     strips, layoutDensity,
   } = useProject();
   const cloudLibrary = useCloudLibrary();
-  const [saveLabel, setSaveLabel] = useState('');
+  const [loadDialogOpen, setLoadDialogOpen] = useState(false);
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [workspaceEvent, setWorkspaceEvent] = useState(null);
+  const [dismissedPersistentKey, setDismissedPersistentKey] = useState('');
+  const workspaceEventIdRef = useRef(0);
+  const recoveryAnnouncedRef = useRef(false);
   const fileInputRef = useRef(null);
+  const showWorkspaceEvent = useCallback((message, options = {}) => {
+    workspaceEventIdRef.current += 1;
+    setWorkspaceEvent({ id: workspaceEventIdRef.current, message, kind: options.kind || 'success', persistent: options.persistent === true, review: options.review === true, source: options.source || '' });
+  }, []);
   useEffect(() => {
     const channel = createBridgeResultChannel({
       onResult: result => {
@@ -487,10 +497,21 @@ function Shell() {
   }, [installActive]);
 
   useEffect(() => {
-    if (!saveLabel) return undefined;
-    const t = setTimeout(() => setSaveLabel(''), 2200);
+    if (!workspaceEvent || workspaceEvent.persistent) return undefined;
+    const id = workspaceEvent.id;
+    const t = setTimeout(() => setWorkspaceEvent(current => current?.id === id ? null : current), 2200);
     return () => clearTimeout(t);
-  }, [saveLabel]);
+  }, [workspaceEvent]);
+  useEffect(() => {
+    if (recoveryAnnouncedRef.current || projectLifecycleLabel !== 'Restored from recovery copy') return;
+    recoveryAnnouncedRef.current = true;
+    showWorkspaceEvent('Restored from recovery copy', { kind: 'recovery' });
+  }, [projectLifecycleLabel, showWorkspaceEvent]);
+  useEffect(() => {
+    if (workspaceEvent?.source === 'cloud-save-waiting' && cloudLibrary.syncState.status === 'saved') {
+      setWorkspaceEvent(null);
+    }
+  }, [cloudLibrary.syncState.status, workspaceEvent?.source]);
 
   // real card status — every screen and the footer read the cardLink state
   // machine, which merges direct HTTP polling (http/file pages) with the
@@ -567,18 +588,26 @@ function Shell() {
   const onSave = useCallback(async () => {
     if (cloudLibrary.session.status === 'authenticated' && cloudLibrary.activeRemoteProject) {
       const result = await cloudLibrary.saveNow();
-      if (!result.ok && !['queued', 'conflict', 'offline'].includes(result.reason)) setSaveLabel('Online save failed');
+      if (result.ok) showWorkspaceEvent('Saved online');
+      else if (result.reason === 'queued' || Number(result.error?.status) >= 500) {
+        showWorkspaceEvent('Save queued — waiting to retry online.', { kind: 'offline', persistent: true, review: true, source: 'cloud-save-waiting' });
+      } else if (result.reason === 'stale-session' || [401, 403].includes(Number(result.error?.status))) {
+        showWorkspaceEvent('Your session changed. Sign in again from Preferences.', { kind: 'error', persistent: true, review: true, source: 'cloud-save-session' });
+      }
+      return;
+    }
+    if (cloudLibrary.session.status === 'authenticated' && cloudLibrary.session.role !== 'customer') {
+      setSaveDialogOpen(true);
       return;
     }
     try {
       const record = saveCurrentProjectToLibrary(serializeProject());
       markProjectPersisted('browser');
-      setSaveLabel(formatBrowserProjectSaveLabel(record));
-      openCardSection('preferences');
+      showWorkspaceEvent(formatBrowserProjectSaveLabel(record));
     } catch {
-      setSaveLabel('save failed');
+      showWorkspaceEvent('Browser save failed', { kind: 'error', persistent: true, review: true });
     }
-  }, [cloudLibrary, markProjectPersisted, openCardSection, serializeProject]);
+  }, [cloudLibrary, markProjectPersisted, serializeProject, showWorkspaceEvent]);
   const onLaunchBridge = useCallback(async operation => {
     await launchBridgeOperation(operation, {
       persistProject: async () => {
@@ -608,9 +637,10 @@ function Shell() {
       serializeProject(),
     );
     if (ok) markProjectPersisted('file');
-    else setSaveLabel('Download failed');
-  }, [markProjectPersisted, projectName, serializeProject]);
-  const onLoad = useCallback(() => fileInputRef.current?.click(), []);
+    else showWorkspaceEvent('Download failed', { kind: 'error', persistent: true, review: true });
+  }, [markProjectPersisted, projectName, serializeProject, showWorkspaceEvent]);
+  const onLoad = useCallback(() => setLoadDialogOpen(true), []);
+  const onImport = useCallback(() => fileInputRef.current?.click(), []);
   const onNew = useCallback(async () => {
     const result = await replaceWithNewProject();
     if (result.ok) {
@@ -629,6 +659,7 @@ function Shell() {
         if (result.ok) {
           writeActiveProjectLibraryRecordId('');
           cloudLibrary.detachProject();
+          setLoadDialogOpen(false);
         }
         if (result.reason === 'invalid') alert('Invalid project file (version mismatch).');
       } catch { alert('Could not parse project file.'); }
@@ -638,12 +669,42 @@ function Shell() {
   }, [cloudLibrary, replaceProject]);
 
   const Screen = SCREEN_BY_ID[view];
+  let persistentNotice = null;
+  if (cloudLibrary.activeRemoteProject && cloudLibrary.syncState.conflict) {
+    persistentNotice = {
+      key: `conflict:${cloudLibrary.activeRemoteProject.id}:${cloudLibrary.syncState.conflict.error?.requestId || 'active'}`,
+      kind: 'conflict',
+      message: 'Online conflict — choose which revision to keep.',
+      persistent: true,
+      review: true,
+    };
+  } else if (cloudLibrary.activeRemoteProject && cloudLibrary.syncState.status === 'error') {
+    persistentNotice = {
+      key: `error:${cloudLibrary.activeRemoteProject.id}:${cloudLibrary.syncState.error?.code || cloudLibrary.syncState.error?.message || 'active'}`,
+      kind: 'error',
+      message: 'Online save needs attention.',
+      persistent: true,
+      review: true,
+    };
+  } else if (cloudLibrary.activeRemoteProject && !cloudLibrary.syncState.online) {
+    persistentNotice = {
+      key: `offline:${cloudLibrary.activeRemoteProject.id}`,
+      kind: 'offline',
+      message: 'Offline — browser recovery continues until the online project can sync.',
+      persistent: true,
+      review: false,
+    };
+  }
+  useEffect(() => {
+    if (!persistentNotice) setDismissedPersistentKey('');
+  }, [persistentNotice?.key]);
+  const visiblePersistentNotice = persistentNotice?.key === dismissedPersistentKey ? null : persistentNotice;
+  const visibleWorkspaceNotice = visiblePersistentNotice || workspaceEvent;
 
   return (
     <div className="app">
       <TopBar
         projectName={projectName || 'Untitled'}
-        saveLabel={saveLabel || (cloudLibrary.activeRemoteProject ? cloudLibrary.syncState.label : projectLifecycleLabel)}
         onNew={onNew} onLoad={onLoad} onDownload={onDownload} onSave={onSave}
         onPreferences={() => openCardSection('preferences')}
       />
@@ -657,6 +718,15 @@ function Shell() {
           </> : null}
         </Suspense>
       </ScreenErrorBoundary>
+
+      <WorkspaceNotice
+        notice={visibleWorkspaceNotice}
+        onDismiss={() => {
+          if (visiblePersistentNotice) setDismissedPersistentKey(visiblePersistentNotice.key);
+          else setWorkspaceEvent(null);
+        }}
+        onReview={() => openCardSection('preferences')}
+      />
 
       <StatusBar
         link={cardLink}
@@ -685,6 +755,28 @@ function Shell() {
           setupNetwork: cardStatus.status?.setupNetwork,
         }}
       />
+      {loadDialogOpen && (
+        <ProjectLoadDialog
+          onClose={() => setLoadDialogOpen(false)}
+          onImport={onImport}
+          onOpenFailure={result => showWorkspaceEvent(
+            result?.error?.message || (result?.reason === 'stale-session'
+              ? 'Your session changed. Sign in again from Preferences.'
+              : 'The online project could not be opened.'),
+            { kind: 'error', persistent: true, review: true },
+          )}
+          onOpenPreferences={() => openCardSection('preferences')}
+        />
+      )}
+      {saveDialogOpen && (
+        <ProjectSaveDialog
+          projectName={projectName}
+          onClose={result => {
+            setSaveDialogOpen(false);
+            if (result?.saved) showWorkspaceEvent('Saved online');
+          }}
+        />
+      )}
       <input ref={fileInputRef} type="file" accept={PROJECT_IMPORT_ACCEPT} style={{ display: 'none' }} onChange={onFile} />
     </div>
   );

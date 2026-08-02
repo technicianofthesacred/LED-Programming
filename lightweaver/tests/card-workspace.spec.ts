@@ -577,7 +577,7 @@ test('an exact nonzero commissioning flow resumed after reload marks the restore
   });
 
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.locator('.savechip')).toContainText('Restored from recovery copy');
+  await expect(page.getByTestId('workspace-notice')).toContainText('Restored from recovery copy');
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await connectCommissioningCard(page);
   await page.evaluate(async () => {
@@ -614,7 +614,8 @@ test('an exact nonzero commissioning flow resumed after reload marks the restore
   await page.getByRole('button', { name: 'Yes, every output is correct', exact: true }).click();
 
   await expect.poll(() => page.evaluate(() => (window as any).__resumedFinalReads)).toBe(1);
-  await expect(page.locator('.savechip')).toContainText('Installed on card');
+  await expect.poll(() => page.evaluate(() => Boolean(JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').installation))).toBe(true);
+  await expect(page.getByTestId('workspace-notice')).toHaveCount(0);
 });
 
 test('light-check hardware mutations stay locked after loss until two stable exact status envelopes', async ({ page }) => {
