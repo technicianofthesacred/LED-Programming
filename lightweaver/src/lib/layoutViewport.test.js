@@ -21,6 +21,34 @@ test('zoom can travel above the former 4000% product cap', () => {
   assert.equal(zoomBy(40, 2), 80);
 });
 
+test('trackpad wheel zoom responds gently to small pixel deltas', () => {
+  const wheelZoomFactor = helper('wheelZoomFactor');
+  const factor = wheelZoomFactor(-4);
+
+  assert.ok(factor > 1, `expected zoom in, received ${factor}`);
+  assert.ok(factor < 1.01, `expected a sub-1% step, received ${factor}`);
+});
+
+test('accelerated wheel zoom is capped to a gentle per-event step', () => {
+  const wheelZoomFactor = helper('wheelZoomFactor');
+  const accelerated = wheelZoomFactor(-600);
+
+  assert.equal(accelerated, wheelZoomFactor(-60));
+  assert.ok(accelerated < 1.06, `expected a step below 6%, received ${accelerated}`);
+});
+
+test('line and page wheel deltas share the same acceleration cap', () => {
+  const wheelZoomFactor = helper('wheelZoomFactor');
+
+  assert.equal(wheelZoomFactor(-4, 1), wheelZoomFactor(-60, 0));
+  assert.equal(wheelZoomFactor(-1, 2), wheelZoomFactor(-60, 0));
+});
+
+test('wheel zoom keeps matching in and out deltas reciprocal', () => {
+  const wheelZoomFactor = helper('wheelZoomFactor');
+  assert.ok(Math.abs(wheelZoomFactor(-30) * wheelZoomFactor(30) - 1) < 1e-12);
+});
+
 test('fit all frames a five-metre strip extending beyond the artwork viewBox', () => {
   const fitViewToBounds = helper('fitViewToBounds');
   const layoutViewBox = helper('layoutViewBox');

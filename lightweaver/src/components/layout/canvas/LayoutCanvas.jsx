@@ -73,6 +73,7 @@ export function LayoutCanvas({
     handleDragOver, handleDragLeave, handleDrop,
     startStripMove, chopStripAtEvent, toggleStripSel, selectStrip,
     togglePathSelection, setHoveredLayerId, setHoveredSubPathId,
+    onFitBoard,
   } = interactionHandlers;
   const handleCanvasPointerDown = event => {
     if (!firstLedPicker) {
@@ -782,6 +783,18 @@ export function LayoutCanvas({
             <div><span className="k">cursor</span><span className="v">{cursorSvgPt.x.toFixed(0)} · {cursorSvgPt.y.toFixed(0)}</span></div>
           )}
           <div><span className="k">zoom</span><span className="v">{Math.round(zoom * 100)}%</span></div>
+          <div className="la-canvas-view-actions">
+            <button
+              type="button"
+              className="la-fit-board"
+              aria-label="Fit board"
+              title="Fit board (F, Cmd/Ctrl+0)"
+              onClick={onFitBoard}>
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M7 3H3v4M13 3h4v4M17 13v4h-4M7 17H3v-4"/>
+              </svg>
+            </button>
+          </div>
         </div>
       </main>
   );

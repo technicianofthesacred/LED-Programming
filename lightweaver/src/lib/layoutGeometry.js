@@ -406,6 +406,16 @@ export function zoomBy(currentZoom, factor) {
   return Math.max(MIN_SAFE_ZOOM, Math.min(MAX_SAFE_ZOOM, current * multiplier));
 }
 
+// Trackpads emit many small pixel deltas, while mouse wheels may report much
+// larger line/page deltas. Preserve that intent without letting OS acceleration
+// turn a single event into a disorienting camera jump.
+export function wheelZoomFactor(deltaY, deltaMode = 0) {
+  const delta = Number.isFinite(deltaY) ? deltaY : 0;
+  const unitScale = deltaMode === 1 ? 16 : deltaMode === 2 ? 100 : 1;
+  const boundedDelta = Math.max(-60, Math.min(60, delta * unitScale));
+  return Math.exp(-boundedDelta * 0.0008);
+}
+
 export function layoutViewBox(viewBox, { zoom = 1, panX = 0, panY = 0 } = {}) {
   const base = parsedVb(viewBox);
   const safeZoom = zoomBy(zoom, 1);

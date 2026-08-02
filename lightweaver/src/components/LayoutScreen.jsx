@@ -247,6 +247,7 @@ export function LayoutScreen({ connected, cardHost, onConnectCard, onOpenConnect
       handleDragOver, handleDragLeave, handleDrop,
       startStripMove, chopStripAtEvent, toggleStripSel, selectStrip,
       togglePathSelection, setHoveredLayerId, setHoveredSubPathId,
+      onFitBoard: resetView,
     },
   };
 

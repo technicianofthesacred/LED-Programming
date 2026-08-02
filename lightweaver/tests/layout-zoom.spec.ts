@@ -72,6 +72,41 @@ test('toolbar shows an accessible non-live zoom percentage', async ({ page }) =>
   await expect.poll(async () => Number((await percentage.textContent())?.replace('%', ''))).toBeLessThan(before);
 });
 
+test('a subtle canvas control fits the complete board', async ({ page }) => {
+  await page.addInitScript(() => localStorage.clear());
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+
+  const svg = page.locator('.lw-viewport svg');
+  const fitBoard = page.locator('.body').getByRole('button', { name: 'Fit board' });
+  await expect(fitBoard).toBeVisible();
+  await expect(fitBoard).toHaveAttribute('title', 'Fit board (F, Cmd/Ctrl+0)');
+  await expect(fitBoard).toHaveCSS('opacity', '1');
+
+  await page.getByRole('button', { name: 'Fit all' }).click();
+  const fittedViewBox = await svg.getAttribute('viewBox');
+  await page.getByTitle('Zoom in (+)').click();
+  await expect.poll(() => svg.getAttribute('viewBox')).not.toBe(fittedViewBox);
+
+  await fitBoard.click();
+  await expect.poll(() => svg.getAttribute('viewBox')).toBe(fittedViewBox);
+});
+
+test('the canvas Fit board control remains keyboard-operable', async ({ page }) => {
+  await page.addInitScript(() => localStorage.clear());
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+
+  const svg = page.locator('.lw-viewport svg');
+  const fitBoard = page.locator('.body').getByRole('button', { name: 'Fit board' });
+  await page.getByRole('button', { name: 'Fit all' }).click();
+  const fittedViewBox = await svg.getAttribute('viewBox');
+  await page.getByTitle('Zoom in (+)').click();
+  await expect.poll(() => svg.getAttribute('viewBox')).not.toBe(fittedViewBox);
+
+  await fitBoard.focus();
+  await page.keyboard.press('Space');
+  await expect.poll(() => svg.getAttribute('viewBox')).toBe(fittedViewBox);
+});
+
 test('Fit all frames artwork geometry outside the imported viewBox', async ({ page }) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-fit-all-'));
   const fixture = path.join(tmp, 'five-metre-strip.svg');
