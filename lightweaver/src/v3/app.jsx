@@ -348,7 +348,6 @@ function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, totalLe
           <div
             className={`sb-freshness is-${freshness.status}`}
             data-testid="studio-freshness"
-            role="status"
             title={presentation.title}
           >
             <span className={`sb-dot ${presentation.dot}`} aria-hidden="true" />
