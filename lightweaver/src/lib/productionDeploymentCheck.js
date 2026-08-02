@@ -1,3 +1,5 @@
+import { parseStudioRelease } from './studioRelease.js';
+
 export const DEFAULT_PRODUCTION_ORIGIN = 'https://led.mandalacodes.com';
 export const FACTORY_FIRMWARE_PATH = '/firmware/lightweaver-controller-esp32s3-factory.bin';
 export const FIRMWARE_MANIFEST_PATH = '/firmware/release-manifest.json';
@@ -5,9 +7,10 @@ export const FIRMWARE_SIGNATURE_PATH = '/firmware/release-manifest.sig';
 export const FIRMWARE_PROVENANCE_PATH = '/firmware/release-provenance.json';
 export const PRODUCTION_JOB_INDEX_PATH = '/production/jobs/index.json';
 export const STUDIO_BUILD_GRAPH_PATH = '/studio-build-graph.json';
+export const STUDIO_RELEASE_PATH = '/studio-release.json';
 
 const LOWERCASE_SHA256 = /^[0-9a-f]{64}$/;
-const STUDIO_FILE_PATH = /^(?:index\.html|assets\/[A-Za-z0-9._/-]+\.(?:js|css))$/;
+const STUDIO_FILE_PATH = /^(?:index\.html|studio-release\.json|assets\/[A-Za-z0-9._/-]+\.(?:js|css))$/;
 
 function isNormalizedStudioPath(path) {
   if (typeof path !== 'string' || path.length === 0 || path.startsWith('/') || path.includes('\\')) return false;
@@ -31,7 +34,7 @@ function describeGraphEntry(entry, index) {
     throw new Error('Studio build graph must not list itself');
   }
   if (!STUDIO_FILE_PATH.test(entry.path)) {
-    throw new Error(`Studio build graph file ${entry.path} is not index.html or a Vite JavaScript/CSS asset`);
+    throw new Error(`Studio build graph file ${entry.path} is not index.html, studio-release.json, or a Vite JavaScript/CSS asset`);
   }
   if (!Number.isSafeInteger(entry.bytes) || entry.bytes < 0) {
     throw new Error(`Studio build graph file ${entry.path} has an invalid byte size`);
@@ -152,6 +155,31 @@ export async function verifyStudioBuildGraph(fetchImpl, cryptoImpl, graphUrl, ex
   return { graph, graphUrl: parsedGraphUrl.href };
 }
 
+function hasNoStore(response) {
+  return /(?:^|,)\s*no-store(?:\s*(?:,|$))/i.test(response.headers.get('cache-control') || '');
+}
+
+export async function verifyStudioRelease(fetchImpl, releaseUrl, expectedInput) {
+  const parsedReleaseUrl = new URL(releaseUrl);
+  const expected = parseStudioRelease(expectedInput);
+  const response = await fetchImpl(parsedReleaseUrl.href, { cache: 'no-store', redirect: 'manual' });
+  if (response.status !== 200) {
+    throw new Error(`Production Studio release marker answered HTTP ${response.status} at\n  ${parsedReleaseUrl.href}`);
+  }
+  if (!hasNoStore(response)) {
+    throw new Error(`Production Studio release marker must use Cache-Control: no-store at\n  ${parsedReleaseUrl.href}`);
+  }
+  const actual = parseStudioRelease(await response.text());
+  if (actual.sourceRevision !== expected.sourceRevision || actual.buildId !== expected.buildId) {
+    throw new Error(
+      `Production Studio release marker does not match this checkout at\n  ${parsedReleaseUrl.href}\n` +
+      `  expected ${expected.sourceRevision} (${expected.buildId})\n` +
+      `  actual   ${actual.sourceRevision} (${actual.buildId})`,
+    );
+  }
+  return actual;
+}
+
 export function resolveProductionUrls(env = {}) {
   const parsed = new URL(env.PROD_ORIGIN || DEFAULT_PRODUCTION_ORIGIN);
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
@@ -168,6 +196,7 @@ export function resolveProductionUrls(env = {}) {
     provenanceUrl: `${origin}${FIRMWARE_PROVENANCE_PATH}`,
     productionJobIndexUrl: `${origin}${PRODUCTION_JOB_INDEX_PATH}`,
     studioBuildGraphUrl: `${origin}${STUDIO_BUILD_GRAPH_PATH}`,
+    studioReleaseUrl: `${origin}${STUDIO_RELEASE_PATH}`,
   };
 }
 

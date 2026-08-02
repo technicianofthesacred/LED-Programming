@@ -18,6 +18,7 @@ test('generator writes deterministic hashes for index and every Vite JS/CSS asse
   await writeFile(join(root, 'assets', 'studio.css'), 'body{color:#fff}');
   await writeFile(join(root, 'assets', 'ignored.png'), 'not part of Studio code graph');
   await writeFile(join(root, 'assets', 'studio.js.map'), 'not deployed integrity surface');
+  await writeFile(join(root, 'studio-release.json'), '{"schemaVersion":1,"sourceRevision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","buildId":"aaaaaaaaaaaa"}\n');
 
   const first = await generateStudioBuildGraph(root);
   const firstBytes = await readFile(join(root, 'studio-build-graph.json'));
@@ -30,6 +31,7 @@ test('generator writes deterministic hashes for index and every Vite JS/CSS asse
     'assets/studio.css',
     'assets/studio.js',
     'index.html',
+    'studio-release.json',
   ]);
   assert.deepEqual(first.files[0], {
     path: 'assets/lazy/production.js',
@@ -46,5 +48,15 @@ test('generator refuses an incomplete staged Studio', async t => {
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, 'assets'), { recursive: true });
   await writeFile(join(root, 'index.html'), '<div id="root"></div>');
+  await writeFile(join(root, 'studio-release.json'), '{"schemaVersion":1,"sourceRevision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","buildId":"aaaaaaaaaaaa"}\n');
   await assert.rejects(generateStudioBuildGraph(root), /at least one JavaScript asset/);
+});
+
+test('generator refuses a staged Studio without its release marker', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'lightweaver-build-graph-no-release-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, 'assets'), { recursive: true });
+  await writeFile(join(root, 'index.html'), '<div id="root"></div>');
+  await writeFile(join(root, 'assets', 'studio.js'), 'export const studio = true;');
+  await assert.rejects(generateStudioBuildGraph(root), /studio-release\.json/);
 });

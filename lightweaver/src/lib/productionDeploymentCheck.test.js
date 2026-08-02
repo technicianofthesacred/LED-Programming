@@ -9,6 +9,7 @@ import {
   assertStudioRoot,
   parseStudioBuildGraph,
   resolveProductionUrls,
+  verifyStudioRelease,
   verifyStudioBuildGraph,
 } from './productionDeploymentCheck.js';
 
@@ -65,6 +66,7 @@ test('one PROD_ORIGIN derives every production check URL', () => {
     provenanceUrl: 'https://preview.example.test/firmware/release-provenance.json',
     productionJobIndexUrl: 'https://preview.example.test/production/jobs/index.json',
     studioBuildGraphUrl: 'https://preview.example.test/studio-build-graph.json',
+    studioReleaseUrl: 'https://preview.example.test/studio-release.json',
   });
 });
 
@@ -74,8 +76,51 @@ test('Studio build graph accepts a sorted exact root and asset set', () => {
     fileEntry('assets/studio-123.css', 'style'),
     fileEntry('assets/studio-123.js', 'studio'),
     fileEntry('index.html', '<div id="root">'),
+    fileEntry('studio-release.json', '{"schemaVersion":1}'),
   ];
   assert.deepEqual(parseStudioBuildGraph(graph(files)), { schemaVersion: 1, files });
+});
+
+test('live Studio release requires exact identity and no-store delivery', async () => {
+  const expected = {
+    schemaVersion: 1,
+    sourceRevision: 'a'.repeat(40),
+    buildId: 'a'.repeat(12),
+  };
+  const requests = [];
+  const fetchImpl = async (input, init) => {
+    requests.push({ input: String(input), init });
+    return new Response(`${JSON.stringify(expected)}\n`, {
+      status: 200,
+      headers: { 'cache-control': 'private, no-store', 'content-type': 'application/json' },
+    });
+  };
+  assert.deepEqual(
+    await verifyStudioRelease(fetchImpl, 'https://example.test/studio-release.json', expected),
+    expected,
+  );
+  assert.deepEqual(requests, [{
+    input: 'https://example.test/studio-release.json',
+    init: { cache: 'no-store', redirect: 'manual' },
+  }]);
+});
+
+test('live Studio release refuses redirects, cacheable markers, malformed markers, and drift', async () => {
+  const expected = {
+    schemaVersion: 1,
+    sourceRevision: 'a'.repeat(40),
+    buildId: 'a'.repeat(12),
+  };
+  const verify = responseValue => verifyStudioRelease(
+    async () => responseValue,
+    'https://example.test/studio-release.json',
+    expected,
+  );
+  await assert.rejects(verify(new Response('', { status: 302, headers: { location: 'https://evil.test/release.json' } })), /HTTP 302/);
+  await assert.rejects(verify(new Response(JSON.stringify(expected), { status: 200 })), /no-store/);
+  await assert.rejects(verify(new Response('{broken', { status: 200, headers: { 'cache-control': 'no-store' } })), /valid JSON/);
+  const stale = { ...expected, sourceRevision: 'b'.repeat(40), buildId: 'b'.repeat(12) };
+  await assert.rejects(verify(new Response(JSON.stringify(stale), { status: 200, headers: { 'cache-control': 'no-store' } })), /does not match/);
 });
 
 test('Studio build graph rejects malformed structure and unsafe paths', () => {
@@ -235,6 +280,7 @@ test('mutable firmware metadata cannot be cached while immutable releases can be
   const headers = await readFile(resolve(import.meta.dirname, '../../public/_headers'), 'utf8');
   for (const path of [
     '/studio-build-graph.json',
+    '/studio-release.json',
     '/firmware/release-manifest.json',
     '/firmware/release-manifest.sig',
     '/firmware/release-provenance.json',

@@ -16,6 +16,7 @@ import { join, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { verifyProductionReleaseSet } from '../src/lib/productionReleaseGate.js';
 import { parseStudioBuildGraph } from '../src/lib/productionDeploymentCheck.js';
+import { parseStudioRelease } from '../src/lib/studioRelease.js';
 import { productionWranglerToml } from '../scripts/deploy-pages-production.mjs';
 import {
   ProductionLibraryConfigurationError,
@@ -99,7 +100,9 @@ assert.doesNotMatch(JSON.stringify(pkg.scripts), /npx --yes wrangler/);
 assert.match(pkg.scripts['test:core'], /pages-headers\.mjs && node tests\/pages-staging\.mjs/);
 assert.equal(pkg.scripts['test:prod-deploy'], 'node --test src/lib/productionDeploymentCheck.test.js src/lib/productionReleaseGate.test.js');
 assert.equal(pkg.scripts['test:build-graph'], 'node --test scripts/generate-studio-build-graph.test.mjs');
+assert.equal(pkg.scripts['test:studio-release'], 'node --test src/lib/studioRelease.test.js scripts/studio-release-identity.test.mjs scripts/studio-release-vite.test.mjs');
 assert.match(pkg.scripts['launch:source'], /npm run test:build-graph/);
+assert.match(pkg.scripts['launch:source'], /npm run test:studio-release/);
 assert.match(pkg.scripts['test:projects'], /accountAuth\.test\.js/);
 assert.match(pkg.scripts['test:projects'], /library-api\.test\.js/);
 assert.equal(
@@ -120,7 +123,7 @@ assert.equal(
 );
 assert.equal(pkg.scripts['test:screen-recovery'], 'playwright test tests/screen-recovery.spec.ts');
 assert.equal(pkg.scripts['test:production'], 'playwright test tests/production-setup.spec.ts tests/production-physical-unmount.spec.ts --project=chromium --workers=1');
-assert.match(pkg.scripts['launch:source'], /npm run test:prod-deploy && npm run test:build-graph && npm run test:show && npm run test:screen-recovery && npm run test:production/);
+assert.match(pkg.scripts['launch:source'], /npm run test:prod-deploy && npm run test:build-graph && npm run test:studio-release && npm run test:show && npm run test:screen-recovery && npm run test:production/);
 assert.match(pkg.scripts['launch:source'], /^npm run test:core:source/);
 assert.equal(pkg.scripts['launch:check'], 'npm run launch:source && npm run firmware:check-bin');
 assert.match(testWorkflow, /packages\/installer-core\/\*\*/);
@@ -316,7 +319,9 @@ assert.match(index, /https:\/\/led\.mandalacodes\.com\/#screen=patterns/);
 assert.doesNotMatch(index, /led\.mandalacodes\.com\/design/);
 assert.match(freshness, /resolveProductionUrls\(process\.env\)/);
 assert.match(freshness, /verifyStudioBuildGraph/);
+assert.match(freshness, /verifyStudioRelease/);
 assert.match(freshness, /\.pages\/lightweaver\/studio-build-graph\.json/);
+assert.match(freshness, /\.pages\/lightweaver\/studio-release\.json/);
 assert.match(freshness, /npm run build && npm run stage:pages/);
 assert.match(freshness, /verifyStudioBuildGraph\(productionFetch, webcrypto, studioBuildGraphUrl, expectedStudioGraph, studioRootBytes\)/);
 assert.match(freshness, /studioResponse = await fetch\(studioUrl, \{[\s\S]*?redirect: 'manual'/);
@@ -408,6 +413,7 @@ if (process.argv.includes('--artifact')) {
   const stagedFirmwarePath = resolve(stagedRoot, 'firmware/lightweaver-controller-esp32s3-factory.bin');
   const stagedJobIndexPath = resolve(stagedRoot, 'production/jobs/index.json');
   const stagedGraphPath = resolve(stagedRoot, 'studio-build-graph.json');
+  const stagedReleasePath = resolve(stagedRoot, 'studio-release.json');
   const compiledFunctionPath = resolve(root, '.pages/functions-build/index.js');
   const compiledFunctionRoutesPath = resolve(root, '.pages/functions-build/_routes.json');
 
@@ -419,6 +425,7 @@ if (process.argv.includes('--artifact')) {
   assert.ok(existsSync(stagedFirmwarePath), 'staged root factory firmware must exist');
   assert.ok(existsSync(stagedJobIndexPath), 'staged production job index must exist');
   assert.ok(existsSync(stagedGraphPath), 'staged Studio build graph must exist');
+  assert.ok(existsSync(stagedReleasePath), 'staged Studio release marker must exist');
   assert.ok(existsSync(compiledFunctionPath), 'staging must compile the Pages Function');
   assert.ok(existsSync(compiledFunctionRoutesPath), 'Functions compilation must emit its route manifest');
   assert.ok(!existsSync(resolve(stagedRoot, 'design')), 'staged artifact must not contain a design directory');
@@ -434,14 +441,16 @@ if (process.argv.includes('--artifact')) {
   assert.deepEqual(stagedRoutes, routes, 'staging must invoke Functions only for the private library API');
 
   const stagedGraph = parseStudioBuildGraph(readFileSync(stagedGraphPath, 'utf8'));
+  const stagedRelease = parseStudioRelease(readFileSync(stagedReleasePath, 'utf8'));
+  assert.equal(stagedRelease.buildId, stagedRelease.sourceRevision.slice(0, 12));
   const stagedCodePaths = readdirSync(resolve(stagedRoot, 'assets'), { recursive: true })
     .map(path => `assets/${String(path).split(sep).join('/')}`)
     .filter(path => /\.(?:js|css)$/.test(path))
     .sort();
   assert.deepEqual(
     stagedGraph.files.map(file => file.path),
-    [...stagedCodePaths, 'index.html'].sort(),
-    'staged graph must cover index.html and every staged Vite JS/CSS asset exactly',
+    [...stagedCodePaths, 'index.html', 'studio-release.json'].sort(),
+    'staged graph must cover index.html, the release marker, and every staged Vite JS/CSS asset exactly',
   );
   for (const expected of stagedGraph.files) {
     const bytes = readFileSync(resolve(stagedRoot, expected.path));
