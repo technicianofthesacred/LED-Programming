@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
@@ -33,4 +34,24 @@ test('hardware operation wrapper always clears its aggregate signal after failur
     /write failed/,
   );
   assert.deepEqual(states, [true, false]);
+});
+
+test('Studio card and production mutations publish the shared hardware-operation signal', async () => {
+  const [cardPushSource, productionSource] = await Promise.all([
+    readFile(new URL('../components/layout/shared/CardPushControl.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../v3/lw-production.jsx', import.meta.url), 'utf8'),
+  ]);
+
+  for (const operation of ['install-project', 'activate-wiring', 'finish-wiring']) {
+    assert.match(cardPushSource, new RegExp(`withStudioHardwareOperation\\('${operation}'`));
+  }
+  for (const operation of [
+    'production-usb-release',
+    'production-usb-reset',
+    'production-firmware-install',
+    'production-artwork-restore',
+    'production-physical-recovery',
+  ]) {
+    assert.match(productionSource, new RegExp(`beginStudioHardwareOperation\\('${operation}'`));
+  }
 });

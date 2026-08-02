@@ -38,7 +38,10 @@ export function createStudioFreshnessMonitor({
   documentRef = document,
   windowRef = window,
   createTimeoutSignal = milliseconds => AbortSignal.timeout(milliseconds),
-  timers = { setTimeout, clearTimeout },
+  timers = {
+    setTimeout: (callback, delay) => globalThis.setTimeout(callback, delay),
+    clearTimeout: id => globalThis.clearTimeout(id),
+  },
 } = {}) {
   const release = parseStudioRelease(releaseInput);
   const releaseUrl = new URL(STUDIO_RELEASE_PATH, locationOrigin).href;

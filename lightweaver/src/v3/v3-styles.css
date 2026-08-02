@@ -542,6 +542,15 @@ input[type=number]::-webkit-outer-spin-button {
 .sb-fact:not(:last-child) { border-right: 1px solid var(--border-hair); }
 .sb-fact .fv { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-mid); }
 .sb-spring { flex: 1; }
+.sb-freshness {
+  min-width: 0; flex: 0 0 auto;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding-left: 12px; white-space: nowrap;
+  color: var(--text-mid); font-family: var(--font-mono); font-size: 10.5px;
+}
+.sb-freshness code { color: var(--text-lo); font: inherit; }
+.sb-freshness .sb-dot.warn { background: var(--warn); box-shadow: none; }
+.sb-freshness.is-unknown { color: var(--text-lo); }
 .sb-right { display: flex; align-items: center; gap: 0; font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
 .sb-right .sb-fact .fv { color: var(--text-lo); }
 .sb-right .kbd { color: var(--text-faint); }

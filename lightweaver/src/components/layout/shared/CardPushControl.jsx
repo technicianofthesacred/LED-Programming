@@ -23,6 +23,7 @@ import {
 import { openLocalCardPage } from '../../../lib/cardBridge.js';
 import { readPersistedCardIdentity } from '../../../lib/cardIdentity.js';
 import { prepareCardStoragePayload } from '../../../lib/cardStoragePayload.js';
+import { withStudioHardwareOperation } from '../../../lib/studioHardwareOperation.js';
 
 const LOCAL_BRIDGE_RECOVERY_REASONS = new Set([
   'mixed-content',
@@ -61,7 +62,7 @@ export function CardPushControl({
   // Serialize the current patch board into the firmware's runtime contract.
   // Direct push is only for local HTTP/file Studio sessions; hosted HTTPS
   // flows use the copy-paste fallback shown by the error state.
-  const pushToCard = async (retryAttempt = null) => {
+  const pushToCard = async (retryAttempt = null) => withStudioHardwareOperation('install-project', async () => {
     const cleanHost = retryAttempt?.host || pushHost.trim().toLowerCase() || 'lightweaver.local';
     setCardHostname(cleanHost);
     setPushHost(getCardHostname());
@@ -154,9 +155,9 @@ export function CardPushControl({
         setPushStatus(`Push failed: ${err.message || err}`);
       }
     }
-  };
+  });
 
-  const startWiringTest = async () => {
+  const startWiringTest = async () => withStudioHardwareOperation('activate-wiring', async () => {
     if (!wiringCandidate) return;
     setWiringTestState('starting');
     setPushStatus('Restarting the card with the test wiring…');
@@ -171,9 +172,9 @@ export function CardPushControl({
       setWiringTestState('failed');
       setPushStatus(error.message || 'The test wiring did not start. The working setup remains safe.');
     }
-  };
+  });
 
-  const finishWiringTest = async visible => {
+  const finishWiringTest = async visible => withStudioHardwareOperation('finish-wiring', async () => {
     if (!wiringCandidate) return;
     setWiringTestState(visible ? 'confirming' : 'rolling-back');
     try {
@@ -206,7 +207,7 @@ export function CardPushControl({
       setWiringTestState('failed');
       setPushStatus(error.message || 'The card could not finish the wiring test. It will roll back automatically when the timer ends.');
     }
-  };
+  });
 
   const pushing = action.status === 'pending' && wiringTestState === 'idle';
   const wiringTransactionActive = Boolean(wiringCandidate);
