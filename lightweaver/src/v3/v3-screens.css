@@ -906,7 +906,7 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .topbar-project-dialog { width: min(480px, 100%); }
 .topbar-dialog-close { min-width: 44px; min-height: 44px; font-size: 20px; line-height: 1; }
 .topbar-project-search { display: block; margin-top: 14px; }
-.topbar-project-search .pm-input { width: 100%; }
+.topbar-project-search .pm-input { width: 100%; min-height: 44px; }
 .topbar-project-list { display: grid; gap: 6px; max-height: min(360px, 48vh); margin-top: 10px; overflow-y: auto; }
 .topbar-project-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; padding: 6px 8px 6px 12px; border: 1px solid var(--border); border-radius: var(--r-md); }
 .topbar-project-row > span { min-width: 0; overflow: hidden; color: var(--text-hi); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }

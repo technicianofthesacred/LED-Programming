@@ -1225,6 +1225,29 @@ for (const width of [320, 390]) {
   });
 }
 
+for (const width of [320, 390]) {
+  test(`${width}px signed-in Load keeps search and project controls touch-sized`, async ({ page }) => {
+    const fixture = new LibraryFixture('worker');
+    fixture.seed('Touch Target Project');
+    await fixture.install(page);
+    await page.setViewportSize({ width, height: 760 });
+    await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+
+    await page.getByRole('button', { name: 'Load project' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Load project' });
+    const controls = [
+      dialog.getByRole('searchbox', { name: 'Search projects' }),
+      dialog.getByRole('button', { name: 'Open Touch Target Project' }),
+      dialog.getByRole('button', { name: 'Import from computer' }),
+    ];
+    for (const control of controls) {
+      const box = await control.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+    }
+  });
+}
+
 async function installAuthEpochHarness(page: Page) {
   await page.goto('/');
   await page.evaluate(async () => {

@@ -117,7 +117,7 @@ async function seedBrowserProjectLibrary(page: any) {
   await page.reload({ waitUntil: 'domcontentloaded' });
 }
 
-async function importBrowserRecordThroughTopBar(page: any, recordId: string) {
+async function importSeededProjectFileThroughTopBar(page: any, recordId: string) {
   const project = await page.evaluate(id => {
     const records = JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records || [];
     return records.find((record: any) => record.id === id)?.project;
@@ -132,7 +132,14 @@ async function importBrowserRecordThroughTopBar(page: any, recordId: string) {
     mimeType: 'application/json',
     buffer: Buffer.from(JSON.stringify(project)),
   });
-  return loadDialog;
+}
+
+async function readBrowserFallbackStorage(page: any) {
+  return page.evaluate(() => ({
+    activeRecordId: localStorage.getItem('lw_project_active_record_v1'),
+    library: localStorage.getItem('lw_project_library_v1'),
+    backup: localStorage.getItem('lw_project_library_v1_backup'),
+  }));
 }
 
 // The old standalone Settings and Installer rail entries were consolidated
@@ -673,28 +680,30 @@ test('replacement guard names both projects and keeps editing until explicitly r
   await expect(projectName).toHaveValue('Incoming Lotus');
 });
 
-test('browser library Keep editing leaves the current record active', async ({ page }) => {
+test('top-bar file import Keep editing preserves the active browser-library record', async ({ page }) => {
   await seedBrowserProjectLibrary(page);
+  const browserFallbackBefore = await readBrowserFallbackStorage(page);
   await openPreferences(page);
   await page.getByRole('textbox', { name: 'Project name' }).fill('Current Mandala edited');
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').dirty)).toBe(true);
-  await importBrowserRecordThroughTopBar(page, 'incoming-record');
+  await importSeededProjectFileThroughTopBar(page, 'incoming-record');
   await page.getByRole('dialog', { name: 'Replace current project?' }).getByRole('button', { name: 'Keep editing' }).click();
   await expect(page.getByRole('textbox', { name: 'Project name' })).toHaveValue('Current Mandala edited');
   await expect(page.locator('.crumb .proj')).toHaveText('Current Mandala edited');
-  expect(await page.evaluate(() => localStorage.getItem('lw_project_active_record_v1'))).toBe('current-record');
+  expect(await readBrowserFallbackStorage(page)).toEqual(browserFallbackBefore);
 });
 
-test('browser library Escape leaves the current record active', async ({ page }) => {
+test('top-bar file import Escape preserves the active browser-library record', async ({ page }) => {
   await seedBrowserProjectLibrary(page);
+  const browserFallbackBefore = await readBrowserFallbackStorage(page);
   await openPreferences(page);
   await page.getByRole('textbox', { name: 'Project name' }).fill('Current Mandala edited');
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').dirty)).toBe(true);
-  await importBrowserRecordThroughTopBar(page, 'incoming-record');
+  await importSeededProjectFileThroughTopBar(page, 'incoming-record');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('textbox', { name: 'Project name' })).toHaveValue('Current Mandala edited');
   await expect(page.locator('.crumb .proj')).toHaveText('Current Mandala edited');
-  expect(await page.evaluate(() => localStorage.getItem('lw_project_active_record_v1'))).toBe('current-record');
+  expect(await readBrowserFallbackStorage(page)).toEqual(browserFallbackBefore);
 });
 
 test('replacement dialog traps keyboard focus and restores its trigger', async ({ page }) => {
