@@ -388,6 +388,7 @@ function Shell() {
   const [installActive, setInstallActive] = useState(false);
   const [hardwareOperationActive, setHardwareOperationActive] = useState(false);
   const installActiveRef = useRef(false);
+  const hardwareOperationActiveRef = useRef(false);
   const installRouteRef = useRef('#screen=card&section=install');
   const [connectionCenterOpen, setConnectionCenterOpen] = useState(false);
   const {
@@ -444,7 +445,12 @@ function Shell() {
     return () => { active = false; channel.close(); };
   }, []);
   useEffect(() => {
-    const onHardwareOperationActive = event => setHardwareOperationActive(event.detail?.active === true);
+    const onHardwareOperationActive = event => {
+      const active = event.detail?.active === true;
+      hardwareOperationActiveRef.current = active;
+      freshnessMonitorRef.current?.setOperationActive(installActiveRef.current || active);
+      setHardwareOperationActive(active);
+    };
     window.addEventListener(STUDIO_HARDWARE_OPERATION_EVENT, onHardwareOperationActive);
     return () => window.removeEventListener(STUDIO_HARDWARE_OPERATION_EVENT, onHardwareOperationActive);
   }, []);
@@ -465,6 +471,7 @@ function Shell() {
       windowRef: window,
     });
     freshnessMonitorRef.current = monitor;
+    monitor.setOperationActive(installActiveRef.current || hardwareOperationActiveRef.current);
     const unsubscribe = monitor.subscribe(setFreshness);
     setFreshness(monitor.getState());
     void monitor.start();
@@ -486,6 +493,7 @@ function Shell() {
     const onInstallActive = event => {
       const active = event.detail?.active === true;
       installActiveRef.current = active;
+      freshnessMonitorRef.current?.setOperationActive(active || hardwareOperationActiveRef.current);
       if (active) {
         const params = new URLSearchParams(window.location.hash.slice(1));
         const legacyInstall = params.get('screen') === 'flash' && params.get('mode') === 'install';

@@ -55,3 +55,10 @@ test('Studio card and production mutations publish the shared hardware-operation
     assert.match(productionSource, new RegExp(`beginStudioHardwareOperation\\('${operation}'`));
   }
 });
+
+test('Studio applies operation signals to freshness synchronously before React effects run', async () => {
+  const appSource = await readFile(new URL('../v3/app.jsx', import.meta.url), 'utf8');
+
+  assert.match(appSource, /hardwareOperationActiveRef\.current = active;[\s\S]*?setOperationActive\(installActiveRef\.current \|\| active\)/);
+  assert.match(appSource, /installActiveRef\.current = active;[\s\S]*?setOperationActive\(active \|\| hardwareOperationActiveRef\.current\)/);
+});
