@@ -8,6 +8,33 @@ Never substitute a local build, direct HTTP request, terminal command, green
 board LED, API acknowledgement, or mocked browser test for the live erased-card
 acceptance below.
 
+## Completion contract
+
+These release states are deliberately non-interchangeable:
+
+- **Committed**: a local Git commit contains the work.
+- **Pushed**: a remote branch contains that commit.
+- **PR-ready**: required tests passed and a truthful ready-for-review pull request exists.
+- **Merged**: the integrated work is contained in `origin/main`.
+- **Deployed**: a non-skipped production workflow used valid production credentials and successfully published the exact integrated revision.
+- **Shipped**: tested, merged, deployed, and independently verified on the live production origin, including the marker and exact files described below.
+
+“Ship it to main” authorizes the complete route through **Shipped**. It never
+means stop after commit, push, PR, merge, or green CI. When blocked, say **not shipped**
+and identify the exact boundary: for example merged but deploy skipped,
+or deployed but live bytes do not match.
+
+The mandatory final live proof runs only after `origin/main` has stopped moving,
+including any protected firmware signer cascade. From a clean checkout of that
+terminal revision, run `PROD_CHECK_REQUIRED=1 npm run check:prod` in
+`lightweaver/`. The checker must rebuild and stage deterministically, require
+`https://led.mandalacodes.com/studio-release.json` to be HTTP 200 with
+`Cache-Control: no-store`, match its full source revision and short build ID to
+the running bundle, and verify every file and digest in the staged build graph
+against live production. Record the revision, deploy workflow run, marker, and
+checker result. This independent proof—not the deploy job's own green badge—is
+the final shipment gate.
+
 ## How a release reaches production
 
 The release is deliberately split so feature branches never receive signing

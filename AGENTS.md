@@ -39,6 +39,25 @@ As of 2026-06 the runtime is **ESP32-S3 only**. The card runs the Lightweaver fi
 - **Mandala Codes repo GitHub**: `git@github-tech:technicianofthesacred/mandalacodes.git`.
 - **Deployment split**: the Lightweaver browser UI lives at `led.mandalacodes.com`. Keep the actual LED command path local (card page, WLED UI, or local bridge) — public HTTPS pages cannot reliably command local HTTP controllers from every phone/browser.
 
+## Shipment vocabulary and standing authorization
+
+Use these words precisely in every Lightweaver handoff:
+
+- **Committed**: the change exists in a local Git commit. It is not necessarily on GitHub.
+- **Pushed**: a remote branch contains the commit. It is not necessarily reviewed or on `origin/main`.
+- **PR-ready**: the pushed branch has its required tests and a truthful ready-for-review pull request. It is not merged.
+- **Merged**: the integrated change is contained in `origin/main`. It is not necessarily deployed.
+- **Deployed**: the production workflow used real production credentials, published the exact integrated revision, and succeeded. A credential-skipped green workflow is not deployed.
+- **Shipped**: the work was tested, merged into `origin/main`, deployed successfully, and then independently proven live at `https://led.mandalacodes.com` by its strict no-store `/studio-release.json` revision and the exact deployed files in the staged build graph.
+
+“Ship it to main” is standing authorization to complete that entire sequence,
+including the integration PR, merge, production workflow, and final live proof.
+A commit, push, PR, merge, or green CI result alone never satisfies it. If any
+boundary cannot be crossed, report **not shipped** and name the exact last
+verified state and blocker. Do not claim completion before the final live proof
+against the terminal `origin/main` revision, including any protected firmware
+signer commit triggered by the merge.
+
 ## Agent ownership boundaries
 - `led-art-mapper/app/src/` — owned by led-art-mapper agent; do not edit
 - `lightweaver/src/` — owned by lightweaver-app agent; do not edit

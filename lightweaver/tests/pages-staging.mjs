@@ -84,6 +84,7 @@ const deploymentDocs = [
   readFileSync(resolve(root, '../docs/worker-flash-runbook.md'), 'utf8'),
 ].join('\n');
 const deploymentChecklist = readFileSync(resolve(root, '../docs/deployment-checklist.md'), 'utf8');
+const agentsDoc = readFileSync(resolve(root, '../AGENTS.md'), 'utf8');
 
 assert.equal(pkg.scripts['build:design'], undefined);
 assert.match(pkg.scripts['stage:pages'], /^npm run build:functions && /);
@@ -350,6 +351,17 @@ assert.match(deploymentChecklist, /Create owner account/);
 assert.match(deploymentChecklist, /no public signup/i);
 assert.match(deploymentChecklist, /restore the Access application\/policy/i);
 assert.match(deploymentChecklist, /deploy the prior compatible Pages/i);
+for (const term of ['Committed', 'Pushed', 'PR-ready', 'Merged', 'Deployed', 'Shipped']) {
+  assert.match(agentsDoc, new RegExp(`\\*\\*${term}\\*\\*`));
+  assert.match(deploymentChecklist, new RegExp(`\\*\\*${term}\\*\\*`));
+}
+for (const shippingContract of [agentsDoc, deploymentChecklist]) {
+  assert.match(shippingContract, /ship it to main/i);
+  assert.match(shippingContract, /origin\/main/);
+  assert.match(shippingContract, /studio-release\.json/);
+  assert.match(shippingContract, /exact (?:deployed )?files|every file/i);
+  assert.match(shippingContract, /not shipped/i);
+}
 assert.doesNotMatch(runtimeRootReferences, /led\.mandalacodes\.com\/design|\/design\//);
 assert.doesNotMatch(runtimeRootReferences, /\/api\/library/, 'card command and flashing paths must never traverse the cloud library API');
 assert.deepEqual(routes, {
