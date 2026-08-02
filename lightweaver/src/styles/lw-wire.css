@@ -188,6 +188,26 @@
 }
 .lww-power-headroom.is-over { color: var(--danger); }
 
+/* The Wire panel lives inside a clipped mobile sheet, so place its hover copy
+   above the trigger and align it with the panel edge. */
+.la-wire-panel [data-tooltip]::after { content: none; }
+
+.lw-wire-hover-tooltip {
+  position: fixed;
+  z-index: 90;
+  max-width: min(220px, calc(100vw - 16px));
+  padding: 6px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm);
+  background: var(--bg-elev-2);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--bg-canvas) 58%, transparent);
+  color: var(--text-hi);
+  font: 500 10.5px/1.35 var(--font-sans);
+  pointer-events: none;
+  text-align: left;
+  white-space: normal;
+}
+
 @container (max-width: 320px) {
   .lww-plan-head {
     align-items: flex-start;

@@ -836,6 +836,41 @@ test('Test & Install never scrolls horizontally at phone width', async ({ page }
   for (const item of overflows) expect(item.scrollWidth, item.selector).toBeLessThanOrEqual(item.clientWidth);
 });
 
+test('Wire button tooltips use one unclipped portal at phone and desktop widths', async ({ page }) => {
+  async function expectPortalTooltip(trigger: any, text: string) {
+    const originalTitle = await trigger.getAttribute('title');
+    await trigger.hover();
+    const tooltip = page.getByRole('tooltip');
+    await expect(tooltip).toHaveCount(1);
+    await expect(tooltip).toHaveText(text);
+    await expect(trigger).not.toHaveAttribute('title');
+    const geometry = await tooltip.evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      return { rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }, pointerEvents: getComputedStyle(element).pointerEvents, width: innerWidth, height: innerHeight };
+    });
+    expect(geometry.pointerEvents).toBe('none');
+    expect(geometry.rect.left).toBeGreaterThanOrEqual(8);
+    expect(geometry.rect.top).toBeGreaterThanOrEqual(8);
+    expect(geometry.rect.right).toBeLessThanOrEqual(geometry.width - 8);
+    expect(geometry.rect.bottom).toBeLessThanOrEqual(geometry.height - 8);
+    await page.mouse.move(0, 0);
+    await expect(tooltip).toHaveCount(0);
+    await expect(trigger).toHaveAttribute('title', originalTitle);
+  }
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await gotoWire(page);
+  const startLedCheck = page.getByTestId('start-led-check');
+  await startLedCheck.focus();
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+  await expectPortalTooltip(startLedCheck, 'Begin or resume the guided check that lights the real LEDs to verify each run.');
+
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await gotoWire(page);
+  await openCustomMapping(page);
+  await expectPortalTooltip(page.getByRole('button', { name: 'Add a cable jump' }), 'Select a strip that has another physical run after it.');
+});
+
 test('card hardware keeps power collapsed, persists its inputs, and raises over-budget warnings', async ({ page }) => {
   await gotoWire(page);
   await openAdvanced(page);

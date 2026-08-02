@@ -2,6 +2,8 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { resolveStudioReleaseIdentity } from './scripts/studio-release-identity.mjs';
+import { serializeStudioRelease } from './src/lib/studioRelease.js';
 
 // NOTE: do NOT import server/index.js at the top level. It pulls in native
 // modules (serialport, bonjour-service, …) that break `vite build` in CI and
@@ -10,6 +12,20 @@ import { fileURLToPath } from 'url';
 // static build path never loads the server module.
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const studioRelease = resolveStudioReleaseIdentity({ cwd: __dirname });
+
+function studioReleasePlugin() {
+  return {
+    name: 'lightweaver-studio-release',
+    generateBundle() {
+      this.emitFile({
+        type: 'asset',
+        fileName: 'studio-release.json',
+        source: serializeStudioRelease(studioRelease),
+      });
+    },
+  };
+}
 
 function lightweaverApiPlugin() {
   return {
@@ -32,7 +48,10 @@ function lightweaverApiPlugin() {
 }
 
 export default defineConfig({
-  plugins: [react(), lightweaverApiPlugin()],
+  plugins: [react(), lightweaverApiPlugin(), studioReleasePlugin()],
+  define: {
+    __LIGHTWEAVER_STUDIO_RELEASE__: JSON.stringify(studioRelease),
+  },
   server: { port: 9998, strictPort: true, watch: { usePolling: true, interval: 500 } },
   build: {
     rollupOptions: {

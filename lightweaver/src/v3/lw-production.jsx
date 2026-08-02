@@ -20,6 +20,7 @@ import { flashFirmwareAndRelease, resetEspIntoApp } from '../lib/flashWorkflow.j
 import { validateInstallHardware, validateProductionInstallRelease } from '../lib/flashPlan.js';
 import { loadProductionFirmwareRelease } from '../lib/firmwareRelease.js';
 import { detectPlatformCapabilities } from '../lib/platformCapabilities.js';
+import { beginStudioHardwareOperation } from '../lib/studioHardwareOperation.js';
 import { appendProductionRecord, readProductionRecords } from '../lib/productionRecords.js';
 import { classifyProductionFailure, inferProductionFailure } from '../lib/productionRecovery.js';
 import { assertProductionFinalWiringStatus } from '../lib/productionPhysicalTest.js';
@@ -422,6 +423,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
 
   async function releaseRetainedUsbOwnership() {
     if (busy || !usbOwnershipRef.current.connection) return;
+    const finishHardwareOperation = beginStudioHardwareOperation('production-usb-release');
     const startingRunId = runRef.current?.runId;
     const connection = usbOwnershipRef.current.connection;
     setBusy(true);
@@ -438,6 +440,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
         setStatus('USB release is confirmed. Connect one card to continue.');
       }
     } finally {
+      finishHardwareOperation();
       if (mountedRef.current) setBusy(false);
     }
   }
@@ -497,6 +500,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
 
   async function inspectInstalledFirmware() {
     if (busy || !hardware || !usbConnected || run.state !== 'inspect') return;
+    const finishHardwareOperation = beginStudioHardwareOperation('production-usb-reset');
     const runLease = captureRunLease();
     let activeRunLease = runLease;
     setBusy(true); setError('');
@@ -529,7 +533,10 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       if (reason?.code === 'stale-production-run' || !runLeaseIsCurrent(runLease)) return;
       setFirmwareDecision('unproven');
       showRecovery('usb-ownership-uncertain');
-    } finally { if (runLeaseIsCurrent(activeRunLease)) setBusy(false); }
+    } finally {
+      finishHardwareOperation();
+      if (runLeaseIsCurrent(activeRunLease)) setBusy(false);
+    }
   }
 
   async function connectCardPageThroughWifi(runLease, initialHost, {
@@ -707,6 +714,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     const retained = usbOwnershipRef.current;
     if (retained.connection && (retained.ownerRunId !== runRef.current?.runId || runRef.current?.usbReleased === false)) return;
     if (firmwareDecision !== 'install-required' || !usbConnected) return;
+    const finishHardwareOperation = beginStudioHardwareOperation('production-firmware-install');
     setBusy(true); setError('');
     const runLease = captureRunLease();
     const installConnection = usbOwnershipRef.current.connection || { loader: loaderRef.current, transport: transportRef.current };
@@ -772,7 +780,10 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       if (!runLeaseIsCurrent(activeRunLease)) return;
       showRecovery(released ? 'disconnect-phase' : 'usb-ownership-uncertain', { cardChanged: 'unknown', usbReleased: released ? 'yes' : 'unknown' });
     }
-    finally { if (runLeaseIsCurrent(activeRunLease)) setBusy(false); }
+    finally {
+      finishHardwareOperation();
+      if (runLeaseIsCurrent(activeRunLease)) setBusy(false);
+    }
   }
 
   async function reconnectAfterInstall() {
@@ -816,6 +827,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
 
   async function restoreArtwork() {
     if (busy || restoreStartedRef.current || run.state !== 'restore') return;
+    const finishHardwareOperation = beginStudioHardwareOperation('production-artwork-restore');
     restoreStartedRef.current = true; setBusy(true); setError('');
     const runLease = captureRunLease();
     let mutationRunLease = runLease;
@@ -870,6 +882,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       else showRecovery(/exact USB-inspected card/i.test(String(reason?.message || '')) ? 'wrong-card-reconnect' : 'restore-failure', { cardChanged: 'no', usbReleased: 'yes' });
     }
     finally {
+      finishHardwareOperation();
       const finalRunLease = mutationIntentPersisted ? mutationRunLease : runLease;
       if (runLeaseIsCurrent(finalRunLease)) setBusy(false);
     }
@@ -1037,6 +1050,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
 
   async function handlePhysicalRecovery(action) {
     if (busy || !['restore-project', 'signed-firmware-recovery', 'rerun-lights'].includes(action)) return;
+    const finishHardwareOperation = beginStudioHardwareOperation('production-physical-recovery');
     const runLease = captureRunLease();
     setBusy(true); setError('');
     try {
@@ -1063,7 +1077,10 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       }
     } catch (reason) {
       setError(`Safe recovery could not be saved. The light test remains stopped. ${reason?.message || reason}`);
-    } finally { setBusy(false); }
+    } finally {
+      finishHardwareOperation();
+      setBusy(false);
+    }
   }
 
   async function handleRecoveryAction(action) {
@@ -1112,6 +1129,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
     if (action === 'rerun-physical') { setRecovery(null); await handlePhysicalRecovery('rerun-lights'); return; }
     if (action === 'install-firmware') { setRecovery(null); await installOrContinue(); return; }
     if (action === 'release-usb') {
+      const finishHardwareOperation = beginStudioHardwareOperation('production-usb-release');
       setBusy(true);
       try {
         const released = await releaseUsbConnection();
@@ -1135,7 +1153,10 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
           setRecovery(classifyProductionFailure('usb-ownership-uncertain'));
         }
       }
-      finally { setBusy(false); }
+      finally {
+        finishHardwareOperation();
+        setBusy(false);
+      }
     }
   }
 

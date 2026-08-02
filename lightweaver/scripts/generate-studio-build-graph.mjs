@@ -30,7 +30,7 @@ async function collectCodeAssets(root, relativeDirectory = 'assets') {
 
 export async function generateStudioBuildGraph(stagedRoot) {
   const root = resolve(stagedRoot);
-  const paths = [...await collectCodeAssets(root), 'index.html']
+  const paths = [...await collectCodeAssets(root), 'index.html', 'studio-release.json']
     .sort();
   const files = [];
   for (const path of paths) {

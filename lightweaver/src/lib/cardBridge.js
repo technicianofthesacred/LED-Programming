@@ -1234,18 +1234,25 @@ export function getCardBridgeVersion() {
 export function acquireCardBridgeFromGesture(rawHost = '', {
   studioUrl = '',
   timeoutMs = 10000,
+  acceptDiscovered = false,
 } = {}) {
   const win = browserWindow();
   const host = normalizeCardHost(rawHost || readStoredCardHost());
+  const acquisitionKey = `${host}:${acceptDiscovered ? 'discovered' : 'verified'}`;
   attachCardBridgeListener();
   bootstrapCardBridgeFromOpener();
 
   const current = getCardBridgeState();
-  if (current.identityVerified && !bridgeTargetClosed() && normalizeCardHost(current.host) === host) {
+  const currentEvidenceReady = current.identityVerified || (
+    acceptDiscovered
+    && current.verified
+    && Boolean(current.discoveredCard?.id)
+  );
+  if (currentEvidenceReady && !bridgeTargetClosed() && normalizeCardHost(current.host) === host) {
     return { window: bridgeWindow, ready: Promise.resolve(current) };
   }
 
-  const existing = bridgeAcquisitions.get(host);
+  const existing = bridgeAcquisitions.get(acquisitionKey);
   if (existing) return existing;
 
   let timer = null;
@@ -1254,20 +1261,35 @@ export function acquireCardBridgeFromGesture(rawHost = '', {
     settle = { resolve, reject };
   });
   const attempt = { window: null, ready };
-  bridgeAcquisitions.set(host, attempt);
+  bridgeAcquisitions.set(acquisitionKey, attempt);
 
   const cleanup = () => {
     if (timer) clearTimeout(timer);
     win?.removeEventListener?.(CARD_BRIDGE_CHANGED_EVENT, onBridgeChange);
-    if (bridgeAcquisitions.get(host) === attempt) bridgeAcquisitions.delete(host);
+    if (bridgeAcquisitions.get(acquisitionKey) === attempt) bridgeAcquisitions.delete(acquisitionKey);
   };
   const resolveWhenVerified = (state = getCardBridgeState()) => {
+    const hostMatches = normalizeCardHost(state?.host) === host;
+    const discoveryReady = acceptDiscovered
+      && state?.verified
+      && hostMatches
+      && Boolean(state?.discoveredCard?.id);
+    if (discoveryReady) {
+      cleanup();
+      try {
+        win?.focus?.();
+      } catch {
+        /* Browser focus permission is best-effort. */
+      }
+      settle.resolve(state);
+      return true;
+    }
     if (state?.identityError && !state?.identityVerified) {
       cleanup();
       settle.reject(bridgeError('The card page did not verify the paired Lightweaver identity.', state.identityError));
       return true;
     }
-    if (!state?.identityVerified || normalizeCardHost(state.host) !== host) return false;
+    if (!state?.identityVerified || !hostMatches) return false;
     cleanup();
     try {
       win?.focus?.();

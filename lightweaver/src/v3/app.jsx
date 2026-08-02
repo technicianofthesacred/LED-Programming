@@ -36,6 +36,9 @@ import { LayoutScreen } from './lw-layout.jsx';
 import { cardRouteFromHash, isCardSection, markCardSectionNavigation } from './cardWorkspaceRoute.js';
 import { canonicalProjectFileName, PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
 import { clearScreenFailure, rememberScreenFailure } from '../lib/screenRecoveryDiagnostics.js';
+import { createStudioFreshnessMonitor } from '../lib/studioFreshness.js';
+import { STUDIO_HARDWARE_OPERATION_EVENT } from '../lib/studioHardwareOperation.js';
+import { getRunningStudioRelease } from '../lib/studioRelease.js';
 
 const PatternScreen = lazy(() => import('./lw-pattern.jsx').then(module => ({ default: module.PatternScreen })));
 const PatternLabScreen = lazy(() => import('../pattern-lab/PatternLabScreen.jsx'));
@@ -284,7 +287,14 @@ function Rail({ view, setView, openCard }) {
 /* ---------- Status / Card bar (wired to the card-link state machine) ---------- */
 /* One compact status control opens the shared Connection Center. Transport and
    host diagnostics stay out of routine chrome. */
-function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, totalLeds, stripCount, density, fps, testStrip, onToggleTestStrip, onTestStripLengthChange }) {
+function freshnessPresentation(freshness) {
+  if (freshness.status === 'current') return { label: 'Studio current', dot: 'on', title: `Studio is current (${freshness.buildId}).` };
+  if (freshness.status === 'update-ready') return { label: 'Update ready', dot: 'warn', title: 'A current Studio build is ready. Refresh waits for the active card operation to finish.' };
+  if (freshness.status === 'unknown') return { label: 'Freshness unknown', dot: 'warn', title: 'Studio could not verify the current production build. It will try again while online.' };
+  return { label: 'Checking', dot: 'off', title: 'Checking the current production Studio build.' };
+}
+
+function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, totalLeds, stripCount, density, fps, testStrip, onToggleTestStrip, onTestStripLengthChange, freshness }) {
   // A blank (factory-default) card is linked but has no project to push to, so
   // it must not advertise a live push rate.
   const connected = isCardLinkConnected(link) && !link.cardBlank;
@@ -331,6 +341,21 @@ function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, totalLe
       </div>
 
       <div className="sb-spring" />
+
+      {(() => {
+        const presentation = freshnessPresentation(freshness);
+        return (
+          <div
+            className={`sb-freshness is-${freshness.status}`}
+            data-testid="studio-freshness"
+            title={presentation.title}
+          >
+            <span className={`sb-dot ${presentation.dot}`} aria-hidden="true" />
+            <span>{presentation.label}</span>
+            <code>{freshness.buildId}</code>
+          </div>
+        );
+      })()}
     </footer>
   );
 }
@@ -361,7 +386,9 @@ function Shell() {
   const [view, setView] = useState(() => isBridgeCallbackLocation() ? 'layout' : viewFromHash());
   const [cardRoute, setCardRoute] = useState(() => cardRouteFromHash());
   const [installActive, setInstallActive] = useState(false);
+  const [hardwareOperationActive, setHardwareOperationActive] = useState(false);
   const installActiveRef = useRef(false);
+  const hardwareOperationActiveRef = useRef(false);
   const installRouteRef = useRef('#screen=card&section=install');
   const [connectionCenterOpen, setConnectionCenterOpen] = useState(false);
   const {
@@ -369,6 +396,16 @@ function Shell() {
     projectLifecycle, projectLifecycleLabel, markProjectPersisted,
     strips, layoutDensity,
   } = useProject();
+  const runningStudioReleaseRef = useRef(null);
+  if (!runningStudioReleaseRef.current) runningStudioReleaseRef.current = getRunningStudioRelease();
+  const [freshness, setFreshness] = useState(() => ({
+    status: 'checking',
+    buildId: runningStudioReleaseRef.current.buildId,
+    reason: '',
+  }));
+  const freshnessMonitorRef = useRef(null);
+  const flushProjectAutosaveRef = useRef(flushProjectAutosave);
+  flushProjectAutosaveRef.current = flushProjectAutosave;
   const cloudLibrary = useCloudLibrary();
   const [loadDialogOpen, setLoadDialogOpen] = useState(false);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
@@ -408,6 +445,46 @@ function Shell() {
     return () => { active = false; channel.close(); };
   }, []);
   useEffect(() => {
+    const onHardwareOperationActive = event => {
+      const active = event.detail?.active === true;
+      hardwareOperationActiveRef.current = active;
+      freshnessMonitorRef.current?.setOperationActive(installActiveRef.current || active);
+      setHardwareOperationActive(active);
+    };
+    window.addEventListener(STUDIO_HARDWARE_OPERATION_EVENT, onHardwareOperationActive);
+    return () => window.removeEventListener(STUDIO_HARDWARE_OPERATION_EVENT, onHardwareOperationActive);
+  }, []);
+  useEffect(() => {
+    const monitor = createStudioFreshnessMonitor({
+      release: runningStudioReleaseRef.current,
+      fetchImpl: window.fetch.bind(window),
+      flushAutosave: () => flushProjectAutosaveRef.current(),
+      reload: () => {
+        const testReload = window.__LW_STUDIO_RELOAD_FOR_TEST__;
+        if (typeof testReload === 'function') testReload();
+        else window.location.reload();
+      },
+      storage: window.sessionStorage,
+      locationOrigin: window.location.origin,
+      navigatorRef: window.navigator,
+      documentRef: window.document,
+      windowRef: window,
+    });
+    freshnessMonitorRef.current = monitor;
+    monitor.setOperationActive(installActiveRef.current || hardwareOperationActiveRef.current);
+    const unsubscribe = monitor.subscribe(setFreshness);
+    setFreshness(monitor.getState());
+    void monitor.start();
+    return () => {
+      unsubscribe();
+      monitor.stop();
+      if (freshnessMonitorRef.current === monitor) freshnessMonitorRef.current = null;
+    };
+  }, []);
+  useEffect(() => {
+    freshnessMonitorRef.current?.setOperationActive(installActive || hardwareOperationActive);
+  }, [hardwareOperationActive, installActive]);
+  useEffect(() => {
     applyStoredStudioTheme();
     window.addEventListener('lw-preview-settings', applyStoredStudioTheme);
     return () => window.removeEventListener('lw-preview-settings', applyStoredStudioTheme);
@@ -416,6 +493,7 @@ function Shell() {
     const onInstallActive = event => {
       const active = event.detail?.active === true;
       installActiveRef.current = active;
+      freshnessMonitorRef.current?.setOperationActive(active || hardwareOperationActiveRef.current);
       if (active) {
         const params = new URLSearchParams(window.location.hash.slice(1));
         const legacyInstall = params.get('screen') === 'flash' && params.get('mode') === 'install';
@@ -739,6 +817,7 @@ function Shell() {
         testStrip={testStrip}
         onToggleTestStrip={onToggleTestStrip}
         onTestStripLengthChange={onTestStripLengthChange}
+        freshness={freshness}
       />
       <CardConnectionCenter
         open={connectionCenterOpen}

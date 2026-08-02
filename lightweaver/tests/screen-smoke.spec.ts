@@ -1,7 +1,17 @@
 import { test, expect } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
 
 // Every primary Studio destination must retain the shared shell controls.
 const SCREENS = ['Patterns', 'Pattern Lab', 'Playlist', 'Layout', 'Show', 'Hardware'];
+const STUDIO_SOURCE_REVISION = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+
+function studioMarker(sourceRevision = STUDIO_SOURCE_REVISION) {
+  return {
+    schemaVersion: 1,
+    sourceRevision,
+    buildId: sourceRevision.slice(0, 12),
+  };
+}
 
 test.beforeEach(async ({ page }) => {
   await page.route('http://lightweaver.local/**', route => route.abort());
@@ -102,6 +112,90 @@ test('every primary screen exposes the Lightweaver connection control', async ({
   }
 });
 
+test('footer shows the current Studio build at the far right on desktop and phone', async ({ page }) => {
+  let markerRequests = 0;
+  const pageErrors: string[] = [];
+  page.on('pageerror', error => pageErrors.push(error.message));
+  await page.route('**/studio-release.json', route => {
+    markerRequests += 1;
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      headers: { 'cache-control': 'no-store' },
+      body: `${JSON.stringify(studioMarker())}\n`,
+    });
+  });
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(100);
+  expect(pageErrors).toEqual([]);
+  expect(await page.evaluate(() => navigator.onLine)).toBe(true);
+  await expect.poll(() => markerRequests).toBe(1);
+
+  const beacon = page.getByTestId('studio-freshness');
+  await expect(beacon).toHaveText(`Studio current${STUDIO_SOURCE_REVISION.slice(0, 12)}`);
+  await expect(page.locator('.status-bar > :last-child')).toHaveAttribute('data-testid', 'studio-freshness');
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(beacon).toBeVisible();
+  const metrics = await page.locator('.status-bar').evaluate(element => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth);
+});
+
+test('new production waits for installer and destructive card operations, flushes autosave, then reloads once', async ({ page }) => {
+  let marker = studioMarker();
+  await page.route('**/studio-release.json', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    headers: { 'cache-control': 'private, no-store' },
+    body: `${JSON.stringify(marker)}\n`,
+  }));
+  await page.addInitScript(() => {
+    (window as any).__lwFreshnessReloads = [];
+    (window as any).__LW_STUDIO_RELOAD_FOR_TEST__ = () => {
+      (window as any).__lwFreshnessReloads.push(localStorage.getItem('lw_autosave_v3'));
+    };
+  });
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('studio-freshness')).toContainText('Studio current');
+  await page.evaluate(() => {
+    localStorage.removeItem('lw_autosave_v3');
+    window.dispatchEvent(new CustomEvent('lw-install-active', { detail: { active: true } }));
+    window.dispatchEvent(new CustomEvent('lw-hardware-operation-active', { detail: { active: true, operation: 'install-project' } }));
+  });
+
+  marker = studioMarker('b'.repeat(40));
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.getByTestId('studio-freshness')).toHaveText(`Update ready${'b'.repeat(12)}`);
+  expect(await page.evaluate(() => (window as any).__lwFreshnessReloads.length)).toBe(0);
+
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('lw-install-active', { detail: { active: false } })));
+  await page.waitForTimeout(50);
+  expect(await page.evaluate(() => (window as any).__lwFreshnessReloads.length)).toBe(0);
+
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('lw-hardware-operation-active', { detail: { active: false, operation: 'install-project' } })));
+  await expect.poll(() => page.evaluate(() => (window as any).__lwFreshnessReloads.length)).toBe(1);
+  const saved = await page.evaluate(() => (window as any).__lwFreshnessReloads[0]);
+  expect(saved).toBeTruthy();
+});
+
+test('invalid or cacheable Studio markers show bounded unknown state without reload', async ({ page }) => {
+  await page.route('**/studio-release.json', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: '{broken',
+  }));
+  await page.addInitScript(() => {
+    (window as any).__lwFreshnessReloads = 0;
+    (window as any).__LW_STUDIO_RELOAD_FOR_TEST__ = () => { (window as any).__lwFreshnessReloads += 1; };
+  });
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('studio-freshness')).toHaveText(`Freshness unknown${STUDIO_SOURCE_REVISION.slice(0, 12)}`);
+  expect(await page.evaluate(() => (window as any).__lwFreshnessReloads)).toBe(0);
+});
+
 test('connection center starts with the two physical card choices', async ({ page }) => {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
@@ -159,6 +253,33 @@ test('opening after a blocked popup renders the retry action directly', async ({
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
+});
+
+test('stale pairing offers to take over the card connection', async ({ page }) => {
+  await installCardPopupMock(page, 'lw-stale-pairing');
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  await dispatchCardLinkEvents(page, [{
+    type: 'bridge-discovered',
+    host: 'lightweaver.local',
+    card: { id: 'lw-stale-pairing', name: 'Workshop card' },
+    bridgeLifecycle: 4,
+  }]);
+
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click();
+
+  await expect(dialog).toContainText('Take over that connection to use the card in this Studio.');
+  await expect(dialog.getByRole('button', { name: 'Take over connection' })).toBeVisible();
+  await expect(dialog).not.toContainText('belongs to an older bridge host');
+
+  await dialog.getByRole('button', { name: 'Take over connection' }).click();
+  await expect.poll(() => page.evaluate(() => (
+    JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null')?.id
+  ))).toBe('lw-stale-pairing');
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
 });
 
 test('opening with old firmware renders the card update directly', async ({ page }) => {

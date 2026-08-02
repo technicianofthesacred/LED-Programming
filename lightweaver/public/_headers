@@ -7,6 +7,9 @@
 /studio-build-graph.json
   Cache-Control: no-store
 
+/studio-release.json
+  Cache-Control: no-store
+
 /firmware/release-manifest.json
   Cache-Control: no-store
 

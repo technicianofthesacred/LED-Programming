@@ -30,11 +30,14 @@ import {
   parseStudioBuildGraph,
   resolveProductionUrls,
   verifyStudioBuildGraph,
+  verifyStudioRelease,
 } from '../src/lib/productionDeploymentCheck.js';
+import { parseStudioRelease } from '../src/lib/studioRelease.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const localBinPath = resolve(here, '../public/firmware/lightweaver-controller-esp32s3-factory.bin');
 const expectedStudioGraphPath = resolve(here, '../.pages/lightweaver/studio-build-graph.json');
+const expectedStudioReleasePath = resolve(here, '../.pages/lightweaver/studio-release.json');
 const {
   studioUrl,
   legacyDesignUrl,
@@ -45,6 +48,7 @@ const {
   productionJobIndexUrl,
   productionSetupUrl,
   studioBuildGraphUrl,
+  studioReleaseUrl,
 } = resolveProductionUrls(process.env);
 const productionOrigin = new URL(studioUrl).origin;
 const librarySessionUrl = new URL('/api/library/session', productionOrigin);
@@ -86,11 +90,14 @@ async function fetchAuthProbe(url, init = {}) {
 }
 
 let expectedStudioGraph;
+let expectedStudioRelease;
 try {
   expectedStudioGraph = parseStudioBuildGraph(readFileSync(expectedStudioGraphPath, 'utf8'));
+  expectedStudioRelease = parseStudioRelease(readFileSync(expectedStudioReleasePath, 'utf8'));
 } catch (err) {
   fail(
-    `The expected Studio build graph for this checkout is missing or invalid at\n  ${expectedStudioGraphPath}\n` +
+    `The expected Studio build graph or release marker for this checkout is missing or invalid.\n` +
+      `  graph: ${expectedStudioGraphPath}\n  marker: ${expectedStudioReleasePath}\n` +
       'Run npm run build && npm run stage:pages from lightweaver before npm run check:prod.\n' +
       `  ${err?.message ?? err}`,
   );
@@ -159,13 +166,15 @@ if (nativeAuthReady) {
 }
 
 let studioBuildFileCount = 0;
+let liveStudioRelease;
 try {
+  liveStudioRelease = await verifyStudioRelease(productionFetch, studioReleaseUrl, expectedStudioRelease);
   const verifiedStudio = await verifyStudioBuildGraph(productionFetch, webcrypto, studioBuildGraphUrl, expectedStudioGraph, studioRootBytes);
   studioBuildFileCount = verifiedStudio.graph.files.length;
 } catch (err) {
   fail(
-    `Production root is reachable, but its Studio build graph is unavailable or does not match the deployed bytes.\n` +
-      `  graph: ${studioBuildGraphUrl}\n  ${err?.message ?? err}`,
+    `Production root is reachable, but its Studio release marker/build graph is unavailable or does not match the deployed bytes.\n` +
+      `  marker: ${studioReleaseUrl}\n  graph: ${studioBuildGraphUrl}\n  ${err?.message ?? err}`,
   );
 }
 
@@ -246,6 +255,7 @@ if (nativeAuthReady) {
 console.log(
   `check-prod-freshness OK — production serves the signed committed factory binary\n  sha256 ${localHash}  (${local.length} bytes)\n  ${new URL(release.manifest.image.url, productionOrigin)}\n  legacy alias: ${legacyAliasUrl}`,
   `\n  Studio build graph: ${studioBuildFileCount} verified files\n  ${studioBuildGraphUrl}`,
+  `\n  Studio release: ${liveStudioRelease.sourceRevision} (${liveStudioRelease.buildId})\n  ${studioReleaseUrl}`,
   `\n  Production Setup: ${productionSetupUrl}\n  verified production jobs: ${productionJobCount}\n  job index: ${productionJobIndexUrl}`,
   `\n  Private library: unauthenticated HTTP ${libraryResponse.status}, Cache-Control ${libraryCacheControl}\n  ${librarySessionUrl}`,
   nativeAuthReady

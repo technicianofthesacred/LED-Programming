@@ -1014,6 +1014,10 @@ test('an inspected run resumed without transient hardware offers exact-card USB 
 test('install failure never claims USB release when cleanup fails', async ({ page }) => {
   await serveJob(page); await installDriver(page, { installThrows: true, disconnectFailureAt: 2 });
   await page.goto('/#screen=production');
+  await page.evaluate(() => {
+    window.__LW_HARDWARE_OPERATION_EVENTS__ = [];
+    window.addEventListener('lw-hardware-operation-active', event => window.__LW_HARDWARE_OPERATION_EVENTS__.push(event.detail));
+  });
   await page.getByRole('button', { name: /Moon · batch 7/ }).click();
   await page.getByRole('button', { name: 'Connect one USB card' }).click();
   await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
@@ -1023,6 +1027,10 @@ test('install failure never claims USB release when cleanup fails', async ({ pag
   await expect(recovery).toContainText('USB released?Not confirmed');
   await expect(recovery.getByRole('button', { name: 'Release USB safely' })).toBeVisible();
   expect(await page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun().usbReleased)).toBe(false);
+  expect(await page.evaluate(() => window.__LW_HARDWARE_OPERATION_EVENTS__.filter(event => event.operation === 'production-firmware-install'))).toEqual([
+    { active: true, operation: 'production-firmware-install' },
+    { active: false, operation: 'production-firmware-install' },
+  ]);
 });
 
 test('different USB card is a wrong-card recovery in every phase', async ({ page }) => {
