@@ -3,6 +3,7 @@ import { test, expect } from '@playwright/test';
 test.beforeEach(async ({ page }) => {
   await page.route('http://lightweaver.local/**', route => route.abort());
   await page.route('http://192.168.4.1/**', route => route.abort());
+  await page.route('http://192.168.18.70/**', route => route.abort());
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
@@ -633,6 +634,43 @@ test('the observed eight-pixel double flash bypasses stale LAN addresses for cus
     url: expect.stringContaining('http://192.168.4.1/'),
     target: 'lightweaver-card-bridge',
   });
+});
+
+test('setup-network instructions stay in one full-width vertical column', async ({ page }) => {
+  for (const width of [320, 390, 900]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+    await page.evaluate(() => {
+      localStorage.clear();
+      localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+        version: 1,
+        id: 'lw-layout-card',
+        hostname: 'layout-card.local',
+        address: '192.168.18.70',
+      }));
+    });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+    await page.getByRole('button', { name: 'Eight lights flash twice, then pause' }).click();
+
+    const list = actionRegion(page).getByRole('list');
+    const geometry = await list.evaluate(element => {
+      const listRect = element.getBoundingClientRect();
+      const items = [...element.querySelectorAll('li')].map(item => item.getBoundingClientRect());
+      return {
+        listWidth: listRect.width,
+        items: items.map(rect => ({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })),
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      };
+    });
+
+    expect(geometry.items).toHaveLength(3);
+    for (const item of geometry.items) expect(item.width).toBeGreaterThan(geometry.listWidth - 40);
+    expect(geometry.items[1].y).toBeGreaterThanOrEqual(geometry.items[0].y + geometry.items[0].height - 1);
+    expect(geometry.items[2].y).toBeGreaterThanOrEqual(geometry.items[1].y + geometry.items[1].height - 1);
+    expect(geometry.scrollWidth).toBe(geometry.clientWidth);
+  }
 });
 
 test('card update and safe recovery use install only when browser USB is usable', async ({ page }) => {
