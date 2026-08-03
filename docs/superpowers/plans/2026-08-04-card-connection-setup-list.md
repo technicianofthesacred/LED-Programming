@@ -15,6 +15,16 @@
 **Files:**
 - Modify: `lightweaver/tests/connection-center-quality.spec.ts`
 
+- [ ] **Step 0: Isolate the simulated LAN card from real hardware**
+
+Add this route to `test.beforeEach` so the fixture address cannot reach a powered card on the developer's LAN:
+
+```ts
+await page.route('http://192.168.18.70/**', route => route.abort());
+```
+
+Run the existing eight-pixel recovery test alone. Expected: PASS without adopting or reporting a real card.
+
 - [ ] **Step 1: Write the failing browser test**
 
 Add a test after the eight-pixel recovery test. For each viewport width, open the factory-beacon recovery route and measure the ordered list:
