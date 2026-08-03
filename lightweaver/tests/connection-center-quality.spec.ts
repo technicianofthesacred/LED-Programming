@@ -525,7 +525,7 @@ test('a staged GPIO restoration stops at the Check lights handoff without legacy
   });
 });
 
-test('wrong-card and recoverable failures retry the existing connection step', async ({ page }) => {
+test('wrong-card and ordinary no-answer recovery use the stable LAN name before explicit setup-network continuation', async ({ page }) => {
   await installOpenSpy(page);
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await dispatchCardLinkEvent(page, { type: 'bridge-lost', reason: 'wrong-card' });
@@ -537,13 +537,47 @@ test('wrong-card and recoverable failures retry the existing connection step', a
   ))).toBeGreaterThan(0);
 
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    localStorage.setItem('lw_chip_card_host', '192.168.18.70');
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1,
+      id: 'lw-gallery-card',
+      name: 'Gallery card',
+      hostname: 'gallery-card.local',
+      address: '192.168.18.70',
+    }));
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
-  await dispatchCardLinkEvent(page, { type: 'bridge-lost', reason: 'no-answer' });
+  await dispatchCardLinkEvent(page, { type: 'bridge-lost', reason: 'no-answer', host: '192.168.18.70' });
   await expect(actionRegion(page)).toHaveAttribute('data-action-id', 'recoverable-failure');
-  await page.getByRole('button', { name: 'Try again' }).click();
+  await page.getByRole('button', { name: 'Look for the card again' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__openedWindows.at(-1))).toMatchObject({
+    url: expect.stringContaining('http://gallery-card.local/'),
+    target: 'lightweaver-card-bridge',
+  });
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_chip_card_host'))).toBe('192.168.18.70');
+
+  await dispatchCardLinkEvent(page, { type: 'bridge-lost', reason: 'no-answer', host: 'gallery-card.local' });
+  await expect(actionRegion(page)).toContainText('pulsing amber');
+  await expect(page.getByRole('button', { name: 'Continue after joining' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Try local network again' })).toBeVisible();
   await expect.poll(() => page.evaluate(() => (
-    (window as any).__openedUrls.length + (window as any).__cardFetchCalls.length
-  ))).toBeGreaterThan(0);
+    (window as any).__openedUrls.some((url: string) => url.includes('192.168.4.1'))
+  ))).toBe(false);
+
+  await page.getByRole('button', { name: 'Try local network again' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__openedWindows.at(-1))).toMatchObject({
+    url: expect.stringContaining('http://gallery-card.local/'),
+    target: 'lightweaver-card-bridge',
+  });
+  await dispatchCardLinkEvent(page, { type: 'bridge-lost', reason: 'no-answer', host: 'gallery-card.local' });
+
+  await page.getByRole('button', { name: 'Continue after joining' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__openedWindows.at(-1))).toMatchObject({
+    url: expect.stringContaining('http://192.168.4.1/'),
+    target: 'lightweaver-card-bridge',
+  });
 });
 
 test('card update and safe recovery use install only when browser USB is usable', async ({ page }) => {

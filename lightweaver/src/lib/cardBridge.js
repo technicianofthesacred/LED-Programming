@@ -413,6 +413,7 @@ function applyAuthoritativeBridgeStatus(status, host = bridgeHost) {
     bridgeAuthorityLifecycle = bridgeLifecycle;
     bridgeRuntimeCommandReady = readiness.connected === true;
     bridgeIdentityError = bridgeRuntimeCommandReady ? '' : 'runtime-not-ready';
+    writeStoredCardHost(host);
     return Object.freeze({
       verified: true,
       commandReady: status.commandReady === true,
@@ -474,10 +475,7 @@ function setBridgeState({
   }
   if (source) bridgeWindow = source;
   if (origin) bridgeOrigin = origin;
-  if (host) {
-    bridgeHost = normalizedHost;
-    if (!bridgeHandoffCorrelation || bridgeStationIdentityVerified) writeStoredCardHost(bridgeHost);
-  }
+  if (host) bridgeHost = normalizedHost;
   bridgeConnected = Boolean(connected);
   // `ready` only flips to true on a verified handshake; once true it sticks for
   // the life of this bridge target (cleared by clearBridgeTarget).
@@ -725,7 +723,7 @@ export function openCardBridge(rawHost = '', {
   // it returns a real target: a blocked popup did not navigate anything and
   // must not destroy the already-working parent/opener bridge.
   revokeBridgeForNavigation({ host, origin });
-  trackNavigatedBridgeWindow(opened, { host, origin });
+  trackNavigatedBridgeWindow(opened, { host, origin, persistHost: false });
   return opened;
 }
 
@@ -773,7 +771,7 @@ export function openLocalCardPage(rawHost = '', { path = '/', reason = 'open-car
   revokeBridgeForNavigation({ host, origin });
   // Same bookkeeping as openCardBridge: adopt the (possibly reused) named
   // window and drop any prior handshake so identity must re-verify.
-  trackNavigatedBridgeWindow(opened, { host, origin });
+  trackNavigatedBridgeWindow(opened, { host, origin, persistHost: false });
   try {
     opened.focus?.();
   } catch {
@@ -1130,6 +1128,7 @@ export async function adoptDiscoveredCardBridgeIdentity(rawHost = bridgeHost) {
   if (!adoptExpectedCardIdentity(identity)) {
     throw bridgeError('Could not save the paired Lightweaver identity.', 'identity-storage');
   }
+  writeStoredCardHost(rawHost || bridgeHost);
   bridgeCard = identity;
   bridgeIdentityError = '';
   dispatchBridgeChange();
@@ -1141,6 +1140,7 @@ export async function rePairDiscoveredCardBridgeIdentity(rawHost = bridgeHost) {
   if (!adoptExpectedCardIdentity(identity)) {
     throw bridgeError('Could not replace the paired Lightweaver identity.', 'identity-storage');
   }
+  writeStoredCardHost(rawHost || bridgeHost);
   bridgeCard = identity;
   bridgeIdentityError = '';
   dispatchBridgeChange();

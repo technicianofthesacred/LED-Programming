@@ -10,6 +10,7 @@ import {
   CARD_HOST_CHANGED_EVENT,
   isLocalCardHost,
   normalizeCardHost,
+  ordinaryCardRecoveryHost,
   readStoredCardHost,
   writeStoredCardHost,
 } from '../../lib/cardConnection.js';
@@ -274,6 +275,11 @@ export function CardConnectionCenter({
     && NEUTRAL_FIRST_RUN_REASONS.has(link.reason)
     && !hasKnownCard;
   const setupSteps = action.id === 'recoverable-failure' && action.route === 'setup-network';
+  const stableRecoveryHost = ordinaryCardRecoveryHost(link.host || host, rememberedCard);
+  const ordinaryNoAnswer = action.id === 'recoverable-failure' && link.reason === 'no-answer';
+  const setupRecovery = ordinaryNoAnswer
+    && normalizeCardHost(link.host || host) === stableRecoveryHost;
+  const showSetupSteps = setupSteps || setupRecovery;
 
   const renderPrimaryAction = () => {
     switch (action.id) {
@@ -308,14 +314,24 @@ export function CardConnectionCenter({
         return <button type="button" className="btn primary" onClick={() => connect()}>Reconnect expected card</button>;
       case 'recoverable-failure':
         return (
-          <button
-            type="button"
-            className="btn primary"
-            onClick={() => connect(setupSteps ? SETUP_HOST : '', { bridge: setupSteps })}
-            disabled={action.primaryDisabled}
-          >
-            {setupSteps ? 'Continue' : action.primaryLabel}
-          </button>
+          <>
+            <button
+              type="button"
+              className="btn primary"
+              onClick={() => connect(
+                showSetupSteps ? SETUP_HOST : (ordinaryNoAnswer ? stableRecoveryHost : ''),
+                { bridge: showSetupSteps || ordinaryNoAnswer },
+              )}
+              disabled={action.primaryDisabled}
+            >
+              {setupRecovery ? 'Continue after joining' : setupSteps ? 'Continue' : ordinaryNoAnswer ? 'Look for the card again' : action.primaryLabel}
+            </button>
+            {setupRecovery && (
+              <button type="button" className="btn" onClick={() => connect(stableRecoveryHost, { bridge: true })}>
+                Try local network again
+              </button>
+            )}
+          </>
         );
       case 'needs-safe-recovery':
         return capabilities.canWebSerialInstall
@@ -368,8 +384,8 @@ export function CardConnectionCenter({
         </div>
       ) : (
         <div className="card-connection-action" data-action-id={effectiveActionId} aria-live="polite" aria-busy={(action.busy || bridgeBusy) || undefined}>
-          <h3>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Waiting for Lightweaver Bridge' : bridgeLifecycleState === 'return-pending' ? 'Return pending' : bridgeLifecycleState === 'installer-unavailable' ? 'Signed Bridge installer unavailable' : action.title}</h3>
-          <p>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Studio sent the launch request but cannot confirm whether Bridge opened. Keep this tab available for the result, or paste the return code below.' : bridgeLifecycleState === 'return-pending' ? 'Studio is validating the one-time return. Bridge will clear its saved result only after this tab accepts it.' : action.explanation}</p>
+          <h3>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Waiting for Lightweaver Bridge' : bridgeLifecycleState === 'return-pending' ? 'Return pending' : bridgeLifecycleState === 'installer-unavailable' ? 'Signed Bridge installer unavailable' : setupRecovery ? 'Join the Lightweaver setup network' : action.title}</h3>
+          <p>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Studio sent the launch request but cannot confirm whether Bridge opened. Keep this tab available for the result, or paste the return code below.' : bridgeLifecycleState === 'return-pending' ? 'Studio is validating the one-time return. Bridge will clear its saved result only after this tab accepts it.' : setupRecovery ? 'If the card is pulsing amber, join its Lightweaver-XXXX Wi-Fi network, then continue.' : action.explanation}</p>
           {action.id === 'escape-insecure-card-frame' && (
             <p>Your browser only allows USB install from a separate secure top-level tab, so the installer opens in the Lightweaver Studio tab.</p>
           )}
@@ -391,11 +407,11 @@ export function CardConnectionCenter({
             </form>
           )}
 
-          {setupSteps && (
+          {showSetupSteps && (
             <ol className="card-setup-steps">
               <li>Power the Lightweaver card.</li>
               <li>Join the <strong>Lightweaver-XXXX</strong> Wi-Fi network.</li>
-              <li>Finish setup, return to Studio, then press Continue.</li>
+              <li>Return to Studio, then press {setupRecovery ? 'Continue after joining' : 'Continue'}.</li>
             </ol>
           )}
 

@@ -17,6 +17,7 @@ import {
 function stubWindow({ openResult } = {}) {
   const opened = [];
   const values = new Map();
+  const listeners = new Map();
   const win = {
     location: { search: '' },
     opener: null,
@@ -26,8 +27,10 @@ function stubWindow({ openResult } = {}) {
       setItem: (key, value) => values.set(key, String(value)),
       removeItem: key => values.delete(key),
     },
-    addEventListener() {},
-    removeEventListener() {},
+    addEventListener(type, listener) { listeners.set(type, listener); },
+    removeEventListener(type, listener) {
+      if (listeners.get(type) === listener) listeners.delete(type);
+    },
     dispatchEvent() {},
     open(url, name) {
       opened.push({ url, name });
@@ -35,7 +38,14 @@ function stubWindow({ openResult } = {}) {
     },
   };
   globalThis.window = win;
-  return { win, opened, values };
+  return {
+    win,
+    opened,
+    values,
+    emitMessage({ origin, source, data }) {
+      listeners.get('message')?.({ origin, source, data });
+    },
+  };
 }
 
 function fakeCardTab() {
@@ -58,7 +68,11 @@ function fakeCardTab() {
     focusCalls: 0,
     focus() { this.focusCalls += 1; },
     postMessageCalls: 0,
-    postMessage() { this.postMessageCalls += 1; },
+    postMessages: [],
+    postMessage(message, targetOrigin) {
+      this.postMessageCalls += 1;
+      this.postMessages.push({ message, targetOrigin });
+    },
   };
 }
 
@@ -98,6 +112,79 @@ test('an ordinary card-page click opens the visible page in bridge mode for the 
   const fragment = new URLSearchParams(url.hash.slice(1));
   assert.equal(fragment.get('studioBridge'), '1');
   assert.equal(fragment.get('studioOrigin'), 'https://led.mandalacodes.com');
+});
+
+test('ordinary navigation persists only after paired identity and readiness are accepted', async () => {
+  const tab = fakeCardTab();
+  const { values, emitMessage } = stubWindow({ openResult: tab });
+  values.set('lw_chip_card_host', '192.168.50.29');
+  values.set('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-paired-card' }));
+
+  assert.equal(openCardBridge('192.168.50.30'), tab);
+  assert.equal(values.get('lw_chip_card_host'), '192.168.50.29');
+  assert.equal(getCardBridgeState().host, '192.168.50.30', 'the in-flight target is still tracked');
+  assert.equal(getCardBridgeState().verified, false);
+
+  emitMessage({
+    origin: 'http://192.168.50.30',
+    source: tab,
+    data: { app: 'LightweaverCardBridge', type: 'ready', host: '192.168.50.30', version: 2 },
+  });
+  assert.equal(values.get('lw_chip_card_host'), '192.168.50.29', 'ready alone is not accepted identity/readiness');
+  const identityRequest = tab.postMessages.at(-1).message;
+  emitMessage({
+    origin: 'http://192.168.50.30',
+    source: tab,
+    data: {
+      app: 'LightweaverCardBridge', id: identityRequest.id, ok: true, version: 2,
+      response: { cardId: 'lw-paired-card', firmwareVersion: '1.0.0', buildId: 'build-paired' },
+    },
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(values.get('lw_chip_card_host'), '192.168.50.29', 'matching identity still waits for readiness');
+
+  const statusPromise = sendCardBridgeRequest('status', {}, { host: '192.168.50.30', timeoutMs: 100 });
+  const statusRequest = tab.postMessages.at(-1).message;
+  emitMessage({
+    origin: 'http://192.168.50.30',
+    source: tab,
+    data: {
+      app: 'LightweaverCardBridge', id: statusRequest.id, ok: true, version: 2,
+      response: {
+        app: 'Lightweaver', provisioningContractVersion: 1,
+        cardId: 'lw-paired-card', firmwareVersion: '1.0.0', buildId: 'build-paired',
+        bootId: 'boot-paired', runtimePhase: 'ready', knownGoodProject: true,
+        commandReady: true, outputReady: true,
+      },
+    },
+  });
+  await statusPromise;
+  assert.equal(values.get('lw_chip_card_host'), '192.168.50.30');
+});
+
+test('a wrong-card identity response never persists the speculative candidate', async () => {
+  const tab = fakeCardTab();
+  const { values, emitMessage } = stubWindow({ openResult: tab });
+  values.set('lw_chip_card_host', '192.168.50.33');
+  values.set('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-expected-card' }));
+
+  openCardBridge('192.168.50.34');
+  emitMessage({
+    origin: 'http://192.168.50.34', source: tab,
+    data: { app: 'LightweaverCardBridge', type: 'ready', host: '192.168.50.34', version: 2 },
+  });
+  const identityRequest = tab.postMessages.at(-1).message;
+  emitMessage({
+    origin: 'http://192.168.50.34', source: tab,
+    data: {
+      app: 'LightweaverCardBridge', id: identityRequest.id, ok: true, version: 2,
+      response: { cardId: 'lw-wrong-card', firmwareVersion: '1.0.0', buildId: 'build-wrong' },
+    },
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  assert.equal(values.get('lw_chip_card_host'), '192.168.50.33');
+  assert.equal(getCardBridgeState().identityError, 'wrong-card');
 });
 
 test('bridge launch parameters preserve an existing card-installer payload', () => {
