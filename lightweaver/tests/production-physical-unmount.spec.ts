@@ -5,6 +5,11 @@ test('accepted staging is rolled back when the physical test unmounts before its
   page.on('console', message => {
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
+  await page.route('https://api.fontshare.com/**', route => route.fulfill({
+    status: 200,
+    contentType: 'text/css',
+    body: '',
+  }));
   await page.goto('/');
 
   await page.evaluate(async () => {
