@@ -106,6 +106,15 @@ const TRANSIENT_REASONS = new Set([
   'never-connected',
   'recovery-timeout',
 ]);
+const LOCAL_CARD_RECOVERY_REASONS = new Set([
+  'no-answer',
+  'card-page-closed',
+  'card-stopped-answering',
+  'card-unreachable',
+  'bridge-missing',
+  'never-connected',
+  'recovery-timeout',
+]);
 const UNCERTAIN_REASONS = new Set([
   'preview-unconfirmed',
   'recovery-unconfirmed',
@@ -262,6 +271,15 @@ export function nextCardConnectionAction(input = {}) {
 
   if (requiresInstaller(input.intent, reason)) return installationRoute(capabilities);
 
+  if (input.intent === 'factory-beacon') {
+    return action('recoverable-failure', {
+      route: 'setup-network',
+      title: 'Join the Lightweaver setup network',
+      explanation: 'Join Lightweaver-XXXX to finish setting up this card, then return to Studio.',
+      primaryLabel: 'Continue',
+    });
+  }
+
   if (input.intent === 'working-card' && hasSetupEvidence(input, link)) {
     return action('recoverable-failure', {
       route: 'setup-network',
@@ -277,7 +295,11 @@ export function nextCardConnectionAction(input = {}) {
     });
   }
 
-  if (TRANSIENT_REASONS.has(reason)) return action('recoverable-failure');
+  if (TRANSIENT_REASONS.has(reason)) {
+    return action('recoverable-failure', LOCAL_CARD_RECOVERY_REASONS.has(reason)
+      ? { route: 'local-card-recovery' }
+      : {});
+  }
 
   if (link.state === 'connecting' || link.state === 'reconnecting' || link.state === 'reconnecting-bridge' || link.state === 'revalidating') {
     return action('recoverable-failure', {

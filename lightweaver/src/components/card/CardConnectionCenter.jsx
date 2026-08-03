@@ -161,6 +161,11 @@ export function CardConnectionCenter({
     if (next.route !== 'setup-network') connect();
   };
 
+  const chooseFactoryBeacon = () => {
+    setIntent('factory-beacon');
+    setFailure('');
+  };
+
   const chooseBlankCard = () => {
     setIntent('blank-card');
     if (capabilities.canWebSerialInstall) openInstall();
@@ -276,8 +281,8 @@ export function CardConnectionCenter({
     && !hasKnownCard;
   const setupSteps = action.id === 'recoverable-failure' && action.route === 'setup-network';
   const stableRecoveryHost = ordinaryCardRecoveryHost(link.host || host, rememberedCard);
-  const ordinaryNoAnswer = action.id === 'recoverable-failure' && link.reason === 'no-answer';
-  const setupRecovery = ordinaryNoAnswer
+  const ordinaryRetry = action.id === 'recoverable-failure' && action.route === 'local-card-recovery';
+  const setupRecovery = ordinaryRetry
     && normalizeCardHost(link.host || host) === stableRecoveryHost;
   const showSetupSteps = setupSteps || setupRecovery;
 
@@ -319,16 +324,21 @@ export function CardConnectionCenter({
               type="button"
               className="btn primary"
               onClick={() => connect(
-                showSetupSteps ? SETUP_HOST : (ordinaryNoAnswer ? stableRecoveryHost : ''),
-                { bridge: showSetupSteps || ordinaryNoAnswer },
+                showSetupSteps ? SETUP_HOST : (ordinaryRetry ? stableRecoveryHost : ''),
+                { bridge: showSetupSteps || ordinaryRetry },
               )}
               disabled={action.primaryDisabled}
             >
-              {setupRecovery ? 'Continue after joining' : setupSteps ? 'Continue' : ordinaryNoAnswer ? 'Look for the card again' : action.primaryLabel}
+              {setupRecovery ? 'Continue after joining' : setupSteps ? 'Continue' : ordinaryRetry ? 'Look for the card again' : action.primaryLabel}
             </button>
             {setupRecovery && (
               <button type="button" className="btn" onClick={() => connect(stableRecoveryHost, { bridge: true })}>
                 Try local network again
+              </button>
+            )}
+            {ordinaryRetry && !setupRecovery && (
+              <button type="button" className="btn" onClick={chooseFactoryBeacon}>
+                Eight lights flash twice, then pause
               </button>
             )}
           </>
@@ -375,7 +385,11 @@ export function CardConnectionCenter({
           <p>Look at the card and its LEDs, then choose what you see.</p>
           <button type="button" className="card-condition-choice" onClick={chooseWorkingCard}>
             <strong>My card already lights up</strong>
-            <span>The card has power and the connected LEDs can light.</span>
+            <span>The artwork is playing a normal moving or steady light pattern.</span>
+          </button>
+          <button type="button" className="card-condition-choice" onClick={chooseFactoryBeacon}>
+            <strong>Eight lights flash twice, then pause</strong>
+            <span>The card is alive and waiting for setup.</span>
           </button>
           <button type="button" className="card-condition-choice" onClick={chooseBlankCard}>
             <strong>Blank or not responding</strong>

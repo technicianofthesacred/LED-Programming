@@ -580,6 +580,61 @@ test('wrong-card and ordinary no-answer recovery use the stable LAN name before 
   });
 });
 
+test('every unreachable-card state escapes a stale IP through the paired local name', async ({ page }) => {
+  await installOpenSpy(page);
+  const reasons = ['never-connected', 'card-unreachable', 'bridge-missing', 'card-page-closed', 'card-stopped-answering'];
+
+  for (const reason of reasons) {
+    await page.evaluate(() => {
+      localStorage.setItem('lw_chip_card_host', '192.168.18.70');
+      localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+        version: 1,
+        id: 'lw-gallery-card',
+        name: 'Gallery card',
+        hostname: 'gallery-card.local',
+        address: '192.168.18.70',
+      }));
+    });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+    await dispatchCardLinkEvent(page, { type: 'bridge-lost', reason, host: '192.168.18.70' });
+    await page.getByRole('button', { name: /Try again|Look for the card again/ }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).__openedWindows.at(-1))).toMatchObject({
+      url: expect.stringContaining('http://gallery-card.local/'),
+      target: 'lightweaver-card-bridge',
+    });
+  }
+});
+
+test('the observed eight-pixel double flash bypasses stale LAN addresses for customer setup', async ({ page }) => {
+  await installOpenSpy(page);
+  await page.evaluate(() => {
+    localStorage.setItem('lw_chip_card_host', '192.168.18.70');
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1,
+      id: 'lw-gallery-card',
+      name: 'Gallery card',
+      hostname: 'gallery-card.local',
+      address: '192.168.18.70',
+    }));
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+
+  await page.getByRole('button', { name: 'Eight lights flash twice, then pause' }).click();
+
+  const action = actionRegion(page);
+  await expect(action).toContainText('Join the Lightweaver setup network');
+  await expect(action).toContainText('Lightweaver-XXXX');
+  expect(await page.evaluate(() => (window as any).__openedWindows)).toHaveLength(0);
+
+  await page.getByRole('button', { name: 'Continue' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__openedWindows.at(-1))).toMatchObject({
+    url: expect.stringContaining('http://192.168.4.1/'),
+    target: 'lightweaver-card-bridge',
+  });
+});
+
 test('card update and safe recovery use install only when browser USB is usable', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: {} });
