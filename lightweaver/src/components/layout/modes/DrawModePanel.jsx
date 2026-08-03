@@ -92,6 +92,7 @@ export function DrawModePanel({
   kaleidoscopeCalibration,
   onConnectCard,
   onOpenConnectionCenter,
+  onStarterPreviewChange,
 }) {
   const {
     strips, layers, hidden, setHidden,
@@ -443,6 +444,7 @@ export function DrawModePanel({
             defaultDensity={density}
             onImport={() => fileRef.current?.click()}
             onCreate={createStarterPrimitive}
+            onPreviewChange={onStarterPreviewChange}
             onFreeDraw={() => {
               clearStarterLayout();
               setWaypoints([]);
