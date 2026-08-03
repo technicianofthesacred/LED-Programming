@@ -216,12 +216,20 @@ test('reports an exact wrong-card result without silently adopting it', () => {
 });
 
 test('turns bounded transient link failures into a retryable state', () => {
-  for (const reason of ['popup-blocked', 'no-answer', 'card-page-closed']) {
-    assert.equal(nextCardConnectionAction({
+  for (const reason of ['no-answer', 'card-page-closed']) {
+    const result = nextCardConnectionAction({
       intent: 'working-card',
       link: { state: 'disconnected', reason },
-    }).id, 'recoverable-failure', reason);
+    });
+    assert.equal(result.id, 'recoverable-failure', reason);
+    assert.equal(result.route, 'local-card-recovery', reason);
   }
+  const popupBlocked = nextCardConnectionAction({
+    intent: 'working-card',
+    link: { state: 'disconnected', reason: 'popup-blocked' },
+  });
+  assert.equal(popupBlocked.id, 'recoverable-failure');
+  assert.equal(popupBlocked.route, undefined);
 });
 
 test('keeps setup-network compatibility as an explicit recoverable route', () => {
@@ -235,6 +243,18 @@ test('keeps setup-network compatibility as an explicit recoverable route', () =>
     assert.equal(result.primaryLabel, 'Continue');
     assert.match(result.explanation, /setup network/i);
   }
+});
+
+test('routes the factory eight-pixel double-flash observation straight to setup', () => {
+  const result = nextCardConnectionAction({
+    intent: 'factory-beacon',
+    link: { state: 'disconnected', reason: 'card-unreachable' },
+  });
+
+  assert.equal(result.id, 'recoverable-failure');
+  assert.equal(result.route, 'setup-network');
+  assert.equal(result.primaryLabel, 'Continue');
+  assert.match(result.explanation, /Lightweaver-XXXX/);
 });
 
 test('requires safe recovery when a write or recovery result is uncertain', () => {
