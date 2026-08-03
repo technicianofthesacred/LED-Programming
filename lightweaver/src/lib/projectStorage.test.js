@@ -23,7 +23,8 @@ import {
   writeStorageJsonWithBackup,
   writeActiveProjectLibraryRecordId,
 } from './projectStorage.js';
-import { createDefaultProject } from './projectModel.js';
+import { createDefaultProject, migrateProject, resolveStartupProject } from './projectModel.js';
+import { normalizePatchBoard } from './patchBoard.js';
 
 function memoryStorage() {
   const data = new Map();
@@ -253,4 +254,62 @@ test('generic JSON storage helpers recover from a corrupt primary snapshot', () 
     ok: true,
     value: 42,
   });
+});
+
+// ── Autosave round-trip: physical data-wire review flag ─────────────────────
+// The autosave flush serializes `normalizePatchBoard(patchBoard, strips)` into
+// the v3 keys; boot reads it back through readRestorableProjectJson and
+// resolveStartupProject. Current-version projects must come back with the
+// "Older project — confirm each strip's GPIO" flag exactly as saved.
+
+const autosavePayloadFor = project => ({
+  ...project,
+  layout: {
+    ...project.layout,
+    patchBoard: normalizePatchBoard(project.layout.patchBoard, project.layout.strips),
+  },
+});
+
+test('current-version autosave round-trip keeps the GPIO review flag clear', () => {
+  const storage = memoryStorage();
+  const project = createDefaultProject();
+  assert.equal(project.layout.patchBoard.dataWireCountNeedsReview, false);
+
+  writeStorageJsonWithBackup('lw_autosave_v3', 'lw_autosave_v3_backup', autosavePayloadFor(project), { storage });
+  const { payload, restoredFrom } = readRestorableProjectJson('lw_autosave_v3', 'lw_autosave_v3_backup', { storage });
+  assert.equal(restoredFrom, 'primary');
+  const booted = resolveStartupProject({ savedProject: payload });
+
+  assert.equal(booted.layout.patchBoard.dataWireCountNeedsReview, false);
+  assert.equal(booted.layout.patchBoard.dataWireCount, 1);
+});
+
+test('a dismissed GPIO review flag stays dismissed across autosave reloads', () => {
+  const storage = memoryStorage();
+
+  // Legacy-shaped save: no explicit data-wire count, no wiring, no configured
+  // outputs — the one case migration legitimately flags for review.
+  const legacyShaped = createDefaultProject();
+  delete legacyShaped.layout.patchBoard.dataWireCount;
+  delete legacyShaped.layout.patchBoard.dataWireCountNeedsReview;
+  legacyShaped.layout.wiring = null;
+  legacyShaped.devices.standaloneController.outputs =
+    legacyShaped.devices.standaloneController.outputs.map(output => ({ ...output, pixels: 0 }));
+
+  const firstBoot = migrateProject(JSON.parse(JSON.stringify(legacyShaped)));
+  assert.equal(firstBoot.layout.patchBoard.dataWireCountNeedsReview, true);
+
+  // "Looks right" dismissal, then the normal autosave flush + reload.
+  firstBoot.layout.patchBoard = { ...firstBoot.layout.patchBoard, dataWireCountNeedsReview: false };
+  writeStorageJsonWithBackup('lw_autosave_v3', 'lw_autosave_v3_backup', autosavePayloadFor(firstBoot), { storage });
+  const { payload } = readRestorableProjectJson('lw_autosave_v3', 'lw_autosave_v3_backup', { storage });
+  const secondBoot = resolveStartupProject({ savedProject: payload });
+
+  assert.equal(secondBoot.layout.patchBoard.dataWireCountNeedsReview, false);
+
+  // And it must remain dismissed on every later reload as well.
+  writeStorageJsonWithBackup('lw_autosave_v3', 'lw_autosave_v3_backup', autosavePayloadFor(secondBoot), { storage });
+  const third = readRestorableProjectJson('lw_autosave_v3', 'lw_autosave_v3_backup', { storage });
+  const thirdBoot = resolveStartupProject({ savedProject: third.payload });
+  assert.equal(thirdBoot.layout.patchBoard.dataWireCountNeedsReview, false);
 });

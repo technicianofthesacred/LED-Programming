@@ -26,6 +26,7 @@ import { WiringCordOverlay } from '../wire/WiringCordOverlay.jsx';
 export function LayoutCanvas({
   refs,
   strips, layers, hidden,
+  starterGhost = null,
   viewBox, computedViewBox, vbScale, svgText, artworkHTML, totalLeds,
   selection,
   lightPreview,
@@ -717,6 +718,20 @@ export function LayoutCanvas({
               );
             })()}
 
+            {/* ── Starter primitive ghost — live preview of the shape the
+                   starter panel will create (dimmed rail + LED dots, no glow) ── */}
+            {starterGhost && (
+              <g className="lw-starter-ghost" data-testid="starter-ghost" aria-hidden="true">
+                <path d={starterGhost.pathData} fill="none"
+                      stroke="oklch(62% 0.012 75)" strokeWidth="1.5"
+                      strokeDasharray="5 3" strokeLinecap="round"/>
+                {starterGhost.pixels.map((px, i) => (
+                  <circle key={i} cx={px.x} cy={px.y} r={vbScale * 3.2}
+                          fill="oklch(58% 0.04 70)"/>
+                ))}
+              </g>
+            )}
+
             {/* ── Draw mode ghost ── */}
             {drawMode && ghostD && (
               <path d={ghostD} stroke="oklch(0.615 0.112 57)" strokeWidth="1.5" fill="none"
@@ -732,8 +747,8 @@ export function LayoutCanvas({
                       fill="oklch(0.615 0.112 57)" opacity={0.5} pointerEvents="none"/>
             )}
 
-            {/* ── Empty state ── */}
-            {!svgText && strips.length === 0 && (
+            {/* ── Empty state (hidden while the starter ghost previews a shape) ── */}
+            {!svgText && strips.length === 0 && !starterGhost && (
               <>
                 <rect x="1" y="1" width="638" height="398" rx="4" fill="none"
                       stroke="oklch(30% 0.01 75)" strokeDasharray="6 4"/>

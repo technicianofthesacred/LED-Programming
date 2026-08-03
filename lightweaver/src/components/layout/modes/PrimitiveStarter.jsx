@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { STARTER_PRIMITIVES } from '../../../lib/layoutPrimitives.js';
 import { DENSITY_OPTIONS, clampLedCount } from '../../../lib/layoutGeometry.js';
 
@@ -11,13 +11,21 @@ function PrimitiveIcon({ type }) {
 
 const formatMetres = value => (Number(value) >= 10 ? Number(value).toFixed(1) : Number(value).toFixed(2));
 
-export function PrimitiveStarter({ currentPixelCount, defaultDensity, onCreate, onFreeDraw, onImport }) {
+export function PrimitiveStarter({ currentPixelCount, defaultDensity, onCreate, onFreeDraw, onImport, onPreviewChange }) {
   const [selected, setSelected] = useState('line');
   const [ledCount, setLedCount] = useState(currentPixelCount);
   const [density, setDensity] = useState(defaultDensity);
   const [lengthM, setLengthM] = useState(currentPixelCount / defaultDensity);
   const [lengthDraft, setLengthDraft] = useState(() => formatMetres(currentPixelCount / defaultDensity));
   const freeDraw = selected === 'free';
+
+  // Surface the resolved values so the canvas can ghost-preview the primitive
+  // live. onPreviewChange must be referentially stable (it is a state setter
+  // upstream) — otherwise this effect would loop on every render.
+  useEffect(() => {
+    onPreviewChange?.({ shape: selected, ledCount: clampLedCount(ledCount), density, lengthM });
+  }, [onPreviewChange, selected, ledCount, density, lengthM]);
+  useEffect(() => () => onPreviewChange?.(null), [onPreviewChange]);
 
   const setLinkedCount = rawValue => {
     const count = clampLedCount(rawValue);

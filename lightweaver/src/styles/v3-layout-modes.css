@@ -63,6 +63,14 @@
 .la-primitive-action > span { color: var(--text-faint); font: 10px/1.4 var(--font-mono); }
 .la-primitive-action .btn { flex: 0 0 auto; justify-content: center; min-width: 98px; text-transform: capitalize; }
 
+/* Canvas ghost of the starter primitive — dimmed live preview that tracks
+   the picker's shape/LEDs/density/size before Create is pressed. */
+.lw-starter-ghost {
+  opacity: 0.35;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+
 /* ── Size mode — the artwork-size → density → per-strip-count chain ─────── */
 
 .la-size-chain {

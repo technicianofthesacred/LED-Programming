@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { TbIcon } from './layout/shared/InspectorPrimitives.jsx';
 import { ModeSwitch } from './layout/shared/ModeSwitch.jsx';
-import { GLOW_MODES, svgPt } from '../lib/layoutGeometry.js';
+import { GLOW_MODES, svgPt, sampleStripPixels } from '../lib/layoutGeometry.js';
+import { createPrimitiveStripDefinition } from '../lib/layoutPrimitives.js';
+import { scaleStripGeometry } from '../lib/stripScale.js';
 import { LayoutCanvas } from './layout/canvas/LayoutCanvas.jsx';
 import { DrawModePanel } from './layout/modes/DrawModePanel.jsx';
 import { WireModePanel } from './layout/modes/WireModePanel.jsx';
@@ -30,6 +32,9 @@ export function LayoutScreen({ connected, cardHost, onConnectCard, onOpenConnect
   const [firstLedError, setFirstLedError] = useState(null);
   const [firstLedMarkerRunId, setFirstLedMarkerRunId] = useState(null);
   const [kaleidoscopeEditor, setKaleidoscopeEditor] = useState(null);
+  // Live values from the starter panel ({ shape, ledCount, density, lengthM }
+  // or null) — drives the ghost preview of the primitive on the canvas.
+  const [starterPreview, setStarterPreview] = useState(null);
   const { wiring, compiledWiring, updateWiring } = useProject();
   const {
     // context passthroughs + composer-level derived (chrome + canvas only)
@@ -197,9 +202,36 @@ export function LayoutScreen({ connected, cardHost, onConnectCard, onOpenConnect
     layoutMode: mode,
   });
 
+  // Ghost preview of the starter primitive: only while the starter panel is
+  // actually shown, and never for Free draw (no geometry until drawn). The
+  // geometry mirrors createStarterPrimitive exactly (same definition + sizing
+  // helpers) so pressing Create causes no visual jump.
+  const starterGhostVisible = state.starterLayoutActive && mode === 'draw' && !drawMode && !state.pendingDraw;
+  const starterGhost = useMemo(() => {
+    if (!starterGhostVisible || !starterPreview || starterPreview.shape === 'free') return null;
+    const definition = createPrimitiveStripDefinition({
+      type: starterPreview.shape,
+      viewBox,
+      pixelCount: starterPreview.ledCount,
+    });
+    const count = definition.pixelCount;
+    const reelDensity = Number.isFinite(starterPreview.density) && starterPreview.density > 0
+      ? starterPreview.density
+      : state.density;
+    const physicalLength = Number.isFinite(starterPreview.lengthM) && starterPreview.lengthM > 0
+      ? starterPreview.lengthM
+      : count / reelDensity;
+    const targetLength = physicalLength * 1000 * state.pxPerMm;
+    const sized = definition.svgLength > 0 && Number.isFinite(targetLength)
+      ? scaleStripGeometry(definition, targetLength / definition.svgLength)
+      : definition;
+    return { pathData: sized.pathData, pixels: sampleStripPixels(sized.pathData, count) };
+  }, [starterGhostVisible, starterPreview, viewBox, state.density, state.pxPerMm]);
+
   const canvasProps = {
     refs: { svgRef, artworkRef, vpRef, spaceRef, stripDragSuppressClickRef },
     strips: state.starterLayoutActive && mode === 'draw' ? [] : strips, layers, hidden,
+    starterGhost,
     viewBox, computedViewBox, vbScale, svgText, artworkHTML, totalLeds,
     selection: { selStripId, selLayer, pathSel, selectedPathDecorations, existingStrip },
     lightPreview: {
@@ -414,7 +446,8 @@ export function LayoutScreen({ connected, cardHost, onConnectCard, onOpenConnect
                            }}
                            kaleidoscopeCalibration={kaleidoscopeCalibration}
                            onConnectCard={onConnectCard}
-                           onOpenConnectionCenter={onOpenConnectionCenter}/>
+                           onOpenConnectionCenter={onOpenConnectionCenter}
+                           onStarterPreviewChange={setStarterPreview}/>
           )}
           {mode === 'wire' && <WireModePanel state={state} connected={connected} cardHost={cardHost}/>} 
         </div>

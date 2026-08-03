@@ -497,7 +497,16 @@ export function resolveStartupProject({
   const projectHasLayout = Array.isArray(project.layout?.strips) &&
     project.layout.strips.length > 0 &&
     !isDefaultCircleLayout(project.layout.strips);
-  const legacyHasLayout = Array.isArray(legacyLayout.layout?.strips) && legacyLayout.layout.strips.length > 0;
+  // A legacy layout made only of generated default-circle strips is a
+  // placeholder, not drawn work worth rescuing — the same rule projectHasLayout
+  // applies above. Rescuing it would also repeat on EVERY boot (the merged
+  // strips stay generated, so projectHasLayout stays false), and each merge
+  // clobbers the saved patch board with a legacy-migrated one whose
+  // dataWireCountNeedsReview was re-derived as true — resurrecting the
+  // "Older project" GPIO banner after the user already dismissed it.
+  const legacyHasLayout = Array.isArray(legacyLayout.layout?.strips) &&
+    legacyLayout.layout.strips.length > 0 &&
+    !isDefaultCircleLayout(legacyLayout.layout.strips);
 
   if (!projectHasLayout && legacyHasLayout) {
     return {

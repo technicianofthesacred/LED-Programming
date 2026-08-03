@@ -426,20 +426,25 @@ export function layoutViewBox(viewBox, { zoom = 1, panX = 0, panY = 0 } = {}) {
   return { x: centerX - width / 2, y: centerY - height / 2, width, height };
 }
 
-export function fitViewToBounds(viewBox, bounds, { paddingRatio = 0.08 } = {}) {
+export function fitViewToBounds(viewBox, bounds, { paddingRatio = 0.08, includeBase = true, maxZoom } = {}) {
   const base = parsedVb(viewBox);
   const bx = Number.isFinite(bounds?.x) ? bounds.x : base.x;
   const by = Number.isFinite(bounds?.y) ? bounds.y : base.y;
   const bw = Number.isFinite(bounds?.width) && bounds.width >= 0 ? bounds.width : base.w;
   const bh = Number.isFinite(bounds?.height) && bounds.height >= 0 ? bounds.height : base.h;
-  const left = Math.min(base.x, bx);
-  const top = Math.min(base.y, by);
-  const right = Math.max(base.x + base.w, bx + bw);
-  const bottom = Math.max(base.y + base.h, by + bh);
+  // includeBase keeps the whole artboard in frame (artwork projects, where LED
+  // positions are relative to the art); content-only fit skips the union so
+  // small strip groups can actually fill the viewport.
+  const left = includeBase ? Math.min(base.x, bx) : bx;
+  const top = includeBase ? Math.min(base.y, by) : by;
+  const right = includeBase ? Math.max(base.x + base.w, bx + bw) : bx + bw;
+  const bottom = includeBase ? Math.max(base.y + base.h, by + bh) : by + bh;
   const padding = Math.max(0, Number.isFinite(paddingRatio) ? paddingRatio : 0.08);
   const contentWidth = Math.max(Number.EPSILON, right - left);
   const contentHeight = Math.max(Number.EPSILON, bottom - top);
+  const zoomCap = Number.isFinite(maxZoom) && maxZoom > 0 ? maxZoom : MAX_SAFE_ZOOM;
   const zoom = zoomBy(1, Math.min(
+    zoomCap,
     base.w / (contentWidth * (1 + padding * 2)),
     base.h / (contentHeight * (1 + padding * 2)),
   ));
@@ -448,6 +453,43 @@ export function fitViewToBounds(viewBox, bounds, { paddingRatio = 0.08 } = {}) {
     panX: left + contentWidth / 2 - (base.x + base.w / 2),
     panY: top + contentHeight / 2 - (base.y + base.h / 2),
   };
+}
+
+// Content-only fit for artwork-less projects. Padding 0.25 per side frames
+// the strips at ~67% of the tighter viewport axis (comfortable, not edge to
+// edge), and the 400% cap keeps Fit from zooming absurdly into a tiny strip —
+// wheel/keyboard zoom can still travel to the numerical rails in zoomBy.
+export const FIT_CONTENT_PADDING_RATIO = 0.25;
+export const FIT_CONTENT_MAX_ZOOM = 4;
+
+export function fitViewToContent(viewBox, bounds, {
+  paddingRatio = FIT_CONTENT_PADDING_RATIO,
+  maxZoom = FIT_CONTENT_MAX_ZOOM,
+} = {}) {
+  return fitViewToBounds(viewBox, bounds, { paddingRatio, maxZoom, includeBase: false });
+}
+
+// Union of every strip's LED pixel coordinates (plus the strip's transient
+// x/y drag offset). Deliberately NOT getBBox(): the SVG stage subtree also
+// holds direction arrows, wire markers, and empty-state chrome that would
+// inflate a measured fit. Returns null when there is nothing to measure.
+export function stripContentBounds(strips) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const strip of Array.isArray(strips) ? strips : []) {
+    const ox = Number.isFinite(strip?.x) ? strip.x : 0;
+    const oy = Number.isFinite(strip?.y) ? strip.y : 0;
+    for (const px of Array.isArray(strip?.pixels) ? strip.pixels : []) {
+      if (!Number.isFinite(px?.x) || !Number.isFinite(px?.y)) continue;
+      const x = px.x + ox;
+      const y = px.y + oy;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (!(minX <= maxX && minY <= maxY)) return null;
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
 export const STRIP_COLORS = [
