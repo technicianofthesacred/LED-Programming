@@ -102,6 +102,15 @@ export function isLocalCardHost(rawHost = '') {
   return /^[a-z0-9-]+(\.[a-z0-9-]+)*\.local$/i.test(bare);
 }
 
+export function ordinaryCardRecoveryHost(_rawHost = '', expectedCard = readPersistedCardIdentity()) {
+  const pairedHostname = normalizeCardHost(expectedCard?.hostname || '');
+  if (
+    pairedHostname.endsWith('.local')
+    && isLocalCardHost(pairedHostname)
+  ) return pairedHostname;
+  return DEFAULT_CARD_HOST;
+}
+
 export function readStoredCardHost() {
   if (typeof window === 'undefined') return DEFAULT_CARD_HOST;
   try {
