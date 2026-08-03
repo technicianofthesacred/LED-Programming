@@ -208,7 +208,7 @@ test('connection center starts with the two physical card choices', async ({ pag
   await expect(dialog.getByRole('button', { name: 'Blank or not responding' })).toBeVisible();
 });
 
-test('an unreachable previously paired card opens directly on retry guidance', async ({ page }) => {
+test('an unreachable paired card without a remembered address opens setup-network recovery', async ({ page }) => {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => {
     localStorage.clear();
@@ -223,7 +223,9 @@ test('an unreachable previously paired card opens directly on retry guidance', a
 
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
-  await expect(dialog.getByRole('button', { name: 'Try again' })).toBeVisible();
+  await expect(dialog).toContainText('Lightweaver-XXXX');
+  await expect(dialog.getByRole('button', { name: 'Continue after joining' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Try local network again' })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
   await expect(dialog).not.toContainText('lw-remembered-card');
 });
