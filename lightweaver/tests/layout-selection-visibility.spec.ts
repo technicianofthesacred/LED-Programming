@@ -119,6 +119,20 @@ test('selected Draw strip has a clear, non-blocking visual identity across drag 
     await expect(path).toHaveAttribute('stroke-linecap', 'round');
     await expect(path).toHaveAttribute('stroke-linejoin', 'round');
   }
+  // Halo is a thin translucent ribbon and core a faint spine so the LED
+  // dots underneath stay readable, rather than a solid tube burying them.
+  await expect(halo).toHaveAttribute('opacity', '0.55');
+  await expect(core).toHaveAttribute('opacity', '0.35');
+
+  // The selected strip's LED dots carry a dark socket rim for contrast
+  // against the halo/core overlay (dots render by default: glow mode starts
+  // as 'dots' and showLeds defaults to true).
+  const selectedLed = page.locator(`[data-testid^="strip-led-${selectedId}-"]`).first();
+  if (await selectedLed.count() > 0) {
+    const selectedLedCircle = selectedLed.locator('circle').first();
+    await expect(selectedLedCircle).toHaveAttribute('stroke', 'oklch(0.22 0.03 235 / 0.9)');
+  }
+
   await expect(badge).toContainText(selected.name);
   await expect(badge).toContainText(new RegExp(`${selected.pixelCount}\\s*LEDs?`));
   const badgeRect = badge.locator('rect');
