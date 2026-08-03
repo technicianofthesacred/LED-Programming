@@ -22,6 +22,8 @@ import {
   wheelZoomFactor,
   layoutViewBox,
   fitViewToBounds,
+  fitViewToContent,
+  stripContentBounds,
   pathIntersectsRect,
 } from '../../../lib/layoutGeometry.js';
 import { isClosedPathData } from '../../../lib/pathClosure.js';
@@ -203,6 +205,22 @@ export function useLayoutCanvasInteraction(ctx, deps) {
     // Let an import/load commit its new SVG tree before measuring. Manual Fit all
     // uses the same path, and no edit operation calls this automatically.
     requestAnimationFrame(() => {
+      // No artwork: the 640x400 artboard is just empty space, so frame the
+      // strips themselves. Bounds come from the strips' pixel coordinates,
+      // not getBBox() — the SVG subtree also carries arrows/markers/empty-
+      // state chrome that would inflate a measured fit. With artwork, keep
+      // the artboard in frame since LED positions are relative to the art.
+      if (!svgText) {
+        const contentBounds = stripContentBounds(stripsRef.current);
+        if (contentBounds) {
+          const fit = fitViewToContent(viewBoxRef.current, contentBounds);
+          setZoom(fit.zoom);
+          setPanX(fit.panX);
+          setPanY(fit.panY);
+          return;
+        }
+      }
+      // Artwork present, or nothing measurable: original artboard-union fit.
       let bounds = null;
       try {
         bounds = svgRef.current?.getBBox?.() || null;
@@ -214,7 +232,7 @@ export function useLayoutCanvasInteraction(ctx, deps) {
       setPanX(fit.panX);
       setPanY(fit.panY);
     });
-  }, [svgRef]);
+  }, [svgRef, svgText, stripsRef]);
 
   const zoomByFactor = useCallback((factor, anchorClientPoint = null) => {
     const nextZoom = zoomBy(zoom, factor);
