@@ -411,7 +411,7 @@ export function CardConnectionCenter({
             <ol className="card-setup-steps">
               <li>Power the Lightweaver card.</li>
               <li>Join the <strong>Lightweaver-XXXX</strong> Wi-Fi network.</li>
-              <li>Return to Studio, then press {setupRecovery ? 'Continue after joining' : 'Continue'}.</li>
+              <li>{setupRecovery ? 'Return to Studio, then press Continue after joining.' : 'Finish setup, return to Studio, then press Continue.'}</li>
             </ol>
           )}
 

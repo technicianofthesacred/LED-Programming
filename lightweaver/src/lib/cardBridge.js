@@ -823,6 +823,14 @@ export function retargetCardBridge(rawHost = '', rawCorrelation = {}, { flowId: 
   }
 
   const target = bridgeWindow;
+  // The setup host stopped being speculative when its status produced the
+  // exact card/boot/generation correlation accepted by the Wi-Fi handoff.
+  // Preserve that last verified recovery address until the station target
+  // proves itself below; an ambiguous network transition can then resume from
+  // the setup AP without saving the unverified station address early.
+  if (!repeated && normalizeCardHost(bridgeHost) === '192.168.4.1') {
+    writeStoredCardHost(bridgeHost);
+  }
   const origin = cardHostToUrl(host);
   if (!repeated) {
     // Settle every AP promise and revoke its lifecycle synchronously before the
