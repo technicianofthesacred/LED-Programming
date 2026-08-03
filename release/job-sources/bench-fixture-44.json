@@ -7,7 +7,7 @@
   "firmware": {
     "target": "esp32-s3-n16r8",
     "version": "1.0.0",
-    "buildId": "cad5335724fff4d2d13159918d9444f171678dbc",
+    "buildId": "bde152c3a5cd9837236a3d6fe3a928a4c15aadfd",
     "minimumVersion": "1.0.0"
   },
   "project": {
