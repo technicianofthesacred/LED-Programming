@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createDefaultProject, migrateProject, toLegacyProject } from './projectModel.js';
+import { createDefaultProject, migrateProject, resolveStartupProject, toLegacyProject } from './projectModel.js';
+import { createDefaultPatchBoard } from './patchBoard.js';
+import { createDefaultCircleLayout } from './defaultCircleLayout.js';
+import { makeDefaultWiring } from './wiringModel.js';
+
+const jsonRoundTrip = value => JSON.parse(JSON.stringify(value));
 
 test('new projects start with one explicit physical data wire', () => {
   const project = createDefaultProject();
@@ -138,6 +143,64 @@ test('migration keeps valid Kaleidoscope metadata and warns while disabling malf
     migrated.layout.projectWarnings,
     'startup validation and application may migrate the same project twice',
   );
+});
+
+test('generated default-circle legacy autosaves never re-merge over a current project', () => {
+  // Saved current-version project: starter-configured single 37-LED section.
+  // Still a generated default-circle layout, so `projectHasLayout` is false —
+  // exactly the shape the reported "Older project" banner appeared on.
+  const saved = createDefaultProject();
+  saved.layout.strips = createDefaultCircleLayout({ totalPixels: 37, sectionCount: 1 });
+  saved.layout.starterPending = false;
+  saved.layout.patchBoard = createDefaultPatchBoard(saved.layout.strips);
+  saved.layout.wiring = makeDefaultWiring(saved.layout.strips);
+
+  // Stale legacy layout autosave whose strips are ALSO generated placeholder
+  // sections. Before the fix this merged over the saved layout on EVERY boot,
+  // and its migrated patch board re-derived dataWireCountNeedsReview = true.
+  const legacyLayoutProject = {
+    version: 2,
+    strips: jsonRoundTrip(createDefaultCircleLayout()),
+    viewBox: '0 0 640 400',
+    patchBoard: null,
+  };
+
+  const booted = resolveStartupProject({
+    savedProject: jsonRoundTrip(saved),
+    legacyLayoutProject: jsonRoundTrip(legacyLayoutProject),
+  });
+
+  assert.deepEqual(
+    booted.layout.strips.map(strip => `${strip.id}:${strip.pixelCount}`),
+    ['default-outer-circle:37'],
+    'the saved starter-configured layout must win over the generated legacy placeholder',
+  );
+  assert.equal(booted.layout.patchBoard.dataWireCountNeedsReview, false);
+
+  // The legacy key is never cleared, so a second reload must stay stable too.
+  const rebooted = resolveStartupProject({
+    savedProject: jsonRoundTrip(booted),
+    legacyLayoutProject: jsonRoundTrip(legacyLayoutProject),
+  });
+  assert.equal(rebooted.layout.patchBoard.dataWireCountNeedsReview, false);
+  assert.deepEqual(
+    rebooted.layout.strips.map(strip => `${strip.id}:${strip.pixelCount}`),
+    ['default-outer-circle:37'],
+  );
+});
+
+test('real drawn legacy layouts still rescue into a fresh default project', () => {
+  const rescued = resolveStartupProject({
+    savedProject: createDefaultProject(),
+    legacyLayoutProject: {
+      version: 2,
+      strips: [{ id: 'legacy-strip', pathData: 'M0 0 L20 0', pixelCount: 20 }],
+      viewBox: '0 0 640 400',
+    },
+  });
+
+  assert.equal(rescued.layout.strips.length, 1);
+  assert.equal(rescued.layout.strips[0].sourceLayerId, 'legacy-strip');
 });
 
 test('old projects load without Kaleidoscope fields and legacy export strips new metadata', () => {
