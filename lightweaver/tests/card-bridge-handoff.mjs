@@ -11,6 +11,7 @@ import {
   openCardBridge,
   openLocalCardPage,
   retargetCardBridge,
+  restoreCardBridgeHandoff,
   sendCardBridgeRequest,
   rePairDiscoveredCardBridgeIdentity,
   verifyCardBridgeIdentity,
@@ -996,6 +997,31 @@ assert.equal(deadlineRecovery.harness.clock.pendingCount(), 0,
 assert.equal(deadlineRecovery.harness.windowListenerCount('online'), 0);
 assert.equal(deadlineRecovery.harness.windowListenerCount('focus'), 0);
 assert.equal(deadlineRecovery.harness.documentListenerCount('visibilitychange'), 0);
+const navigationCountAtDeadline = deadlineRecovery.target.navigations.length;
+const expiredExactDuplicate = retargetCardBridge(recoveryStationHost, recoveryCorrelation, {
+  flowId: recoveryFlowId,
+});
+assert.equal(expiredExactDuplicate.ok, false);
+assert.equal(expiredExactDuplicate.reason, 'stale-correlation');
+assert.equal(expiredExactDuplicate.retryable, false);
+assert.equal(deadlineRecovery.target.navigations.length, navigationCountAtDeadline,
+  'an exact duplicate at the absolute deadline cannot navigate');
+assert.equal(deadlineRecovery.harness.clock.pendingCount(), 0);
+assert.equal(deadlineRecovery.harness.windowListenerCount('online'), 0);
+assert.equal(deadlineRecovery.harness.windowListenerCount('focus'), 0);
+assert.equal(deadlineRecovery.harness.documentListenerCount('visibilitychange'), 0);
+deadlineRecovery.harness.clock.advance(1);
+const expiredLaterDuplicate = retargetCardBridge(recoveryStationHost, recoveryCorrelation, {
+  flowId: recoveryFlowId,
+});
+assert.equal(expiredLaterDuplicate.ok, false);
+assert.equal(expiredLaterDuplicate.reason, 'stale-correlation');
+assert.equal(deadlineRecovery.target.navigations.length, navigationCountAtDeadline,
+  'an exact duplicate after the deadline cannot navigate or rearm recovery');
+assert.equal(deadlineRecovery.harness.clock.pendingCount(), 0);
+assert.equal(deadlineRecovery.harness.windowListenerCount('online'), 0);
+assert.equal(deadlineRecovery.harness.windowListenerCount('focus'), 0);
+assert.equal(deadlineRecovery.harness.documentListenerCount('visibilitychange'), 0);
 
 const lifecycleRecovery = beginNavigationRecovery();
 const lifecycleUrl = lifecycleRecovery.result.url;
@@ -1068,6 +1094,55 @@ assert.equal(responseRecovery.harness.windowListenerCount('online'), 0);
 assert.equal(responseRecovery.harness.windowListenerCount('focus'), 0);
 assert.equal(responseRecovery.harness.documentListenerCount('visibilitychange'), 0);
 
+const malformedIdentityRecovery = beginNavigationRecovery({
+  flowId: 'flow-malformed-identity-1234',
+  correlation: { ...recoveryCorrelation, handoffGeneration: 121 },
+});
+const malformedStaleCallbacks = [
+  ...malformedIdentityRecovery.harness.windowListeners('online'),
+  ...malformedIdentityRecovery.harness.windowListeners('focus'),
+  ...malformedIdentityRecovery.harness.documentListeners('visibilitychange'),
+  ...malformedIdentityRecovery.harness.clock.callbacks(),
+];
+const malformedIdentityPromise = sendCardBridgeRequest('firmware-info', {}, {
+  host: recoveryStationHost,
+  timeoutMs: 1000,
+  retryOnTimeout: false,
+});
+const malformedIdentityRequest = malformedIdentityRecovery.target.posts.at(-1)?.message;
+assert.equal(malformedIdentityRequest?.type, 'firmware-info');
+malformedIdentityRecovery.harness.emitMessage({
+  origin: `http://${recoveryStationHost}`,
+  source: malformedIdentityRecovery.target,
+  data: {
+    app: 'LightweaverCardBridge', version: 2, id: malformedIdentityRequest.id, ok: true,
+    response: { firmwareVersion: '2.0.0', buildId: 'build-navigation-recovery' },
+  },
+});
+await assert.rejects(malformedIdentityPromise, error => error?.reason === 'identity-missing');
+assert.equal(malformedIdentityRecovery.harness.clock.pendingCount(), 0,
+  'malformed exact-origin firmware identity clears the retry timer');
+assert.equal(malformedIdentityRecovery.harness.windowListenerCount('online'), 0);
+assert.equal(malformedIdentityRecovery.harness.windowListenerCount('focus'), 0);
+assert.equal(malformedIdentityRecovery.harness.documentListenerCount('visibilitychange'), 0);
+const malformedNavigationCount = malformedIdentityRecovery.target.navigations.length;
+for (const callback of malformedStaleCallbacks) callback();
+assert.equal(malformedIdentityRecovery.target.navigations.length, malformedNavigationCount,
+  'signals and stale timers cannot navigate after malformed identity invalidates handoff recovery');
+
+const staleHostRecovery = beginNavigationRecovery({
+  flowId: 'flow-stale-host-restore-1234',
+  correlation: { ...recoveryCorrelation, handoffGeneration: 122 },
+});
+staleHostRecovery.harness.storageValues.set('lw_chip_card_host', '192.168.18.199');
+const staleHostRestore = restoreCardBridgeHandoff('flow-stale-host-restore-1234');
+assert.equal(staleHostRestore.reason, 'stale-host');
+assert.equal(staleHostRecovery.harness.clock.pendingCount(), 0,
+  'stale-host restore rejection clears the active navigation timer');
+assert.equal(staleHostRecovery.harness.windowListenerCount('online'), 0);
+assert.equal(staleHostRecovery.harness.windowListenerCount('focus'), 0);
+assert.equal(staleHostRecovery.harness.documentListenerCount('visibilitychange'), 0);
+
 const duplicateRecovery = beginNavigationRecovery({
   flowId: 'flow-duplicate-recovery-1234',
   correlation: { ...recoveryCorrelation, handoffGeneration: 13 },
@@ -1112,6 +1187,66 @@ throwingRecovery.harness.clock.advance(4000);
 assert.equal(throwingRecovery.target.navigations.length, 2);
 assert.equal(throwingRecovery.target.location.href, throwingRecovery.result.url,
   'a later bounded retry succeeds once location assignment is writable');
+
+const closedSameOwnerRecovery = beginNavigationRecovery({
+  flowId: 'flow-closed-same-owner-1234',
+  correlation: { ...recoveryCorrelation, handoffGeneration: 161 },
+});
+const closedSameOwnerNavigationCount = closedSameOwnerRecovery.target.navigations.length;
+closedSameOwnerRecovery.target.closed = true;
+closedSameOwnerRecovery.harness.emitWindow('online');
+assert.equal(closedSameOwnerRecovery.target.navigations.length, closedSameOwnerNavigationCount,
+  'a closed active target cannot navigate on the same owner');
+assert.equal(closedSameOwnerRecovery.harness.clock.pendingCount(), 0);
+assert.equal(closedSameOwnerRecovery.harness.windowListenerCount('online'), 0);
+assert.equal(closedSameOwnerRecovery.harness.windowListenerCount('focus'), 0);
+assert.equal(closedSameOwnerRecovery.harness.documentListenerCount('visibilitychange'), 0);
+
+const sameOwnerOldRecovery = beginNavigationRecovery({
+  flowId: 'flow-same-owner-old-1234',
+  correlation: { ...recoveryCorrelation, handoffGeneration: 162 },
+});
+const sameOwnerOldCallbacks = [
+  ...sameOwnerOldRecovery.harness.windowListeners('online'),
+  ...sameOwnerOldRecovery.harness.windowListeners('focus'),
+  ...sameOwnerOldRecovery.harness.documentListeners('visibilitychange'),
+  ...sameOwnerOldRecovery.harness.clock.callbacks(),
+];
+const sameOwnerSuccessorCorrelation = {
+  ...recoveryCorrelation,
+  host: '192.168.18.93',
+  expectedBootId: 'boot-same-owner-successor',
+  handoffGeneration: 163,
+};
+const sameOwnerSuccessorTarget = recoveryTargetFor(sameOwnerOldRecovery.harness);
+sameOwnerOldRecovery.harness.win.open = (url, name) => {
+  sameOwnerOldRecovery.harness.opened.push({ url, name });
+  return sameOwnerSuccessorTarget;
+};
+assert.equal(openLocalCardPage(recoveryApHost).ok, true);
+const sameOwnerSuccessorResult = retargetCardBridge(
+  sameOwnerSuccessorCorrelation.host,
+  sameOwnerSuccessorCorrelation,
+  { flowId: 'flow-same-owner-successor-1234' },
+);
+assert.equal(sameOwnerSuccessorResult.ok, true);
+assert.equal(sameOwnerOldRecovery.harness.clock.pendingCount(), 1,
+  'same-owner successor leaves exactly its one timer');
+assert.equal(sameOwnerOldRecovery.harness.windowListenerCount('online'), 1);
+assert.equal(sameOwnerOldRecovery.harness.windowListenerCount('focus'), 1);
+assert.equal(sameOwnerOldRecovery.harness.documentListenerCount('visibilitychange'), 1);
+const sameOwnerOldNavigationCount = sameOwnerOldRecovery.target.navigations.length;
+const sameOwnerSuccessorNavigationCount = sameOwnerSuccessorTarget.navigations.length;
+for (const callback of sameOwnerOldCallbacks) callback();
+assert.equal(sameOwnerOldRecovery.target.navigations.length, sameOwnerOldNavigationCount,
+  'stale same-owner callbacks cannot navigate their replaced target');
+assert.equal(sameOwnerSuccessorTarget.navigations.length, sameOwnerSuccessorNavigationCount,
+  'stale same-owner callbacks cannot navigate the accepted successor');
+assert.equal(sameOwnerOldRecovery.harness.clock.pendingCount(), 1,
+  'stale same-owner callbacks cannot clear the successor timer');
+assert.equal(sameOwnerOldRecovery.harness.windowListenerCount('online'), 1);
+assert.equal(sameOwnerOldRecovery.harness.windowListenerCount('focus'), 1);
+assert.equal(sameOwnerOldRecovery.harness.documentListenerCount('visibilitychange'), 1);
 
 const oldRecovery = beginNavigationRecovery({
   flowId: 'flow-old-owner-recovery-1234',

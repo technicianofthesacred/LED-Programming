@@ -113,6 +113,9 @@ let bridgeAuthorityLifecycle = -1;
 let bridgeRestoredHandoff = false;
 let bridgeRestoredFinalEnvelopeCount = 0;
 let bridgeHandoffNavigationRetry = null;
+// The deadline outlives timer/listener cleanup. This tombstone prevents exact
+// duplicate AP evidence from minting a fresh five-minute window after expiry.
+let bridgeHandoffNavigationContext = null;
 let listenerAttached = false;
 let listenerWindow = null;
 const pending = new Map();
@@ -143,6 +146,14 @@ function clearBridgeHandoffNavigationRetry(expectedWork = null) {
   work.onOnline = null;
   work.onFocus = null;
   work.onVisibilityChange = null;
+  return true;
+}
+
+function invalidateBridgeHandoffNavigationContext(expectedFlowId = '') {
+  const context = bridgeHandoffNavigationContext;
+  if (expectedFlowId && context && context.flowId !== expectedFlowId) return false;
+  bridgeHandoffNavigationContext = null;
+  clearBridgeHandoffNavigationRetry();
   return true;
 }
 
@@ -200,7 +211,7 @@ function clearBridgeTarget({
   origin = bridgeOrigin,
   preserveHandoff = false,
 } = {}) {
-  clearBridgeHandoffNavigationRetry();
+  invalidateBridgeHandoffNavigationContext();
   bridgeWindow = null;
   bridgeOrigin = origin || '';
   bridgeHost = normalizeCardHost(host || bridgeHost || readStoredCardHost());
@@ -257,7 +268,7 @@ function revokeBridgeForNavigation({
   bridgeRuntimeCommandReady = false;
   bridgeInitialConfigAvailable = false;
   if (!preserveHandoff) {
-    clearBridgeHandoffNavigationRetry();
+    invalidateBridgeHandoffNavigationContext();
     bridgeHandoffCorrelation = null;
     bridgeHandoffFlowId = '';
     bridgeInitialConfigAttempted = false;
@@ -300,6 +311,18 @@ function sameHandoffCorrelation(left, right) {
     && left.handoffGeneration === right.handoffGeneration;
 }
 
+function sameHandoffNavigationContext(context, {
+  owner, target, url, origin, correlation, flowId,
+}) {
+  return Boolean(context)
+    && context.owner === owner
+    && context.target === target
+    && context.url === url
+    && context.origin === origin
+    && context.flowId === flowId
+    && sameHandoffCorrelation(context.correlation, correlation);
+}
+
 // A station address is unreachable while the workshop computer is still on the
 // card AP. Browsers keep the failed network-error document after WiFi changes;
 // they do not reliably retry that cross-subnet navigation themselves. Retain
@@ -321,19 +344,21 @@ function scheduleBridgeHandoffNavigationRetry({ target, url, correlation, flowId
     ? owner.clearTimeout.bind(owner)
     : globalThis.clearTimeout.bind(globalThis);
   const origin = cardHostToUrl(correlation.host);
-  const prior = bridgeHandoffNavigationRetry;
-  const duplicateExactWork = Boolean(
-    prior
-    && prior.owner === owner
-    && prior.target === target
-    && prior.url === url
-    && prior.origin === origin
-    && prior.flowId === flowId
-    && sameHandoffCorrelation(prior.correlation, correlation)
-  );
-  const deadline = duplicateExactWork
-    ? prior.deadline
-    : now() + WIFI_HANDOFF_NAVIGATION_DEADLINE_MS;
+  const contextInput = { owner, target, url, origin, correlation, flowId };
+  let context = bridgeHandoffNavigationContext;
+  if (!sameHandoffNavigationContext(context, contextInput)) {
+    invalidateBridgeHandoffNavigationContext();
+    context = Object.freeze({
+      ...contextInput,
+      deadline: now() + WIFI_HANDOFF_NAVIGATION_DEADLINE_MS,
+    });
+    bridgeHandoffNavigationContext = context;
+  }
+  if (now() >= context.deadline) {
+    clearBridgeHandoffNavigationRetry();
+    return { ok: false, reason: 'stale-correlation' };
+  }
+  const deadline = context.deadline;
   clearBridgeHandoffNavigationRetry();
   const work = {
     owner,
@@ -422,6 +447,7 @@ function scheduleBridgeHandoffNavigationRetry({ target, url, correlation, flowId
     /* noop */
   }
   scheduleNext();
+  return { ok: true, deadline };
 }
 
 function applyAuthoritativeBridgeStatus(status, host = bridgeHost) {
@@ -445,6 +471,7 @@ function applyAuthoritativeBridgeStatus(status, host = bridgeHost) {
       });
       if (!sameHandoffCorrelation(stillHandoffReady, bridgeHandoffCorrelation)) {
         clearWifiHandoffRecovery(bridgeHandoffFlowId);
+        invalidateBridgeHandoffNavigationContext(bridgeHandoffFlowId);
       }
       return null;
     }
@@ -479,6 +506,7 @@ function applyAuthoritativeBridgeStatus(status, host = bridgeHost) {
       bridgeCard = null;
       bridgeIdentityError = error?.reason || 'handoff-correlation';
       clearWifiHandoffRecovery(bridgeHandoffFlowId);
+      invalidateBridgeHandoffNavigationContext(bridgeHandoffFlowId);
       return null;
     }
   }
@@ -708,7 +736,10 @@ function handleBridgeMessage(event) {
         bridgeRuntimeCommandReady = false;
         bridgeInitialConfigAvailable = false;
         bridgeIdentityError = error?.reason || 'identity-missing';
-        if (bridgeHandoffFlowId) clearWifiHandoffRecovery(bridgeHandoffFlowId);
+        if (bridgeHandoffFlowId) {
+          clearWifiHandoffRecovery(bridgeHandoffFlowId);
+          invalidateBridgeHandoffNavigationContext(bridgeHandoffFlowId);
+        }
       }
     } catch (error) {
       bridgeDiscoveredCard = null;
@@ -717,7 +748,10 @@ function handleBridgeMessage(event) {
       bridgeRuntimeCommandReady = false;
       bridgeInitialConfigAvailable = false;
       bridgeIdentityError = error?.reason || 'identity-missing';
-      if (bridgeHandoffFlowId) clearWifiHandoffRecovery(bridgeHandoffFlowId);
+      if (bridgeHandoffFlowId) {
+        clearWifiHandoffRecovery(bridgeHandoffFlowId);
+        invalidateBridgeHandoffNavigationContext(bridgeHandoffFlowId);
+      }
       dispatchBridgeChange();
       request.reject(error);
       return;
@@ -752,7 +786,7 @@ export function attachCardBridgeListener() {
   if (!win) return;
   if (listenerAttached && listenerWindow === win) return;
   if (listenerWindow && listenerWindow !== win) {
-    clearBridgeHandoffNavigationRetry();
+    invalidateBridgeHandoffNavigationContext();
     try {
       listenerWindow.removeEventListener?.('message', handleBridgeMessage);
     } catch {
@@ -964,15 +998,30 @@ export function retargetCardBridge(rawHost = '', rawCorrelation = {}, { flowId: 
       repeated: true,
     };
   }
-  if (repeated) {
-    revokeBridgeForNavigation({ host, origin, preserveHandoff: true });
-  }
-  scheduleBridgeHandoffNavigationRetry({
+  // The retained exact-context tombstone is checked before revoking the
+  // current bridge lifecycle, so expired duplicate evidence is a true no-op.
+  const recovery = scheduleBridgeHandoffNavigationRetry({
     target,
     url: url.href,
     correlation,
     flowId,
   });
+  if (!recovery.ok) {
+    return {
+      ok: false,
+      state: recovery.reason,
+      reason: recovery.reason,
+      retryable: false,
+      window: target,
+      host,
+      url: url.href,
+      correlation,
+      repeated,
+    };
+  }
+  if (repeated) {
+    revokeBridgeForNavigation({ host, origin, preserveHandoff: true });
+  }
   try {
     target.location.href = url.href;
   } catch (cause) {
@@ -1012,6 +1061,7 @@ export function restoreCardBridgeHandoff(rawFlowId = '') {
   const correlation = recovery.correlation;
   if (normalizeCardHost(readStoredCardHost()) !== correlation.host) {
     clearWifiHandoffRecovery(flowId);
+    invalidateBridgeHandoffNavigationContext(flowId);
     return { ok: false, reason: 'stale-host' };
   }
   const win = browserWindow();
@@ -1125,7 +1175,7 @@ export function hasCardBridgeInitialConfigAuthority({ host = '', flowId: rawFlow
 export function clearCardBridgeHandoff(rawFlowId = '') {
   const flowId = normalizeCommissioningFlowId(rawFlowId);
   if (!flowId || flowId !== bridgeHandoffFlowId) return false;
-  clearBridgeHandoffNavigationRetry();
+  invalidateBridgeHandoffNavigationContext(flowId);
   bridgeHandoffCorrelation = null;
   bridgeHandoffFlowId = '';
   bridgeHandoffAckReady = false;
@@ -1165,7 +1215,7 @@ export function adoptCommissionedCardBridgeIdentity(rawFlowId = '') {
     throw bridgeError('Could not save the commissioned replacement card identity.', 'identity-storage');
   }
   const adopted = bridgeCard;
-  clearBridgeHandoffNavigationRetry();
+  invalidateBridgeHandoffNavigationContext(flowId);
   bridgeHandoffCorrelation = null;
   bridgeHandoffFlowId = '';
   bridgeHandoffAckReady = false;
