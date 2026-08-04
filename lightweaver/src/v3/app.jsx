@@ -9,7 +9,7 @@ import { CardConnectionCenter } from '../components/card/CardConnectionCenter.js
 import { CardStatusControl } from '../components/card/CardStatusControl.jsx';
 import { ProjectLoadDialog, ProjectSaveDialog } from '../components/projects/TopBarProjectDialogs.jsx';
 import { WorkspaceNotice } from '../components/projects/WorkspaceNotice.jsx';
-import { canPushDirectlyToCard } from '../lib/cardConnection.js';
+import { bootstrapCardHostFromLocation, canPushDirectlyToCard } from '../lib/cardConnection.js';
 import {
   bootstrapBridgeCallback,
   clearStoredBridgeResult,
@@ -68,6 +68,8 @@ const SCREEN_KEYS = STUDIO_SCREENS.map(screen => screen.id);
 const SCREEN_BY_ID = Object.fromEntries(STUDIO_SCREENS.map(screen => [screen.id, screen.Component]));
 const LEGACY_CARD_SCREENS = new Set(['flash', 'settings', 'installer', 'production']);
 const SCREEN_RECOVERY_KEY = 'lw_screen_recovery_v1';
+
+bootstrapCardHostFromLocation();
 
 function readScreenRecoveryAttempt() {
   try {
@@ -890,7 +892,13 @@ function Shell() {
       cloudLibrary.detachProject();
       setProjectAssociationSaveBlocked(false);
     }
+    return result;
   }, [cloudLibrary, replaceWithNewProject]);
+  const onStartNewProject = useCallback(async () => {
+    const result = await onNew();
+    if (result?.ok) navigateStudio('layout');
+    return result;
+  }, [navigateStudio, onNew]);
   const onFile = useCallback((e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -979,6 +987,7 @@ function Shell() {
               saveProjectToBrowserGuarded={saveProjectToBrowserGuarded}
               isProjectSwitchSnapshotCurrent={isProjectSwitchSnapshotCurrent}
               onMatchedProjectLoaded={onMatchedCardProjectLoaded}
+              onStartNewProject={onStartNewProject}
               route={cardRoute}
             />
             <ScreenReady />

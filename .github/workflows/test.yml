@@ -1,131 +1,235 @@
 name: Tests
 
-# The always-on test gate. Runs `npm run launch:check` (core runtime contract
-# tests + production Vite build) on every push and pull request that touches
-# the app or firmware — independent of any secrets.
-#
-# Why this exists (2026-07-09): deploy-site.yml used to be the only workflow
-# that ran tests, and it gated them on the Cloudflare secrets being present —
-# with secrets absent a push was green having run ZERO tests. build-firmware.yml
-# runs zero tests by design. This workflow closes both gaps; deploy-site.yml
-# calls it as a reusable workflow (workflow_call) and gates its deploy job on it.
-
+# One exact source gate. A repository-owned classifier selects bounded lanes;
+# the always-run `gate` job is the sole branch-protection check.
 on:
-  push:
-    paths:
-      - 'lightweaver/**'
-      - 'led-art-mapper/**'
-      - 'packages/installer-core/**'
-      - 'firmware/**'
-      - 'release/job-generators/**'
-      - 'release/job-sources/**'
-      - 'release/firmware-manifest.schema.json'
-      - 'release/production-job.schema.json'
-      - 'release/production-job-signing.md'
-      - 'release/keys/**'
-      - 'scripts/build-firmware-manifest.mjs'
-      - 'scripts/build-production-job.mjs'
-      - 'scripts/rebuild-production-jobs.mjs'
-      - 'scripts/sign-release-artifacts.mjs'
-      - 'scripts/production-job-consistency.test.mjs'
-      - 'docs/card-provisioning-audit.md'
-      - 'docs/card-provisioning-checklist.md'
-      - 'docs/card-provisioning-fixes.md'
-      - 'docs/new-card-checklist.md'
-      - 'docs/deployment-checklist.md'
-      - 'docs/led-mandalacodes-setup.md'
-      - 'docs/worker-flash-runbook.md'
-      - 'docs/worker-job-card.md'
-      - 'docs/roadmap.md'
-      - 'TODO.md'
-      - '.github/workflows/**'
   pull_request:
     paths:
       - 'lightweaver/**'
       - 'led-art-mapper/**'
       - 'packages/installer-core/**'
       - 'firmware/**'
-      - 'release/job-generators/**'
-      - 'release/job-sources/**'
-      - 'release/firmware-manifest.schema.json'
-      - 'release/production-job.schema.json'
-      - 'release/production-job-signing.md'
-      - 'release/keys/**'
-      - 'scripts/build-firmware-manifest.mjs'
-      - 'scripts/build-production-job.mjs'
-      - 'scripts/rebuild-production-jobs.mjs'
-      - 'scripts/sign-release-artifacts.mjs'
-      - 'scripts/production-job-consistency.test.mjs'
-      - 'docs/card-provisioning-audit.md'
-      - 'docs/card-provisioning-checklist.md'
-      - 'docs/card-provisioning-fixes.md'
-      - 'docs/new-card-checklist.md'
-      - 'docs/deployment-checklist.md'
-      - 'docs/led-mandalacodes-setup.md'
-      - 'docs/worker-flash-runbook.md'
-      - 'docs/worker-job-card.md'
-      - 'docs/roadmap.md'
+      - 'release/**'
+      - 'scripts/**'
+      - 'docs/**'
       - 'TODO.md'
       - '.github/workflows/**'
-  # Lets deploy-site.yml reuse this exact test job as its deploy gate instead
-  # of maintaining a near-copy of these steps.
-  workflow_call:
+  merge_group:
+  push:
+    branches:
+      - main
+    paths:
+      - 'lightweaver/**'
+      - 'led-art-mapper/**'
+      - 'packages/installer-core/**'
+      - 'firmware/**'
+      - 'release/**'
+      - 'scripts/**'
+      - 'docs/**'
+      - 'TODO.md'
+      - '.github/workflows/**'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: tests-${{ github.workflow }}-${{ github.ref }}
+  group: tests-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  test:
+  classify:
+    runs-on: ubuntu-latest
+    outputs:
+      source: ${{ steps.lanes.outputs.source }}
+      browser: ${{ steps.lanes.outputs.browser }}
+      cloud: ${{ steps.lanes.outputs.cloud }}
+      production: ${{ steps.lanes.outputs.production }}
+      firmware: ${{ steps.lanes.outputs.firmware }}
+      artifact: ${{ steps.lanes.outputs.artifact }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Select exact changed-path lanes
+        id: lanes
+        env:
+          CI_ACTOR: ${{ github.actor }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+        run: |
+          if [ "$CI_ACTOR" = "github-actions[bot]" ] \
+            && [ "$(git log -1 --format=%s "$CI_HEAD_SHA")" = "CI: publish signed Lightweaver firmware release" ]; then
+            export CI_GENERATED_RELEASE=true
+          fi
+          node scripts/ci-changed-lanes.mjs
+
+  source:
+    needs: classify
+    if: needs.classify.outputs.source == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          # factory-bin-freshness.mjs compares the committed binary's last
-          # commit against firmware-source history (git log / rev-list). A
-          # shallow checkout makes that check pass trivially, so fetch it all.
           fetch-depth: 0
-
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
-
-      - name: Install dependencies
-        working-directory: lightweaver
+          cache: npm
+          cache-dependency-path: |
+            lightweaver/package-lock.json
+            led-art-mapper/app/package-lock.json
+      - name: Install pinned source dependencies
         run: |
-          # `npm ci` installs exactly what lightweaver/package-lock.json pins,
-          # for reproducible builds (vs `npm install`, which can drift the tree).
-          npm ci
-          # launch:source also runs the standalone Mapper's tests and Vite
-          # build, so its own lockfile must be installed in a clean runner.
-          npm ci --prefix ../led-art-mapper/app
-          # Workaround for npm/cli#4828: npm may skip the platform-specific
-          # Rollup native binding on fresh installs, breaking `vite build`.
-          node scripts/ensure-rollup-native.mjs
-
-      - name: Install Playwright browser
-        working-directory: lightweaver
-        # launch:check runs test:show (tests/show-screen.spec.ts) under Playwright,
-        # which needs a browser binary. `npm ci` does not fetch it, so without this
-        # the e2e step fails with "Executable doesn't exist" and reddens main.
-        run: npx playwright install --with-deps chromium
-
+          npm ci --prefix lightweaver
+          node lightweaver/scripts/ensure-rollup-native.mjs
+          npm ci --prefix led-art-mapper/app
+          npx --prefix lightweaver playwright install --with-deps chromium
       - name: Apply D1 migrations to isolated local CI state
         working-directory: lightweaver
         run: npm exec -- wrangler d1 migrations apply PROJECTS_DB --config wrangler.local.toml --local --persist-to .wrangler/ci-state
-
-      # Feature branches cannot use the protected firmware signing key. They
-      # still run every source/runtime/browser/build/staging check; only main
-      # may prove that its committed binary came from the protected signer.
-      - name: Source launch gate (feature branches and pull requests)
-        if: github.ref != 'refs/heads/main'
+      - name: Run bounded source and build gate
         working-directory: lightweaver
-        run: npm run launch:source
+        run: npm run ci:source-build
 
-      - name: Signed production launch gate (main and deploys)
-        if: github.ref == 'refs/heads/main'
+  browser:
+    needs: classify
+    if: needs.classify.outputs.browser == 'true'
+    runs-on: ubuntu-latest
+    name: browser smoke
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: lightweaver/package-lock.json
+      - run: npm ci
         working-directory: lightweaver
-        run: npm run launch:check
+      - run: node scripts/ensure-rollup-native.mjs
+        working-directory: lightweaver
+      - run: npx playwright install --with-deps chromium
+        working-directory: lightweaver
+      - name: Run focused critical-workflow smoke tests
+        working-directory: lightweaver
+        run: npm run ci:browser-smoke
+
+  cloud:
+    needs: classify
+    if: needs.classify.outputs.cloud == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: lightweaver/package-lock.json
+      - run: npm ci
+        working-directory: lightweaver
+      - run: node scripts/ensure-rollup-native.mjs
+        working-directory: lightweaver
+      - run: npx playwright install --with-deps chromium
+        working-directory: lightweaver
+      - run: npm run ci:cloud
+        working-directory: lightweaver
+
+  production:
+    needs: classify
+    if: needs.classify.outputs.production == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: lightweaver/package-lock.json
+      - run: npm ci
+        working-directory: lightweaver
+      - run: node scripts/ensure-rollup-native.mjs
+        working-directory: lightweaver
+      - run: npx playwright install --with-deps chromium
+        working-directory: lightweaver
+      - run: npm run ci:production
+        working-directory: lightweaver
+
+  firmware:
+    needs: classify
+    if: needs.classify.outputs.firmware == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: lightweaver/package-lock.json
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/lightweaver-controller/platformio.ini') }}
+          restore-keys: pio-${{ runner.os }}-
+      - run: |
+          pip install platformio==6.1.19
+          npm ci --prefix lightweaver
+      - run: npm run ci:firmware-sensitive
+        working-directory: lightweaver
+      - name: Compile pinned firmware with exact source identity
+        env:
+          LW_BUILD_ID: ${{ github.sha }}
+        run: |
+          pio run -d firmware/lightweaver-controller -e esp32-s3-n16r8
+          node firmware/lightweaver-controller/tests/card-identity-capabilities.mjs
+
+  artifact:
+    needs: classify
+    if: needs.classify.outputs.artifact == 'true' && needs.classify.outputs.firmware != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: lightweaver/package-lock.json
+      - run: npm ci
+        working-directory: lightweaver
+      - run: npm run ci:artifact
+        working-directory: lightweaver
+
+  gate:
+    name: gate
+    if: ${{ always() }}
+    needs: [classify, source, browser, cloud, production, firmware, artifact]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every selected lane
+        env:
+          CLASSIFY: ${{ needs.classify.result }}
+          SOURCE: ${{ needs.source.result }}
+          BROWSER: ${{ needs.browser.result }}
+          CLOUD: ${{ needs.cloud.result }}
+          PRODUCTION: ${{ needs.production.result }}
+          FIRMWARE: ${{ needs.firmware.result }}
+          ARTIFACT: ${{ needs.artifact.result }}
+        run: |
+          for result in "$CLASSIFY" "$SOURCE" "$BROWSER" "$CLOUD" "$PRODUCTION" "$FIRMWARE" "$ARTIFACT"; do
+            if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
+              echo "::error::A selected Lightweaver CI lane did not pass."
+              exit 1
+            fi
+          done
+          echo "Every selected Lightweaver CI lane passed."

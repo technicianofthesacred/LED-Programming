@@ -1,0 +1,39 @@
+name: Exhaustive launch check
+
+# Slow, exhaustive confidence belongs off the interactive merge/deploy path.
+# Any failure is a release incident and must be green before the next shipment.
+on:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: exhaustive-launch-check
+  cancel-in-progress: true
+
+jobs:
+  launch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Install pinned application dependencies
+        run: |
+          npm ci --prefix lightweaver
+          node lightweaver/scripts/ensure-rollup-native.mjs
+          npm ci --prefix led-art-mapper/app
+          npx --prefix lightweaver playwright install --with-deps chromium
+      - name: Apply local D1 migrations
+        working-directory: lightweaver
+        run: npm exec -- wrangler d1 migrations apply PROJECTS_DB --config wrangler.local.toml --local
+      - name: Run the unchanged exhaustive launch gate
+        working-directory: lightweaver
+        run: npm run launch:check

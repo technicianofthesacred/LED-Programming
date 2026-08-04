@@ -1,61 +1,66 @@
 name: Build firmware binary
 
-# Rebuilds and signs the factory firmware release that led.mandalacodes.com
-# flashes to cards, and commits the complete release set back so the website
-# never ships stale or unsigned firmware. Runs in CI
-# because the ESP32 toolchain host is reachable here (it is blocked inside the
-# Claude agent sandbox). The trigger watches firmware build inputs only, so the
-# bot's binary-only commit does not re-trigger this workflow (no loop).
-
+# A successful main Tests run is the only route into the protected signer.
+# Every job checks out and labels the exact source revision that Tests proved.
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'firmware/lightweaver-controller/src/**'
-      - 'firmware/lightweaver-controller/platformio.ini'
-      - 'firmware/lightweaver-controller/scripts/**'
-      - 'scripts/build-firmware-manifest.mjs'
-      - 'scripts/build-production-job.mjs'
-      - 'scripts/rebuild-production-jobs.mjs'
-      - 'scripts/sign-release-artifacts.mjs'
-      # Production-job generators import the Studio domain libraries. Watch the
-      # bounded lib tree so transitive job-shaping changes cannot leave jobs
-      # pinned to stale source; generated public artifacts are outside this path.
-      - 'lightweaver/src/lib/**'
-      - 'packages/installer-core/**'
-      - 'release/firmware-manifest.schema.json'
-      - 'release/production-job.schema.json'
-      - 'release/job-generators/**'
-      - 'release/job-sources/**'
-      - 'release/keys/lightweaver-release-public.pem'
-      - '.github/workflows/build-firmware.yml'
+  workflow_run:
+    workflows: ["Tests"]
+    types: [completed]
+    branches: [main]
 
 permissions: {}
 
 concurrency:
-  group: build-firmware-${{ github.ref }}
+  group: build-firmware-${{ github.event.workflow_run.head_sha }}
   cancel-in-progress: true
 
 jobs:
-  # This job has no environment and no secrets. It must succeed before GitHub
-  # will even start the protected signer job below.
+  classify:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      firmware: ${{ steps.changes.outputs.firmware }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Classify the tested revision
+        id: changes
+        env:
+          CI_ACTOR: ${{ github.event.workflow_run.actor.login }}
+          CI_BASE_SHA: ${{ github.event.workflow_run.head_sha }}^
+          CI_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ "$CI_ACTOR" = "github-actions[bot]" ] \
+            && [ "$(git log -1 --format=%s "$CI_HEAD_SHA")" = "CI: publish signed Lightweaver firmware release" ]; then
+            export CI_GENERATED_RELEASE=true
+          fi
+          node scripts/ci-changed-lanes.mjs
+
+  # This job has no environment and no secrets. The tested revision must pass
+  # the signing-specific contract before GitHub can unlock the protected job.
   verify:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: classify
+    if: needs.classify.outputs.firmware == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
-
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
-
       - name: Cache unprivileged verification dependencies
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -63,53 +68,40 @@ jobs:
             ~/.platformio
             ~/.cache/pip
           key: pio-${{ runner.os }}-${{ hashFiles('firmware/lightweaver-controller/platformio.ini') }}
-          restore-keys: |
-            pio-${{ runner.os }}-
-
+          restore-keys: pio-${{ runner.os }}-
       - name: Install pinned verification dependencies
         run: |
           pip install platformio==6.1.19
           npm ci --prefix lightweaver
-
-      - name: Verify every source and core contract before signing
-        run: |
-          cd lightweaver
-          # The factory binary is intentionally stale on a firmware-source
-          # commit; the protected build below replaces it. Every other normal
-          # core contract still runs here and must pass before secrets unlock.
-          npm run test:production-jobs
-          npm run test:core:source
-          node scripts/ensure-rollup-native.mjs
-          npm run build
-
-      - name: Verify pinned firmware compiles with the source identity
+      - name: Verify signer-sensitive contracts
+        run: npm run ci:firmware-sensitive --prefix lightweaver
+      - name: Verify pinned firmware compiles with the tested identity
         env:
-          LW_BUILD_ID: ${{ github.sha }}
+          LW_BUILD_ID: ${{ github.event.workflow_run.head_sha }}
         run: |
           pio run -d firmware/lightweaver-controller -e esp32-s3-n16r8
           node firmware/lightweaver-controller/tests/card-identity-capabilities.mjs
 
   build:
     needs: verify
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: firmware-release
     permissions:
       contents: write
-      # Needed only to dispatch the production site after the signed release is
-      # committed. The protected environment prevents feature refs from using it.
       actions: write
+    env:
+      SOURCE_REVISION: ${{ github.event.workflow_run.head_sha }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
-
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
-
       - name: Cache PlatformIO toolchain
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -117,17 +109,13 @@ jobs:
             ~/.platformio
             ~/.cache/pip
           key: pio-${{ runner.os }}-${{ hashFiles('firmware/lightweaver-controller/platformio.ini') }}
-          restore-keys: |
-            pio-${{ runner.os }}-
-
+          restore-keys: pio-${{ runner.os }}-
       - name: Install PlatformIO
         run: pip install platformio==6.1.19
-
-      - name: Rebuild merged factory binary
+      - name: Rebuild tested factory binary
         env:
-          LW_BUILD_ID: ${{ github.sha }}
+          LW_BUILD_ID: ${{ env.SOURCE_REVISION }}
         run: firmware/lightweaver-controller/scripts/build-factory-bin.sh
-
       - name: Build and sign immutable release set
         env:
           LIGHTWEAVER_RELEASE_SIGNING_KEY: ${{ secrets.LIGHTWEAVER_RELEASE_SIGNING_KEY }}
@@ -138,26 +126,21 @@ jobs:
           test -n "$CONFIG_VERSION"
           node scripts/build-firmware-manifest.mjs \
             --firmware-version "$FW_VERSION" \
-            --build-id "${GITHUB_SHA}" \
-            --source-revision "${GITHUB_SHA}" \
+            --build-id "$SOURCE_REVISION" \
+            --source-revision "$SOURCE_REVISION" \
             --config-min "$CONFIG_VERSION" \
             --config-max "$CONFIG_VERSION" \
             --minimum-installer 1.4.0
           node scripts/sign-release-artifacts.mjs
-
-      - name: Rebuild production jobs against the freshly signed release
+      - name: Rebuild production jobs against the signed release
         run: |
           node scripts/rebuild-production-jobs.mjs
           npm run test:production-jobs --prefix lightweaver
-
       - name: Verify signed release set
-        run: |
-          cd lightweaver
-          node --test src/lib/firmwareRelease.test.js
-          node ../firmware/lightweaver-controller/tests/release-build-identity.mjs
-
-      - name: Commit updated signed release if it changed
+        run: npm run ci:artifact --prefix lightweaver
+      - name: Commit the signed release if it changed
         id: release
+        shell: bash
         run: |
           RELEASE_PATHS=(
             lightweaver/public/firmware/lightweaver-controller-esp32s3-factory.bin
@@ -187,8 +170,9 @@ jobs:
           )
           if git diff --quiet -- "${RELEASE_PATHS[@]}" && \
              test -z "$(git ls-files --others --exclude-standard -- "${RELEASE_PATHS[@]}")"; then
-            echo "Signed firmware release already matches current source — nothing to commit."
+            echo "Signed firmware release already matches tested source."
             echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "signed_sha=$SOURCE_REVISION" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git config user.name "github-actions[bot]"
@@ -196,38 +180,25 @@ jobs:
           git add "${RELEASE_PATHS[@]}"
           git commit -m "CI: publish signed Lightweaver firmware release"
           git fetch origin main
-          if ! git diff --quiet "$GITHUB_SHA..origin/main" -- "${RELEASE_INPUTS[@]}"; then
-            echo "::error::Main changed a release input while this signer ran. Refusing to publish a stale signed build; the newer source must rebuild it."
+          if ! git diff --quiet "$SOURCE_REVISION..origin/main" -- "${RELEASE_INPUTS[@]}"; then
+            echo "::error::Main changed a release input while this signer ran; refusing a stale signature."
             exit 1
           fi
-          # Test/docs-only updates may land while the protected build compiles.
-          # Integrate them so the signed artifact push remains fast-forward.
           git rebase origin/main
-          git push origin "HEAD:main"
+          git push origin HEAD:main
+          signed_sha="$(git rev-parse HEAD)"
           echo "changed=true" >> "$GITHUB_OUTPUT"
-
-      - name: Trigger site deploy
-        # GITHUB_TOKEN pushes do not fire workflow `push` triggers (GitHub
-        # intentionally blocks recursive webhook loops). We must dispatch
-        # deploy-site.yml explicitly so the site always ships the freshly
-        # rebuilt binary rather than the stale one from the previous deploy.
-        # This step only runs when we actually committed a new binary above
-        # (exit 0 = no change → no dispatch needed).
+          echo "signed_sha=$signed_sha" >> "$GITHUB_OUTPUT"
+      - name: Trigger exact signed-revision deploy
         env:
           GH_TOKEN: ${{ github.token }}
+          SIGNED_SHA: ${{ steps.release.outputs.signed_sha }}
         run: |
-          if [ "${{ steps.release.outputs.changed }}" != "true" ]; then
-            echo "Signed release unchanged — skipping deploy-site dispatch."
+          if [ "${{ steps.release.outputs.changed }}" = "true" ]; then
+            gh workflow run deploy-site.yml --ref main -f source=ci -f revision="$SIGNED_SHA"
           else
-            echo "Signed release updated — dispatching deploy-site.yml…"
-            # Non-fatal: the release is already committed at this point, so a
-            # dispatch failure must not redden a build that shipped its
-            # artifact. launch:check's factory-bin-freshness still guards
-            # against a stale site.
-            gh workflow run deploy-site.yml --ref main -f source=ci \
-              || echo "::warning::deploy-site dispatch failed — run it manually from the Actions tab so the site serves the fresh binary."
+            echo "Signed release unchanged; no follow-up commit needs deployment."
           fi
-
       - name: Upload signed release set as one artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

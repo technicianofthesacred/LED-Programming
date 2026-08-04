@@ -150,7 +150,7 @@ const SettingsFieldContext = createContext(null);
     );
   }
 
-  function SettingsScreen({ embedded = false, mode = 'all' } = {}) {
+  function SettingsScreen({ embedded = false, mode = 'all', cardLink = {} } = {}) {
     const {
       projectId,
       projectLifecycle,
@@ -311,7 +311,13 @@ const SettingsFieldContext = createContext(null);
       try {
         prepareCardStoragePayload(runtimePackage);
         const before = await readCardProjectEvidence({ host: cardHost });
-        const response = await pushConfigToCard(runtimePackage, { host: cardHost, timeoutMs: 6000, reboot: 'if-needed', allowLayoutChange: true });
+        const response = await pushConfigToCard(runtimePackage, {
+          host: cardHost,
+          timeoutMs: 6000,
+          reboot: 'if-needed',
+          allowLayoutChange: true,
+          factoryBlank: cardLink.cardBlank === true,
+        });
         if (response?.state === 'staged') {
           throw new Error('The card kept this hardware change staged. Open Test & Install and confirm it on the real LEDs before it can be installed.');
         }

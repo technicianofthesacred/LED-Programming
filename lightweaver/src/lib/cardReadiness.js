@@ -24,6 +24,8 @@ export function normalizeCardReadiness(raw = {}) {
   const runtimePhase = cleanText(source.runtimePhase, 32).toLowerCase();
   const mode = cleanText(source.mode, 32).toLowerCase();
   const runtimeSource = cleanText(source.source ?? source.runtimeSource, 32).toLowerCase();
+  const projectId = cleanText(source.projectId ?? source.piece?.id, 128);
+  const projectFingerprint = cleanText(source.projectFingerprint, 64).toLowerCase();
   const contractVersion = Number.isSafeInteger(source.provisioningContractVersion)
     ? source.provisioningContractVersion
     : null;
@@ -48,6 +50,8 @@ export function normalizeCardReadiness(raw = {}) {
     runtimePhase,
     mode,
     source: runtimeSource,
+    projectId,
+    projectFingerprint,
     knownGoodProject: explicitBoolean(source.knownGoodProject),
     commandReady: explicitBoolean(source.commandReady),
     outputReady: explicitBoolean(source.outputReady),
@@ -101,11 +105,10 @@ export function classifyCardReadiness(raw = {}, {
     return classifiedResult('identity-mismatch', normalized, 'unexpected-firmware-build');
   }
   if (
-    normalized.runtimePhase === 'factory'
-    && normalized.knownGoodProject === false
-    && normalized.commandReady === false
-    && normalized.mode === 'factory-flash'
-    && normalized.source === 'defaults'
+    normalized.knownGoodProject === false
+    && !normalized.projectId
+    && !normalized.projectFingerprint
+    && (normalized.mode === 'factory-flash' || normalized.source === 'defaults')
   ) {
     return classifiedResult('blank', normalized, 'factory', { blank: true });
   }
