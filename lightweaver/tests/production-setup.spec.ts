@@ -390,6 +390,7 @@ test('HTTPS production transport performs exact blank config then runtime frame 
         messageTypes.push(type);
         if (type === 'wifi-handoff-ack') {
           status = { ...status, runtimePhase: 'factory', knownGoodProject: false, commandReady: false, outputReady: false,
+            mode: 'factory-flash', source: 'defaults',
             wifi: { transport: 'station', transition: 'station', transitionPending: false, apActive: false, stationIp: stationHost, ip: stationHost, handoffGeneration: generation } };
           setTimeout(emitReady, 25);
         }
@@ -586,6 +587,7 @@ test('an erased card retries once after WiFi returns and lets a slow ESP station
         app: 'Lightweaver', provisioningContractVersion: 1, cardId: expectedCardId,
         firmwareVersion: '0.9.0', buildId: oldBuild, bootId: 'boot-before-flash',
         runtimePhase: 'factory', knownGoodProject: false, commandReady: false, outputReady: false,
+        mode: 'factory-flash', source: 'defaults',
         wifi: { transport: 'station', transition: 'station', transitionPending: false, apActive: false, stationIp: stationHost, ip: stationHost, handoffGeneration: 1 },
       };
       return {
@@ -593,6 +595,7 @@ test('an erased card retries once after WiFi returns and lets a slow ESP station
         firmwareVersion: firmware.firmwareVersion, buildId: firmware.buildId, bootId: 'boot-after-flash',
         runtimePhase: acked ? 'factory' : 'ready', knownGoodProject: !acked,
         commandReady: !acked, outputReady: !acked,
+        ...(acked ? { mode: 'factory-flash', source: 'defaults' } : {}),
         wifi: acked
           ? { transport: 'station', transition: 'station', transitionPending: false, apActive: false, stationIp: stationHost, ip: stationHost, handoffGeneration: 2 }
           : { transport: 'station', transition: 'handoff-ready', transitionPending: true, apActive: true, stationIp: stationHost, ip: stationHost, handoffGeneration: 2 },
@@ -719,6 +722,7 @@ test('HTTPS ProductionScreen commissions a blank card through bridge, human ligh
       runtimePhase: configured ? 'ready' : acked ? 'factory' : 'ready',
       knownGoodProject: Boolean(configured),
       commandReady: Boolean(configured), outputReady: Boolean(configured),
+      ...(acked && !configured ? { mode: 'factory-flash', source: 'defaults' } : {}),
       wifi: acked
         ? { transport: 'station', transition: 'station', transitionPending: false, apActive: false, stationIp: stationHost, ip: stationHost, handoffGeneration }
         : { transport: 'station', transition: 'handoff-ready', transitionPending: true, apActive: true, stationIp: stationHost, ip: stationHost, handoffGeneration },
