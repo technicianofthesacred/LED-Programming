@@ -887,6 +887,12 @@ test('direct Patterns navigation cannot consume a card edit intent without exact
   const configRequests: Record<string, unknown>[] = [];
   await mockDefaultCardZones(page);
   await pairReadyPatternCard(page, 'lw-direct-pattern-bypass');
+  const differentStudioProject = createDefaultProject();
+  differentStudioProject.id = 'lw-direct-pattern-bypass-other-project';
+  differentStudioProject.name = 'Different Studio project';
+  await page.addInitScript(project => {
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
+  }, differentStudioProject);
   await page.addInitScript(() => {
     localStorage.setItem('lw_chip_card_host', 'lightweaver.local');
     (window as any).__cardEditBypassOpenCalls = [];
