@@ -95,4 +95,10 @@ assert.match(
   'firmware-info should expose the stored piece name for human-readable mismatch errors',
 );
 
+assert.match(
+  storage,
+  /doc\["projectId"\]\s*=\s*config\.pieceId/,
+  'runtime status should continuously bind command authority to the installed Studio project id',
+);
+
 console.log('project-identity-contract tests passed');

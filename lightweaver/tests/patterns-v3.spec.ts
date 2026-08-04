@@ -6,6 +6,7 @@ import { prepareCardStoragePayload } from '../src/lib/cardStoragePayload.js';
 import { CARD_PATTERN_BANK } from '../src/lib/cardPatternBank.js';
 import { createDefaultKaleidoscope } from '../src/lib/kaleidoscope.js';
 import { compileWiring } from '../src/lib/wiringCompiler.js';
+import { cardProjectFingerprint } from '../src/lib/cardProjectResolver.js';
 
 // These specs assert on the EXACT mockup PatternScreen that now ships
 // (src/v3/lw-pattern.jsx). The DOM is the mockup's own: .pm wrapper, .pmcard
@@ -36,25 +37,82 @@ async function mockDefaultCardZones(page) {
   }));
 }
 
+const patternAuthorizationFixtures = new WeakMap<object, any>();
+
+function registerPatternAuthorizationFixture(page, {
+  project,
+  cardId,
+  firmwareVersion = '1.0.0',
+  buildId,
+  bootId = `${cardId}-boot`,
+}) {
+  const fixture = {
+    project,
+    projectFingerprint: cardProjectFingerprint(project),
+    cardId,
+    firmwareVersion,
+    buildId,
+    bootId,
+  };
+  patternAuthorizationFixtures.set(page, fixture);
+  return fixture;
+}
+
+async function issueRegisteredPatternAuthorization(page, intent = '') {
+  const fixture = patternAuthorizationFixtures.get(page);
+  if (!fixture) return;
+  const issued = await page.evaluate(async authorization => {
+    const { issueCardEditAuthorization } = await import('/src/lib/cardEditAuthorization.js');
+    return issueCardEditAuthorization(authorization);
+  }, {
+    intent,
+    cardId: fixture.cardId,
+    firmwareVersion: fixture.firmwareVersion,
+    buildId: fixture.buildId,
+    bootId: fixture.bootId,
+    installedProjectId: fixture.project.id,
+    installedProjectFingerprint: fixture.projectFingerprint,
+    studioProjectId: fixture.project.id,
+    studioProjectFingerprint: fixture.projectFingerprint,
+    projectGeneration: 0,
+  });
+  expect(issued).toBe(true);
+  await page.evaluate(() => { window.location.hash = '#screen=layout'; });
+  await expect(page).toHaveURL(/#screen=layout/);
+  await page.evaluate(() => { window.location.hash = '#screen=pattern'; });
+  await expect(page.locator('.pm')).toBeVisible();
+}
+
 async function gotoFreshPatterns(page) {
   await mockDefaultCardZones(page);
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await issueRegisteredPatternAuthorization(page);
 }
 
 async function pairReadyPatternCard(page, cardId: string, firmwareVersion = '1.0.0', suppliedBuildId = '') {
   const buildId = suppliedBuildId || `${cardId}-build`;
-  await page.addInitScript(({ id, version, build }) => {
+  const project = createDefaultProject();
+  const fixture = registerPatternAuthorizationFixture(page, {
+    project, cardId, firmwareVersion, buildId,
+  });
+  await page.addInitScript(({ id, version, build, savedProject }) => {
     localStorage.setItem('lw_card_identity_v1', JSON.stringify({
       version: 1, id, firmwareVersion: version, buildId: build,
     }));
-  }, { id: cardId, version: firmwareVersion, build: buildId });
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
+  }, { id: cardId, version: firmwareVersion, build: buildId, savedProject: project });
   await page.route('**/api/status', route => route.fulfill({ json: {
     app: 'Lightweaver', provisioningContractVersion: 1,
     cardId, firmwareVersion, buildId, bootId: `${cardId}-boot`,
     runtimePhase: 'ready', knownGoodProject: true,
     commandReady: true, outputReady: true,
+    piece: { id: project.id }, projectFingerprint: fixture.projectFingerprint,
+  } }));
+  await page.route('**/api/firmware-info', route => route.fulfill({ json: {
+    app: 'Lightweaver', cardId, firmwareVersion, buildId, bootId: `${cardId}-boot`,
+    projectId: project.id, projectRevision: 0, projectFingerprint: fixture.projectFingerprint,
   } }));
   return buildId;
 }
@@ -71,6 +129,7 @@ async function gotoSavedProjectPatterns(page, project) {
     localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
   }, project);
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await issueRegisteredPatternAuthorization(page);
 }
 
 async function gotoPairedReadinessPatterns(page, {
@@ -81,11 +140,17 @@ async function gotoPairedReadinessPatterns(page, {
   outputReady = true,
 }) {
   const buildId = `${cardId}-build`;
+  const project = createDefaultProject();
+  const authorize = runtimePhase === 'ready' && knownGoodProject === true && commandReady === true && outputReady === true;
+  const fixture = authorize
+    ? registerPatternAuthorizationFixture(page, { project, cardId, buildId })
+    : null;
   const controlRequests: Record<string, unknown>[] = [];
   await mockDefaultCardZones(page);
-  await page.addInitScript(({ id, firmwareBuild }) => {
+  await page.addInitScript(({ id, firmwareBuild, savedProject }) => {
     localStorage.clear();
     localStorage.setItem('lw_chip_card_host', 'lightweaver.local');
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
     localStorage.setItem('lw_card_identity_v1', JSON.stringify({
       version: 1,
       id,
@@ -97,14 +162,18 @@ async function gotoPairedReadinessPatterns(page, {
       (window as any).__blankWorkflowOpenCalls.push({ url: String(url || ''), name: String(name || '') });
       return { closed: false, focus() {}, postMessage() {} } as any;
     }) as typeof window.open;
-  }, { id: cardId, firmwareBuild: buildId });
+  }, { id: cardId, firmwareBuild: buildId, savedProject: project });
   await page.route('**/api/firmware-info', route => route.fulfill({ json: {
     app: 'Lightweaver', cardId, firmwareVersion: '1.0.0', buildId,
+    ...(fixture ? {
+      projectId: project.id, projectRevision: 0, projectFingerprint: fixture.projectFingerprint,
+    } : {}),
   } }));
   await page.route('**/api/status', route => route.fulfill({ json: {
     app: 'Lightweaver', ok: true, provisioningContractVersion: 1,
     cardId, firmwareVersion: '1.0.0', buildId, bootId: `${cardId}-boot`,
     runtimePhase, knownGoodProject, commandReady, outputReady,
+    ...(fixture ? { piece: { id: project.id }, projectFingerprint: fixture.projectFingerprint } : {}),
     ...(runtimePhase === 'factory' ? { mode: 'factory-flash', source: 'defaults' } : {}),
   } }));
   await page.route('**/api/control', async route => {
@@ -115,6 +184,7 @@ async function gotoPairedReadinessPatterns(page, {
     } });
   });
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  if (authorize) await issueRegisteredPatternAuthorization(page);
   return { controlRequests };
 }
 
@@ -139,9 +209,16 @@ function compileProjectWiring(project) {
 }
 
 async function mockVerifiedInstallCard(page, project, cardId = 'lw-pattern-install', options: any = {}) {
+  const fixture = registerPatternAuthorizationFixture(page, {
+    project,
+    cardId,
+    buildId: 'pattern-install-build',
+  });
   let installedConfig = buildCardRuntimePackageFromProject({
     projectId: project.id,
     projectName: project.name,
+    projectRevision: 0,
+    projectFingerprint: fixture.projectFingerprint,
     strips: project.layout.strips,
     patchBoard: project.layout.patchBoard,
     compiledWiring: compileProjectWiring(project),
@@ -154,6 +231,7 @@ async function mockVerifiedInstallCard(page, project, cardId = 'lw-pattern-insta
       cardId,
       firmwareVersion: '1.0.0',
       buildId: 'pattern-install-build',
+      projectId: project.id,
       projectRevision: installedConfig.projectRevision,
       projectFingerprint: installedConfig.projectFingerprint,
       outputs: installedConfig.led.outputs,
@@ -165,6 +243,7 @@ async function mockVerifiedInstallCard(page, project, cardId = 'lw-pattern-insta
       cardId, firmwareVersion: '1.0.0', buildId: 'pattern-install-build',
       bootId: `${cardId}-boot`, runtimePhase: 'ready', knownGoodProject: true,
       commandReady: true, outputReady: true,
+      piece: { id: project.id }, projectFingerprint: fixture.projectFingerprint,
       led: { pixels: installedConfig.led.pixels },
     },
   }));
@@ -195,12 +274,15 @@ async function mockVerifiedInstallCard(page, project, cardId = 'lw-pattern-insta
   }, cardId);
 }
 
-test('Shift colors immediately tries the next order and opens direct correction controls', async ({ page }) => {
+test('Shift colors applies one exact-authorized correction then requires project revalidation', async ({ page }) => {
   const project = createDefaultProject();
   project.devices.standaloneController.led.colorOrder = 'RGB';
   project.devices.standaloneController.led.colorOrderConfirmed = true;
   project.devices.standaloneController.led.confirmedColorOrder = 'RGB';
   const cardId = 'lw-pattern-color-shift';
+  const fixture = registerPatternAuthorizationFixture(page, {
+    project, cardId, buildId: 'pattern-color-shift-build', bootId: 'pattern-color-shift-boot',
+  });
   const controlRequests: Record<string, unknown>[] = [];
   const recoveryRequests: Record<string, unknown>[] = [];
 
@@ -209,11 +291,13 @@ test('Shift colors immediately tries the next order and opens direct correction 
   }, cardId);
   await page.route('**/api/firmware-info', route => route.fulfill({ json: {
     app: 'Lightweaver', cardId, firmwareVersion: '1.0.0', buildId: 'pattern-color-shift-build',
+    projectId: project.id, projectRevision: 0, projectFingerprint: fixture.projectFingerprint,
   } }));
   await page.route('**/api/status', route => route.fulfill({ json: {
     app: 'Lightweaver', ok: true, provisioningContractVersion: 1,
     cardId, firmwareVersion: '1.0.0', buildId: 'pattern-color-shift-build', bootId: 'pattern-color-shift-boot',
     runtimePhase: 'ready', knownGoodProject: true, commandReady: true, outputReady: true,
+    piece: { id: project.id }, projectFingerprint: fixture.projectFingerprint,
   } }));
   await page.route('**/api/control', async route => {
     const body = JSON.parse(route.request().postData() || '{}');
@@ -234,61 +318,14 @@ test('Shift colors immediately tries the next order and opens direct correction 
   await trigger.click();
 
   const popover = page.getByRole('dialog', { name: 'Shift colors' });
-  await expect(popover).toBeVisible();
-  await expect(popover.getByText('What color do you see?')).toHaveCount(0);
-  await expect(popover.getByRole('button', { name: 'Try next order' })).toBeVisible();
-  await expect(popover.getByRole('button', { name: 'Red is correct' })).toBeVisible();
-  await expect(popover.getByRole('button', { name: 'Looks right' })).toHaveCount(0);
-  await expect(popover.getByRole('button', { name: 'Green is correct' })).toHaveCount(0);
   await expect.poll(() => controlRequests.some(request => request.colorOrder === 'GRB')).toBe(true);
   await expect.poll(() => recoveryRequests.some(request => request.patternId === 'test-red')).toBe(true);
-  await expect(popover.getByTestId('strip-color-order')).toHaveText('GRB');
-  await expect(popover.getByRole('button', { name: 'Red is correct' })).toBeEnabled();
-  await popover.getByRole('button', { name: 'Red is correct' }).click();
-  await expect(popover.getByRole('button', { name: 'Red is correct' })).toHaveCount(0);
-  await expect(popover.getByRole('button', { name: 'Try other match' })).toBeVisible();
-  await expect(popover.getByRole('button', { name: 'Green is correct' })).toBeVisible();
-  await expect.poll(() => recoveryRequests.some(request => request.patternId === 'test-green')).toBe(true);
+  await expect(popover).toHaveCount(0);
+  await expect(page.getByRole('alert')).toContainText('verify that this exact Studio project is still installed');
   await expect.poll(() => page.evaluate(() => {
     const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
     return saved.devices?.standaloneController?.led?.colorOrderConfirmed;
   })).toBe(false);
-
-  const greenTestsBeforePair = recoveryRequests.filter(request => request.patternId === 'test-green').length;
-  await popover.getByRole('button', { name: 'Try other match' }).click();
-  await expect.poll(() => controlRequests.some(request => request.colorOrder === 'BRG')).toBe(true);
-  await expect.poll(() => recoveryRequests.filter(request => request.patternId === 'test-green').length).toBeGreaterThan(greenTestsBeforePair);
-  await expect(popover.getByTestId('strip-color-order')).toHaveText('BRG');
-  await expect(popover.getByRole('button', { name: 'Green is correct' })).toBeEnabled();
-  await popover.getByRole('button', { name: 'Green is correct' }).click();
-  await expect(popover.locator('.lwb-quiz-order')).toContainText('BRG · confirmed');
-  await expect.poll(() => page.evaluate(() => {
-    const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
-    return saved.devices?.standaloneController?.led?.confirmedColorOrder;
-  })).toBe('BRG');
-
-  await trigger.dispatchEvent('click');
-  await expect(popover).toHaveCount(0);
-  await expect(trigger).toBeFocused();
-
-  await trigger.click();
-  await expect(popover.getByTestId('strip-color-order')).toHaveText('BGR');
-  await page.keyboard.press('Escape');
-  await expect(popover).toHaveCount(0);
-  await expect(trigger).toBeFocused();
-
-  await page.setViewportSize({ width: 390, height: 260 });
-  await trigger.click();
-  await expect(popover.getByTestId('strip-color-order')).toHaveText('RBG');
-  const popoverBox = await popover.boundingBox();
-  expect(popoverBox).toBeTruthy();
-  expect(popoverBox!.x).toBeGreaterThanOrEqual(0);
-  expect(popoverBox!.x + popoverBox!.width).toBeLessThanOrEqual(390);
-  expect(popoverBox!.y).toBeGreaterThanOrEqual(0);
-  expect(popoverBox!.y + popoverBox!.height).toBeLessThanOrEqual(260);
-  await page.locator('.pm-menu-backdrop').click({ position: { x: 8, y: 8 } });
-  await expect(popover).toHaveCount(0);
-  await expect(trigger).toBeFocused();
 });
 
 test('a failed quick color shift keeps the last card-confirmed order', async ({ page }) => {
@@ -297,17 +334,22 @@ test('a failed quick color shift keeps the last card-confirmed order', async ({ 
   project.devices.standaloneController.led.colorOrderConfirmed = true;
   project.devices.standaloneController.led.confirmedColorOrder = 'RGB';
   const cardId = 'lw-pattern-color-shift-failure';
+  const fixture = registerPatternAuthorizationFixture(page, {
+    project, cardId, buildId: 'pattern-color-shift-failure-build', bootId: 'pattern-color-shift-failure-boot',
+  });
 
   await page.addInitScript((id) => {
     localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id }));
   }, cardId);
   await page.route('**/api/firmware-info', route => route.fulfill({ json: {
     app: 'Lightweaver', cardId, firmwareVersion: '1.0.0', buildId: 'pattern-color-shift-failure-build',
+    projectId: project.id, projectRevision: 0, projectFingerprint: fixture.projectFingerprint,
   } }));
   await page.route('**/api/status', route => route.fulfill({ json: {
     app: 'Lightweaver', ok: true, provisioningContractVersion: 1,
     cardId, firmwareVersion: '1.0.0', buildId: 'pattern-color-shift-failure-build', bootId: 'pattern-color-shift-failure-boot',
     runtimePhase: 'ready', knownGoodProject: true, commandReady: true, outputReady: true,
+    piece: { id: project.id }, projectFingerprint: fixture.projectFingerprint,
   } }));
   await page.route('**/api/control', route => route.fulfill({ status: 503, json: { ok: false } }));
   await gotoSavedProjectPatterns(page, project);
@@ -591,7 +633,6 @@ test('rapid duplicate Install clicks start only one card write', async ({ page }
   await page.waitForTimeout(200);
   expect(configRequests).toHaveLength(1);
   releaseConfig?.();
-  await expect(install).toBeEnabled();
 });
 
 test('an edit made during verification remains a draft above the installed snapshot', async ({ page }) => {
@@ -618,7 +659,8 @@ test('an edit made during verification remains a draft above the installed snaps
   await page.locator('.pm-cards .pmcard[data-pattern-id="ripple"]').click();
   await expect(page.getByTestId('pattern-preview-meta')).toContainText('Ripple');
   releaseVerification?.();
-  await expect(install).toBeEnabled();
+  await expect(install).toBeDisabled();
+  await expect(page.getByRole('alert')).toContainText('verify that this exact Studio project is still installed');
   await page.waitForTimeout(300);
 
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').dirty)).toBe(true);
@@ -771,8 +813,60 @@ test('first load reads warm (Lava Lamp) on a fresh, untitled project', async ({ 
 });
 
 test('card-to-Studio return hydrates the selected pattern and preserves bridge correlation', async ({ page }) => {
-  await page.goto('/?cardBridge=1&cardHost=192.168.18.70&editPattern=fire#screen=patterns', {
-    waitUntil: 'domcontentloaded',
+  const project = createDefaultProject();
+  project.id = 'authorized-card-return-project';
+  const projectFingerprint = cardProjectFingerprint(project);
+  const cardId = 'lw-authorized-card-return';
+  const firmwareVersion = '1.0.0';
+  const buildId = 'authorized-card-return-build';
+  const bootId = 'authorized-card-return-boot';
+  const controlRequests: Record<string, unknown>[] = [];
+  await page.addInitScript(({ savedProject, id, firmwareBuild }) => {
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
+    localStorage.setItem('lw_chip_card_host', '192.168.18.70');
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1,
+      id,
+      firmwareVersion: '1.0.0',
+      buildId: firmwareBuild,
+    }));
+  }, { savedProject: project, id: cardId, firmwareBuild: buildId });
+  await page.route('**/api/zones', route => route.fulfill({ json: { zones: [
+    { id: 'patch-default-outer-circle' },
+    { id: 'patch-default-inner-circle' },
+  ] } }));
+  await page.route('**/api/status', route => route.fulfill({ json: {
+    app: 'Lightweaver', provisioningContractVersion: 1,
+    cardId, firmwareVersion, buildId, bootId,
+    runtimePhase: 'ready', knownGoodProject: true,
+    commandReady: true, outputReady: true,
+    piece: { id: project.id }, projectFingerprint,
+  } }));
+  await page.route('**/api/firmware-info', route => route.fulfill({ json: {
+    app: 'Lightweaver', cardId, firmwareVersion, buildId, bootId,
+    projectId: project.id, projectRevision: 0, projectFingerprint,
+  } }));
+  await page.route('**/api/control', async route => {
+    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ json: { ok: true } });
+  });
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(async authorization => {
+    const { issueCardEditAuthorization } = await import('/src/lib/cardEditAuthorization.js');
+    if (!issueCardEditAuthorization(authorization)) throw new Error('test authorization was rejected');
+    window.history.replaceState(null, '', `${window.location.pathname}?cardBridge=1&cardHost=192.168.18.70&editPattern=fire${window.location.hash}`);
+    window.location.hash = '#screen=pattern';
+  }, {
+    intent: 'pattern:fire',
+    cardId,
+    firmwareVersion,
+    buildId,
+    bootId,
+    installedProjectId: project.id,
+    installedProjectFingerprint: projectFingerprint,
+    studioProjectId: project.id,
+    studioProjectFingerprint: projectFingerprint,
+    projectGeneration: 0,
   });
 
   await expect(page.getByTestId('pattern-preview-meta')).toContainText('Fire');
@@ -783,6 +877,41 @@ test('card-to-Studio return hydrates the selected pattern and preserves bridge c
   expect(returned.searchParams.get('cardBridge')).toBe('1');
   expect(returned.searchParams.get('cardHost')).toBe('192.168.18.70');
   expect(new URLSearchParams(returned.hash.slice(1)).get('screen')).toBe('pattern');
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+  await expect.poll(() => controlRequests.some(request => request.patternId === 'ocean')).toBe(true);
+});
+
+test('direct Patterns navigation cannot consume a card edit intent without exact project authorization', async ({ page }) => {
+  const controlRequests: Record<string, unknown>[] = [];
+  const configRequests: Record<string, unknown>[] = [];
+  await mockDefaultCardZones(page);
+  await pairReadyPatternCard(page, 'lw-direct-pattern-bypass');
+  await page.addInitScript(() => {
+    localStorage.setItem('lw_chip_card_host', 'lightweaver.local');
+    (window as any).__cardEditBypassOpenCalls = [];
+    window.open = ((url?: string | URL, name?: string) => {
+      (window as any).__cardEditBypassOpenCalls.push({ url: String(url || ''), name: String(name || '') });
+      return null;
+    }) as typeof window.open;
+  });
+  await page.route('**/api/control', async route => {
+    controlRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ json: { ok: true } });
+  });
+  await page.route('**/api/config', async route => {
+    configRequests.push(JSON.parse(route.request().postData() || '{}'));
+    await route.fulfill({ json: { ok: true } });
+  });
+
+  await page.goto('/?editPattern=ocean#screen=patterns', { waitUntil: 'domcontentloaded' });
+
+  await expect.poll(() => new URLSearchParams(new URL(page.url()).hash.slice(1)).get('screen')).toBe('card');
+  expect(new URL(page.url()).searchParams.get('editPattern')).toBe('ocean');
+  await page.waitForTimeout(350);
+  expect(controlRequests).toHaveLength(0);
+  expect(configRequests).toHaveLength(0);
+  expect(await page.evaluate(() => (window as any).__cardEditBypassOpenCalls)).toHaveLength(0);
 });
 
 test('search filters the browse grid', async ({ page }) => {
@@ -924,12 +1053,7 @@ test('checking evidence keeps a pattern tap local with no late card-page acquisi
 
 test('Studio preview changes immediately while runtime application waits for the paired-card acknowledgement', async ({ page }) => {
   let releaseControl: (() => void) | null = null;
-  const buildId = await pairReadyPatternCard(page, 'lw-preview-test');
-  await page.route('**/api/firmware-info', route => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({ app: 'Lightweaver', cardId: 'lw-preview-test', firmwareVersion: '1.0.0', buildId }),
-  }));
+  await pairReadyPatternCard(page, 'lw-preview-test');
   await page.route('**/api/control', async route => {
     const request = JSON.parse(route.request().postData() || '{}');
     await new Promise<void>(resolve => { releaseControl = resolve; });
@@ -954,12 +1078,7 @@ test('Studio preview changes immediately while runtime application waits for the
 });
 
 test('an old card keeps the Studio selection and offers a card software update', async ({ page }) => {
-  const buildId = await pairReadyPatternCard(page, 'lw-preview-test', '0.9.0');
-  await page.route('**/api/firmware-info', route => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({ app: 'Lightweaver', cardId: 'lw-preview-test', firmwareVersion: '0.9.0', buildId }),
-  }));
+  await pairReadyPatternCard(page, 'lw-preview-test', '0.9.0');
   await page.route('**/api/control', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -976,12 +1095,7 @@ test('an old card keeps the Studio selection and offers a card software update',
 });
 
 test('an unknown preview failure stays bounded and does not render the card response', async ({ page }) => {
-  const buildId = await pairReadyPatternCard(page, 'lw-preview-test');
-  await page.route('**/api/firmware-info', route => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({ app: 'Lightweaver', cardId: 'lw-preview-test', firmwareVersion: '1.0.0', buildId }),
-  }));
+  await pairReadyPatternCard(page, 'lw-preview-test');
   await page.route('**/api/control', route => route.fulfill({
     status: 200,
     contentType: 'text/plain',
@@ -997,12 +1111,7 @@ test('an unknown preview failure stays bounded and does not render the card resp
 
 test('missing runtime state proof recovers the card before asking for visible confirmation', async ({ page }) => {
   let recoveryCount = 0;
-  const buildId = await pairReadyPatternCard(page, 'lw-output-test');
-  await page.route('**/api/firmware-info', route => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({ app: 'Lightweaver', cardId: 'lw-output-test', firmwareVersion: '1.0.0', buildId }),
-  }));
+  await pairReadyPatternCard(page, 'lw-output-test');
   await page.route('**/api/control', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -1593,19 +1702,31 @@ test('oversized setup JSON stops copy and download before browser side effects',
 test('Recover lights asks for physical confirmation and offers wire discovery when still dark', async ({ page }) => {
   const recoveries: Record<string, unknown>[] = [];
   let rebootCount = 0;
+  const project = createDefaultProject();
+  const cardId = 'lw-recovery-test';
+  const buildId = 'a'.repeat(40);
+  const bootId = 'boot-recovery-test';
+  const fixture = registerPatternAuthorizationFixture(page, { project, cardId, buildId, bootId });
+  await page.addInitScript((id) => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id }));
+  }, cardId);
   await page.route('**/api/firmware-info', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ cardId: 'lw-recovery-test', firmwareVersion: '1.0.0' }),
+    body: JSON.stringify({
+      app: 'Lightweaver', cardId, firmwareVersion: '1.0.0', buildId, bootId,
+      projectId: project.id, projectRevision: 0, projectFingerprint: fixture.projectFingerprint,
+    }),
   }));
   await page.route('**/api/status', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({
       app: 'Lightweaver', provisioningContractVersion: 1,
-      cardId: 'lw-recovery-test', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
-      bootId: 'boot-recovery-test', runtimePhase: 'ready', knownGoodProject: true,
+      cardId, firmwareVersion: '1.0.0', buildId,
+      bootId, runtimePhase: 'ready', knownGoodProject: true,
       commandReady: true, outputReady: true, led: { pixels: 44 },
+      piece: { id: project.id }, projectFingerprint: fixture.projectFingerprint,
     }),
   }));
   await page.route('**/api/wiring/status', route => route.fulfill({
@@ -1629,9 +1750,7 @@ test('Recover lights asks for physical confirmation and offers wire discovery wh
     rebootCount += 1;
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
   });
-  await gotoFreshPatterns(page);
-  await page.evaluate(() => localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-recovery-test' })));
-  await page.reload({ waitUntil: 'domcontentloaded' });
+  await gotoSavedProjectPatterns(page, project);
 
   await page.getByTestId('recover-lights').click();
   await expect.poll(() => recoveries.length).toBe(2);
@@ -1665,12 +1784,7 @@ test('category chips filter the grid', async ({ page }) => {
 
 test('a slider changes its readout and sends a tuned color modifier', async ({ page }) => {
   const controlRequests: Record<string, unknown>[] = [];
-  const buildId = await pairReadyPatternCard(page, 'lw-slider-test');
-  await page.route('**/api/firmware-info', route => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({ app: 'Lightweaver', cardId: 'lw-slider-test', firmwareVersion: '1.0.0', buildId }),
-  }));
+  await pairReadyPatternCard(page, 'lw-slider-test');
   await page.route('**/api/control', async route => {
     const request = JSON.parse(route.request().postData() || '{}');
     controlRequests.push(request);

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as projectStorageApi from './projectStorage.js';
 
 import {
   AUTOSAVE_QUARANTINE_STORAGE_KEY,
@@ -34,6 +35,32 @@ function memoryStorage() {
     getItem: key => data.has(key) ? data.get(key) : null,
     setItem: (key, value) => data.set(key, String(value)),
     removeItem: key => data.delete(key),
+  };
+}
+
+function controlledLockManager() {
+  const queue = [];
+  return {
+    request(name, options, callback) {
+      assert.equal(name, 'lightweaver-project-library-save-v1');
+      assert.deepEqual(options, { mode: 'exclusive' });
+      return new Promise((resolve, reject) => {
+        queue.push({ callback, name, options, reject, resolve });
+      });
+    },
+    pending() {
+      return queue.length;
+    },
+    async runNext() {
+      const entry = queue.shift();
+      assert.ok(entry, 'expected a queued lock request');
+      try {
+        entry.resolve(await entry.callback());
+      } catch (error) {
+        entry.reject(error);
+      }
+      await Promise.resolve();
+    },
   };
 }
 
@@ -152,6 +179,354 @@ test('a global safety block stops every current-project browser library save', (
     setProjectLibrarySaveBlocked(false);
   }
   assert.equal(isProjectLibrarySaveBlocked(), false);
+});
+
+test('guarded concurrent saves serialize and preserve both distinct project records', async () => {
+  assert.equal(typeof projectStorageApi.saveCurrentProjectToLibraryGuarded, 'function');
+  const storage = memoryStorage();
+  const lockManager = controlledLockManager();
+  const firstProject = { ...createDefaultProject(), id: 'project-a', name: 'Project A' };
+  const secondProject = { ...createDefaultProject(), id: 'project-b', name: 'Project B' };
+
+  const firstSave = projectStorageApi.saveCurrentProjectToLibraryGuarded(firstProject, {
+    storage, lockManager, id: 'record-a', now: 1000,
+  });
+  const secondSave = projectStorageApi.saveCurrentProjectToLibraryGuarded(secondProject, {
+    storage, lockManager, id: 'record-b', now: 2000,
+  });
+
+  assert.equal(lockManager.pending(), 2);
+  await lockManager.runNext();
+  await lockManager.runNext();
+  assert.equal((await firstSave).ok, true);
+  assert.equal((await secondSave).ok, true);
+  assert.deepEqual(
+    listProjectLibraryRecords({ storage }).map(record => record.project.id).sort(),
+    ['project-a', 'project-b'],
+  );
+});
+
+test('guarded save rejects a stale same-project record without overwriting newer content', async () => {
+  assert.equal(typeof projectStorageApi.saveCurrentProjectToLibraryGuarded, 'function');
+  const storage = memoryStorage();
+  const lockManager = controlledLockManager();
+  const original = { ...createDefaultProject(), id: 'shared-project', name: 'Original' };
+  saveCurrentProjectToLibrary(original, { storage, id: 'shared-record', now: 1000 });
+
+  const pending = projectStorageApi.saveCurrentProjectToLibraryGuarded(
+    { ...original, name: 'Tab A edit' },
+    { storage, lockManager, adoptCurrentAssociation: true, now: 3000 },
+  );
+  saveProjectLibraryRecord(createProjectLibraryRecord(
+    { ...original, name: 'Tab B edit' },
+    { id: 'shared-record', now: 2000 },
+  ), { storage, now: 2000 });
+
+  await lockManager.runNext();
+  assert.deepEqual(await pending, { ok: false, reason: 'browser-conflict' });
+  assert.equal(listProjectLibraryRecords({ storage })[0].name, 'Tab B edit');
+});
+
+test('guarded save rejects a caller-held association after another tab already saved a newer revision', async () => {
+  const storage = memoryStorage();
+  const project = { ...createDefaultProject(), id: 'sequential-project', name: 'Original' };
+  saveCurrentProjectToLibrary(project, { storage, id: 'sequential-record', now: 1000 });
+  const tabAAssociation = projectStorageApi.readProjectLibraryRecordSnapshot('sequential-record', { storage });
+  saveCurrentProjectToLibrary({ ...project, name: 'Tab B newer save' }, { storage, now: 2000 });
+  const lockManager = controlledLockManager();
+
+  const pending = projectStorageApi.saveCurrentProjectToLibraryGuarded(
+    { ...project, name: 'Tab A stale save' },
+    { storage, lockManager, expectedAssociationSnapshot: tabAAssociation, now: 3000 },
+  );
+  await lockManager.runNext();
+
+  assert.deepEqual(await pending, { ok: false, reason: 'browser-conflict' });
+  assert.equal(listProjectLibraryRecords({ storage })[0].name, 'Tab B newer save');
+});
+
+test('guarded save rejects a caller-held association whose record was deleted', async () => {
+  const storage = memoryStorage();
+  const project = { ...createDefaultProject(), id: 'deleted-project', name: 'Before deletion' };
+  saveCurrentProjectToLibrary(project, { storage, id: 'deleted-record', now: 1000 });
+  const expectedAssociationSnapshot = projectStorageApi.readProjectLibraryRecordSnapshot('deleted-record', { storage });
+  deleteProjectLibraryRecord('deleted-record', { storage });
+  const lockManager = controlledLockManager();
+
+  const pending = projectStorageApi.saveCurrentProjectToLibraryGuarded(project, {
+    storage, lockManager, expectedAssociationSnapshot, now: 2000,
+  });
+  await lockManager.runNext();
+
+  assert.deepEqual(await pending, { ok: false, reason: 'browser-conflict' });
+  assert.deepEqual(listProjectLibraryRecords({ storage }), []);
+});
+
+test('guarded save rejects an association token whose record ID does not match its record', async () => {
+  const storage = memoryStorage();
+  const project = { ...createDefaultProject(), id: 'mismatched-project', name: 'Original' };
+  saveCurrentProjectToLibrary(project, { storage, id: 'mismatched-record', now: 1000 });
+  const valid = projectStorageApi.readProjectLibraryRecordSnapshot('mismatched-record', { storage });
+  const expectedAssociationSnapshot = { ...valid, recordId: 'different-record' };
+  const lockManager = controlledLockManager();
+
+  const pending = projectStorageApi.saveCurrentProjectToLibraryGuarded(
+    { ...project, name: 'Must not save' },
+    { storage, lockManager, expectedAssociationSnapshot, now: 2000 },
+  );
+  await lockManager.runNext();
+
+  assert.deepEqual(await pending, { ok: false, reason: 'browser-conflict' });
+  assert.equal(listProjectLibraryRecords({ storage })[0].name, 'Original');
+});
+
+test('guarded save without an association token creates a distinct record instead of adopting an existing same-project pointer', async () => {
+  const storage = memoryStorage();
+  const project = { ...createDefaultProject(), id: 'unadopted-project', name: 'Existing revision' };
+  const existing = saveCurrentProjectToLibrary(project, { storage, id: 'unadopted-record', now: 1000 });
+  const lockManager = controlledLockManager();
+
+  const pending = projectStorageApi.saveCurrentProjectToLibraryGuarded(
+    { ...project, name: 'Independent save' },
+    { storage, lockManager, now: 2000 },
+  );
+  await lockManager.runNext();
+  const result = await pending;
+
+  assert.equal(result.ok, true);
+  assert.notEqual(result.record.id, existing.id);
+  assert.deepEqual(
+    listProjectLibraryRecords({ storage }).map(record => record.name).sort(),
+    ['Existing revision', 'Independent save'],
+  );
+});
+
+test('guarded save captures an immutable project snapshot before waiting for the lock', async () => {
+  assert.equal(typeof projectStorageApi.saveCurrentProjectToLibraryGuarded, 'function');
+  const storage = memoryStorage();
+  const lockManager = controlledLockManager();
+  const project = { ...createDefaultProject(), id: 'immutable-project', name: 'Captured name' };
+
+  const pending = projectStorageApi.saveCurrentProjectToLibraryGuarded(project, {
+    storage, lockManager, id: 'immutable-record', now: 1000,
+  });
+  project.name = 'Mutated after capture';
+  await lockManager.runNext();
+
+  const result = await pending;
+  assert.equal(result.ok, true);
+  assert.equal(result.record.name, 'Captured name');
+  assert.equal(Object.isFrozen(result.projectSnapshot), true);
+  assert.equal(
+    projectStorageApi.sameProjectLibraryRecordSnapshot(
+      result.associationSnapshot,
+      projectStorageApi.readProjectLibraryRecordSnapshot(result.record.id, { storage }),
+    ),
+    true,
+  );
+});
+
+test('guarded save fails closed when safe browser locking is unavailable', async () => {
+  assert.equal(typeof projectStorageApi.saveCurrentProjectToLibraryGuarded, 'function');
+  const storage = memoryStorage();
+
+  const result = await projectStorageApi.saveCurrentProjectToLibraryGuarded(createDefaultProject(), {
+    storage,
+    lockManager: {},
+  });
+
+  assert.deepEqual(result, { ok: false, reason: 'locking-unavailable' });
+  assert.deepEqual(listProjectLibraryRecords({ storage }), []);
+});
+
+test('guarded save verifies exact storage readback before acknowledging success', async () => {
+  assert.equal(typeof projectStorageApi.saveCurrentProjectToLibraryGuarded, 'function');
+  const base = memoryStorage();
+  const storage = {
+    ...base,
+    setItem(key, value) {
+      if (key === PROJECT_LIBRARY_STORAGE_KEY || key === PROJECT_LIBRARY_BACKUP_STORAGE_KEY) return;
+      base.setItem(key, value);
+    },
+  };
+  const lockManager = controlledLockManager();
+  const pending = projectStorageApi.saveCurrentProjectToLibraryGuarded(createDefaultProject(), {
+    storage, lockManager, id: 'unacknowledged-record', now: 1000,
+  });
+
+  await lockManager.runNext();
+  assert.deepEqual(await pending, { ok: false, reason: 'browser-readback-failed' });
+});
+
+test('guarded association stores only the exact caller-held record revision', async () => {
+  assert.equal(typeof projectStorageApi.associateProjectLibraryRecordGuarded, 'function');
+  const storage = memoryStorage();
+  const project = { ...createDefaultProject(), id: 'association-project', name: 'Association target' };
+  saveCurrentProjectToLibrary(project, { storage, id: 'association-record', now: 1000 });
+  writeActiveProjectLibraryRecordId('', { storage });
+  const expectedAssociationSnapshot = projectStorageApi.readProjectLibraryRecordSnapshot(
+    'association-record',
+    { storage },
+  );
+  const lockManager = controlledLockManager();
+
+  const pending = projectStorageApi.associateProjectLibraryRecordGuarded(
+    expectedAssociationSnapshot,
+    { storage, lockManager },
+  );
+  await lockManager.runNext();
+  const result = await pending;
+
+  assert.equal(result.ok, true);
+  assert.equal(readActiveProjectLibraryRecordId({ storage }), 'association-record');
+  assert.equal(
+    projectStorageApi.sameProjectLibraryRecordSnapshot(
+      result.associationSnapshot,
+      expectedAssociationSnapshot,
+    ),
+    true,
+  );
+});
+
+test('guarded association rejects a record changed while its lock request is queued', async () => {
+  const storage = memoryStorage();
+  const project = { ...createDefaultProject(), id: 'queued-association-project', name: 'Before queue' };
+  saveCurrentProjectToLibrary(project, { storage, id: 'queued-association-record', now: 1000 });
+  writeActiveProjectLibraryRecordId('', { storage });
+  const expectedAssociationSnapshot = projectStorageApi.readProjectLibraryRecordSnapshot(
+    'queued-association-record',
+    { storage },
+  );
+  const lockManager = controlledLockManager();
+  const pending = projectStorageApi.associateProjectLibraryRecordGuarded(
+    expectedAssociationSnapshot,
+    { storage, lockManager },
+  );
+  saveProjectLibraryRecord(createProjectLibraryRecord(
+    { ...project, name: 'Changed before lock' },
+    { id: 'queued-association-record', now: 2000 },
+  ), { storage, now: 2000 });
+
+  await lockManager.runNext();
+
+  assert.deepEqual(await pending, { ok: false, reason: 'browser-conflict' });
+  assert.equal(readActiveProjectLibraryRecordId({ storage }), '');
+});
+
+test('guarded association rejects a record deleted while its lock request is queued', async () => {
+  const storage = memoryStorage();
+  const project = { ...createDefaultProject(), id: 'deleted-association-project' };
+  saveCurrentProjectToLibrary(project, { storage, id: 'deleted-association-record', now: 1000 });
+  writeActiveProjectLibraryRecordId('', { storage });
+  const expectedAssociationSnapshot = projectStorageApi.readProjectLibraryRecordSnapshot(
+    'deleted-association-record',
+    { storage },
+  );
+  const lockManager = controlledLockManager();
+  const pending = projectStorageApi.associateProjectLibraryRecordGuarded(
+    expectedAssociationSnapshot,
+    { storage, lockManager },
+  );
+  deleteProjectLibraryRecord('deleted-association-record', { storage });
+
+  await lockManager.runNext();
+
+  assert.deepEqual(await pending, { ok: false, reason: 'browser-conflict' });
+  assert.equal(readActiveProjectLibraryRecordId({ storage }), '');
+});
+
+test('guarded association detects deletion during the active-pointer write', async () => {
+  const base = memoryStorage();
+  let deleteDuringAssociation = false;
+  const storage = {
+    ...base,
+    setItem(key, value) {
+      base.setItem(key, value);
+      if (key === projectStorageApi.PROJECT_ACTIVE_RECORD_STORAGE_KEY && deleteDuringAssociation) {
+        deleteDuringAssociation = false;
+        deleteProjectLibraryRecord('interleaved-association-record', { storage: base });
+      }
+    },
+  };
+  const project = { ...createDefaultProject(), id: 'interleaved-association-project' };
+  saveCurrentProjectToLibrary(project, { storage, id: 'interleaved-association-record', now: 1000 });
+  writeActiveProjectLibraryRecordId('', { storage });
+  const expectedAssociationSnapshot = projectStorageApi.readProjectLibraryRecordSnapshot(
+    'interleaved-association-record',
+    { storage },
+  );
+  const lockManager = controlledLockManager();
+  deleteDuringAssociation = true;
+
+  const pending = projectStorageApi.associateProjectLibraryRecordGuarded(
+    expectedAssociationSnapshot,
+    { storage, lockManager },
+  );
+  await lockManager.runNext();
+
+  assert.deepEqual(await pending, { ok: false, reason: 'browser-conflict' });
+  assert.equal(readActiveProjectLibraryRecordId({ storage }), '');
+});
+
+test('guarded association reports a failed active-pointer readback', async () => {
+  const base = memoryStorage();
+  const storage = {
+    ...base,
+    setItem(key, value) {
+      if (key !== projectStorageApi.PROJECT_ACTIVE_RECORD_STORAGE_KEY) base.setItem(key, value);
+    },
+  };
+  const project = { ...createDefaultProject(), id: 'unacknowledged-association-project' };
+  saveCurrentProjectToLibrary(project, { storage, id: 'unacknowledged-association-record', now: 1000 });
+  const expectedAssociationSnapshot = projectStorageApi.readProjectLibraryRecordSnapshot(
+    'unacknowledged-association-record',
+    { storage },
+  );
+  const lockManager = controlledLockManager();
+  const pending = projectStorageApi.associateProjectLibraryRecordGuarded(
+    expectedAssociationSnapshot,
+    { storage, lockManager },
+  );
+
+  await lockManager.runNext();
+
+  assert.deepEqual(await pending, { ok: false, reason: 'browser-readback-failed' });
+});
+
+test('guarded association fails closed when safe browser locking is unavailable', async () => {
+  const storage = memoryStorage();
+  const project = { ...createDefaultProject(), id: 'unlocked-association-project' };
+  saveCurrentProjectToLibrary(project, { storage, id: 'unlocked-association-record', now: 1000 });
+  const expectedAssociationSnapshot = projectStorageApi.readProjectLibraryRecordSnapshot(
+    'unlocked-association-record',
+    { storage },
+  );
+
+  assert.deepEqual(
+    await projectStorageApi.associateProjectLibraryRecordGuarded(expectedAssociationSnapshot, {
+      storage,
+      lockManager: {},
+    }),
+    { ok: false, reason: 'locking-unavailable' },
+  );
+});
+
+test('record snapshot helpers compare exact frozen record revision and content', () => {
+  assert.equal(typeof projectStorageApi.readProjectLibraryRecordSnapshot, 'function');
+  assert.equal(typeof projectStorageApi.sameProjectLibraryRecordSnapshot, 'function');
+  const storage = memoryStorage();
+  const project = { ...createDefaultProject(), id: 'snapshot-project', name: 'First revision' };
+  saveCurrentProjectToLibrary(project, { storage, id: 'snapshot-record', now: 1000 });
+  const first = projectStorageApi.readProjectLibraryRecordSnapshot('snapshot-record', { storage });
+  const same = projectStorageApi.readProjectLibraryRecordSnapshot('snapshot-record', { storage });
+  saveCurrentProjectToLibrary({ ...project, name: 'Second revision' }, { storage, now: 2000 });
+  const changed = projectStorageApi.readProjectLibraryRecordSnapshot('snapshot-record', { storage });
+
+  assert.equal(first.recordId, 'snapshot-record');
+  assert.equal(first.record.updatedAt, 1000);
+  assert.equal(Object.isFrozen(first.record.project), true);
+  assert.equal(projectStorageApi.sameProjectLibraryRecordSnapshot(first, same), true);
+  assert.equal(projectStorageApi.sameProjectLibraryRecordSnapshot(first, changed), false);
 });
 
 test('project library reads the backup copy when the primary entry is corrupt', () => {

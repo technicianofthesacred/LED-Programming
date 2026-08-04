@@ -39,6 +39,10 @@ function goToInstall() {
   window.location.hash = 'screen=flash&mode=install';
 }
 
+function goToLayout() {
+  window.location.hash = 'screen=layout';
+}
+
 const SETUP_HOST = '192.168.4.1';
 const NEUTRAL_FIRST_RUN_REASONS = new Set(['never-connected', 'card-unreachable']);
 
@@ -136,6 +140,12 @@ export function CardConnectionCenter({
     shouldRestoreFocusRef.current = false;
     onClose();
     goToInstall();
+  };
+
+  const openLayout = () => {
+    shouldRestoreFocusRef.current = false;
+    onClose();
+    goToLayout();
   };
 
   const connect = (rawHost = '', { bridge = false } = {}) => {
@@ -293,7 +303,7 @@ export function CardConnectionCenter({
       case 'pair-local-card':
         return <button type="button" className="btn primary" onClick={useDiscoveredCard} disabled={pairingBusy}>{pairingBusy ? 'Connecting…' : 'Connect'}</button>;
       case 'card-needs-project':
-        return <button type="button" className="btn primary" onClick={openInstall}>Install your project</button>;
+        return <button type="button" className="btn primary" onClick={openLayout}>Start layout</button>;
       case 'ready-browser-usb':
         return <button type="button" className="btn primary" onClick={openInstall}>Start installation</button>;
       case 'escape-insecure-card-frame':

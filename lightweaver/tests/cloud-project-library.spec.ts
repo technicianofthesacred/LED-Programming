@@ -1179,6 +1179,40 @@ test('signed-out top-bar Save uses the browser library without leaving the activ
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records?.length || 0)).toBe(1);
 });
 
+test('reloaded browser project keeps its exact save association instead of creating duplicates', async ({ page }) => {
+  const fixture = new LibraryFixture(null);
+  await fixture.install(page);
+  let sessionResponse = page.waitForResponse('**/api/account/session');
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await sessionResponse;
+
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records?.length || 0)).toBe(1);
+
+  sessionResponse = page.waitForResponse('**/api/account/session');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await sessionResponse;
+  const restoredAssociation = await page.evaluate(() => {
+    const records = JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records || [];
+    const autosave = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
+    return {
+      activeRecordId: localStorage.getItem('lw_project_active_record_v1'),
+      autosaveProjectId: autosave.id,
+      records: records.map((record: any) => ({ id: record.id, projectId: record.project?.id })),
+    };
+  });
+  expect(restoredAssociation.activeRecordId).toBe(restoredAssociation.records[0]?.id);
+  expect(restoredAssociation.autosaveProjectId).toBe(restoredAssociation.records[0]?.projectId);
+  await page.getByLabel('Preferences').first().click();
+  await page.getByLabel('Project name').fill('Reloaded browser project');
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+
+  await expect.poll(() => page.evaluate(() => {
+    const records = JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records || [];
+    return { count: records.length, name: records[0]?.project?.name };
+  })).toEqual({ count: 1, name: 'Reloaded browser project' });
+});
+
 test('customer top-bar Save keeps unassociated work in browser and saves only an opened assigned draft online', async ({ page }) => {
   const fixture = new LibraryFixture('customer', 'client@example.test');
   const official = fixture.seed('Official Installation');

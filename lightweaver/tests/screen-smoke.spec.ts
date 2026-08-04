@@ -489,7 +489,8 @@ test('a paired card reporting a factory status surfaces "Needs project", not gre
   await status.click();
   const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
   await expect(dialog).toContainText('Blank — load a project');
-  await expect(dialog.getByRole('button', { name: 'Install your project' })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Start layout' }).click();
+  await expect(page).toHaveURL(/#screen=layout/);
 });
 
 test('card status control distinguishes checking, blank, and command-ready states', async ({ page }) => {
@@ -523,7 +524,7 @@ test('card status control distinguishes checking, blank, and command-ready state
       app: 'Lightweaver', provisioningContractVersion: 1,
       cardId: card.id, firmwareVersion: '1.4.0', buildId: 'a'.repeat(40),
       bootId: 'boot-factory', runtimePhase: 'factory', knownGoodProject: false,
-      commandReady: false, outputReady: false,
+      commandReady: false, outputReady: false, mode: 'factory-flash', source: 'defaults',
     },
   }]);
   await expect(status).toHaveAccessibleName(/Needs project/);

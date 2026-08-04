@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { fingerprintCommissioningProject } from './cardCommissioningFlow.js';
+import { prepareCardDeployment } from './cardDeployment.js';
 import { createDefaultProject } from './projectModel.js';
 import {
   cardProjectFingerprint,
@@ -19,7 +21,6 @@ function project(id, name = id) {
     layout: {
       ...value.layout,
       starterPending: false,
-      strips: [{ id: `${id}-strip`, name: 'Strip', pixelCount: 12, pixels: [] }],
     },
   };
 }
@@ -33,6 +34,33 @@ function evidenceFor(value, overrides = {}) {
     ...overrides,
   };
 }
+
+test('matches the exact current project using the fingerprint written by the real deployment path', () => {
+  const current = createDefaultProject();
+  current.layout.starterPending = false;
+  const deployed = prepareCardDeployment({
+    projectId: current.id,
+    projectName: current.name,
+    projectRevision: 7,
+    strips: current.layout.strips,
+    patchBoard: current.layout.patchBoard,
+    wiring: current.layout.wiring,
+    standaloneController: current.devices.standaloneController,
+  });
+  const result = resolveCardProject({
+    evidence: {
+      cardId: 'lw-aabbccddeeff',
+      projectId: deployed.config.piece.id,
+      projectRevision: deployed.config.projectRevision,
+      projectFingerprint: deployed.config.projectFingerprint,
+    },
+    currentProject: current,
+  });
+
+  assert.equal(result.status, 'match');
+  assert.equal(result.source, 'current');
+  assert.equal(result.project, current);
+});
 
 test('prefers an exact currently open project over every stored source', () => {
   const current = project('gallery-piece');
@@ -54,14 +82,20 @@ test('prefers an exact currently open project over every stored source', () => {
 
 test('matches a production job only with the complete exact card tuple', () => {
   const installed = project('production-piece');
-  const fingerprint = cardProjectFingerprint(installed);
+  const fingerprint = fingerprintCommissioningProject(installed);
   const job = {
     jobId: 'job-7',
     digest: 'b'.repeat(64),
     project: { id: installed.id, revision: 7, fingerprint, restoreSnapshot: installed },
   };
+  const productionEvidence = overrides => evidenceFor(installed, {
+    projectFingerprint: fingerprint,
+    productionJobId: job.jobId,
+    productionJobDigest: job.digest,
+    ...overrides,
+  });
   const exact = resolveCardProject({
-    evidence: evidenceFor(installed, { productionJobId: job.jobId, productionJobDigest: job.digest }),
+    evidence: productionEvidence(),
     productionJobs: [job],
   });
   assert.equal(exact.status, 'match');
@@ -69,14 +103,51 @@ test('matches a production job only with the complete exact card tuple', () => {
   assert.equal(exact.candidate, job);
 
   for (const evidence of [
-    evidenceFor(installed, { productionJobId: job.jobId }),
-    evidenceFor(installed, { productionJobDigest: job.digest }),
-    evidenceFor(installed, { productionJobId: job.jobId, productionJobDigest: 'c'.repeat(64) }),
-    evidenceFor(installed, { projectRevision: 8, productionJobId: job.jobId, productionJobDigest: job.digest }),
-    evidenceFor(installed, { projectFingerprint: 'f'.repeat(16), productionJobId: job.jobId, productionJobDigest: job.digest }),
+    productionEvidence({ productionJobDigest: undefined }),
+    productionEvidence({ productionJobId: undefined }),
+    productionEvidence({ productionJobDigest: 'c'.repeat(64) }),
+    productionEvidence({ projectRevision: 8 }),
+    productionEvidence({ projectFingerprint: 'f'.repeat(16) }),
   ]) {
     assert.notEqual(resolveCardProject({ evidence, productionJobs: [job] }).status, 'match');
   }
+});
+
+test('an incomplete current workspace cannot block an exact production project match', () => {
+  const installed = project('production-piece');
+  const fingerprint = fingerprintCommissioningProject(installed);
+  const job = {
+    jobId: 'job-7',
+    digest: 'b'.repeat(64),
+    project: { id: installed.id, revision: 7, fingerprint, restoreSnapshot: installed },
+  };
+  const incompleteCurrent = project(installed.id, 'Incomplete local copy');
+  incompleteCurrent.layout.strips = [{
+    id: 'unfinished-strip', name: 'Unfinished strip', pixelCount: 17, pixels: [],
+  }];
+
+  const result = resolveCardProject({
+    evidence: {
+      ...evidenceFor(installed),
+      projectFingerprint: fingerprint,
+      productionJobId: job.jobId,
+      productionJobDigest: job.digest,
+    },
+    currentProject: incompleteCurrent,
+    productionJobs: [job],
+  });
+
+  assert.equal(result.status, 'match');
+  assert.equal(result.source, 'production');
+});
+
+test('an incomplete workspace has no deployed fingerprint instead of throwing during reconnect correlation', () => {
+  const incomplete = project('work-in-progress');
+  incomplete.layout.strips = [{
+    id: 'unfinished-strip', name: 'Unfinished strip', pixelCount: 17, pixels: [],
+  }];
+
+  assert.equal(cardProjectFingerprint(incomplete), '');
 });
 
 test('matches an exact active cloud document before an exact browser record', () => {

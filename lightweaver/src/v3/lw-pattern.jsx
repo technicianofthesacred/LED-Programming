@@ -52,6 +52,12 @@ import {
 } from '../lib/cardConnection.js';
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
 import { classifyCardReadiness } from '../lib/cardReadiness.js';
+import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
+import {
+  consumeCardEditAuthorization,
+  currentCardProjectAuthorizationExpiresAt,
+  hasCurrentCardProjectAuthorization,
+} from '../lib/cardEditAuthorization.js';
 import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard, readCardProjectEvidence } from '../lib/cardPushClient.js';
 import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
 import { prepareCardDeployment, waitForCardDeploymentVerification } from '../lib/cardDeployment.js';
@@ -337,6 +343,7 @@ import { PatternPreview } from './PatternPreview.jsx';
       setActivePatternId,
       gammaEnabled,
       gammaValue,
+      serializeProject,
     } = useProject();
     const projectPreviewStrip = useMemo(
       () => createProjectPreviewStrip({ compiledWiring: wiringInPhysicalPreviewOrder(compiledWiring), strips, hidden }),
@@ -411,6 +418,36 @@ import { PatternPreview } from './PatternPreview.jsx';
     const syncedPreviewSelectionRef = useRef('');
     const installIntentRef = useRef(null);
 
+    const patternAuthorizationBinding = useMemo(() => {
+      const readiness = cardLink?.readiness || {};
+      const card = cardLink?.card || {};
+      const currentProject = serializeProject();
+      return {
+        cardId: readiness.cardId || card.id || card.cardId || '',
+        firmwareVersion: readiness.firmwareVersion || card.firmwareVersion || '',
+        buildId: readiness.buildId || card.buildId || '',
+        bootId: readiness.bootId || cardLink?.validatedBootId || '',
+        installedProjectId: readiness.projectId || readiness.piece?.id || '',
+        installedProjectFingerprint: readiness.projectFingerprint || '',
+        studioProjectId: projectId,
+        studioProjectFingerprint: cardProjectFingerprint(currentProject),
+        projectGeneration: projectLifecycle.generation,
+      };
+    }, [cardLink?.card, cardLink?.readiness, cardLink?.validatedBootId, projectId, projectLifecycle.generation, serializeProject]);
+    const patternAuthorizationRef = useRef(patternAuthorizationBinding);
+    patternAuthorizationRef.current = patternAuthorizationBinding;
+    const [, refreshPatternAuthorization] = useReducer(value => value + 1, 0);
+    const authorizationExpiresAt = currentCardProjectAuthorizationExpiresAt(patternAuthorizationBinding);
+    const projectAuthorizationCurrent = authorizationExpiresAt > 0;
+    useEffect(() => {
+      if (!authorizationExpiresAt) return undefined;
+      const timeout = setTimeout(
+        () => refreshPatternAuthorization(),
+        Math.max(0, authorizationExpiresAt - Date.now()) + 1,
+      );
+      return () => clearTimeout(timeout);
+    }, [authorizationExpiresAt]);
+
     const patternCardAccess = useMemo(() => {
       const expectedCard = cardLink?.expectedCard || null;
       const readiness = classifyCardReadiness(cardLink?.readiness || {}, { expectedCard });
@@ -423,6 +460,24 @@ import { PatternPreview } from './PatternPreview.jsx';
     const patternAccessRef = useRef(patternCardAccess);
     patternAccessRef.current = patternCardAccess;
     const previousPatternAccessRef = useRef(patternCardAccess);
+
+    const hasCurrentProjectAuthorization = useCallback(() => (
+      hasCurrentCardProjectAuthorization(patternAuthorizationRef.current)
+    ), []);
+    const currentPatternCardAccess = useCallback(() => {
+      const access = patternAccessRef.current;
+      if (access !== 'ready') return access;
+      return hasCurrentProjectAuthorization() ? 'ready' : 'project';
+    }, [hasCurrentProjectAuthorization]);
+    const matchesCurrentCardProjectEvidence = useCallback((evidence = {}) => {
+      const binding = patternAuthorizationRef.current;
+      return hasCurrentProjectAuthorization()
+        && String(evidence.cardId || '').trim().toLowerCase() === String(binding.cardId || '').trim().toLowerCase()
+        && String(evidence.firmwareVersion || '').trim() === String(binding.firmwareVersion || '').trim()
+        && String(evidence.buildId || '').trim() === String(binding.buildId || '').trim()
+        && String(evidence.projectId || '').trim() === String(binding.installedProjectId || '').trim()
+        && String(evidence.projectFingerprint || '').trim().toLowerCase() === String(binding.installedProjectFingerprint || '').trim().toLowerCase();
+    }, [hasCurrentProjectAuthorization]);
 
     const invalidatePendingPreview = useCallback(() => {
       browsePreviewSeq.current += 1;
@@ -437,13 +492,27 @@ import { PatternPreview } from './PatternPreview.jsx';
 
     const blockPatternCardEffect = useCallback((access = patternAccessRef.current) => {
       invalidatePendingPreview();
-      setPatternCardGate(access === 'blank' ? 'blank' : 'recovery');
+      setPatternCardGate(access === 'blank' ? 'blank' : access === 'project' ? 'project' : 'recovery');
       setHandoffUrl('');
       setStatusKind('err');
-      setStatus(access === 'blank'
-        ? 'This card has no project yet. Set up its LED strips, then install this Studio project.'
-        : 'This card is not ready for pattern commands. Recover and verify it before sending lights.');
+      setStatus(
+        access === 'blank'
+          ? 'This card has no project yet. Set up its LED strips, then install this Studio project.'
+          : access === 'project'
+            ? 'Open Hardware and verify that this exact Studio project is still installed on this card before sending lights.'
+            : 'This card is not ready for pattern commands. Recover and verify it before sending lights.',
+      );
     }, [invalidatePendingPreview]);
+
+    const previousProjectAuthorizationRef = useRef(projectAuthorizationCurrent);
+    useEffect(() => {
+      const previous = previousProjectAuthorizationRef.current;
+      previousProjectAuthorizationRef.current = projectAuthorizationCurrent;
+      if (previous && !projectAuthorizationCurrent) {
+        setColorOrderOpen(false);
+        blockPatternCardEffect('project');
+      }
+    }, [blockPatternCardEffect, projectAuthorizationCurrent]);
 
     useEffect(() => {
       // Card authority is tied to the exact readiness envelope that existed
@@ -714,6 +783,7 @@ import { PatternPreview } from './PatternPreview.jsx';
 
     const scheduleLivePreview = useCallback((nextLook, target = selectedTarget, delayMs = 80, { bridgeAuthority = null } = {}) => {
       const hasCurrentAuthority = () => {
+        if (!hasCurrentProjectAuthorization()) return false;
         if (patternAccessRef.current === 'ready') return true;
         if (!bridgeAuthority) return false;
         const state = getCardBridgeState();
@@ -734,7 +804,7 @@ import { PatternPreview } from './PatternPreview.jsx';
         return;
       }
       if (!hasCurrentAuthority()) {
-        blockPatternCardEffect(patternAccessRef.current);
+        blockPatternCardEffect(currentPatternCardAccess());
         return;
       }
       setPatternCardGate('');
@@ -748,10 +818,16 @@ import { PatternPreview } from './PatternPreview.jsx';
       livePreviewTimer.current = setTimeout(async () => {
         setHandoffUrl('');
         if (!hasCurrentAuthority()) {
-          blockPatternCardEffect(patternAccessRef.current);
+          blockPatternCardEffect(currentPatternCardAccess());
           return;
         }
         try {
+          const evidence = await readCardProjectEvidence({ host: cardHost, transport: cardLink?.transport });
+          if (sequence !== livePreviewSeq.current) return;
+          if (!matchesCurrentCardProjectEvidence(evidence)) {
+            blockPatternCardEffect('project');
+            return;
+          }
           if (zone) {
             if (!runtimePackage) throw runtimeBuild.error;
             await ensureCardSectionsForPreview({
@@ -761,7 +837,7 @@ import { PatternPreview } from './PatternPreview.jsx';
             });
             if (sequence !== livePreviewSeq.current) return;
             if (!hasCurrentAuthority()) {
-              blockPatternCardEffect(patternAccessRef.current);
+              blockPatternCardEffect(currentPatternCardAccess());
               return;
             }
           }
@@ -798,7 +874,7 @@ import { PatternPreview } from './PatternPreview.jsx';
           }
         }
       }, delayMs);
-    }, [blockPatternCardEffect, cardHost, livePreview, localCard, markCardLookConfirmed, runtimeBuild.error, runtimePackage, selectedTarget]);
+    }, [blockPatternCardEffect, cardHost, cardLink?.transport, currentPatternCardAccess, hasCurrentProjectAuthorization, livePreview, localCard, markCardLookConfirmed, matchesCurrentCardProjectEvidence, runtimeBuild.error, runtimePackage, selectedTarget]);
 
     const retryLatestPreview = useCallback(() => {
       const latest = latestPreviewIntent.current;
@@ -843,9 +919,24 @@ import { PatternPreview } from './PatternPreview.jsx';
     useEffect(() => {
       if (cardReturnConsumed.current || typeof window === 'undefined') return;
       const params = new URLSearchParams(window.location.search);
-      const requestedPatternId = String(params.get('editPattern') || '').trim().toLowerCase();
-      const requestedLookId = String(params.get('editLook') || '').trim().toLowerCase();
+      const requestedPatternValue = String(params.get('editPattern') || '').trim();
+      const requestedLookValue = String(params.get('editLook') || '').trim();
+      const requestedPatternId = requestedPatternValue.toLowerCase();
+      const requestedLookId = requestedLookValue.toLowerCase();
       if (!requestedPatternId && !requestedLookId) return;
+      const requestedIntent = requestedPatternValue
+        ? `pattern:${requestedPatternValue}`
+        : `look:${requestedLookValue}`;
+      if (!consumeCardEditAuthorization({
+        ...patternAuthorizationRef.current,
+        intent: requestedIntent,
+      })) {
+        cardReturnConsumed.current = true;
+        invalidatePendingPreview();
+        if (go) go('card');
+        else window.location.hash = '#screen=card&section=overview';
+        return;
+      }
       cardReturnConsumed.current = true;
 
       const returnedHost = params.get('cardHost') || '';
@@ -892,7 +983,7 @@ import { PatternPreview } from './PatternPreview.jsx';
       params.delete('editLook');
       const search = params.toString();
       window.history.replaceState(null, '', `${window.location.pathname}${search ? `?${search}` : ''}${window.location.hash}`);
-    }, [board, savedGlobalLook, savedLooks, setPatchBoard, setStandaloneController, strips]);
+    }, [board, go, invalidatePendingPreview, savedGlobalLook, savedLooks, setPatchBoard, setStandaloneController, strips]);
 
     const updatePreviewLook = (patch, { push = true } = {}) => {
       if (!selectedTarget) return null;
@@ -905,8 +996,8 @@ import { PatternPreview } from './PatternPreview.jsx';
 
     const scheduleBrowseLivePreview = useCallback((nextLook, target) => {
       if (!nextLook) return;
-      if (livePreview && patternAccessRef.current !== 'ready') {
-        blockPatternCardEffect(patternAccessRef.current);
+      if (livePreview && currentPatternCardAccess() !== 'ready') {
+        blockPatternCardEffect(currentPatternCardAccess());
         return;
       }
       setPatternCardGate('');
@@ -946,7 +1037,7 @@ import { PatternPreview } from './PatternPreview.jsx';
           && bridgeState.runtimeCommandReady
           && normalizeCardHost(bridgeState.host) === normalizeCardHost(cardHost);
         if (!exactFreshAuthority || sequence !== browsePreviewSeq.current) {
-          blockPatternCardEffect(patternAccessRef.current);
+          blockPatternCardEffect(currentPatternCardAccess());
           return;
         }
         setStatusKind('');
@@ -1015,7 +1106,7 @@ import { PatternPreview } from './PatternPreview.jsx';
           setStatus(error?.message || 'The local card did not connect. Open Flash to update the card, then try again.');
         }
       });
-    }, [blockPatternCardEffect, cardHost, livePreview, localCard, scheduleLivePreview]);
+    }, [blockPatternCardEffect, cardHost, currentPatternCardAccess, livePreview, localCard, scheduleLivePreview]);
 
     // Clicking a target tab pushes that target's current look to its zone
     // (debounced) so the physical strip follows the selection.
@@ -1149,8 +1240,23 @@ import { PatternPreview } from './PatternPreview.jsx';
         : 'The card address is not a valid local Lightweaver address. Check it, then try again.');
       return false;
     };
-    const openCardInstaller = () => {
+    const openCardInstaller = async () => {
       if (!handoffUrl) return;
+      if (currentPatternCardAccess() !== 'ready') {
+        blockPatternCardEffect(currentPatternCardAccess());
+        return;
+      }
+      try {
+        const evidence = await readCardProjectEvidence({ host: cardHost, transport: cardLink?.transport });
+        if (!matchesCurrentCardProjectEvidence(evidence)) {
+          blockPatternCardEffect('project');
+          return;
+        }
+      } catch (error) {
+        setStatusKind('err');
+        setStatus(error?.message || 'The card could not be reverified before opening the installer.');
+        return;
+      }
       const url = new URL(handoffUrl);
       reportCardPageOpenResult(openLocalCardPage(cardHost, {
         path: `${url.pathname}${url.search}${url.hash}`,
@@ -1173,8 +1279,8 @@ import { PatternPreview } from './PatternPreview.jsx';
     };
 
     const savePreviewToCard = async () => {
-      if (patternAccessRef.current !== 'ready') {
-        blockPatternCardEffect(patternAccessRef.current);
+      if (currentPatternCardAccess() !== 'ready') {
+        blockPatternCardEffect(currentPatternCardAccess());
         return;
       }
       if (installIntentRef.current) return;
@@ -1217,13 +1323,13 @@ import { PatternPreview } from './PatternPreview.jsx';
         prepareCardStoragePayload(packageForCard);
         const safety = await checkCardLayoutWriteSafety(packageForCard, 'saving');
         if (!safety.ok) return;
-        if (patternAccessRef.current !== 'ready') {
-          blockPatternCardEffect(patternAccessRef.current);
+        if (currentPatternCardAccess() !== 'ready') {
+          blockPatternCardEffect(currentPatternCardAccess());
           return;
         }
         const before = await readCardProjectEvidence({ host: safety.host || cardHost });
-        if (patternAccessRef.current !== 'ready') {
-          blockPatternCardEffect(patternAccessRef.current);
+        if (!matchesCurrentCardProjectEvidence(before)) {
+          blockPatternCardEffect('project');
           return;
         }
         const exactPrepared = { ...prepared, cardId: before.cardId };
@@ -1279,10 +1385,12 @@ import { PatternPreview } from './PatternPreview.jsx';
           const zone = testStrip.enabled
             ? ''
             : (selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '');
-          await pushLivePreviewToCard(
-            { ...nextLook, zone, syncZones: testStrip.enabled || nextLook.syncZones },
-            { host: safety.host || cardHost, timeoutMs: 2200 },
-          ).catch(() => null);
+          if (currentPatternCardAccess() === 'ready') {
+            await pushLivePreviewToCard(
+              { ...nextLook, zone, syncZones: testStrip.enabled || nextLook.syncZones },
+              { host: safety.host || cardHost, timeoutMs: 2200 },
+            ).catch(() => null);
+          }
         }
         setStatusKind('');
         setStatus('');
@@ -1441,8 +1549,8 @@ import { PatternPreview } from './PatternPreview.jsx';
     };
 
     const repairLed = async () => {
-      if (patternAccessRef.current !== 'ready') {
-        blockPatternCardEffect(patternAccessRef.current);
+      if (currentPatternCardAccess() !== 'ready') {
+        blockPatternCardEffect(currentPatternCardAccess());
         return;
       }
       if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
@@ -1454,6 +1562,12 @@ import { PatternPreview } from './PatternPreview.jsx';
       setStatusKind('');
       setStatus(`Sending warm-white LED repair to ${cardHostToUrl(cardHost)}...`);
       try {
+        const evidence = await readCardProjectEvidence({ host: cardHost, transport: cardLink?.transport });
+        if (sequence !== livePreviewSeq.current) return;
+        if (!matchesCurrentCardProjectEvidence(evidence)) {
+          blockPatternCardEffect('project');
+          return;
+        }
         await recoverCardLights(
           { patternId: 'warm-white', brightness: 1, syncZones: true },
           { host: cardHost, timeoutMs: 3200, restartCard: true },
@@ -1487,8 +1601,8 @@ import { PatternPreview } from './PatternPreview.jsx';
     // real fix is a dedicated multi-output test rig, not a fake split on one
     // zone.
     const sendSplitPreview = async () => {
-      if (patternAccessRef.current !== 'ready') {
-        blockPatternCardEffect(patternAccessRef.current);
+      if (currentPatternCardAccess() !== 'ready') {
+        blockPatternCardEffect(currentPatternCardAccess());
         return;
       }
       const { nextLook, nextBoard, nextController } = buildCurrentHardwareState();
@@ -1509,6 +1623,10 @@ import { PatternPreview } from './PatternPreview.jsx';
         const safety = await checkCardLayoutWriteSafety(nextPackage, 'applying split preview');
         if (!safety.ok) return;
         const before = await readCardProjectEvidence({ host: safety.host || cardHost });
+        if (!matchesCurrentCardProjectEvidence(before)) {
+          blockPatternCardEffect('project');
+          return;
+        }
         const response = await pushConfigToCard(nextPackage, { host: safety.host || cardHost, timeoutMs: 6000, reboot: 'if-needed', allowLayoutChange: true });
         if (response?.state === 'staged') {
           throw new Error('The split is staged but not installed. Open Test & Install and confirm it on the real LEDs.');
@@ -1520,7 +1638,7 @@ import { PatternPreview } from './PatternPreview.jsx';
         setPatchBoard(nextBoard);
         setStandaloneController(nextController);
         setDraftLooks({});
-        if (!response.rebooting) {
+        if (!response.rebooting && currentPatternCardAccess() === 'ready') {
           const zone = selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '';
           await pushLivePreviewToCard({ ...nextLook, zone }, { host: safety.host || cardHost, timeoutMs: 2200 }).catch(() => null);
         }
@@ -1583,6 +1701,9 @@ import { PatternPreview } from './PatternPreview.jsx';
     const selectedTargetName = selectedTarget ? targetLabel(selectedTarget) : 'All sections';
     const showFlashAction = statusKind === 'err' && status === cardBridgeFeatureGap('frame')?.message;
     const hasPreviewFailureAction = previewAction.status === 'failed' && Boolean(previewFailure?.actionId);
+    const authorizedPatternCardAccess = patternCardAccess === 'ready' && !projectAuthorizationCurrent
+      ? 'project'
+      : patternCardAccess;
     const runPreviewFailureAction = () => {
       switch (previewFailure?.actionId) {
         case 'update-card':
@@ -1617,9 +1738,9 @@ import { PatternPreview } from './PatternPreview.jsx';
                 <JourneyHint step={2} nextLabel="Arrange playlist" onNext={() => go?.('playlist')} />
               </div>
               <div className="pm-actions">
-                <button className="btn primary" title="Install the current look on the card" onClick={savePreviewToCard} disabled={patternCardAccess !== 'ready' || cardSave.conflictsDisabled || Boolean(hardwareConfigurationIssue)}>{I.bolt}{cardSave.status === 'pending' ? 'Sending…' : cardSave.status === 'failed' ? 'Retry install' : 'Install on card'}</button>
+                <button className="btn primary" title="Install the current look on the card" onClick={savePreviewToCard} disabled={authorizedPatternCardAccess !== 'ready' || cardSave.conflictsDisabled || Boolean(hardwareConfigurationIssue)}>{I.bolt}{cardSave.status === 'pending' ? 'Sending…' : cardSave.status === 'failed' ? 'Retry install' : 'Install on card'}</button>
                 {connected &&
-                  <button className="btn" title="Bring the lights back with a warm-white recovery" data-testid="recover-lights" onClick={repairLed} disabled={cardSave.conflictsDisabled}>{I.wrench}Recover lights</button>
+                  <button className="btn" title="Bring the lights back with a warm-white recovery" data-testid="recover-lights" onClick={repairLed} disabled={authorizedPatternCardAccess !== 'ready' || cardSave.conflictsDisabled}>{I.wrench}Recover lights</button>
                 }
                 <div className="pm-color-order">
                   <button
@@ -1628,10 +1749,25 @@ import { PatternPreview } from './PatternPreview.jsx';
                     className={"btn" + (colorOrderOpen ? " toggled" : "")}
                     aria-expanded={colorOrderOpen}
                     aria-haspopup="dialog"
-                    disabled={patternCardAccess !== 'ready'}
-                    onClick={() => {
+                    disabled={authorizedPatternCardAccess !== 'ready'}
+                    onClick={async () => {
                       if (colorOrderOpen) {
                         closeColorOrder();
+                        return;
+                      }
+                      if (currentPatternCardAccess() !== 'ready') {
+                        blockPatternCardEffect(currentPatternCardAccess());
+                        return;
+                      }
+                      try {
+                        const evidence = await readCardProjectEvidence({ host: cardHost, transport: cardLink?.transport });
+                        if (!matchesCurrentCardProjectEvidence(evidence)) {
+                          blockPatternCardEffect('project');
+                          return;
+                        }
+                      } catch (error) {
+                        setStatusKind('err');
+                        setStatus(error?.message || 'The card could not be reverified before the color test.');
                         return;
                       }
                       setMenuOpen(false);
@@ -1696,7 +1832,9 @@ import { PatternPreview } from './PatternPreview.jsx';
                     >
                       {patternCardGate === 'blank'
                         ? 'Set up LED strips and install on card'
-                        : 'Recover and verify card'}
+                        : patternCardGate === 'project'
+                          ? 'Verify project in Hardware'
+                          : 'Recover and verify card'}
                     </button>
                   </div>
                 }

@@ -20,7 +20,7 @@ import { loadProductionFirmwareRelease } from '../lib/firmwareRelease.js';
 import { SECURE_INSTALLER_URL, detectPlatformCapabilities } from '../lib/platformCapabilities.js';
 import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
 import { createBridgeResultChannel, launchBridgeOperation, resumeBridgeReturnCode } from '../lib/bridgeLaunch.js';
-import { saveCurrentProjectToLibrary } from '../lib/projectStorage.js';
+import { saveCurrentProjectToLibraryGuarded } from '../lib/projectStorage.js';
 import { useProject } from '../state/ProjectContext.jsx';
 import { CardCommissioningPanel, CardCommissioningSteps } from '../components/card/CardCommissioningPanel.jsx';
 import { readCardProjectEvidence } from '../lib/cardPushClient.js';
@@ -426,8 +426,8 @@ import { openInChrome } from '../lib/openInChrome.js';
     );
   }
 
-  function AutomaticInstallScreen({ cardLink = {}, onConnectCard, onCommissioningComplete, embedded = false }) {
-    const { serializeProject, markProjectPersisted, projectLifecycle } = useProject();
+  function AutomaticInstallScreen({ cardLink = {}, onConnectCard, onCommissioningComplete, persistCurrentProjectToBrowser, embedded = false }) {
+    const { serializeProject, flushProjectAutosave, markProjectPersisted, projectLifecycle } = useProject();
     const capabilities = detectInstallerCapabilities();
     const handoff = nextCardConnectionAction({ intent: 'blank-card', capabilities });
     const [releaseState, setReleaseState] = useState({ state: 'loading', release: null, error: '' });
@@ -442,7 +442,30 @@ import { openInChrome } from '../lib/openInChrome.js';
     const mountedRef = useRef(true);
     const findingRef = useRef(false);
     const installingRef = useRef(false);
+    const browserAssociationRef = useRef(null);
     const InstallHeading = embedded ? 'h2' : 'h1';
+
+    const persistProject = async () => {
+      const project = serializeProject();
+      if (flushProjectAutosave() !== true) {
+        throw new Error('Studio could not create a browser recovery copy before installing.');
+      }
+      const result = persistCurrentProjectToBrowser
+        ? await persistCurrentProjectToBrowser(project)
+        : await saveCurrentProjectToLibraryGuarded(project, browserAssociationRef.current
+          ? { expectedAssociationSnapshot: browserAssociationRef.current }
+          : {});
+      if (!result?.ok) {
+        const error = new Error(result?.reason === 'browser-conflict'
+          ? 'Another tab saved a newer browser copy. Reopen that copy before installing.'
+          : 'Studio could not safely save this project in the browser.');
+        error.reason = result?.reason;
+        throw error;
+      }
+      browserAssociationRef.current = result.associationSnapshot;
+      markProjectPersisted('browser');
+      return result.record;
+    };
 
     useEffect(() => {
       if (!capabilities.canWebSerialInstall) return undefined;
@@ -485,8 +508,7 @@ import { openInChrome } from '../lib/openInChrome.js';
 
     const launchBridge = operation => launchBridgeOperation(operation, {
       persistProject: async () => {
-        saveCurrentProjectToLibrary(serializeProject());
-        markProjectPersisted('browser');
+        await persistProject();
       },
       navigate: url => {
         const testNavigate = window.__LW_BRIDGE_NAVIGATE_FOR_TEST__;
@@ -541,8 +563,7 @@ import { openInChrome } from '../lib/openInChrome.js';
       setInstallState('installing');
       setProgress(0);
       try {
-        const record = saveCurrentProjectToLibrary(serializeProject());
-        markProjectPersisted('browser');
+        const record = await persistProject();
         const started = beginCardCommissioning({
           source: 'web-serial',
           operation: 'install-current-release',

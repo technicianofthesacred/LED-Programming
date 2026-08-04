@@ -1299,6 +1299,10 @@ test('Card overview distinguishes checking, blank, and ready evidence', async ({
     mode: 'factory-flash', source: 'defaults',
   });
   await expect(page.getByTestId('card-detected-state')).toContainText('Blank — load a project');
+  await page.getByRole('button', { name: 'Start layout' }).click();
+  await expect(page).toHaveURL(/#screen=layout/);
+
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
 
   status = readyStatus('lw-overview-state');
   await expect(page.getByTestId('card-detected-state')).toContainText('ready for light check');

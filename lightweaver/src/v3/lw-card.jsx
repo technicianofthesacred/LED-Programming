@@ -23,6 +23,8 @@ import {
   sameCardResolutionContext,
 } from '../lib/cardProjectResolver.js';
 import { normalizeCardHost } from '../lib/cardConnection.js';
+import { classifyCardReadiness } from '../lib/cardReadiness.js';
+import { clearCardEditAuthorization, issueCardEditAuthorization } from '../lib/cardEditAuthorization.js';
 
 // Section bar labels. `workshop` is deliberately absent: Batch production is a
 // manufacturing surface reached from the overview link, the support tile, or a
@@ -59,8 +61,10 @@ function resolvedMatchKey(match) {
 
 function cardEditIntent() {
   const params = new URLSearchParams(window.location.search);
-  if (params.get('editPattern')) return `pattern:${params.get('editPattern')}`;
-  if (params.get('editLook')) return `look:${params.get('editLook')}`;
+  const pattern = String(params.get('editPattern') || '').trim();
+  const look = String(params.get('editLook') || '').trim();
+  if (pattern) return `pattern:${pattern}`;
+  if (look) return `look:${look}`;
   return '';
 }
 
@@ -71,6 +75,7 @@ function CardOverview({
   onConnectCard,
   onOpenConnectionCenter,
   onOpenSection,
+  go,
   replaceProject,
   currentProject,
   projectGeneration,
@@ -191,7 +196,7 @@ function CardOverview({
     presentation = {
       tone: 'failure',
       message: 'Blank — load a project before using this card.',
-      primary: { label: 'Load a project', section: 'install' },
+      primary: { label: 'Start layout', view: 'layout' },
       secondary: { label: 'Open support', section: 'support' },
     };
   } else if (ready) {
@@ -279,6 +284,7 @@ function CardOverview({
     let replacementCommitted = false;
     let associationHandoffFailed = false;
     let replacementCloudSessionLost = false;
+    clearCardEditAuthorization();
     try {
       const requestContext = {
         host: normalizeCardHost(cardLink?.host || cardHost),
@@ -322,18 +328,19 @@ function CardOverview({
           readCardProjectEvidence({ host: requestContext.host, transport: cardLink?.transport }),
           readCardStatusEnvelope({ host: requestContext.host, transport: cardLink?.transport }),
         ]);
+        const exactReadiness = classifyCardReadiness(status, {
+          expectedCard: {
+            id: requestContext.cardId,
+            firmwareVersion: requestContext.firmwareVersion,
+            buildId: requestContext.buildId,
+          },
+          previousBootId: requestContext.bootId,
+        });
         if (!requestContext.cardId
-          || status.cardId !== requestContext.cardId
+          || exactReadiness.patternAccess !== 'ready'
           || evidence.cardId !== requestContext.cardId
-          || (requestContext.firmwareVersion && status.firmwareVersion !== requestContext.firmwareVersion)
           || (requestContext.firmwareVersion && evidence.firmwareVersion !== requestContext.firmwareVersion)
-          || (requestContext.buildId && status.buildId !== requestContext.buildId)
-          || (requestContext.buildId && evidence.buildId !== requestContext.buildId)
-          || (requestContext.bootId && status.bootId !== requestContext.bootId)
-          || status.runtimePhase !== 'ready'
-          || status.knownGoodProject !== true
-          || status.commandReady !== true
-          || status.outputReady !== true) {
+          || (requestContext.buildId && evidence.buildId !== requestContext.buildId)) {
           throw new Error('The exact card is no longer Ready. Nothing was replaced.');
         }
         if (expectedEvidence && !sameCardProjectEvidence(expectedEvidence, evidence)) {
@@ -343,6 +350,23 @@ function CardOverview({
         return evidence;
       };
       const evidence = await readExactCardSnapshot();
+      const authorizeResolvedProject = (project, generation) => {
+        const issued = issueCardEditAuthorization({
+          intent: cardEditIntent(),
+          cardId: evidence.cardId,
+          firmwareVersion: evidence.firmwareVersion,
+          buildId: evidence.buildId,
+          bootId: requestContext.bootId,
+          installedProjectId: evidence.projectId,
+          installedProjectFingerprint: evidence.projectFingerprint,
+          studioProjectId: project?.id,
+          studioProjectFingerprint: cardProjectFingerprint(project),
+          projectGeneration: generation,
+        });
+        if (!issued) {
+          throw new Error('Studio could not authorize this exact card and project for Pattern commands. Nothing was opened in Patterns.');
+        }
+      };
 
       const productionJobs = [];
       if (evidence.productionJobId || evidence.productionJobDigest) {
@@ -417,6 +441,7 @@ function CardOverview({
         if (autoIntent && cardEditIntent() !== autoIntent) {
           throw new Error('The requested pattern or look changed while Studio was resolving the card. Nothing was opened.');
         }
+        authorizeResolvedProject(resolved.project, projectGeneration);
         window.location.hash = '#screen=pattern';
         return;
       }
@@ -471,7 +496,16 @@ function CardOverview({
               : 'The active online project changed or was archived before Studio could open it. Nothing was opened in Patterns.');
         }
         replacementCommitted = true;
+        const associationResult = await onMatchedProjectLoaded?.({
+          source: 'cloud',
+          remoteId: resolved.remoteId,
+        });
+        if (!associationResult?.ok) {
+          associationHandoffFailed = true;
+          throw new Error(projectSwitchSaveFailureMessage('association-handoff-failed'));
+        }
         await readExactCardSnapshot(evidence, { workspace: false });
+        authorizeResolvedProject(resolved.project, projectGeneration + 1);
         window.location.hash = '#screen=pattern';
         return;
       }
@@ -524,6 +558,9 @@ function CardOverview({
       const associationResult = await onMatchedProjectLoaded?.({
         source: resolved.source,
         recordId: resolved.recordId,
+        recordSnapshot: resolved.source === 'browser'
+          ? { recordId: resolved.recordId, record: resolved.candidate }
+          : null,
         remoteId: resolved.remoteId,
       });
       if (!associationResult?.ok) {
@@ -531,6 +568,7 @@ function CardOverview({
         throw new Error(projectSwitchSaveFailureMessage('association-handoff-failed'));
       }
       await readExactCardSnapshot(evidence, { workspace: false });
+      authorizeResolvedProject(studioProject, projectGeneration + 1);
       window.location.hash = '#screen=pattern';
     } catch (error) {
       setMatchingProjectState({
@@ -571,6 +609,13 @@ function CardOverview({
       cardLink?.card?.id,
       cardLink?.card?.buildId,
       cardLink?.readiness?.bootId,
+      cardLink?.operationGeneration,
+      cardLink?.revalidationGeneration,
+      cardLink?.readiness?.projectId,
+      cardLink?.readiness?.projectRevision,
+      cardLink?.readiness?.projectFingerprint,
+      cardLink?.readiness?.productionJobId,
+      cardLink?.readiness?.productionJobDigest,
       projectGeneration,
     ].join('|');
     if (cardProjectProbeRef.current === signature) return;
@@ -583,7 +628,11 @@ function CardOverview({
       type="button"
       className={`btn${primary ? ' primary' : ''}`}
       disabled={action.disabled}
-      onClick={() => action.action === 'connect' ? openConnection() : onOpenSection(action.section)}
+      onClick={() => action.action === 'connect'
+        ? openConnection()
+        : action.view
+          ? go(action.view)
+          : onOpenSection(action.section)}
     >
       {action.label}
     </button>
@@ -754,7 +803,7 @@ function CardSupport({ initialTool, cardProps, onOpenConnectionCenter, onOpenSec
   );
 }
 
-export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection, replaceProject, currentProject, projectGeneration, activeCloudProjects, browserProjects, readBrowserProjects, readCloudProject, openMatchingCardProject, confirmProjectReplacement, saveBeforeCardProjectSwitch, isProjectSwitchSnapshotCurrent, onMatchedProjectLoaded, route = { section: 'overview', supportTool: '' } }) {
+export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection, go, replaceProject, currentProject, projectGeneration, activeCloudProjects, browserProjects, readBrowserProjects, readCloudProject, openMatchingCardProject, confirmProjectReplacement, saveBeforeCardProjectSwitch, saveProjectToBrowserGuarded, isProjectSwitchSnapshotCurrent, onMatchedProjectLoaded, route = { section: 'overview', supportTool: '' } }) {
   const headingRef = useRef(null);
   const mountedRef = useRef(false);
 
@@ -778,6 +827,7 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
       embedded
       cardLink={cardLink}
       onConnectCard={onConnectCard}
+      persistCurrentProjectToBrowser={saveProjectToBrowserGuarded}
       onCommissioningComplete={() => onOpenSection('overview')}
     />
   );
@@ -785,7 +835,7 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
   else if (route.section === 'workshop') content = <ProductionScreen embedded cardHost={cardHost} cardLink={cardLink} onConnectCard={onConnectCard} />;
   else if (route.section === 'preferences') content = <SettingsScreen embedded mode="preferences" {...cardProps} />;
   else if (route.section === 'support') content = <CardSupport initialTool={route.supportTool} cardProps={cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} />;
-  else content = <CardOverview {...cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} replaceProject={replaceProject} currentProject={currentProject} projectGeneration={projectGeneration} activeCloudProjects={activeCloudProjects} browserProjects={browserProjects} readBrowserProjects={readBrowserProjects} readCloudProject={readCloudProject} openMatchingCardProject={openMatchingCardProject} confirmProjectReplacement={confirmProjectReplacement} saveBeforeCardProjectSwitch={saveBeforeCardProjectSwitch} isProjectSwitchSnapshotCurrent={isProjectSwitchSnapshotCurrent} onMatchedProjectLoaded={onMatchedProjectLoaded} />;
+  else content = <CardOverview {...cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} go={go} replaceProject={replaceProject} currentProject={currentProject} projectGeneration={projectGeneration} activeCloudProjects={activeCloudProjects} browserProjects={browserProjects} readBrowserProjects={readBrowserProjects} readCloudProject={readCloudProject} openMatchingCardProject={openMatchingCardProject} confirmProjectReplacement={confirmProjectReplacement} saveBeforeCardProjectSwitch={saveBeforeCardProjectSwitch} isProjectSwitchSnapshotCurrent={isProjectSwitchSnapshotCurrent} onMatchedProjectLoaded={onMatchedProjectLoaded} />;
 
   // Batch production (route.section === 'workshop') renders outside the tab
   // set: its own heading and kicker, no section tab highlighted.

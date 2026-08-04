@@ -1,35 +1,19 @@
-function stableJson(value) {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function cardRestoreSnapshot(project = {}) {
-  return JSON.parse(JSON.stringify({
-    version: project.version,
-    id: project.id,
-    name: project.name,
-    layout: {
-      strips: project.layout?.strips || [],
-      patchBoard: project.layout?.patchBoard || null,
-      wiring: project.layout?.wiring || null,
-    },
-    devices: {
-      standaloneController: project.devices?.standaloneController || {},
-    },
-  }));
-}
+import { prepareCardDeployment } from './cardDeployment.js';
 
 export function cardProjectFingerprint(project) {
-  const source = stableJson(cardRestoreSnapshot(project));
-  let hash = 0xcbf29ce484222325n;
-  for (let index = 0; index < source.length; index += 1) {
-    hash ^= BigInt(source.charCodeAt(index));
-    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  try {
+    return prepareCardDeployment({
+      projectId: project?.id,
+      projectName: project?.name,
+      projectRevision: 0,
+      strips: project?.layout?.strips || [],
+      patchBoard: project?.layout?.patchBoard || null,
+      wiring: project?.layout?.wiring || null,
+      standaloneController: project?.devices?.standaloneController || {},
+    }).config.projectFingerprint;
+  } catch {
+    return '';
   }
-  return hash.toString(16).padStart(16, '0');
 }
 
 export function cardProjectId(value) {
@@ -37,9 +21,9 @@ export function cardProjectId(value) {
 }
 
 export function matchesCardProjectEvidence(project, evidence) {
-  return Boolean(project && typeof project === 'object')
-    && cardProjectId(project.id) === cardProjectId(evidence.projectId)
-    && cardProjectFingerprint(project) === evidence.projectFingerprint;
+  if (!project || typeof project !== 'object'
+    || cardProjectId(project.id) !== cardProjectId(evidence.projectId)) return false;
+  return cardProjectFingerprint(project) === evidence.projectFingerprint;
 }
 
 const CARD_PROJECT_EVIDENCE_FIELDS = Object.freeze([
