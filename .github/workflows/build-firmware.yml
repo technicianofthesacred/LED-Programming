@@ -137,7 +137,7 @@ jobs:
           node scripts/rebuild-production-jobs.mjs
           npm run test:production-jobs --prefix lightweaver
       - name: Verify signed release set
-        run: npm run ci:artifact --prefix lightweaver
+        run: npm run ci:artifact:contracts --prefix lightweaver
       - name: Commit the signed release if it changed
         id: release
         shell: bash
@@ -170,6 +170,7 @@ jobs:
           )
           if git diff --quiet -- "${RELEASE_PATHS[@]}" && \
              test -z "$(git ls-files --others --exclude-standard -- "${RELEASE_PATHS[@]}")"; then
+            npm run ci:artifact --prefix lightweaver
             echo "Signed firmware release already matches tested source."
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "signed_sha=$SOURCE_REVISION" >> "$GITHUB_OUTPUT"
@@ -185,6 +186,7 @@ jobs:
             exit 1
           fi
           git rebase origin/main
+          npm run ci:artifact --prefix lightweaver
           git push origin HEAD:main
           signed_sha="$(git rev-parse HEAD)"
           echo "changed=true" >> "$GITHUB_OUTPUT"
