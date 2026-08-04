@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 import {
@@ -19,6 +20,37 @@ function responseFor(value, options = {}) {
     status: options.status ?? 200,
     headers: options.headers ?? { 'cache-control': 'private, no-store' },
   });
+}
+
+function buildGraphFor(target, assetPaths = ['assets/main-current.js']) {
+  const marker = `${JSON.stringify(target)}\n`;
+  return {
+    schemaVersion: 1,
+    files: [
+      ...assetPaths.map((path, index) => ({
+        path,
+        bytes: index + 1,
+        sha256: String(index + 1).padStart(64, '0'),
+      })),
+      { path: 'index.html', bytes: 1, sha256: 'a'.repeat(64) },
+      {
+        path: 'studio-release.json',
+        bytes: Buffer.byteLength(marker),
+        sha256: createHash('sha256').update(marker).digest('hex'),
+      },
+    ].sort((left, right) => left.path.localeCompare(right.path)),
+  };
+}
+
+function readyReleaseFetch(target) {
+  const graph = buildGraphFor(target);
+  return async url => {
+    const pathname = new URL(url).pathname;
+    if (pathname === '/studio-release.json') return responseFor(target);
+    if (pathname === '/studio-build-graph.json') return responseFor(graph);
+    if (pathname.startsWith('/assets/')) return new Response('ready', { status: 200 });
+    throw new Error(`Unexpected freshness URL: ${url}`);
+  };
 }
 
 function memoryStorage(initial = {}) {
@@ -189,7 +221,7 @@ test('freshness flushes autosave and records the revision pair before one reload
   const order = [];
   const harness = monitorHarness({
     release: running,
-    fetchImpl: async () => responseFor(remote),
+    fetchImpl: readyReleaseFetch(remote),
     flushAutosave: () => { order.push('autosave'); return true; },
     reload: () => order.push('reload'),
   });
@@ -201,13 +233,69 @@ test('freshness flushes autosave and records the revision pair before one reload
   });
 });
 
+test('freshness waits for the current no-store graph and every listed asset before reloading', async () => {
+  const running = release('a');
+  const remote = release('b');
+  const graph = buildGraphFor(remote, ['assets/main-current.js', 'assets/main-current.css']);
+  let graphRequests = 0;
+  let assetRound = 0;
+  let reloads = 0;
+  const calls = [];
+  const harness = monitorHarness({
+    release: running,
+    fetchImpl: async (url, init) => {
+      const pathname = new URL(url).pathname;
+      calls.push({ pathname, init });
+      if (pathname === '/studio-release.json') return responseFor(remote);
+      if (pathname === '/studio-build-graph.json') {
+        graphRequests += 1;
+        if (graphRequests === 1) {
+          return responseFor(graph, { headers: { 'cache-control': 'public, max-age=60' } });
+        }
+        assetRound += 1;
+        return responseFor(graph);
+      }
+      if (pathname === '/assets/main-current.css' && assetRound === 1) {
+        return new Response('Not found', { status: 404 });
+      }
+      if (pathname.startsWith('/assets/')) return new Response('ready', { status: 200 });
+      throw new Error(`Unexpected freshness URL: ${url}`);
+    },
+    reload: () => { reloads += 1; },
+  });
+
+  await harness.monitor.checkNow();
+  assert.equal(reloads, 0, 'a cacheable graph must not authorize reload');
+
+  await harness.monitor.checkNow();
+  assert.equal(reloads, 0, 'a graph-listed asset returning 404 must not authorize reload');
+
+  await harness.monitor.checkNow();
+  assert.equal(reloads, 1, 'a later fully converged check may reload once');
+  assert.equal(graphRequests, 3);
+  assert.equal(
+    calls.filter(call => call.pathname === '/assets/main-current.js').length,
+    2,
+    'every graph-listed JavaScript asset is probed on each no-store graph check',
+  );
+  assert.equal(
+    calls.filter(call => call.pathname === '/assets/main-current.css').length,
+    2,
+    'every graph-listed CSS asset is probed on each no-store graph check',
+  );
+  assert.ok(
+    calls.filter(call => call.pathname === '/studio-build-graph.json')
+      .every(call => call.init.cache === 'no-store' && call.init.redirect === 'manual'),
+  );
+});
+
 test('freshness defers one target until all protected hardware operations clear', async () => {
   const running = release('a');
   const remote = release('b');
   let reloads = 0;
   const harness = monitorHarness({
     release: running,
-    fetchImpl: async () => responseFor(remote),
+    fetchImpl: readyReleaseFetch(remote),
     reload: () => { reloads += 1; },
   });
   harness.monitor.setOperationActive(true);
@@ -216,7 +304,81 @@ test('freshness defers one target until all protected hardware operations clear'
     status: 'update-ready', buildId: remote.buildId, reason: 'operation-active',
   });
   assert.equal(reloads, 0);
-  harness.monitor.setOperationActive(false);
+  await harness.monitor.setOperationActive(false);
+  assert.equal(reloads, 1);
+});
+
+test('ending a protected operation revalidates the newest marker instead of reloading a stale pending release', async () => {
+  const running = release('a');
+  const firstRemote = release('b');
+  const newestRemote = release('c');
+  let target = firstRemote;
+  let assetsReady = true;
+  let reloads = 0;
+  const harness = monitorHarness({
+    release: running,
+    fetchImpl: async url => {
+      const pathname = new URL(url).pathname;
+      if (pathname === '/studio-release.json') return responseFor(target);
+      if (pathname === '/studio-build-graph.json') return responseFor(buildGraphFor(target));
+      if (pathname.startsWith('/assets/')) {
+        return new Response(assetsReady ? 'ready' : 'not found', { status: assetsReady ? 200 : 404 });
+      }
+      throw new Error(`Unexpected freshness URL: ${url}`);
+    },
+    reload: () => { reloads += 1; },
+  });
+
+  harness.monitor.setOperationActive(true);
+  await harness.monitor.checkNow();
+  assert.equal(harness.monitor.getState().status, 'update-ready');
+
+  target = newestRemote;
+  assetsReady = false;
+  await harness.monitor.checkNow();
+  assert.equal(harness.monitor.getState().reason, 'convergence');
+
+  await harness.monitor.setOperationActive(false);
+  assert.equal(reloads, 0, 'ending protection must not reload the older pending release');
+
+  assetsReady = true;
+  await harness.monitor.checkNow();
+  assert.equal(reloads, 1);
+  assert.deepEqual(JSON.parse(harness.storage.getItem(STUDIO_REFRESH_ATTEMPT_KEY)), {
+    from: running.sourceRevision,
+    to: newestRemote.sourceRevision,
+  });
+});
+
+test('an unchanged pending marker is not re-probed until protected work ends', async () => {
+  const running = release('a');
+  const remote = release('b');
+  const graph = buildGraphFor(remote);
+  let graphRequests = 0;
+  let reloads = 0;
+  const harness = monitorHarness({
+    release: running,
+    fetchImpl: async url => {
+      const pathname = new URL(url).pathname;
+      if (pathname === '/studio-release.json') return responseFor(remote);
+      if (pathname === '/studio-build-graph.json') {
+        graphRequests += 1;
+        return responseFor(graph);
+      }
+      if (pathname.startsWith('/assets/')) return new Response('ready', { status: 200 });
+      throw new Error(`Unexpected freshness URL: ${url}`);
+    },
+    reload: () => { reloads += 1; },
+  });
+
+  harness.monitor.setOperationActive(true);
+  await harness.monitor.checkNow();
+  await harness.monitor.checkNow();
+  assert.equal(graphRequests, 1, 'the same pending release should reuse its convergence proof');
+  assert.equal(reloads, 0);
+
+  await harness.monitor.setOperationActive(false);
+  assert.equal(graphRequests, 2, 'ending protection must obtain a fresh convergence proof');
   assert.equal(reloads, 1);
 });
 
@@ -232,7 +394,7 @@ test('freshness refuses reload on autosave/storage failure and prevents a same-p
     let reloads = 0;
     const harness = monitorHarness({
       release: running,
-      fetchImpl: async () => responseFor(remote),
+      fetchImpl: readyReleaseFetch(remote),
       reload: () => { reloads += 1; },
       ...options,
     });

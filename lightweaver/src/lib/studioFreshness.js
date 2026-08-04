@@ -1,3 +1,4 @@
+import { STUDIO_BUILD_GRAPH_PATH, parseStudioBuildGraph } from './productionDeploymentCheck.js';
 import { parseStudioRelease } from './studioRelease.js';
 
 export const STUDIO_RELEASE_PATH = '/studio-release.json';
@@ -15,6 +16,15 @@ function boundedError(reason) {
 
 function hasNoStore(response) {
   return /(?:^|,)\s*no-store(?:\s*(?:,|$))/i.test(response.headers.get('cache-control') || '');
+}
+
+function bytesToHex(bytes) {
+  return Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+}
+
+async function sha256Hex(cryptoImpl, bytes) {
+  if (!cryptoImpl?.subtle?.digest) throw new Error('Web Crypto SHA-256 is unavailable');
+  return bytesToHex(new Uint8Array(await cryptoImpl.subtle.digest('SHA-256', bytes)));
 }
 
 function sameAttempt(value, from, to) {
@@ -37,6 +47,7 @@ export function createStudioFreshnessMonitor({
   navigatorRef = navigator,
   documentRef = document,
   windowRef = window,
+  cryptoImpl = globalThis.crypto,
   createTimeoutSignal = milliseconds => AbortSignal.timeout(milliseconds),
   timers = {
     setTimeout: (callback, delay) => globalThis.setTimeout(callback, delay),
@@ -45,11 +56,13 @@ export function createStudioFreshnessMonitor({
 } = {}) {
   const release = parseStudioRelease(releaseInput);
   const releaseUrl = new URL(STUDIO_RELEASE_PATH, locationOrigin).href;
+  const buildGraphUrl = new URL(STUDIO_BUILD_GRAPH_PATH, locationOrigin).href;
   const listeners = new Set();
   let state = immutableState('checking', release.buildId);
   let started = false;
   let operationActive = false;
   let pendingRelease = null;
+  let convergedReleaseRevision = '';
   let pollTimer = null;
   let inFlight = null;
 
@@ -118,6 +131,7 @@ export function createStudioFreshnessMonitor({
   const acceptRelease = target => {
     if (target.sourceRevision === release.sourceRevision) {
       pendingRelease = null;
+      convergedReleaseRevision = '';
       try { storage.removeItem(STUDIO_REFRESH_ATTEMPT_KEY); } catch { /* matching code needs no reload guard */ }
       return emit(immutableState('current', release.buildId));
     }
@@ -128,6 +142,42 @@ export function createStudioFreshnessMonitor({
     pendingRelease = null;
     refreshTo(target);
     return state;
+  };
+
+  const requireConvergedRelease = async markerText => {
+    try {
+      const graphResponse = await fetchImpl(buildGraphUrl, {
+        cache: 'no-store',
+        redirect: 'manual',
+        signal: createTimeoutSignal(STUDIO_FRESHNESS_TIMEOUT_MS),
+      });
+      if (graphResponse.status !== 200 || graphResponse.redirected === true || !hasNoStore(graphResponse)) {
+        throw new Error('The current Studio build graph is unavailable or cacheable');
+      }
+      const graph = parseStudioBuildGraph(await graphResponse.text());
+      const markerEntry = graph.files.find(file => file.path === STUDIO_RELEASE_PATH.slice(1));
+      const markerBytes = new TextEncoder().encode(markerText);
+      if (!markerEntry
+        || markerEntry.bytes !== markerBytes.byteLength
+        || markerEntry.sha256 !== await sha256Hex(cryptoImpl, markerBytes)) {
+        throw new Error('The Studio build graph does not describe the current release marker');
+      }
+
+      const assetEntries = graph.files.filter(file => /^assets\/.*\.(?:js|css)$/.test(file.path));
+      await Promise.all(assetEntries.map(async entry => {
+        const assetUrl = new URL(entry.path, `${new URL(locationOrigin).origin}/`).href;
+        const assetResponse = await fetchImpl(assetUrl, {
+          cache: 'no-store',
+          redirect: 'manual',
+          signal: createTimeoutSignal(STUDIO_FRESHNESS_TIMEOUT_MS),
+        });
+        if (!assetResponse.ok || assetResponse.redirected === true) {
+          throw new Error(`Studio asset is not ready: ${entry.path}`);
+        }
+      }));
+    } catch {
+      throw boundedError('convergence');
+    }
   };
 
   const checkNow = () => {
@@ -147,10 +197,19 @@ export function createStudioFreshnessMonitor({
       if (response.status !== 200 || response.redirected === true) throw boundedError('response');
       if (!hasNoStore(response)) throw boundedError('cache');
       let target;
+      let markerText;
       try {
-        target = parseStudioRelease(await response.text());
+        markerText = await response.text();
+        target = parseStudioRelease(markerText);
       } catch {
         throw boundedError('invalid');
+      }
+      if (target.sourceRevision !== release.sourceRevision) {
+        if (convergedReleaseRevision !== target.sourceRevision) {
+          convergedReleaseRevision = '';
+          await requireConvergedRelease(markerText);
+          convergedReleaseRevision = target.sourceRevision;
+        }
       }
       return acceptRelease(target);
     })()
@@ -194,10 +253,11 @@ export function createStudioFreshnessMonitor({
     setOperationActive(active) {
       operationActive = active === true;
       if (!operationActive && pendingRelease) {
-        const target = pendingRelease;
         pendingRelease = null;
-        refreshTo(target);
+        convergedReleaseRevision = '';
+        return checkNow();
       }
+      return Promise.resolve(state);
     },
   });
 }

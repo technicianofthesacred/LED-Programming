@@ -315,7 +315,11 @@ export function CardCommissioningPanel({
   }, [flow, link]);
 
   const interruptedInstallEvidence = useMemo(() => {
-    if (!flow || flow.stage !== 'install-safely' || flow.source !== 'web-serial' || !link?.card?.id || !isCardLinkConnected(link)) return null;
+    const verifiedBlankCard = (link?.state === 'connected-bridge' || link?.state === 'connected-direct')
+      && link?.cardBlank === true
+      && Boolean(link?.validatedBootId);
+    if (!flow || flow.stage !== 'install-safely' || flow.source !== 'web-serial' || !link?.card?.id
+      || (!isCardLinkConnected(link) && !verifiedBlankCard)) return null;
     return resumeInstalledCardAfterInterruption(flow, link.card);
   }, [flow, link]);
 

@@ -219,7 +219,7 @@ String studioSetupUrl(const RuntimeConfig& cfg) {
 
 String studioOpenScript() {
   String script;
-  script.reserve(900);
+  script.reserve(1100);
   script += F("function lwOpenStudio(event,url){"
            "if(event)event.preventDefault();"
            "try{"
@@ -230,6 +230,8 @@ String studioOpenScript() {
              "for(const key of ['editPattern','editLook']){const value=requested.searchParams.get(key)||'';if(/^[a-z0-9_-]{1,64}$/i.test(value))u.searchParams.set(key,value)}"
              "u.hash='#screen=card&section=overview';url=u.href"
            "}catch(_){url='https://led.mandalacodes.com/?cardBridge=1&cardHost='+encodeURIComponent(location.host)+'#screen=card&section=overview'}"
+           "let opener=null;try{if(lwBridgeLaunch&&window.opener&&!window.opener.closed)opener=window.opener}catch(_){}"
+           "if(opener){try{opener.focus()}catch(_){}return false}"
            "const opened=window.open(url,'lightweaver-studio');"
            "if(!opened)alert('Allow pop-ups for this page, then tap Open Studio again.');"
            "else try{opened.focus()}catch(_){}"

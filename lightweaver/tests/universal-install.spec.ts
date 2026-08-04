@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { test, expect } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
@@ -172,4 +173,152 @@ test('an interrupted browser install inspects the exact result and never flashes
     getSharedCardLink().dispatch(event);
   });
   await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
+});
+
+test('an interrupted browser install accepts the exact recovering blank card without flashing again', async ({ page }) => {
+  const cardWrites: string[] = [];
+  await page.route('http://192.168.18.70/**', route => {
+    const request = route.request();
+    if (!['GET', 'OPTIONS'].includes(request.method())) cardWrites.push(`${request.method()} ${request.url()}`);
+    return route.abort();
+  });
+  await page.addInitScript(() => {
+    window.__LW_SERIAL_REQUESTS__ = 0;
+    window.localStorage.setItem('lw_chip_card_host', '192.168.18.70');
+    Object.defineProperty(navigator, 'serial', {
+      configurable: true,
+      value: { requestPort: async () => { window.__LW_SERIAL_REQUESTS__ += 1; return {}; } },
+    });
+  });
+  await page.goto('/#screen=flash&mode=install');
+  await page.evaluate(async () => {
+    const { beginCardCommissioning, writeCardCommissioning } = await import('/src/lib/cardCommissioningFlow.js');
+    const { saveCurrentProjectToLibrary } = await import('/src/lib/projectStorage.js');
+    const { createDefaultProject } = await import('/src/lib/projectModel.js');
+    const project = createDefaultProject();
+    const record = saveCurrentProjectToLibrary(project);
+    await writeCardCommissioning(beginCardCommissioning({
+      source: 'web-serial', operation: 'install-current-release', strategy: 'clean-recovery',
+      projectRecord: record, projectRevision: 3,
+      installTarget: { id: 'lw-b0fe81f61b44', firmwareVersion: '1.0.0', buildId: '19369537be823b74362896fdadd32b8182f27417' },
+    }));
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByText(/will not flash again automatically/i)).toBeVisible();
+
+  const linkState = await page.evaluate(async () => {
+    const { getSharedCardLink } = await import('/src/lib/cardLink.js');
+    const event = {
+      type: 'card-verified', via: 'bridge', host: '192.168.18.70',
+      card: {
+        id: 'lw-b0fe81f61b44', firmwareVersion: '1.0.0',
+        buildId: '19369537be823b74362896fdadd32b8182f27417',
+      },
+      readiness: {
+        app: 'Lightweaver', provisioningContractVersion: 1,
+        cardId: 'lw-b0fe81f61b44', firmwareVersion: '1.0.0',
+        buildId: '19369537be823b74362896fdadd32b8182f27417',
+        bootId: 'boot-e11c5733-b0fe81f61b44', runtimePhase: 'recovering',
+        knownGoodProject: false, commandReady: false, outputReady: false,
+        mode: 'factory-flash', source: 'defaults',
+        projectId: '', projectRevision: 0, projectFingerprint: '',
+        wifi: {
+          transport: 'station', transition: 'handoff-abandoned', transitionPending: true,
+          handoffGeneration: 1, apActive: false, stationIp: '192.168.18.70', ip: '192.168.18.70',
+        },
+      },
+    };
+    getSharedCardLink().dispatch(event);
+    getSharedCardLink().dispatch(event);
+    return getSharedCardLink().getState();
+  });
+
+  expect(linkState).toMatchObject({
+    state: 'connected-bridge', cardBlank: true,
+    validatedBootId: 'boot-e11c5733-b0fe81f61b44',
+  });
+  await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__LW_SERIAL_REQUESTS__)).toBe(0);
+  expect(cardWrites).toEqual([]);
+});
+
+test('post-flash commissioning remains a protected Studio operation during Wi-Fi handoff', async ({ page }) => {
+  const remoteRelease = {
+    schemaVersion: 1,
+    sourceRevision: 'c'.repeat(40),
+    buildId: 'c'.repeat(12),
+  };
+  const marker = `${JSON.stringify(remoteRelease)}\n`;
+  const graph = {
+    schemaVersion: 1,
+    files: [
+      { path: 'assets/freshness-ready.js', bytes: 1, sha256: '1'.repeat(64) },
+      { path: 'index.html', bytes: 1, sha256: '2'.repeat(64) },
+      {
+        path: 'studio-release.json', bytes: Buffer.byteLength(marker),
+        sha256: createHash('sha256').update(marker).digest('hex'),
+      },
+    ],
+  };
+  let updateAvailable = false;
+  let graphRequests = 0;
+  await page.route('**/studio-release.json', route => updateAvailable
+    ? route.fulfill({ status: 200, body: marker, headers: { 'cache-control': 'private, no-store' } })
+    : route.continue());
+  await page.route('**/studio-build-graph.json', route => {
+    graphRequests += 1;
+    return route.fulfill({
+      status: 200,
+      body: `${JSON.stringify(graph)}\n`,
+      headers: { 'cache-control': 'private, no-store' },
+    });
+  });
+  await page.route('**/assets/freshness-ready.js', route => route.fulfill({ status: 200, body: 'x' }));
+  await page.addInitScript(() => {
+    window.__LW_STUDIO_RELOADS__ = 0;
+    window.__LW_STUDIO_RELOAD_FOR_TEST__ = () => { window.__LW_STUDIO_RELOADS__ += 1; };
+    Object.defineProperty(navigator, 'serial', {
+      configurable: true,
+      value: { requestPort: async () => ({}) },
+    });
+  });
+  await page.goto('/#screen=flash&mode=install');
+  await page.evaluate(async () => {
+    const {
+      beginCardCommissioning,
+      completeCardInstall,
+      writeCardCommissioning,
+    } = await import('/src/lib/cardCommissioningFlow.js');
+    const { saveCurrentProjectToLibrary } = await import('/src/lib/projectStorage.js');
+    const { createDefaultProject } = await import('/src/lib/projectModel.js');
+    const project = createDefaultProject();
+    const record = saveCurrentProjectToLibrary(project);
+    const started = beginCardCommissioning({
+      source: 'web-serial', operation: 'install-current-release', strategy: 'clean-recovery',
+      projectRecord: record, projectRevision: 3,
+      installTarget: { id: 'lw-b0fe81f61b44', firmwareVersion: '1.0.0', buildId: 'b'.repeat(40) },
+    });
+    await writeCardCommissioning(completeCardInstall(started, {
+      operation: 'install-current-release', cardId: 'lw-b0fe81f61b44',
+      firmwareVersion: '1.0.0', buildId: 'b'.repeat(40),
+    }));
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
+  await page.getByRole('button', { name: 'Layout' }).click();
+  await expect(page).toHaveURL(/#screen=layout$/);
+
+  updateAvailable = true;
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect.poll(() => graphRequests).toBeGreaterThan(0);
+  expect(await page.evaluate(() => window.__LW_STUDIO_RELOADS__)).toBe(0);
+
+  await page.evaluate(async () => {
+    const { clearCardCommissioning, inspectCardCommissioning } = await import('/src/lib/cardCommissioningFlow.js');
+    const flowId = inspectCardCommissioning().flow?.flowId;
+    if (!flowId) throw new Error('Expected a persisted commissioning flow');
+    await clearCardCommissioning({ flowId });
+  });
+  await expect.poll(() => page.evaluate(() => window.__LW_STUDIO_RELOADS__)).toBe(1);
 });
