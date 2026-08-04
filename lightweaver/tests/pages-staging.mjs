@@ -128,16 +128,47 @@ assert.match(pkg.scripts['launch:source'], /npm run test:prod-deploy && npm run 
 assert.match(pkg.scripts['launch:source'], /^npm run test:core:source/);
 assert.equal(pkg.scripts['launch:check'], 'npm run launch:source && npm run firmware:check-bin');
 assert.match(testWorkflow, /packages\/installer-core\/\*\*/);
-assert.match(testWorkflow, /docs\/led-mandalacodes-setup\.md/);
+assert.match(testWorkflow, /docs\/\*\*/);
 assert.match(testWorkflow, /TODO\.md/);
-assert.match(testWorkflow, /npm run launch:source/);
-assert.match(testWorkflow, /npm run launch:check/);
+assert.match(testWorkflow, /node scripts\/ci-changed-lanes\.mjs/);
+assert.match(testWorkflow, /npm run ci:source-build/);
+assert.match(testWorkflow, /npm run ci:browser-smoke/);
+assert.match(testWorkflow, /npm run test:release-ui -- --shard=1\/3/);
+assert.match(testWorkflow, /npm run ci:cloud/);
+assert.match(testWorkflow, /npm run ci:production/);
+assert.match(testWorkflow, /npm run ci:firmware-sensitive/);
+assert.match(testWorkflow, /npm run ci:artifact/);
+assert.doesNotMatch(testWorkflow, /npm run launch:(?:source|check)/);
 assert.match(testWorkflow, /wrangler d1 migrations apply PROJECTS_DB[\s\S]*?--config wrangler\.local\.toml[\s\S]*?--local/);
-assert.match(testWorkflow, /github\.ref != 'refs\/heads\/main'/);
-assert.match(testWorkflow, /github\.ref == 'refs\/heads\/main'/);
+assert.match(testWorkflow, /CI_BASE_SHA:\s*\$\{\{ github\.event\.pull_request\.base\.sha \|\| github\.event\.merge_group\.base_sha \|\| github\.event\.before \}\}/);
+assert.match(testWorkflow, /CI_HEAD_SHA:\s*\$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.event\.merge_group\.head_sha \|\| github\.sha \}\}/);
+assert.match(testWorkflow, /needs: \[classify, source, browser, cloud, production, firmware, artifact\]/);
+assert.match(testWorkflow, /if: \$\{\{ always\(\) \}\}/);
+assert.match(testWorkflow, /if \[ "\$result" = "failure" \] \|\| \[ "\$result" = "cancelled" \]/);
+
+assert.match(
+  workflow,
+  /workflow_run:\s*\n\s*workflows: \["Tests"\]\s*\n\s*types: \[completed\]\s*\n\s*branches: \[main\]/,
+);
+assert.match(workflow, /if: github\.event_name == 'workflow_dispatch' \|\| github\.event\.workflow_run\.conclusion == 'success'/);
+assert.match(workflow, /revision:\s*\n\s*description: Exact tested or signed main revision to deploy\s*\n\s*required: true/);
+assert.match(workflow, /TESTED_REVISION:\s*\$\{\{ github\.event\.workflow_run\.head_sha \}\}/);
+assert.match(workflow, /Deploy revision must be a complete 40-character commit SHA/);
+assert.ok(
+  (workflow.match(/ref: \$\{\{ (?:steps\.revision|needs\.preflight)\.outputs\.revision \}\}/g) || []).length >= 2,
+  'preflight and deploy must both check out the exact resolved revision',
+);
+assert.match(workflow, /CI_HEAD_SHA:\s*\$\{\{ steps\.revision\.outputs\.revision \}\}/);
+assert.match(workflow, /Firmware-sensitive source is waiting for the protected signer/);
+assert.match(workflow, /Signer artifact commits deploy only through their explicit signed-SHA dispatch/);
+assert.match(workflow, /DEPLOY_REVISION:\s*\$\{\{ needs\.preflight\.outputs\.revision \}\}/);
+assert.match(workflow, /npm run ci:artifact/);
+
+const revisionRecheckStep = workflow.indexOf('- name: Reconfirm the exact main revision before publish');
 
 const migrationStep = workflow.indexOf('- name: Apply additive production D1 migrations');
 const deployStep = workflow.indexOf('- name: Build and deploy to Cloudflare Pages');
+assert.ok(revisionRecheckStep >= 0 && revisionRecheckStep < migrationStep, 'origin/main must still name the exact revision before migration or upload');
 assert.ok(migrationStep >= 0, 'production workflow must have an explicit remote migration step');
 assert.ok(deployStep > migrationStep, 'additive D1 migrations must finish before compatible Functions deploy');
 assert.equal(
