@@ -20,6 +20,19 @@ const emittedPredicate = [...predicateSource.matchAll(/"(?:\\.|[^"\\])*"/g)]
 const bridgeContext = {};
 vm.runInNewContext(emittedPredicate + ';globalThis.allowed=lwBridgeAllowed', bridgeContext);
 
+const openScriptStart = web.indexOf('String studioOpenScript()');
+const openScriptEnd = web.indexOf('String studioBridgeScript()', openScriptStart);
+assert.notEqual(openScriptStart, -1, 'firmware should define the card-page Studio opener');
+assert.notEqual(openScriptEnd, -1, 'firmware should bound the card-page Studio opener script');
+const emittedOpenScript = [...web.slice(openScriptStart, openScriptEnd).matchAll(/"(?:\\.|[^"\\])*"/g)]
+  .map(match => JSON.parse(match[0]))
+  .join('');
+const bridgeLaunchEnd = web.indexOf('"const lwBridgeReadyOrigin', bridgeStart);
+assert.notEqual(bridgeLaunchEnd, -1, 'bridge should validate its launch fragment before ready handling');
+const emittedBridgeLaunch = [...web.slice(bridgeStart, bridgeLaunchEnd).matchAll(/"(?:\\.|[^"\\])*"/g)]
+  .map(match => JSON.parse(match[0]))
+  .join('');
+
 const trustedOrigins = [
   'https://led.mandalacodes.com',
   'https://lightweaver-edw.pages.dev',
@@ -150,6 +163,78 @@ assert.match(
   /Allow pop-ups for this page, then tap Open Studio again\./,
   'the card page should give concise, actionable help when the Studio popup is blocked',
 );
+{
+  const openCalls = [];
+  const alerts = [];
+  const opener = {
+    closed: false,
+    location: { href: 'https://led.mandalacodes.com/#screen=production' },
+    focusCalls: 0,
+    focus() { this.focusCalls += 1; },
+  };
+  const context = {
+    URL,
+    URLSearchParams,
+    location: {
+      host: '192.168.4.1',
+      hash: '#studioBridge=1&studioOrigin=https%3A%2F%2Fled.mandalacodes.com',
+    },
+    alert(message) { alerts.push(message); },
+    window: {
+      opener,
+      open(url, name) {
+        openCalls.push({ url, name });
+        return { focus() {} };
+      },
+    },
+  };
+  vm.runInNewContext(`${emittedOpenScript}${emittedBridgeLaunch};globalThis.openStudio=lwOpenStudio`, context);
+  let prevented = 0;
+  assert.equal(context.openStudio({ preventDefault() { prevented += 1; } },
+    'https://led.mandalacodes.com/?cardBridge=1&cardHost=192.168.4.1#screen=layout'), false);
+  assert.equal(prevented, 1);
+  assert.equal(opener.focusCalls, 1,
+    'a card page opened by Studio should focus that exact installer/commissioning tab');
+  assert.equal(opener.location.href, 'https://led.mandalacodes.com/#screen=production',
+    'returning from the card must not navigate the existing Studio tab away from its active flow');
+  assert.deepEqual(openCalls, [],
+    'a live Studio opener must be reused without opening or targeting another Studio window');
+  assert.deepEqual(alerts, []);
+}
+{
+  const openCalls = [];
+  const alerts = [];
+  const unrelatedOpener = {
+    closed: false,
+    focusCalls: 0,
+    focus() { this.focusCalls += 1; },
+  };
+  const context = {
+    URL,
+    URLSearchParams,
+    location: { host: '192.168.4.1', hash: '' },
+    alert(message) { alerts.push(message); },
+    window: {
+      opener: unrelatedOpener,
+      open(url, name) {
+        openCalls.push({ url, name });
+        return null;
+      },
+    },
+  };
+  vm.runInNewContext(`${emittedOpenScript}${emittedBridgeLaunch};globalThis.openStudio=lwOpenStudio`, context);
+  context.openStudio({ preventDefault() {} },
+    'https://evil.example/?editPattern=calm#screen=layout');
+  assert.equal(unrelatedOpener.focusCalls, 0,
+    'a direct or captive-portal card page must not focus an unrelated opener');
+  assert.equal(openCalls.length, 1,
+    'a card page without a verified bridge launch should use the named Studio fallback');
+  assert.equal(openCalls[0].name, 'lightweaver-studio');
+  assert.equal(openCalls[0].url,
+    'https://led.mandalacodes.com/?cardBridge=1&cardHost=192.168.4.1&editPattern=calm#screen=card&section=overview',
+    'the non-bridge fallback must remain pinned to the canonical Studio origin and bounded parameters');
+  assert.deepEqual(alerts, ['Allow pop-ups for this page, then tap Open Studio again.']);
+}
 assert.match(
   web,
   /editPattern/,

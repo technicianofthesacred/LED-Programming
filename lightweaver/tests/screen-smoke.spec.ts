@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
 // Every primary Studio destination must retain the shared shell controls.
@@ -10,6 +11,22 @@ function studioMarker(sourceRevision = STUDIO_SOURCE_REVISION) {
     schemaVersion: 1,
     sourceRevision,
     buildId: sourceRevision.slice(0, 12),
+  };
+}
+
+function studioBuildGraph(marker: ReturnType<typeof studioMarker>) {
+  const markerText = `${JSON.stringify(marker)}\n`;
+  return {
+    schemaVersion: 1,
+    files: [
+      { path: 'assets/freshness-ready.js', bytes: 1, sha256: '1'.repeat(64) },
+      { path: 'index.html', bytes: 1, sha256: '2'.repeat(64) },
+      {
+        path: 'studio-release.json',
+        bytes: Buffer.byteLength(markerText),
+        sha256: createHash('sha256').update(markerText).digest('hex'),
+      },
+    ],
   };
 }
 
@@ -152,6 +169,13 @@ test('new production waits for installer and destructive card operations, flushe
     headers: { 'cache-control': 'private, no-store' },
     body: `${JSON.stringify(marker)}\n`,
   }));
+  await page.route('**/studio-build-graph.json', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    headers: { 'cache-control': 'private, no-store' },
+    body: `${JSON.stringify(studioBuildGraph(marker))}\n`,
+  }));
+  await page.route('**/assets/freshness-ready.js', route => route.fulfill({ status: 200, body: 'x' }));
   await page.addInitScript(() => {
     (window as any).__lwFreshnessReloads = [];
     (window as any).__LW_STUDIO_RELOAD_FOR_TEST__ = () => {

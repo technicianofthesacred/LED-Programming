@@ -40,7 +40,12 @@ import {
 } from '../lib/projectStorage.js';
 import { runProjectSwitchSaveBarrier } from '../lib/projectSwitchSaveBarrier.js';
 import { formatBrowserProjectSaveLabel } from '../lib/studioActionStatus.js';
-import { beginCardCommissioning, writeCardCommissioning } from '../lib/cardCommissioningFlow.js';
+import {
+  CARD_COMMISSIONING_CHANGED_EVENT,
+  beginCardCommissioning,
+  inspectCardCommissioning,
+  writeCardCommissioning,
+} from '../lib/cardCommissioningFlow.js';
 import { readTestStrip, writeTestStrip, TEST_STRIP_CHANGED_EVENT } from '../lib/testStrip.js';
 import { LayoutScreen } from './lw-layout.jsx';
 import { cardRouteFromHash, isCardSection, markCardSectionNavigation } from './cardWorkspaceRoute.js';
@@ -67,7 +72,12 @@ const STUDIO_SCREENS = [
 const SCREEN_KEYS = STUDIO_SCREENS.map(screen => screen.id);
 const SCREEN_BY_ID = Object.fromEntries(STUDIO_SCREENS.map(screen => [screen.id, screen.Component]));
 const LEGACY_CARD_SCREENS = new Set(['flash', 'settings', 'installer', 'production']);
+const PROTECTED_COMMISSIONING_STAGES = new Set(['install-safely', 'set-up-card', 'check-lights']);
 const SCREEN_RECOVERY_KEY = 'lw_screen_recovery_v1';
+
+function readCommissioningProtection() {
+  return PROTECTED_COMMISSIONING_STAGES.has(inspectCardCommissioning().flow?.stage);
+}
 
 bootstrapCardHostFromLocation();
 
@@ -399,8 +409,10 @@ function Shell() {
   const [cardRoute, setCardRoute] = useState(() => cardRouteFromHash());
   const [installActive, setInstallActive] = useState(false);
   const [hardwareOperationActive, setHardwareOperationActive] = useState(false);
+  const [commissioningActive, setCommissioningActive] = useState(readCommissioningProtection);
   const installActiveRef = useRef(false);
   const hardwareOperationActiveRef = useRef(false);
+  const commissioningActiveRef = useRef(commissioningActive);
   const installRouteRef = useRef('#screen=card&section=install');
   const [connectionCenterOpen, setConnectionCenterOpen] = useState(false);
   const {
@@ -494,10 +506,29 @@ function Shell() {
     return () => { active = false; channel.close(); };
   }, []);
   useEffect(() => {
+    const syncCommissioning = () => {
+      const active = readCommissioningProtection();
+      commissioningActiveRef.current = active;
+      void freshnessMonitorRef.current?.setOperationActive(
+        installActiveRef.current || hardwareOperationActiveRef.current || active,
+      );
+      setCommissioningActive(active);
+    };
+    window.addEventListener(CARD_COMMISSIONING_CHANGED_EVENT, syncCommissioning);
+    window.addEventListener('storage', syncCommissioning);
+    syncCommissioning();
+    return () => {
+      window.removeEventListener(CARD_COMMISSIONING_CHANGED_EVENT, syncCommissioning);
+      window.removeEventListener('storage', syncCommissioning);
+    };
+  }, []);
+  useEffect(() => {
     const onHardwareOperationActive = event => {
       const active = event.detail?.active === true;
       hardwareOperationActiveRef.current = active;
-      freshnessMonitorRef.current?.setOperationActive(installActiveRef.current || active);
+      void freshnessMonitorRef.current?.setOperationActive(
+        installActiveRef.current || active || commissioningActiveRef.current,
+      );
       setHardwareOperationActive(active);
     };
     window.addEventListener(STUDIO_HARDWARE_OPERATION_EVENT, onHardwareOperationActive);
@@ -520,7 +551,9 @@ function Shell() {
       windowRef: window,
     });
     freshnessMonitorRef.current = monitor;
-    monitor.setOperationActive(installActiveRef.current || hardwareOperationActiveRef.current);
+    void monitor.setOperationActive(
+      installActiveRef.current || hardwareOperationActiveRef.current || commissioningActiveRef.current,
+    );
     const unsubscribe = monitor.subscribe(setFreshness);
     setFreshness(monitor.getState());
     void monitor.start();
@@ -531,8 +564,10 @@ function Shell() {
     };
   }, []);
   useEffect(() => {
-    freshnessMonitorRef.current?.setOperationActive(installActive || hardwareOperationActive);
-  }, [hardwareOperationActive, installActive]);
+    void freshnessMonitorRef.current?.setOperationActive(
+      installActive || hardwareOperationActive || commissioningActive,
+    );
+  }, [commissioningActive, hardwareOperationActive, installActive]);
   useEffect(() => {
     applyStoredStudioTheme();
     window.addEventListener('lw-preview-settings', applyStoredStudioTheme);
@@ -542,7 +577,9 @@ function Shell() {
     const onInstallActive = event => {
       const active = event.detail?.active === true;
       installActiveRef.current = active;
-      freshnessMonitorRef.current?.setOperationActive(active || hardwareOperationActiveRef.current);
+      void freshnessMonitorRef.current?.setOperationActive(
+        active || hardwareOperationActiveRef.current || commissioningActiveRef.current,
+      );
       if (active) {
         const params = new URLSearchParams(window.location.hash.slice(1));
         const legacyInstall = params.get('screen') === 'flash' && params.get('mode') === 'install';
