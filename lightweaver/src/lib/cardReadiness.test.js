@@ -141,6 +141,45 @@ test('reachable factory defaults remain blank during an abandoned WiFi handoff',
   assert.equal(result.connected, false);
 });
 
+test('either authoritative factory marker is blank only without installed project identity', () => {
+  for (const override of [
+    { mode: 'factory-flash', source: '', commandReady: true },
+    { mode: 'run', source: 'defaults', commandReady: false },
+  ]) {
+    const result = classifyCardReadiness(readyEnvelope({
+      runtimePhase: 'recovering',
+      knownGoodProject: false,
+      outputReady: false,
+      projectId: '',
+      projectFingerprint: '',
+      ...override,
+    }), { expectedCardId: CARD_ID });
+    assert.equal(result.state, 'blank', JSON.stringify(override));
+    assert.equal(result.blank, true, JSON.stringify(override));
+    assert.equal(result.patternAccess, 'blank', JSON.stringify(override));
+  }
+});
+
+test('factory markers with conflicting installed project identity remain recovery', () => {
+  for (const override of [
+    { projectId: 'configured-piece', projectFingerprint: '' },
+    { projectId: '', projectFingerprint: 'b'.repeat(16) },
+  ]) {
+    const result = classifyCardReadiness(readyEnvelope({
+      runtimePhase: 'recovering',
+      knownGoodProject: false,
+      commandReady: false,
+      outputReady: false,
+      mode: 'factory-flash',
+      source: 'defaults',
+      ...override,
+    }), { expectedCardId: CARD_ID });
+    assert.equal(result.state, 'not-ready', JSON.stringify(override));
+    assert.equal(result.blank, false, JSON.stringify(override));
+    assert.equal(result.patternAccess, 'recovery', JSON.stringify(override));
+  }
+});
+
 test('factory recovery classification still fails closed for configured, wrong, and incomplete cards', () => {
   const recoveringConfigured = classifyCardReadiness(readyEnvelope({
     runtimePhase: 'recovering',
@@ -181,13 +220,10 @@ test('factory recovery classification still fails closed for configured, wrong, 
   assert.equal(incompleteResult.blank, null);
 });
 
-test('non-factory and partial factory evidence stays in recovery', () => {
+test('non-factory evidence stays in recovery', () => {
   for (const override of [
     { runtimePhase: 'recovering', knownGoodProject: true, commandReady: false },
     { runtimePhase: 'recovering', knownGoodProject: false, commandReady: false },
-    { runtimePhase: 'factory', knownGoodProject: false, commandReady: true, mode: 'factory-flash', source: 'defaults' },
-    { runtimePhase: 'factory', knownGoodProject: false, commandReady: false, source: 'defaults' },
-    { runtimePhase: 'factory', knownGoodProject: false, commandReady: false, mode: 'factory-flash' },
   ]) {
     const result = classifyCardReadiness(readyEnvelope(override), { expectedCardId: CARD_ID });
     assert.equal(result.state, 'not-ready', JSON.stringify(override));
