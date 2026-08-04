@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import {
+  CARD_BRIDGE_CHANGED_EVENT,
   CARD_BRIDGE_WINDOW_NAME,
   acquireCardBridgeFromGesture,
   adoptDiscoveredCardBridgeIdentity,
   buildCardBridgeLaunchUrl,
   bootstrapCardBridgeFromOpener,
   cardBridgeAutoPreviewEnabled,
+  clearCardBridgeHandoff,
   getCardBridgeState,
   isCardBridgeLaunch,
   openCardBridge,
@@ -966,6 +968,115 @@ function beginNavigationRecovery({
   const result = retargetCardBridge(host, correlation, { flowId });
   return { harness, target, result };
 }
+
+const initialReentrantHarness = bridgeWindowHarness({
+  host: recoveryApHost,
+  fakeClock: true,
+});
+const initialReentrantTarget = recoveryTargetFor(initialReentrantHarness);
+initialReentrantHarness.win.open = (url, name) => {
+  initialReentrantHarness.opened.push({ url, name });
+  return initialReentrantTarget;
+};
+globalThis.window = initialReentrantHarness.win;
+assert.equal(openLocalCardPage(recoveryApHost).ok, true);
+const initialReentrantFlow = 'flow-initial-reentrant-1234';
+let initialReentrantClearCount = 0;
+initialReentrantHarness.win.addEventListener(CARD_BRIDGE_CHANGED_EVENT, event => {
+  if (event.detail?.handoffFlowId !== initialReentrantFlow) return;
+  if (clearCardBridgeHandoff(initialReentrantFlow)) initialReentrantClearCount += 1;
+});
+const initialReentrantResult = retargetCardBridge(
+  recoveryStationHost,
+  { ...recoveryCorrelation, handoffGeneration: 101 },
+  { flowId: initialReentrantFlow },
+);
+assert.equal(initialReentrantClearCount, 1,
+  'the harness clears the newly published flow during synchronous dispatch');
+assert.equal(initialReentrantResult.ok, false);
+assert.equal(initialReentrantResult.reason, 'stale-correlation');
+assert.equal(initialReentrantResult.retryable, false);
+assert.equal(initialReentrantTarget.navigations.length, 0,
+  'initial retarget cannot navigate after its synchronous publish was cleared');
+assert.equal(initialReentrantHarness.clock.pendingCount(), 0);
+assert.equal(initialReentrantHarness.windowListenerCount('online'), 0);
+assert.equal(initialReentrantHarness.windowListenerCount('focus'), 0);
+assert.equal(initialReentrantHarness.documentListenerCount('visibilitychange'), 0);
+initialReentrantHarness.emitWindow('online');
+initialReentrantHarness.emitWindow('focus');
+initialReentrantHarness.emitDocument();
+initialReentrantHarness.clock.advance(300000);
+assert.equal(initialReentrantTarget.navigations.length, 0,
+  'later lifecycle signals cannot revive the cleared initial retarget');
+
+const repeatedReentrantRecovery = beginNavigationRecovery({
+  flowId: 'flow-repeated-reentrant-1234',
+  correlation: { ...recoveryCorrelation, handoffGeneration: 102 },
+});
+const repeatedOldNavigationCount = repeatedReentrantRecovery.target.navigations.length;
+const repeatedSuccessorCorrelation = {
+  ...recoveryCorrelation,
+  host: '192.168.18.94',
+  expectedBootId: 'boot-reentrant-successor',
+  handoffGeneration: 103,
+};
+const repeatedSuccessorFlow = 'flow-reentrant-successor-1234';
+const repeatedSuccessorTarget = recoveryTargetFor(repeatedReentrantRecovery.harness);
+let repeatedDispatchHandled = false;
+let repeatedCapturedCallbacks = [];
+repeatedReentrantRecovery.harness.win.addEventListener(CARD_BRIDGE_CHANGED_EVENT, event => {
+  if (repeatedDispatchHandled
+    || event.detail?.handoffFlowId !== 'flow-repeated-reentrant-1234'
+    || event.detail?.verified !== false) return;
+  repeatedDispatchHandled = true;
+  repeatedCapturedCallbacks = [
+    ...repeatedReentrantRecovery.harness.windowListeners('online'),
+    ...repeatedReentrantRecovery.harness.windowListeners('focus'),
+    ...repeatedReentrantRecovery.harness.documentListeners('visibilitychange'),
+    ...repeatedReentrantRecovery.harness.clock.callbacks(),
+  ];
+  clearCardBridgeHandoff('flow-repeated-reentrant-1234');
+  repeatedReentrantRecovery.harness.win.open = (url, name) => {
+    repeatedReentrantRecovery.harness.opened.push({ url, name });
+    return repeatedSuccessorTarget;
+  };
+  assert.equal(openLocalCardPage(recoveryApHost).ok, true);
+  assert.equal(retargetCardBridge(
+    repeatedSuccessorCorrelation.host,
+    repeatedSuccessorCorrelation,
+    { flowId: repeatedSuccessorFlow },
+  ).ok, true);
+});
+const repeatedReentrantResult = retargetCardBridge(
+  recoveryStationHost,
+  { ...recoveryCorrelation, handoffGeneration: 102 },
+  { flowId: 'flow-repeated-reentrant-1234' },
+);
+assert.equal(repeatedDispatchHandled, true,
+  'the harness installs a successor during repeated retarget revocation');
+assert.equal(repeatedReentrantResult.ok, false);
+assert.equal(repeatedReentrantResult.reason, 'stale-correlation');
+assert.equal(repeatedReentrantResult.retryable, false);
+assert.equal(repeatedReentrantRecovery.target.navigations.length, repeatedOldNavigationCount,
+  'repeated retarget cannot navigate its old target after synchronous replacement');
+assert.equal(repeatedSuccessorTarget.navigations.length, 1);
+assert.equal(getCardBridgeState().handoffFlowId, repeatedSuccessorFlow);
+assert.equal(repeatedReentrantRecovery.harness.clock.pendingCount(), 1,
+  'only successor recovery retains a timer');
+assert.equal(repeatedReentrantRecovery.harness.windowListenerCount('online'), 1);
+assert.equal(repeatedReentrantRecovery.harness.windowListenerCount('focus'), 1);
+assert.equal(repeatedReentrantRecovery.harness.documentListenerCount('visibilitychange'), 1);
+const repeatedSuccessorNavigationCount = repeatedSuccessorTarget.navigations.length;
+for (const callback of repeatedCapturedCallbacks) callback();
+assert.equal(repeatedReentrantRecovery.target.navigations.length, repeatedOldNavigationCount,
+  'captured old callbacks cannot navigate the replaced target');
+assert.equal(repeatedSuccessorTarget.navigations.length, repeatedSuccessorNavigationCount,
+  'captured old callbacks cannot navigate the successor');
+assert.equal(repeatedReentrantRecovery.harness.clock.pendingCount(), 1,
+  'old token cleanup cannot clear the successor timer');
+assert.equal(repeatedReentrantRecovery.harness.windowListenerCount('online'), 1);
+assert.equal(repeatedReentrantRecovery.harness.windowListenerCount('focus'), 1);
+assert.equal(repeatedReentrantRecovery.harness.documentListenerCount('visibilitychange'), 1);
 
 const deadlineRecovery = beginNavigationRecovery();
 assert.equal(deadlineRecovery.result.ok, true);

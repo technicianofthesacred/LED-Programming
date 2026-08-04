@@ -323,6 +323,25 @@ function sameHandoffNavigationContext(context, {
     && sameHandoffCorrelation(context.correlation, correlation);
 }
 
+function sameBridgeNavigationTarget({ owner, target, host, origin }) {
+  return browserWindow() === owner
+    && bridgeWindow === target
+    && !bridgeTargetClosed(target)
+    && normalizeCardHost(bridgeHost) === host
+    && bridgeOrigin === origin;
+}
+
+function sameExactHandoffNavigationState({ owner, target, origin, correlation, flowId }) {
+  return sameBridgeNavigationTarget({
+    owner,
+    target,
+    host: correlation.host,
+    origin,
+  })
+    && bridgeHandoffFlowId === flowId
+    && sameHandoffCorrelation(bridgeHandoffCorrelation, correlation);
+}
+
 // A station address is unreachable while the workshop computer is still on the
 // card AP. Browsers keep the failed network-error document after WiFi changes;
 // they do not reliably retry that cross-subnet navigation themselves. Retain
@@ -447,7 +466,7 @@ function scheduleBridgeHandoffNavigationRetry({ target, url, correlation, flowId
     /* noop */
   }
   scheduleNext();
-  return { ok: true, deadline };
+  return { ok: true, deadline, work };
 }
 
 function applyAuthoritativeBridgeStatus(status, host = bridgeHost) {
@@ -918,13 +937,14 @@ export function retargetCardBridge(rawHost = '', rawCorrelation = {}, { flowId: 
   const correlation = normalizeWifiHandoffCorrelation(rawCorrelation);
   const flowId = normalizeCommissioningFlowId(rawFlowId);
   const host = normalizeCardHost(rawHost);
+  const owner = browserWindow();
   if (!correlation || !flowId || host !== correlation.host) {
     return { ok: false, state: 'invalid-correlation', reason: 'invalid-correlation', retryable: false };
   }
   // A replaced top-level Studio window cannot own a WindowProxy acquired by
   // the prior document. Browsers normally tear the module down too; this guard
   // also makes that lifecycle explicit for embedded/test hosts.
-  if (listenerWindow && listenerWindow !== browserWindow()) {
+  if (listenerWindow && listenerWindow !== owner) {
     rejectPendingBridgeRequests('bridge-missing', 'The Studio bridge owner changed.');
     clearBridgeTarget({ host: bridgeHost, origin: bridgeOrigin });
   }
@@ -968,12 +988,21 @@ export function retargetCardBridge(rawHost = '', rawCorrelation = {}, { flowId: 
     // Settle every AP promise and revoke its lifecycle synchronously before the
     // cross-origin location assignment. A delayed AP response can no longer
     // mutate identity or readiness after this point.
+    const lifecycleBeforeRevoke = bridgeLifecycle;
     revokeBridgeForNavigation({
       host,
       origin,
       reason: 'bridge-retargeted',
       message: 'The setup-AP bridge was replaced by the correlated station target.',
     });
+    if (bridgeLifecycle !== lifecycleBeforeRevoke + 1
+      || bridgeHandoffFlowId
+      || bridgeHandoffCorrelation
+      || !sameBridgeNavigationTarget({ owner, target, host, origin })) {
+      return {
+        ok: false, state: 'stale-correlation', reason: 'stale-correlation', retryable: false,
+      };
+    }
     bridgeHandoffCorrelation = correlation;
     bridgeHandoffFlowId = flowId;
     bridgeInitialConfigAttempted = false;
@@ -981,6 +1010,11 @@ export function retargetCardBridge(rawHost = '', rawCorrelation = {}, { flowId: 
     bridgeRestoredFinalEnvelopeCount = 0;
     writeWifiHandoffRecovery({ correlation, flowId, ackAttempted: false });
     dispatchBridgeChange();
+    if (!sameExactHandoffNavigationState({ owner, target, origin, correlation, flowId })) {
+      return {
+        ok: false, state: 'stale-correlation', reason: 'stale-correlation', retryable: false,
+      };
+    }
   }
 
   const url = new URL(`${origin}/`);
@@ -1027,8 +1061,38 @@ export function retargetCardBridge(rawHost = '', rawCorrelation = {}, { flowId: 
       repeated,
     };
   }
+  if (!sameExactHandoffNavigationState({ owner, target, origin, correlation, flowId })
+    || bridgeHandoffNavigationRetry !== recovery.work) {
+    clearBridgeHandoffNavigationRetry(recovery.work);
+    return {
+      ok: false,
+      state: 'stale-correlation',
+      reason: 'stale-correlation',
+      retryable: false,
+      window: target,
+      host,
+      url: url.href,
+      correlation,
+      repeated,
+    };
+  }
   if (repeated) {
     revokeBridgeForNavigation({ host, origin, preserveHandoff: true });
+    if (!sameExactHandoffNavigationState({ owner, target, origin, correlation, flowId })
+      || bridgeHandoffNavigationRetry !== recovery.work) {
+      clearBridgeHandoffNavigationRetry(recovery.work);
+      return {
+        ok: false,
+        state: 'stale-correlation',
+        reason: 'stale-correlation',
+        retryable: false,
+        window: target,
+        host,
+        url: url.href,
+        correlation,
+        repeated,
+      };
+    }
   }
   try {
     target.location.href = url.href;
