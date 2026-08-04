@@ -349,6 +349,21 @@ function sameExactHandoffNavigationState({ owner, target, origin, correlation, f
     && sameExactHandoffCorrelationState({ owner, origin, correlation, flowId });
 }
 
+function sameExactHandoffNavigationWork({ owner, target, url, origin, correlation, flowId }) {
+  const work = bridgeHandoffNavigationRetry;
+  const contextInput = { owner, target, url, origin, correlation, flowId };
+  return Boolean(work)
+    && work.owner === owner
+    && work.target === target
+    && work.url === url
+    && work.origin === origin
+    && work.flowId === flowId
+    && sameHandoffCorrelation(work.correlation, correlation)
+    && sameHandoffNavigationContext(bridgeHandoffNavigationContext, contextInput)
+    && work.deadline === bridgeHandoffNavigationContext.deadline
+    && work.now() < work.deadline;
+}
+
 // A station address is unreachable while the workshop computer is still on the
 // card AP. Browsers keep the failed network-error document after WiFi changes;
 // they do not reliably retry that cross-subnet navigation themselves. Retain
@@ -1146,19 +1161,57 @@ export function restoreCardBridgeHandoff(rawFlowId = '') {
   const win = browserWindow();
   const studioOrigin = currentStudioOrigin();
   if (!win?.open || !studioOrigin) return { ok: false, reason: 'bridge-missing' };
-  if (bridgeWindow
+  const host = correlation.host;
+  const origin = cardHostToUrl(host);
+  const url = new URL(`${origin}/`);
+  url.hash = new URLSearchParams({
+    studioBridge: '1',
+    wifiHandoff: String(correlation.handoffGeneration),
+    expectedCardId: correlation.expectedCardId,
+    expectedBootId: correlation.expectedBootId,
+    studioOrigin,
+  }).toString();
+  const trackedTarget = bridgeWindow;
+  const sameTrackedHandoff = Boolean(trackedTarget)
     && bridgeHandoffFlowId === flowId
-    && sameHandoffCorrelation(bridgeHandoffCorrelation, correlation)) {
+    && sameHandoffCorrelation(bridgeHandoffCorrelation, correlation);
+  if (sameTrackedHandoff) {
+    const exactTarget = sameExactHandoffNavigationState({
+      owner: win, target: trackedTarget, origin, correlation, flowId,
+    });
+    const exactActiveWork = exactTarget && sameExactHandoffNavigationWork({
+      owner: win,
+      target: trackedTarget,
+      url: url.href,
+      origin,
+      correlation,
+      flowId,
+    });
+    const exactVerifiedBridge = exactTarget && bridgeReady && bridgeConnected;
+    if (exactActiveWork || exactVerifiedBridge) {
+      return {
+        ok: true, state: 'already-restored', correlation, flowId,
+        ackAttempted: recovery.ackAttempted,
+        configAttempted: recovery.configAttempted,
+        lifecycle: bridgeLifecycle,
+      };
+    }
+    const staleWork = bridgeHandoffNavigationRetry;
+    if (staleWork
+      && staleWork.target === trackedTarget
+      && staleWork.flowId === flowId
+      && sameHandoffCorrelation(staleWork.correlation, correlation)) {
+      clearBridgeHandoffNavigationRetry(staleWork);
+    }
+  } else if (bridgeHandoffCorrelation && (
+    bridgeHandoffFlowId !== flowId
+    || !sameHandoffCorrelation(bridgeHandoffCorrelation, correlation)
+  )) {
     return {
-      ok: true, state: 'already-restored', correlation, flowId,
-      ackAttempted: recovery.ackAttempted,
-      configAttempted: recovery.configAttempted,
-      lifecycle: bridgeLifecycle,
+      ok: false, state: 'stale-correlation', reason: 'stale-correlation', retryable: false,
     };
   }
 
-  const host = correlation.host;
-  const origin = cardHostToUrl(host);
   attachCardBridgeListener();
   const lifecycleBeforeRevoke = bridgeLifecycle;
   revokeBridgeForNavigation({ host, origin });
@@ -1178,14 +1231,6 @@ export function restoreCardBridgeHandoff(rawFlowId = '') {
   bridgeRestoredHandoff = recovery.ackAttempted;
   bridgeRestoredFinalEnvelopeCount = 0;
 
-  const url = new URL(`${origin}/`);
-  url.hash = new URLSearchParams({
-    studioBridge: '1',
-    wifiHandoff: String(correlation.handoffGeneration),
-    expectedCardId: correlation.expectedCardId,
-    expectedBootId: correlation.expectedBootId,
-    studioOrigin,
-  }).toString();
   const staleRestoreResult = (window = null) => ({
     ok: false,
     state: 'stale-correlation',
