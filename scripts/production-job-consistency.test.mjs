@@ -162,6 +162,18 @@ test('fast Tests workflow exposes one aggregate gate over every focused lane', a
   assert.match(workflow, /gate:\s*\n\s*name: gate\s*\n\s*if: \$\{\{ always\(\) \}\}/);
   assert.match(workflow, /needs: \[classify, source, browser, cloud, production, firmware, artifact\]/);
   assert.doesNotMatch(workflow, /npm run launch:(?:source|check)/, 'fast lanes must not rerun the monolithic launch gate');
+  assert.doesNotMatch(workflow, /test:release-ui|--shard=/, 'blocking browser validation must remain a focused smoke set');
+  for (const [job, nextJob] of [
+    ['source', 'browser'],
+    ['browser', 'cloud'],
+    ['cloud', 'production'],
+    ['production', 'firmware'],
+  ]) {
+    const segment = workflow.slice(workflow.indexOf(`\n  ${job}:\n`), workflow.indexOf(`\n  ${nextJob}:\n`));
+    assert.match(segment, /npm ci[\s\S]*?ensure-rollup-native\.mjs/, `${job} must restore Rollup after npm ci`);
+  }
+  const sourceJob = workflow.slice(workflow.indexOf('\n  source:\n'), workflow.indexOf('\n  browser:\n'));
+  assert.match(sourceJob, /playwright install --with-deps chromium/, 'mapper geometry tests require pinned Chromium');
 });
 
 test('protected signer consumes the exact successful Tests revision without an artifact loop', async () => {
@@ -212,6 +224,37 @@ test('artifact-only Tests completion defers to the signer exact-SHA dispatch', a
   assert.match(workflow, /EVENT_NAME" = "workflow_run".*ARTIFACT_ONLY" = "true".*FIRMWARE_SENSITIVE" != "true"/s);
   assert.match(workflow, /Signer artifact commits deploy only through their explicit signed-SHA dispatch/);
   assert.match(workflow, /EVENT_NAME" = "workflow_run".*FIRMWARE_SENSITIVE" = "true"/s);
+});
+
+test('manual deploy cannot bypass protected signing for a firmware-sensitive revision', async () => {
+  const workflow = await readFile(resolve(repoRoot, '.github/workflows/deploy-site.yml'), 'utf8');
+  assert.match(workflow, /expected_signer_email=.*build-firmware\.yml/);
+  assert.match(workflow, /--format=%ce.*expected_signer_email/);
+  assert.doesNotMatch(workflow, /4189828?2\+github-actions/, 'deploy must derive signer identity from the signer workflow');
+  assert.match(workflow, /SIGNED_RELEASE_COMMIT: \$\{\{ steps\.changes\.outputs\.signed_release \}\}/);
+  assert.match(workflow, /FIRMWARE_SENSITIVE" = "true".*SIGNED_RELEASE_COMMIT" != "true"/s);
+  assert.match(workflow, /EVENT_NAME" = "workflow_dispatch"/);
+  assert.match(workflow, /Manual deploy cannot bypass the protected firmware signer/);
+});
+
+test('focused browser script covers core workflow without embedding the full release suite', async () => {
+  const packageJson = await readJson('lightweaver/package.json');
+  const smoke = packageJson.scripts['ci:browser-smoke'];
+  assert.match(smoke, /tests\/workflow\.spec\.ts/);
+  assert.match(smoke, /tests\/screen-smoke\.spec\.ts/);
+  assert.match(smoke, /tests\/card-workspace\.spec\.ts/);
+  assert.match(smoke, /--grep/);
+  assert.match(smoke, /reachable recovering factory card uses URL IP/);
+  assert.match(smoke, /Hardware loads the verified production project/);
+  assert.match(smoke, /npm run test:show/);
+  assert.match(smoke, /npm run test:screen-recovery/);
+  assert.doesNotMatch(smoke, /test:release-ui|--shard/);
+});
+
+test('exhaustive workflow retains the complete launch gate and Linux Rollup repair', async () => {
+  const workflow = await readFile(resolve(repoRoot, '.github/workflows/exhaustive.yml'), 'utf8');
+  assert.match(workflow, /npm ci --prefix lightweaver[\s\S]*node lightweaver\/scripts\/ensure-rollup-native\.mjs/);
+  assert.match(workflow, /npm run launch:check/);
 });
 
 test('deploy allows the Cloudflare asset graph to converge before declaring failure', async () => {

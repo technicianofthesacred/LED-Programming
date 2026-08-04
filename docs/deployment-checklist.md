@@ -48,7 +48,11 @@ keys:
    authority. Its classifier selects bounded source/build, browser, cloud,
    production, firmware-sensitive, and artifact lanes; selected lanes run in
    parallel and the aggregate gate fails if any selected lane fails or is
-   cancelled. Workflow and classifier changes conservatively run every lane.
+   cancelled. The blocking browser lane is a small established smoke set for
+   project creation/navigation, connection visibility, and exact card-project
+   recovery. The complete `test:release-ui` suite remains in the asynchronous
+   exhaustive gate. Workflow and classifier changes conservatively run every
+   lane, and deleted files are classified the same as added or edited files.
 3. When that exact tested revision is firmware-sensitive, protected
    `build-firmware.yml` checks out `workflow_run.head_sha`, recompiles the
    ESP32-S3 factory image with that identity, signs its manifest/provenance,
@@ -60,7 +64,10 @@ keys:
    revisions are deferred until the signer dispatches their signed commit.
    `deploy-site.yml` rejects stale revisions, checks that `origin/main` still
    names the requested SHA immediately before publish, and runs
-   `npm run ci:artifact`; it never substitutes a newer checkout.
+   `npm run ci:artifact`; it never substitutes a newer checkout. A manual
+   dispatch cannot override this boundary: firmware-sensitive source is
+   rejected unless the requested current-main SHA is the signer-generated,
+   artifact-only release commit.
 5. `deploy-site.yml` then applies every pending expand-only D1 migration, including
    `0002_account_access.sql` and `0003_account_session_generation.sql`, with the
    separate D1-only credential before publishing compatible Studio and Pages

@@ -95,12 +95,13 @@ jobs:
       - name: Classify the exact revision
         id: changes
         env:
-          CI_ACTOR: ${{ github.event.workflow_run.actor.login }}
           CI_BASE_SHA: ${{ steps.revision.outputs.revision }}^
           CI_HEAD_SHA: ${{ steps.revision.outputs.revision }}
         run: |
-          if [ "$CI_ACTOR" = "github-actions[bot]" ] \
-            && [ "$(git log -1 --format=%s "$CI_HEAD_SHA")" = "CI: publish signed Lightweaver firmware release" ]; then
+          expected_signer_email="$(sed -n 's/.*git config user.email "\([^"]*\)".*/\1/p' .github/workflows/build-firmware.yml)"
+          test -n "$expected_signer_email"
+          if [ "$(git log -1 --format=%s "$CI_HEAD_SHA")" = "CI: publish signed Lightweaver firmware release" ] \
+            && [ "$(git log -1 --format=%ce "$CI_HEAD_SHA")" = "$expected_signer_email" ]; then
             export CI_GENERATED_RELEASE=true
           fi
           node scripts/ci-changed-lanes.mjs
@@ -111,6 +112,7 @@ jobs:
           DEPLOY_REVISION: ${{ steps.revision.outputs.revision }}
           EVENT_NAME: ${{ github.event_name }}
           FIRMWARE_SENSITIVE: ${{ steps.changes.outputs.firmware }}
+          SIGNED_RELEASE_COMMIT: ${{ steps.changes.outputs.signed_release }}
         run: |
           echo "revision=$DEPLOY_REVISION" >> "$GITHUB_OUTPUT"
           if [ "${stale:-}" = "true" ]; then
@@ -119,7 +121,11 @@ jobs:
           elif [ "$EVENT_NAME" = "workflow_run" ] && [ "$ARTIFACT_ONLY" = "true" ] && [ "$FIRMWARE_SENSITIVE" != "true" ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             echo "reason=Signer artifact commits deploy only through their explicit signed-SHA dispatch." >> "$GITHUB_OUTPUT"
-          elif [ "$EVENT_NAME" = "workflow_run" ] && [ "$FIRMWARE_SENSITIVE" = "true" ]; then
+          elif [ "$FIRMWARE_SENSITIVE" = "true" ] && [ "$SIGNED_RELEASE_COMMIT" != "true" ]; then
+            if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+              echo "::error::Manual deploy cannot bypass the protected firmware signer. Deploy the exact signer-generated commit instead."
+              exit 1
+            fi
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             echo "reason=Firmware-sensitive source is waiting for the protected signer." >> "$GITHUB_OUTPUT"
           else

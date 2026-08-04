@@ -28,6 +28,7 @@ jobs:
       - name: Install pinned application dependencies
         run: |
           npm ci --prefix lightweaver
+          node lightweaver/scripts/ensure-rollup-native.mjs
           npm ci --prefix led-art-mapper/app
           npx --prefix lightweaver playwright install --with-deps chromium
       - name: Apply local D1 migrations

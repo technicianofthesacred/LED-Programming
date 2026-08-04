@@ -85,7 +85,9 @@ jobs:
       - name: Install pinned source dependencies
         run: |
           npm ci --prefix lightweaver
+          node lightweaver/scripts/ensure-rollup-native.mjs
           npm ci --prefix led-art-mapper/app
+          npx --prefix lightweaver playwright install --with-deps chromium
       - name: Apply D1 migrations to isolated local CI state
         working-directory: lightweaver
         run: npm exec -- wrangler d1 migrations apply PROJECTS_DB --config wrangler.local.toml --local --persist-to .wrangler/ci-state
@@ -97,19 +99,7 @@ jobs:
     needs: classify
     if: needs.classify.outputs.browser == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - lane: smoke
-            command: npm run ci:browser-smoke
-          - lane: release-1
-            command: npm run test:release-ui -- --shard=1/3
-          - lane: release-2
-            command: npm run test:release-ui -- --shard=2/3
-          - lane: release-3
-            command: npm run test:release-ui -- --shard=3/3
-    name: browser (${{ matrix.lane }})
+    name: browser smoke
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -119,11 +109,13 @@ jobs:
           cache-dependency-path: lightweaver/package-lock.json
       - run: npm ci
         working-directory: lightweaver
+      - run: node scripts/ensure-rollup-native.mjs
+        working-directory: lightweaver
       - run: npx playwright install --with-deps chromium
         working-directory: lightweaver
-      - name: Run ${{ matrix.lane }} browser lane
+      - name: Run focused critical-workflow smoke tests
         working-directory: lightweaver
-        run: ${{ matrix.command }}
+        run: npm run ci:browser-smoke
 
   cloud:
     needs: classify
@@ -137,6 +129,8 @@ jobs:
           cache: npm
           cache-dependency-path: lightweaver/package-lock.json
       - run: npm ci
+        working-directory: lightweaver
+      - run: node scripts/ensure-rollup-native.mjs
         working-directory: lightweaver
       - run: npx playwright install --with-deps chromium
         working-directory: lightweaver
@@ -155,6 +149,8 @@ jobs:
           cache: npm
           cache-dependency-path: lightweaver/package-lock.json
       - run: npm ci
+        working-directory: lightweaver
+      - run: node scripts/ensure-rollup-native.mjs
         working-directory: lightweaver
       - run: npx playwright install --with-deps chromium
         working-directory: lightweaver

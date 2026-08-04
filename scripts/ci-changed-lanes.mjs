@@ -21,14 +21,18 @@ const GENERATED_RELEASE_PATHS = Object.freeze([
 const isPath = (path, prefix) => path === prefix || path.startsWith(`${prefix}/`);
 const isAnyPath = (path, prefixes) => prefixes.some(prefix => isPath(path, prefix));
 
+export function isGeneratedReleaseChange(paths) {
+  return paths.length > 0
+    && paths.every(path => isAnyPath(String(path).replace(/^\.\//, ''), GENERATED_RELEASE_PATHS));
+}
+
 function emptyLanes() {
   return Object.fromEntries(LANE_NAMES.map(name => [name, false]));
 }
 
 export function classifyChangedPaths(paths, { conservative = false, generatedRelease = false } = {}) {
   if (conservative) return { ...ALL_LANES };
-  if (generatedRelease && paths.length > 0
-    && paths.every(path => isAnyPath(String(path).replace(/^\.\//, ''), GENERATED_RELEASE_PATHS))) {
+  if (generatedRelease && isGeneratedReleaseChange(paths)) {
     return { ...emptyLanes(), artifact: true };
   }
   const lanes = emptyLanes();
@@ -138,7 +142,7 @@ export function classifyChangedPaths(paths, { conservative = false, generatedRel
 }
 
 function gitChangedPaths(base, head, cwd = process.cwd()) {
-  const output = execFileSync('git', ['diff', '--name-only', '--diff-filter=ACMR', base, head], {
+  const output = execFileSync('git', ['diff', '--name-only', '--diff-filter=ACMRD', base, head], {
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'inherit'],
@@ -170,10 +174,11 @@ function parseArguments(argv) {
   return parsed;
 }
 
-function writeOutputs(lanes, paths, outputPath) {
+function writeOutputs(lanes, paths, outputPath, signedRelease = false) {
   if (!outputPath) return;
   const lines = [
     ...LANE_NAMES.map(name => `${name}=${lanes[name] ? 'true' : 'false'}`),
+    `signed_release=${signedRelease ? 'true' : 'false'}`,
     `changed_paths=${JSON.stringify(paths)}`,
   ];
   appendFileSync(outputPath, `${lines.join('\n')}\n`);
@@ -186,12 +191,14 @@ function main() {
     before: parsed.before || process.env.CI_BASE_SHA || '',
     head: parsed.head || process.env.CI_HEAD_SHA || '',
   });
+  const signedRelease = process.env.CI_GENERATED_RELEASE === 'true'
+    && isGeneratedReleaseChange(resolved.paths);
   const lanes = classifyChangedPaths(resolved.paths, {
     conservative: resolved.conservative,
-    generatedRelease: process.env.CI_GENERATED_RELEASE === 'true',
+    generatedRelease: signedRelease,
   });
-  writeOutputs(lanes, resolved.paths, process.env.GITHUB_OUTPUT || '');
-  process.stdout.write(`${JSON.stringify({ ...lanes, paths: resolved.paths, conservative: resolved.conservative })}\n`);
+  writeOutputs(lanes, resolved.paths, process.env.GITHUB_OUTPUT || '', signedRelease);
+  process.stdout.write(`${JSON.stringify({ ...lanes, signedRelease, paths: resolved.paths, conservative: resolved.conservative })}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
