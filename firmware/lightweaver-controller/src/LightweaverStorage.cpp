@@ -2260,6 +2260,7 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["mode"] = config.mode;
   doc["source"] = config.source == SOURCE_SD ? "sd" : config.source == SOURCE_NVS ? "internal-flash" : "defaults";
   doc["runtimeSource"] = config.source == SOURCE_SD ? "sd" : config.source == SOURCE_NVS ? "internal-flash" : "defaults";
+  doc["projectId"] = config.pieceId;
   doc["resetReason"] = static_cast<uint8_t>(esp_reset_reason());
   doc["projectRevision"] = config.projectRevision;
   doc["projectFingerprint"] = config.projectFingerprint;

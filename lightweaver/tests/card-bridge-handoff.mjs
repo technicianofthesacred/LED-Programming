@@ -895,6 +895,7 @@ stationStatus = {
   firmwareVersion: handoffIdentity.firmwareVersion,
   buildId: handoffIdentity.buildId,
   bootId: handoffCorrelation.expectedBootId, runtimePhase: 'factory', knownGoodProject: false,
+  mode: 'factory-flash', source: 'defaults',
   commandReady: false, outputReady: true,
   wifi: {
     transport: 'ap', transition: 'handoff-ready', transitionPending: true,

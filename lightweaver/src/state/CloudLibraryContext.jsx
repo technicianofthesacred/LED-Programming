@@ -5,7 +5,13 @@ import { canonicalLibraryBackupFileName, isLibraryBackup } from '../lib/libraryB
 import { downloadJsonFile, downloadTextFile } from '../lib/downloadFile.js';
 import { canonicalProjectFileName } from '../lib/projectFiles.js';
 import { createProjectId, migrateProject } from '../lib/projectModel.js';
-import { listProjectLibraryRecords } from '../lib/projectStorage.js';
+import { cardProjectId, matchesCardProjectEvidence } from '../lib/cardProjectResolver.js';
+import {
+  PROJECT_LIBRARY_BACKUP_STORAGE_KEY,
+  PROJECT_LIBRARY_CHANGED_EVENT,
+  PROJECT_LIBRARY_STORAGE_KEY,
+  listProjectLibraryRecords,
+} from '../lib/projectStorage.js';
 import {
   WORKSPACE_ASSETS_EVENT,
   WORKSPACE_ASSETS_VERSION,
@@ -85,6 +91,14 @@ function writeClaimedBrowserProjectIds(ids) {
 
 function markerKey(marker) {
   return `${marker.generation}:${marker.revision}`;
+}
+
+function validProjectMarker(marker) {
+  return Boolean(marker
+    && Number.isInteger(marker.generation)
+    && marker.generation >= 0
+    && Number.isInteger(marker.revision)
+    && marker.revision >= 0);
 }
 
 function canonicalJson(value) {
@@ -330,6 +344,23 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     generation: 0,
   });
   const [, setBrowserClaimRevision] = useState(0);
+
+  useEffect(() => {
+    const refreshBrowserProjects = () => setBrowserClaimRevision(value => value + 1);
+    const refreshBrowserProjectsFromStorage = event => {
+      if (!event?.key || [
+        PROJECT_LIBRARY_STORAGE_KEY,
+        PROJECT_LIBRARY_BACKUP_STORAGE_KEY,
+        BROWSER_CLAIMS_KEY,
+      ].includes(event.key)) refreshBrowserProjects();
+    };
+    window.addEventListener(PROJECT_LIBRARY_CHANGED_EVENT, refreshBrowserProjects);
+    window.addEventListener('storage', refreshBrowserProjectsFromStorage);
+    return () => {
+      window.removeEventListener(PROJECT_LIBRARY_CHANGED_EVENT, refreshBrowserProjects);
+      window.removeEventListener('storage', refreshBrowserProjectsFromStorage);
+    };
+  }, []);
 
   const lifecycleRef = useRef(projectLifecycle);
   const documentRef = useRef(null);
@@ -1207,8 +1238,12 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     const authToken = captureAuthenticatedSession();
     if (!authToken) return { ok: false, reason: 'stale-session' };
     const result = await replaceProject(remote.document, force ? { confirmDiscard: () => true } : undefined);
-    if (!result.ok || !authenticatedSessionIsCurrent(authToken)) {
-      return result.ok ? { ok: false, reason: 'stale-session' } : result;
+    if (!result.ok) return result;
+    if (!authenticatedSessionIsCurrent(authToken)) {
+      // Replacement has already committed. Do not retain the prior cloud
+      // association or describe this as an untouched workspace to callers.
+      setActiveRemote(null);
+      return { ok: false, reason: 'stale-session', replacementCommitted: true, project: remote };
     }
     const nextMarker = { generation: lifecycleRef.current.generation + 1, revision: 0 };
     setCurrentConflict(null);
@@ -1296,16 +1331,93 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     }
   }, [associateOpenedProject, authenticatedSessionIsCurrent, captureAuthenticatedSession, client, handleLibraryError, requestReplacementConfirmation]);
 
-  const saveNow = useCallback(async () => {
+  const openMatchingCardProject = useCallback(async (projectOrId, evidence, {
+    expectedRevision,
+    beforeMutation,
+    currentProjectSaved = false,
+  } = {}) => {
+    const authToken = captureAuthenticatedSession();
+    if (!authToken) return { ok: false, reason: 'stale-session' };
+    const id = typeof projectOrId === 'string' ? projectOrId : projectOrId?.id;
+    const activeMetadata = projectsByState.active.find(project => project.id === id);
+    const isArchived = projectsByState.archived.some(project => project.id === id);
+    if (!activeMetadata || isArchived
+      || cardProjectId(activeMetadata.embeddedProjectId) !== cardProjectId(evidence?.projectId)) {
+      return { ok: false, reason: 'card-project-inactive' };
+    }
+    const confirmed = currentProjectSaved === true || await requestReplacementConfirmation({
+      currentName: documentRef.current?.name,
+      incomingName: activeMetadata.title,
+    });
+    if (!authenticatedSessionIsCurrent(authToken)) return { ok: false, reason: 'stale-session' };
+    if (!confirmed) return { ok: false, reason: 'cancelled' };
+    const operation = ++openOperationRef.current;
+    try {
+      const [active, archived, remote] = await Promise.all([
+        client.listProjects({ state: 'active' }),
+        client.listProjects({ state: 'archived' }),
+        client.readProject(id),
+      ]);
+      if (!authenticatedSessionIsCurrent(authToken) || operation !== openOperationRef.current) {
+        return { ok: false, reason: 'superseded' };
+      }
+      const freshMetadata = active.find(project => project.id === id);
+      if (!freshMetadata
+        || archived.some(project => project.id === id)
+        || remote.revision !== expectedRevision
+        || remote.revision !== freshMetadata.revision
+        || cardProjectId(freshMetadata.embeddedProjectId) !== cardProjectId(evidence?.projectId)
+        || cardProjectId(remote.document?.id) !== cardProjectId(evidence?.projectId)
+        || !matchesCardProjectEvidence(remote.document, evidence)) {
+        return { ok: false, reason: 'card-project-mismatch' };
+      }
+      try {
+        await beforeMutation?.();
+      } catch {
+        return { ok: false, reason: 'precondition-changed' };
+      }
+      if (!authenticatedSessionIsCurrent(authToken) || operation !== openOperationRef.current) {
+        return { ok: false, reason: 'superseded' };
+      }
+      const result = await associateOpenedProject(remote, { force: true });
+      if (result.ok) openOperationRef.current += 1;
+      return result;
+    } catch (error) {
+      const normalized = operation === openOperationRef.current && authenticatedSessionIsCurrent(authToken)
+        ? handleLibraryError(error)
+        : normalizeError(error);
+      return { ok: false, error: normalized };
+    }
+  }, [
+    associateOpenedProject,
+    authenticatedSessionIsCurrent,
+    captureAuthenticatedSession,
+    client,
+    handleLibraryError,
+    projectsByState.active,
+    projectsByState.archived,
+    requestReplacementConfirmation,
+  ]);
+
+  const readCardProjectCandidate = useCallback(id => client.readProject(id), [client]);
+
+  const saveNow = useCallback(async ({ expectedRemoteId = '', expectedMarker = null } = {}) => {
     const authToken = captureAuthenticatedSession();
     if (!authToken) return { ok: false, reason: 'stale-session' };
     clearTimeout(saveTimerRef.current);
     const marker = projectMarker(lifecycleRef.current);
+    const remote = activeRemoteRef.current;
+    if (expectedRemoteId && remote?.id !== expectedRemoteId) {
+      return { ok: false, reason: 'workspace-changed' };
+    }
+    if (expectedMarker !== null
+      && (!validProjectMarker(expectedMarker) || markerKey(expectedMarker) !== markerKey(marker))) {
+      return { ok: false, reason: 'workspace-changed' };
+    }
     if (acknowledgedMarkerRef.current && markerKey(acknowledgedMarkerRef.current) === markerKey(marker)) {
       setSyncStatus('saved');
-      return { ok: true, project: activeRemoteRef.current, unchanged: true };
+      return { ok: true, project: remote, unchanged: true };
     }
-    const remote = activeRemoteRef.current;
     if (!remote) return { ok: false, reason: 'unassociated' };
     return performSave({
       remoteId: remote.id,
@@ -1815,6 +1927,8 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     refreshProjects,
     createProject,
     openProject,
+    readCardProjectCandidate,
+    openMatchingCardProject,
     saveNow,
     detachProject,
     renameProject,
@@ -1835,7 +1949,7 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     accountAction, activeRemoteProject, archiveProject, assignProject, bootstrapOwner, browserProjects,
     changePassword, claimBrowserProjects, createAccount, createProject, deleteProject, duplicateProject,
     exportMaster, exportProject, importProject, listAccounts, listAssignments, listHistory, listProjectDrafts, login, logout,
-    detachProject, loadSession, openProject, projectsByState, refreshProjects, renameProject, resolveConflict,
+    detachProject, loadSession, openMatchingCardProject, openProject, projectsByState, readCardProjectCandidate, refreshProjects, renameProject, resolveConflict,
     promoteDraft, resetAccountPassword, resolveWorkspaceAssetConflict, restoreHistory, restoreMaster, saveNow,
     session, setAccountRole, setAccountStatus, signIn, syncState, unarchiveProject, unassignProject, workspaceAssets,
   ]);

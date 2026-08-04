@@ -8,6 +8,17 @@ export const PROJECT_LIFECYCLE_STORAGE_KEY = 'lw_project_lifecycle_v1';
 export const PROJECT_LIBRARY_CHANGED_EVENT = 'lightweaver-project-library-changed';
 export const PROJECT_LIBRARY_VERSION = 1;
 export const PROJECT_LIBRARY_LIMIT = 24;
+export const PROJECT_LIBRARY_SAVE_LOCK = 'lightweaver-project-library-save-v1';
+
+let projectLibrarySaveBlocked = false;
+
+export function setProjectLibrarySaveBlocked(blocked) {
+  projectLibrarySaveBlocked = blocked === true;
+}
+
+export function isProjectLibrarySaveBlocked() {
+  return projectLibrarySaveBlocked;
+}
 
 function getDefaultStorage() {
   if (typeof window !== 'undefined' && window.localStorage) return window.localStorage;
@@ -18,6 +29,21 @@ function getDefaultStorage() {
 function makeId() {
   const random = Math.random().toString(36).slice(2, 8);
   return `project-${Date.now().toString(36)}-${random}`;
+}
+
+function deepFreeze(value, seen = new WeakSet()) {
+  if (!value || typeof value !== 'object' || seen.has(value)) return value;
+  seen.add(value);
+  for (const child of Object.values(value)) deepFreeze(child, seen);
+  return Object.freeze(value);
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function storageFromOptions(options = {}) {
@@ -297,6 +323,29 @@ export function readActiveProjectLibraryRecordId(options = {}) {
   }
 }
 
+export function readProjectLibraryRecordSnapshot(recordId, options = {}) {
+  const id = String(recordId || '');
+  const record = id
+    ? listProjectLibraryRecords(options).find(candidate => candidate.id === id) || null
+    : null;
+  return deepFreeze(structuredClone({ recordId: id, record }));
+}
+
+export function sameProjectLibraryRecordSnapshot(expected, actual) {
+  if (!expected || !actual || typeof expected !== 'object' || typeof actual !== 'object') return false;
+  return canonicalJson(expected) === canonicalJson(actual);
+}
+
+function isValidProjectLibraryRecordSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return false;
+  if (!Object.hasOwn(snapshot, 'recordId') || typeof snapshot.recordId !== 'string') return false;
+  if (!Object.hasOwn(snapshot, 'record')) return false;
+  if (snapshot.record === null) return true;
+  return typeof snapshot.record === 'object'
+    && !Array.isArray(snapshot.record)
+    && snapshot.record.id === snapshot.recordId;
+}
+
 export function writeActiveProjectLibraryRecordId(id, options = {}) {
   const storage = storageFromOptions(options);
   if (!storage) return '';
@@ -358,18 +407,227 @@ export function duplicateProjectLibraryRecord(id, options = {}) {
   return duplicate;
 }
 
+// Legacy synchronous entry point retained for migrations and existing callers.
+// Interactive UI saves should use saveCurrentProjectToLibraryGuarded so every
+// participating tab shares one serialized read/validate/write boundary.
 export function saveCurrentProjectToLibrary(project, options = {}) {
+  if (projectLibrarySaveBlocked) {
+    throw new Error('Project library saving is blocked until a safe project destination is established');
+  }
   const storage = storageFromOptions(options);
   requireStorage(storage);
   const activeId = options.id || readActiveProjectLibraryRecordId({ storage });
   const existing = activeId
     ? listProjectLibraryRecords({ storage }).find(record => record.id === activeId)
     : null;
+  const existingMatchesProject = existing?.project?.id === project?.id;
   const record = createProjectLibraryRecord(project, {
-    id: existing?.id || options.id || makeId(),
+    // An active-record pointer is only authority to update that same project.
+    // A stale pointer after reload/tab races must create a new record instead
+    // of overwriting a different project's last acknowledged save.
+    id: existing && !existingMatchesProject
+      ? makeId()
+      : existing?.id || options.id || activeId || makeId(),
     now: options.now || Date.now(),
   });
   const saved = saveProjectLibraryRecord(record, { storage, now: options.now });
   writeActiveProjectLibraryRecordId(saved.id, { storage });
   return saved;
+}
+
+export async function associateProjectLibraryRecordGuarded(expectedAssociationSnapshot, options = {}) {
+  let expectedAssociation;
+  try {
+    expectedAssociation = deepFreeze(structuredClone(expectedAssociationSnapshot));
+  } catch {
+    return { ok: false, reason: 'browser-conflict' };
+  }
+
+  const storage = storageFromOptions(options);
+  if (!storage) return { ok: false, reason: 'browser-library-failed' };
+  const lockManager = options.lockManager
+    ?? (typeof navigator !== 'undefined' ? navigator.locks : null);
+  if (!lockManager || typeof lockManager.request !== 'function') {
+    return { ok: false, reason: 'locking-unavailable' };
+  }
+
+  try {
+    const result = await lockManager.request(
+      PROJECT_LIBRARY_SAVE_LOCK,
+      { mode: 'exclusive' },
+      async () => {
+        if (!isValidProjectLibraryRecordSnapshot(expectedAssociation)
+          || expectedAssociation.record === null) {
+          return { ok: false, reason: 'browser-conflict' };
+        }
+
+        let beforeAssociation;
+        try {
+          beforeAssociation = readProjectLibraryRecordSnapshot(expectedAssociation.recordId, { storage });
+        } catch {
+          return { ok: false, reason: 'browser-library-failed' };
+        }
+        if (!sameProjectLibraryRecordSnapshot(expectedAssociation, beforeAssociation)) {
+          return { ok: false, reason: 'browser-conflict' };
+        }
+
+        try {
+          writeActiveProjectLibraryRecordId(expectedAssociation.recordId, { storage });
+        } catch {
+          return { ok: false, reason: 'browser-library-failed' };
+        }
+
+        let afterAssociation;
+        try {
+          afterAssociation = readProjectLibraryRecordSnapshot(expectedAssociation.recordId, { storage });
+        } catch {
+          return { ok: false, reason: 'browser-readback-failed' };
+        }
+        if (!sameProjectLibraryRecordSnapshot(expectedAssociation, afterAssociation)) {
+          try {
+            if (readActiveProjectLibraryRecordId({ storage }) === expectedAssociation.recordId) {
+              writeActiveProjectLibraryRecordId('', { storage });
+            }
+          } catch {
+            // The association remains unacknowledged; callers keep saving blocked.
+          }
+          return { ok: false, reason: 'browser-conflict' };
+        }
+        if (readActiveProjectLibraryRecordId({ storage }) !== expectedAssociation.recordId) {
+          return { ok: false, reason: 'browser-readback-failed' };
+        }
+
+        return { ok: true, associationSnapshot: afterAssociation };
+      },
+    );
+    return result && typeof result === 'object'
+      ? result
+      : { ok: false, reason: 'locking-failed' };
+  } catch {
+    return { ok: false, reason: 'locking-failed' };
+  }
+}
+
+export async function saveCurrentProjectToLibraryGuarded(project, options = {}) {
+  if (projectLibrarySaveBlocked) {
+    return { ok: false, reason: 'association-handoff-failed' };
+  }
+
+  let projectSnapshot;
+  try {
+    projectSnapshot = deepFreeze(structuredClone(project));
+    if (!migrateProject(projectSnapshot)) return { ok: false, reason: 'snapshot-invalid' };
+  } catch {
+    return { ok: false, reason: 'snapshot-invalid' };
+  }
+
+  const storage = storageFromOptions(options);
+  if (!storage) return { ok: false, reason: 'browser-library-failed' };
+  const lockManager = options.lockManager
+    ?? (typeof navigator !== 'undefined' ? navigator.locks : null);
+  if (!lockManager || typeof lockManager.request !== 'function') {
+    return { ok: false, reason: 'locking-unavailable' };
+  }
+
+  const hasExpectedAssociation = options.expectedAssociationSnapshot !== undefined;
+  const adoptCurrentAssociation = options.adoptCurrentAssociation === true;
+  let expectedAssociation = null;
+  if (hasExpectedAssociation) {
+    try {
+      expectedAssociation = deepFreeze(structuredClone(options.expectedAssociationSnapshot));
+    } catch {
+      return { ok: false, reason: 'browser-conflict' };
+    }
+  } else if (adoptCurrentAssociation) {
+    const recordId = String(options.id || readActiveProjectLibraryRecordId({ storage }) || '');
+    try {
+      expectedAssociation = readProjectLibraryRecordSnapshot(recordId, { storage });
+    } catch {
+      return { ok: false, reason: 'browser-library-failed' };
+    }
+  }
+
+  const requestedRecordId = String(options.id || '');
+
+  try {
+    const result = await lockManager.request(
+      PROJECT_LIBRARY_SAVE_LOCK,
+      { mode: 'exclusive' },
+      async () => {
+        if (projectLibrarySaveBlocked) {
+          return { ok: false, reason: 'association-handoff-failed' };
+        }
+
+        if (hasExpectedAssociation
+          && (!isValidProjectLibraryRecordSnapshot(expectedAssociation)
+            || (options.id !== undefined && String(options.id) !== expectedAssociation.recordId))) {
+          return { ok: false, reason: 'browser-conflict' };
+        }
+
+        let targetId = '';
+        if (hasExpectedAssociation || adoptCurrentAssociation) {
+          let currentAssociation;
+          try {
+            currentAssociation = readProjectLibraryRecordSnapshot(expectedAssociation.recordId, { storage });
+          } catch {
+            return { ok: false, reason: 'browser-library-failed' };
+          }
+          if (!sameProjectLibraryRecordSnapshot(expectedAssociation, currentAssociation)) {
+            return { ok: false, reason: 'browser-conflict' };
+          }
+
+          const expectedSameProject = expectedAssociation.record?.project?.id === projectSnapshot.id;
+          const expectedSlotIsEmpty = expectedAssociation.record === null;
+          targetId = expectedSameProject || expectedSlotIsEmpty
+            ? expectedAssociation.recordId
+            : '';
+        } else if (requestedRecordId) {
+          let requestedAssociation;
+          try {
+            requestedAssociation = readProjectLibraryRecordSnapshot(requestedRecordId, { storage });
+          } catch {
+            return { ok: false, reason: 'browser-library-failed' };
+          }
+          if (requestedAssociation.record === null) targetId = requestedRecordId;
+        }
+        if (!targetId) targetId = makeId();
+
+        let saved;
+        try {
+          const record = createProjectLibraryRecord(projectSnapshot, {
+            id: targetId,
+            now: options.now || Date.now(),
+          });
+          saved = saveProjectLibraryRecord(record, { storage, now: options.now });
+          writeActiveProjectLibraryRecordId(saved.id, { storage });
+        } catch {
+          return { ok: false, reason: 'browser-library-failed' };
+        }
+
+        let readback;
+        try {
+          readback = readProjectLibraryRecordSnapshot(saved.id, { storage });
+        } catch {
+          return { ok: false, reason: 'browser-readback-failed' };
+        }
+        const expectedReadback = deepFreeze(structuredClone({ recordId: saved.id, record: saved }));
+        if (readActiveProjectLibraryRecordId({ storage }) !== saved.id
+          || !sameProjectLibraryRecordSnapshot(expectedReadback, readback)) {
+          return { ok: false, reason: 'browser-readback-failed' };
+        }
+
+        return {
+          ok: true,
+          record: saved,
+          projectSnapshot,
+          associationSnapshot: readback,
+        };
+      },
+    );
+    return result && typeof result === 'object'
+      ? result
+      : { ok: false, reason: 'locking-failed' };
+  } catch {
+    return { ok: false, reason: 'locking-failed' };
+  }
 }

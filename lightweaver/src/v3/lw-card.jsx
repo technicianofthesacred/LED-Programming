@@ -1,19 +1,34 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AutomaticInstallScreen, TechnicianFlashScreen } from './lw-flash.jsx';
 import { InstallerScreen } from './lw-installer.jsx';
 import { DeploymentCheckPanel } from '../components/card/DeploymentCheckPanel.jsx';
 import { ProductionScreen } from './lw-production.jsx';
 import { SettingsScreen } from './lw-settings.jsx';
 import { consumeCardSectionNavigation } from './cardWorkspaceRoute.js';
-import { cardLinkReasonText, isCardLinkConnected } from '../lib/cardLink.js';
+import { cardLinkReasonText, getCardLinkState, isCardLinkConnected } from '../lib/cardLink.js';
 import {
   CARD_COMMISSIONING_CHANGED_EVENT,
   inspectCardCommissioning,
 } from '../lib/cardCommissioningFlow.js';
 import { loadProductionJobFromIndexEntry, loadProductionJobIndex } from '../lib/productionJobPackage.js';
 import { createDefaultProject } from '../lib/projectModel.js';
-import { readCardStatusEnvelope } from '../lib/cardPushClient.js';
+import { readCardProjectEvidence, readCardStatusEnvelope } from '../lib/cardPushClient.js';
 import { recoverCardLights } from '../lib/cardLiveControl.js';
+import {
+  cardProjectFingerprint,
+  cardProjectId,
+  describeResolvedCardProject,
+  resolveCardProject,
+  sameCardProjectEvidence,
+  sameCardResolutionContext,
+} from '../lib/cardProjectResolver.js';
+import { normalizeCardHost } from '../lib/cardConnection.js';
+import { classifyCardReadiness } from '../lib/cardReadiness.js';
+import {
+  clearCardEditAuthorization,
+  issueCardEditAuthorization,
+  issueSignedProductionCardEditAuthorization,
+} from '../lib/cardEditAuthorization.js';
 
 // Section bar labels. `workshop` is deliberately absent: Batch production is a
 // manufacturing surface reached from the overview link, the support tile, or a
@@ -26,10 +41,72 @@ const SECTION_LABELS = Object.freeze({
   preferences: 'Preferences',
 });
 
-function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection, replaceProject }) {
+const SAVE_FAILURE_MESSAGES = Object.freeze({
+  'browser-recovery-failed': 'Studio could not create a browser recovery copy. Your current project is still open; free browser storage and retry.',
+  offline: 'The current online project has not been saved because Studio is offline. Reconnect, then retry.',
+  queued: 'The current online save is still pending. Wait for Saved online, then retry.',
+  conflict: 'The current online project has a save conflict. Resolve it in Preferences before switching.',
+  'stale-session': 'Your session changed before the current project was saved. Sign in again, then retry.',
+  'workspace-changed': 'The current project changed while Studio was saving it. Your edits are still open; retry to save the newest version.',
+  'association-handoff-failed': 'Studio could not establish a safe save destination for this project. Saving is blocked; open another project or retry after browser storage is available.',
+});
+
+function projectSwitchSaveFailureMessage(reason) {
+  return SAVE_FAILURE_MESSAGES[reason]
+    || 'Studio could not confirm that the current project was saved. Your current project is still open; retry before switching.';
+}
+
+function resolvedMatchKey(match) {
+  if (match?.source === 'cloud') return `cloud:${match.remoteId}:${match.candidate?.revision ?? ''}`;
+  if (match?.source === 'browser') return `browser:${match.recordId}`;
+  if (match?.source === 'production') return `production:${match.candidate?.jobId}:${match.candidate?.digest}`;
+  return `current:${match?.project?.id || ''}`;
+}
+
+function cardEditIntent() {
+  const params = new URLSearchParams(window.location.search);
+  const pattern = String(params.get('editPattern') || '').trim();
+  const look = String(params.get('editLook') || '').trim();
+  if (pattern) return `pattern:${pattern}`;
+  if (look) return `look:${look}`;
+  return '';
+}
+
+function CardOverview({
+  connected,
+  cardHost,
+  cardLink,
+  onConnectCard,
+  onOpenConnectionCenter,
+  onOpenSection,
+  go,
+  replaceProject,
+  currentProject,
+  projectGeneration,
+  activeCloudProjects = [],
+  browserProjects = [],
+  readBrowserProjects,
+  readCloudProject,
+  openMatchingCardProject,
+  saveBeforeCardProjectSwitch,
+  isProjectSwitchSnapshotCurrent,
+  onMatchedProjectLoaded,
+}) {
   const [commissioningFlow, setCommissioningFlow] = useState(() => inspectCardCommissioning().flow);
   const [matchingProjectState, setMatchingProjectState] = useState({ status: 'idle', message: '' });
   const [hardwareActionState, setHardwareActionState] = useState({ status: 'idle', message: '' });
+  const resolutionContextRef = useRef(null);
+  const projectSwitchInFlightRef = useRef(false);
+  const cardProjectProbeRef = useRef('');
+  const pendingCardProjectProbeRef = useRef(null);
+  const [cardProjectProbeRevision, requestCardProjectProbe] = React.useReducer(value => value + 1, 0);
+  resolutionContextRef.current = {
+    browserProjects,
+    cardLink,
+    currentProject,
+    projectGeneration,
+    ready: cardLink ? isCardLinkConnected(cardLink) : connected,
+  };
   useEffect(() => {
     const syncCommissioning = () => setCommissioningFlow(inspectCardCommissioning().flow);
     window.addEventListener('storage', syncCommissioning);
@@ -55,7 +132,6 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConn
   const verifiedTransport = Boolean(cardLink?.card?.id && (
     state === 'connected-direct' || state === 'connected-bridge'
   ));
-  const productionJobId = String(cardLink?.card?.productionJobId || '').trim();
   const setupLabels = ['Connect', 'Install firmware', 'WiFi', 'Install on card', 'Test lights'];
   let currentSetupIndex = ready ? 3 : 0;
   if (commissioningFlow?.stage === 'install-safely') currentSetupIndex = 1;
@@ -127,7 +203,7 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConn
     presentation = {
       tone: 'failure',
       message: 'Blank — load a project before using this card.',
-      primary: { label: 'Load a project', section: 'install' },
+      primary: { label: 'Start layout', view: 'layout' },
       secondary: { label: 'Open support', section: 'support' },
     };
   } else if (ready) {
@@ -170,7 +246,7 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConn
   const requireExactReadyStatus = (status) => {
     const expectedCardId = String(cardLink?.card?.id || '').trim();
     if (!status || status.cardId !== expectedCardId) throw new Error('A different card answered the hardware check. Reconnect the expected card.');
-    if (status.runtimePhase !== 'ready' || status.commandReady !== true || status.outputReady !== true) {
+    if (status.runtimePhase !== 'ready' || status.knownGoodProject !== true || status.commandReady !== true || status.outputReady !== true) {
       throw new Error('The card answered, but its runtime or LED output is not ready. Open support before retrying.');
     }
     return status;
@@ -206,34 +282,292 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConn
       setHardwareActionState({ status: 'error', message: error?.message || 'Recovery was not verified. Keep the card powered, reconnect, and retry.' });
     }
   };
-  const loadMatchingCardProject = async () => {
-    if (!productionJobId || matchingProjectState.status === 'loading') return;
-    setMatchingProjectState({ status: 'loading', message: 'Verifying the published project for this exact card…' });
-    try {
-      const index = await loadProductionJobIndex();
-      const entry = index.jobs.find(candidate => candidate.jobId === productionJobId);
-      if (!entry) throw new Error(`No published Studio project matches card job ${productionJobId}.`);
-      const job = await loadProductionJobFromIndexEntry(entry);
-      if (job.jobId !== productionJobId) {
-        throw new Error('The verified project identity changed while loading. Nothing was replaced.');
+  const loadMatchingCardProject = useCallback(async ({ probeOnly = false, selectionKey = '', autoIntent = '', probeSignature = '' } = {}) => {
+    if (!ready) return;
+    if (projectSwitchInFlightRef.current) {
+      if (probeSignature) {
+        pendingCardProjectProbeRef.current = { probeOnly, autoIntent, probeSignature };
       }
-      const snapshot = job.project.restoreSnapshot;
-      const defaults = createDefaultProject();
-      const studioProject = {
-        ...defaults,
-        id: snapshot.id,
-        name: snapshot.name,
-        layout: {
-          ...defaults.layout,
-          ...snapshot.layout,
-          starterPending: false,
-        },
-        devices: {
-          ...defaults.devices,
-          ...snapshot.devices,
-        },
+      return;
+    }
+    projectSwitchInFlightRef.current = true;
+    if (probeSignature) {
+      cardProjectProbeRef.current = probeSignature;
+      if (pendingCardProjectProbeRef.current?.probeSignature === probeSignature) {
+        pendingCardProjectProbeRef.current = null;
+      }
+    }
+    setMatchingProjectState({ status: 'loading', message: 'Reading the exact project installed on this card…' });
+    let replacementCommitted = false;
+    let associationHandoffFailed = false;
+    let replacementCloudSessionLost = false;
+    clearCardEditAuthorization();
+    try {
+      const requestContext = {
+        host: normalizeCardHost(cardLink?.host || cardHost),
+        cardId: String(cardLink?.card?.id || '').trim(),
+        firmwareVersion: String(cardLink?.card?.firmwareVersion || '').trim(),
+        buildId: String(cardLink?.card?.buildId || '').trim(),
+        bootId: String(cardLink?.validatedBootId || cardLink?.readiness?.bootId || '').trim(),
+        operationGeneration: Number(cardLink?.operationGeneration || 0),
+        revalidationGeneration: Number(cardLink?.revalidationGeneration || 0),
+        projectGeneration,
+        workspaceFingerprint: cardProjectFingerprint(currentProject),
       };
-      const result = await replaceProject(studioProject);
+      const assertContextCurrent = ({ workspace = true } = {}) => {
+        const latest = resolutionContextRef.current || {};
+        const latestLink = latest.cardLink || {};
+        const sharedLink = getCardLinkState();
+        const contextFrom = (link, includeWorkspace = false) => ({
+          host: normalizeCardHost(link.host || cardHost),
+          cardId: String(link.card?.id || '').trim(),
+          firmwareVersion: String(link.card?.firmwareVersion || '').trim(),
+          buildId: String(link.card?.buildId || '').trim(),
+          bootId: String(link.validatedBootId || link.readiness?.bootId || '').trim(),
+          operationGeneration: Number(link.operationGeneration || 0),
+          revalidationGeneration: Number(link.revalidationGeneration || 0),
+          ...(includeWorkspace ? {
+            projectGeneration: latest.projectGeneration,
+            workspaceFingerprint: cardProjectFingerprint(latest.currentProject),
+          } : {}),
+        });
+        if (!latest.ready
+          || !sameCardResolutionContext(requestContext, contextFrom(latestLink, true), { workspace })
+          || (sharedLink.card?.id && (
+            !isCardLinkConnected(sharedLink)
+            || !sameCardResolutionContext(requestContext, contextFrom(sharedLink), { workspace: false })
+          ))) {
+          throw new Error('The card or open Studio project changed while resolving. Nothing was replaced.');
+        }
+      };
+      const readExactCardSnapshot = async (expectedEvidence = null, { workspace = true } = {}) => {
+        const [evidence, status] = await Promise.all([
+          readCardProjectEvidence({ host: requestContext.host, transport: cardLink?.transport }),
+          readCardStatusEnvelope({ host: requestContext.host, transport: cardLink?.transport }),
+        ]);
+        const exactReadiness = classifyCardReadiness(status, {
+          expectedCard: {
+            id: requestContext.cardId,
+            firmwareVersion: requestContext.firmwareVersion,
+            buildId: requestContext.buildId,
+          },
+          previousBootId: requestContext.bootId,
+        });
+        if (!requestContext.cardId
+          || exactReadiness.patternAccess !== 'ready'
+          || evidence.cardId !== requestContext.cardId
+          || (requestContext.firmwareVersion && evidence.firmwareVersion !== requestContext.firmwareVersion)
+          || (requestContext.buildId && evidence.buildId !== requestContext.buildId)) {
+          throw new Error('The exact card is no longer Ready. Nothing was replaced.');
+        }
+        if (expectedEvidence && !sameCardProjectEvidence(expectedEvidence, evidence)) {
+          throw new Error('The project installed on the card changed while Studio was resolving it. Nothing was replaced.');
+        }
+        assertContextCurrent({ workspace });
+        return evidence;
+      };
+      const evidence = await readExactCardSnapshot();
+      const authorizeResolvedProject = (project, generation, signedProductionProject = null) => {
+        const binding = {
+          intent: cardEditIntent(),
+          cardId: evidence.cardId,
+          firmwareVersion: evidence.firmwareVersion,
+          buildId: evidence.buildId,
+          bootId: requestContext.bootId,
+          installedProjectId: evidence.projectId,
+          installedProjectFingerprint: evidence.projectFingerprint,
+          studioProjectId: project?.id,
+          studioProjectFingerprint: cardProjectFingerprint(project),
+          projectGeneration: generation,
+        };
+        const issued = signedProductionProject
+          ? issueSignedProductionCardEditAuthorization(binding, signedProductionProject)
+          : issueCardEditAuthorization(binding);
+        if (!issued) {
+          throw new Error('Studio could not authorize this exact card and project for Pattern commands. Nothing was opened in Patterns.');
+        }
+      };
+
+      const productionJobs = [];
+      if (evidence.productionJobId || evidence.productionJobDigest) {
+        const index = await loadProductionJobIndex();
+        const entry = index.jobs.find(candidate => candidate.jobId === evidence.productionJobId);
+        if (!entry || entry.digest !== evidence.productionJobDigest) {
+          throw new Error('No verified production project matches the exact job digest reported by this card.');
+        }
+        productionJobs.push(await loadProductionJobFromIndexEntry(entry));
+      }
+
+      // Resolve sources in priority order. In particular, an already-open
+      // exact project must remain usable when the online library is offline.
+      let resolved = resolveCardProject({
+        evidence,
+        currentProject,
+        productionJobs,
+      });
+      if (resolved.status === 'none') {
+        const cloudMetadata = activeCloudProjects.filter(project => (
+          cardProjectId(project?.embeddedProjectId) === cardProjectId(evidence.projectId)
+        ));
+        const cloudProjects = readCloudProject
+          ? await Promise.all(cloudMetadata.map(async metadata => ({
+              ...metadata,
+              ...(await readCloudProject(metadata.id)),
+            })))
+          : [];
+        const freshBrowserProjects = readBrowserProjects?.() || browserProjects;
+        resolved = resolveCardProject({ evidence, cloudProjects, browserProjects: freshBrowserProjects });
+      }
+      // Source discovery may include production package fetches and multiple
+      // cloud reads. Do not publish an offer/ambiguity from that stale window.
+      await readExactCardSnapshot(evidence);
+      if (resolved.status === 'ambiguous') {
+        if (!selectionKey) {
+          setMatchingProjectState({
+            status: 'ambiguous',
+            message: 'More than one exact active match was found. Choose the project to load; Studio will verify it again before replacing anything.',
+            matches: resolved.matches,
+          });
+          return;
+        }
+        resolved = resolved.matches.find(match => resolvedMatchKey(match) === selectionKey);
+        if (!resolved) throw new Error('The selected exact match changed. Nothing was replaced.');
+      }
+      if (resolved.status !== 'match') {
+        throw new Error('No active Studio project exactly matches the project identity on this card.');
+      }
+      if (selectionKey && resolvedMatchKey(resolved) !== selectionKey) {
+        throw new Error('The selected exact match changed. Nothing was replaced.');
+      }
+      if (probeOnly) {
+        setMatchingProjectState({
+          status: 'offer',
+          message: `Exact match found: “${describeResolvedCardProject(resolved)}”. Load it to save the current workspace and continue to Patterns.`,
+          selectionKey: resolvedMatchKey(resolved),
+          matchLabel: describeResolvedCardProject(resolved),
+        });
+        return;
+      }
+      if (autoIntent && resolved.source !== 'current') {
+        setMatchingProjectState({
+          status: 'offer',
+          message: `Exact match found: “${describeResolvedCardProject(resolved)}”. Load it to save the current workspace before Studio opens the card project.`,
+          selectionKey: resolvedMatchKey(resolved),
+          matchLabel: describeResolvedCardProject(resolved),
+        });
+        return;
+      }
+      if (resolved.source === 'current') {
+        await readExactCardSnapshot(evidence);
+        if (autoIntent && cardEditIntent() !== autoIntent) {
+          throw new Error('The requested pattern or look changed while Studio was resolving the card. Nothing was opened.');
+        }
+        authorizeResolvedProject(resolved.project, projectGeneration);
+        window.location.hash = '#screen=pattern';
+        return;
+      }
+
+      setMatchingProjectState({ status: 'saving', message: 'Saving current project…' });
+      let savedCurrent;
+      try {
+        savedCurrent = await saveBeforeCardProjectSwitch?.();
+      } catch {
+        savedCurrent = { ok: false, reason: 'authoritative-save-failed' };
+      }
+      if (!savedCurrent?.ok) {
+        throw new Error(projectSwitchSaveFailureMessage(savedCurrent?.reason));
+      }
+      const assertSavedProjectStillCurrent = () => {
+        if (!savedCurrent.snapshot
+          || isProjectSwitchSnapshotCurrent?.(savedCurrent.snapshot) !== true) {
+          throw new Error(projectSwitchSaveFailureMessage('workspace-changed'));
+        }
+      };
+      assertSavedProjectStillCurrent();
+      await readExactCardSnapshot(evidence);
+      assertSavedProjectStillCurrent();
+
+      if (resolved.source === 'cloud') {
+        const result = await openMatchingCardProject?.(resolved.remoteId, evidence, {
+          expectedRevision: resolved.candidate?.revision,
+          currentProjectSaved: true,
+          beforeMutation: async () => {
+            await readExactCardSnapshot(evidence);
+            assertSavedProjectStillCurrent();
+          },
+        });
+        if (!result?.ok) {
+          if (result?.replacementCommitted === true) {
+            replacementCommitted = true;
+            const associationResult = await onMatchedProjectLoaded?.({
+              source: 'unassociated',
+              remoteId: resolved.remoteId,
+            });
+            if (!associationResult?.ok) {
+              associationHandoffFailed = true;
+              throw new Error(projectSwitchSaveFailureMessage('association-handoff-failed'));
+            }
+            replacementCloudSessionLost = true;
+            throw new Error('The online project was loaded, but the session changed before Studio could associate it.');
+          }
+          throw new Error(result?.reason === 'precondition-changed'
+            ? 'The card or current project changed after saving. Your current project is still open; retry.'
+            : result?.reason === 'cancelled'
+              ? 'The current Studio project was kept.'
+              : 'The active online project changed or was archived before Studio could open it. Nothing was opened in Patterns.');
+        }
+        replacementCommitted = true;
+        const associationResult = await onMatchedProjectLoaded?.({
+          source: 'cloud',
+          remoteId: resolved.remoteId,
+        });
+        if (!associationResult?.ok) {
+          associationHandoffFailed = true;
+          throw new Error(projectSwitchSaveFailureMessage('association-handoff-failed'));
+        }
+        await readExactCardSnapshot(evidence, { workspace: false });
+        authorizeResolvedProject(resolved.project, projectGeneration + 1);
+        window.location.hash = '#screen=pattern';
+        return;
+      }
+      let revalidated = null;
+      if (resolved.source === 'browser') {
+        revalidated = resolveCardProject({
+          evidence,
+          browserProjects: readBrowserProjects?.() || [],
+        });
+      } else if (resolved.source === 'production') {
+        const freshIndex = await loadProductionJobIndex();
+        const freshEntry = freshIndex.jobs.find(candidate => candidate.jobId === evidence.productionJobId);
+        const freshJobs = freshEntry?.digest === evidence.productionJobDigest
+          ? [await loadProductionJobFromIndexEntry(freshEntry)]
+          : [];
+        revalidated = resolveCardProject({ evidence, productionJobs: freshJobs });
+      }
+      if (revalidated?.status !== 'match' || resolvedMatchKey(revalidated) !== resolvedMatchKey(resolved)) {
+        throw new Error('The selected project changed while Studio was saving the current project. Nothing was replaced.');
+      }
+      resolved = revalidated;
+      if (resolved.source === 'production') {
+        // The index and signed package were both reread after confirmation;
+        // bind their result to one last exact live card/workspace snapshot.
+        await readExactCardSnapshot(evidence);
+      }
+      assertSavedProjectStillCurrent();
+
+      let studioProject = resolved.project;
+      if (resolved.source === 'production') {
+        const snapshot = resolved.candidate.project.restoreSnapshot;
+        const defaults = createDefaultProject();
+        studioProject = {
+          ...defaults,
+          id: snapshot.id,
+          name: snapshot.name,
+          layout: { ...defaults.layout, ...snapshot.layout, starterPending: false },
+          devices: { ...defaults.devices, ...snapshot.devices },
+        };
+      }
+      const result = await replaceProject(studioProject, { confirmDiscard: () => true });
       if (!result.ok) {
         setMatchingProjectState({
           status: result.reason === 'cancelled' ? 'idle' : 'error',
@@ -241,17 +575,104 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConn
         });
         return;
       }
+      replacementCommitted = true;
+      const associationResult = await onMatchedProjectLoaded?.({
+        source: resolved.source,
+        recordId: resolved.recordId,
+        recordSnapshot: resolved.source === 'browser'
+          ? { recordId: resolved.recordId, record: resolved.candidate }
+          : null,
+        remoteId: resolved.remoteId,
+      });
+      if (!associationResult?.ok) {
+        associationHandoffFailed = true;
+        throw new Error(projectSwitchSaveFailureMessage('association-handoff-failed'));
+      }
+      await readExactCardSnapshot(evidence, { workspace: false });
+      authorizeResolvedProject(studioProject, projectGeneration + 1, resolved.source === 'production' ? {
+        jobId: resolved.candidate.jobId,
+        jobDigest: resolved.candidate.digest,
+        projectId: resolved.candidate.project.id,
+        projectFingerprint: resolved.candidate.project.fingerprint,
+      } : null);
       window.location.hash = '#screen=pattern';
     } catch (error) {
-      setMatchingProjectState({ status: 'error', message: error?.message || 'The matching card project could not be loaded.' });
+      setMatchingProjectState({
+        status: 'error',
+        message: associationHandoffFailed
+          ? 'The matching project was loaded and your previous project was saved, but Studio could not establish a safe save destination for the loaded project. Saving is blocked; open another project or retry after browser storage is available.'
+          : replacementCloudSessionLost
+            ? 'The matching online project was loaded and your previous project was saved, but your session changed before Studio could associate the loaded project. Sign in again before saving online.'
+          : replacementCommitted
+          ? 'The matching project was loaded and your previous project was saved, but Studio could not complete the final card check. Reconnect the card before changing patterns.'
+          : error?.message || 'The matching card project could not be loaded.',
+      });
+    } finally {
+      projectSwitchInFlightRef.current = false;
+      const pendingProbe = pendingCardProjectProbeRef.current;
+      if (pendingProbe && pendingProbe.probeSignature !== cardProjectProbeRef.current) {
+        pendingCardProjectProbeRef.current = null;
+        requestCardProjectProbe();
+      }
     }
-  };
+  }, [
+    activeCloudProjects,
+    browserProjects,
+    cardHost,
+    cardLink,
+    currentProject,
+    matchingProjectState.status,
+    onMatchedProjectLoaded,
+    openMatchingCardProject,
+    readCloudProject,
+    readBrowserProjects,
+    ready,
+    replaceProject,
+    projectGeneration,
+    saveBeforeCardProjectSwitch,
+    isProjectSwitchSnapshotCurrent,
+  ]);
+  useEffect(() => {
+    if (!ready) return;
+    const candidateSourceSignature = [
+      activeCloudProjects
+        .map(project => `${project?.id || ''}:${project?.revision ?? ''}:${project?.embeddedProjectId || ''}`)
+        .sort()
+        .join(','),
+      browserProjects
+        .map(record => `${record?.id || ''}:${record?.updatedAt ?? ''}:${record?.project?.id || ''}`)
+        .sort()
+        .join(','),
+    ].join('::');
+    const signature = [
+      normalizeCardHost(cardLink?.host || cardHost),
+      cardLink?.card?.id,
+      cardLink?.card?.buildId,
+      cardLink?.readiness?.bootId,
+      cardLink?.operationGeneration,
+      cardLink?.revalidationGeneration,
+      cardLink?.readiness?.projectId,
+      cardLink?.readiness?.projectRevision,
+      cardLink?.readiness?.projectFingerprint,
+      cardLink?.readiness?.productionJobId,
+      cardLink?.readiness?.productionJobDigest,
+      projectGeneration,
+      candidateSourceSignature,
+    ].join('|');
+    if (cardProjectProbeRef.current === signature) return;
+    const autoIntent = cardEditIntent();
+    void loadMatchingCardProject({ probeOnly: !autoIntent, autoIntent, probeSignature: signature });
+  }, [activeCloudProjects, browserProjects, cardHost, cardLink, cardProjectProbeRevision, loadMatchingCardProject, projectGeneration, ready]);
   const renderAction = (action, primary = false) => action && (
     <button
       type="button"
       className={`btn${primary ? ' primary' : ''}`}
       disabled={action.disabled}
-      onClick={() => action.action === 'connect' ? openConnection() : onOpenSection(action.section)}
+      onClick={() => action.action === 'connect'
+        ? openConnection()
+        : action.view
+          ? go(action.view)
+          : onOpenSection(action.section)}
     >
       {action.label}
     </button>
@@ -298,18 +719,40 @@ function CardOverview({ connected, cardHost, cardLink, onConnectCard, onOpenConn
         )}
       </div>
 
-      {ready && productionJobId && (
+      {ready && (
         <section className="card-support-panel" aria-label="Matching card project">
           <h2>Matching card project</h2>
-          <p>This card reports <strong>{productionJobId}</strong>. Load the latest verified release of that project before changing patterns so Studio keeps the exact LED count, wiring, protocol, and power limit.</p>
-          <button
-            type="button"
-            className="btn primary"
-            disabled={matchingProjectState.status === 'loading'}
-            onClick={() => void loadMatchingCardProject()}
-          >
-            {matchingProjectState.status === 'loading' ? 'Verifying project…' : 'Load matching card project'}
-          </button>
+          <p>Open the exact active Studio project installed on this card before changing patterns, so its LED count, wiring, protocol, and power limit stay aligned.</p>
+          {matchingProjectState.status !== 'ambiguous' && (
+            <button
+              type="button"
+              className="btn primary"
+              disabled={matchingProjectState.status === 'loading' || matchingProjectState.status === 'saving'}
+              onClick={() => void loadMatchingCardProject({ selectionKey: matchingProjectState.selectionKey || '' })}
+            >
+              {matchingProjectState.status === 'saving'
+                ? 'Saving current project…'
+                : matchingProjectState.status === 'loading'
+                ? 'Verifying project…'
+                : matchingProjectState.matchLabel
+                  ? `Load ${matchingProjectState.matchLabel}`
+                  : 'Load matching card project'}
+            </button>
+          )}
+          {matchingProjectState.status === 'ambiguous' && (
+            <div className="card-overview-actions" aria-label="Exact matching projects">
+              {matchingProjectState.matches.map(match => (
+                <button
+                  key={resolvedMatchKey(match)}
+                  type="button"
+                  className="btn"
+                  onClick={() => void loadMatchingCardProject({ selectionKey: resolvedMatchKey(match) })}
+                >
+                  Load {describeResolvedCardProject(match)}
+                </button>
+              ))}
+            </div>
+          )}
           {matchingProjectState.message && (
             <p role={matchingProjectState.status === 'error' ? 'alert' : 'status'}>{matchingProjectState.message}</p>
           )}
@@ -400,7 +843,7 @@ function CardSupport({ initialTool, cardProps, onOpenConnectionCenter, onOpenSec
   );
 }
 
-export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection, replaceProject, route = { section: 'overview', supportTool: '' } }) {
+export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection, go, replaceProject, currentProject, projectGeneration, activeCloudProjects, browserProjects, readBrowserProjects, readCloudProject, openMatchingCardProject, confirmProjectReplacement, saveBeforeCardProjectSwitch, saveProjectToBrowserGuarded, isProjectSwitchSnapshotCurrent, onMatchedProjectLoaded, route = { section: 'overview', supportTool: '' } }) {
   const headingRef = useRef(null);
   const mountedRef = useRef(false);
 
@@ -424,6 +867,7 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
       embedded
       cardLink={cardLink}
       onConnectCard={onConnectCard}
+      persistCurrentProjectToBrowser={saveProjectToBrowserGuarded}
       onCommissioningComplete={() => onOpenSection('overview')}
     />
   );
@@ -431,7 +875,7 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
   else if (route.section === 'workshop') content = <ProductionScreen embedded cardHost={cardHost} cardLink={cardLink} onConnectCard={onConnectCard} />;
   else if (route.section === 'preferences') content = <SettingsScreen embedded mode="preferences" {...cardProps} />;
   else if (route.section === 'support') content = <CardSupport initialTool={route.supportTool} cardProps={cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} />;
-  else content = <CardOverview {...cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} replaceProject={replaceProject} />;
+  else content = <CardOverview {...cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} go={go} replaceProject={replaceProject} currentProject={currentProject} projectGeneration={projectGeneration} activeCloudProjects={activeCloudProjects} browserProjects={browserProjects} readBrowserProjects={readBrowserProjects} readCloudProject={readCloudProject} openMatchingCardProject={openMatchingCardProject} confirmProjectReplacement={confirmProjectReplacement} saveBeforeCardProjectSwitch={saveBeforeCardProjectSwitch} isProjectSwitchSnapshotCurrent={isProjectSwitchSnapshotCurrent} onMatchedProjectLoaded={onMatchedProjectLoaded} />;
 
   // Batch production (route.section === 'workshop') renders outside the tab
   // set: its own heading and kicker, no section tab highlighted.

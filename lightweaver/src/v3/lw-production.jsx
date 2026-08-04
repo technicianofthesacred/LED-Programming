@@ -87,6 +87,7 @@ function exactEvidence(evidence, job, cardId, release) {
   return evidence?.cardId === cardId
     && evidence?.firmwareVersion === release.manifest.firmwareVersion
     && evidence?.buildId === release.manifest.buildId
+    && evidence?.projectId === job.project.id
     && evidence?.projectRevision === job.project.revision
     && evidence?.projectFingerprint === job.project.fingerprint
     && evidence?.productionJobId === job.jobId

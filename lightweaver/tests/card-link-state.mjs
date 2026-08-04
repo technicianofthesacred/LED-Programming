@@ -28,13 +28,19 @@ import { nextCardConnectionAction } from '../src/lib/cardConnectionFlow.js';
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 function readyEnvelope(cardId, overrides = {}) {
-  return {
+  const envelope = {
     app: 'Lightweaver', provisioningContractVersion: 1,
     cardId, firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
     bootId: 'boot-1', runtimePhase: 'ready', knownGoodProject: true,
     commandReady: true, outputReady: true,
     ...overrides,
   };
+  if (envelope.runtimePhase === 'factory' && envelope.knownGoodProject === false) {
+    if (!Object.hasOwn(overrides, 'commandReady')) envelope.commandReady = false;
+    if (!Object.hasOwn(overrides, 'mode')) envelope.mode = 'factory-flash';
+    if (!Object.hasOwn(overrides, 'source')) envelope.source = 'defaults';
+  }
+  return envelope;
 }
 
 function handoffEnvelope(correlation, overrides = {}) {

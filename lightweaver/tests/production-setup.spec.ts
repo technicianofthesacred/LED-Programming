@@ -90,10 +90,11 @@ async function installDriver(page, {
   restoreThrows = false, restoreDelayMs = 0, linkLossDuringRestore = false, invalidInspection = false, recordThrowsOnce = false, recordDelayMs = 0, linkLossDuringRecord = false,
   candidateEvidenceMismatch = false, physicalIdentityMismatch = false, physicalFirmwareMismatch = false,
   activationFailure = false, activationLifecycleChange = false, rollbackFailure = false, rollbackRebootReads = 0, physicalDeliveryFailure = false, physicalDeliveryFailureOnce = false, physicalDeliveryDelayMs = 0, linkLossDuringPhysical = false,
+  projectIdMismatch = false,
   connectErrorOnce = '',
   disconnectFailureAt = 0, disconnectDelayMs = 0, restartThrows = false, stationPreflight = false, handoffPreflight = false, stationAfterConnect = false, secondUsbWrong = false, installThrows = false, reconnectFirmwareMismatch = false, reconnectThrows = false, mappedRestore = false,
 } = {}) {
-  await page.addInitScript(({ firmwareVersion, firmwareBuildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, connectErrorOnce, disconnectFailureAt, disconnectDelayMs, restartThrows, stationPreflight, handoffPreflight, stationAfterConnect, secondUsbWrong, installThrows, reconnectFirmwareMismatch, reconnectThrows, mappedRestore }) => {
+  await page.addInitScript(({ firmwareVersion, firmwareBuildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, projectIdMismatch, connectErrorOnce, disconnectFailureAt, disconnectDelayMs, restartThrows, stationPreflight, handoffPreflight, stationAfterConnect, secondUsbWrong, installThrows, reconnectFirmwareMismatch, reconnectThrows, mappedRestore }) => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
     const evidence = {
       cardId: 'lw-aabbccddeeff', firmwareVersion,
@@ -266,6 +267,7 @@ async function installDriver(page, {
           localStorage.setItem('lw_test_operation_generation', '5');
         }
         localStorage.setItem('lw_test_current_config', JSON.stringify(configuration.config));
+        evidence.projectId = configuration.config?.piece?.id || configuration.config?.projectId || '';
         evidence.projectFingerprint = configuration.config.projectFingerprint;
         evidence.productionJobDigest = configuration.config.productionJobDigest;
         if (restoreThrows) throw new Error('Response lost after card accepted restore');
@@ -315,6 +317,7 @@ async function installDriver(page, {
           firmwareVersion: physicalFirmwareMismatch || localStorage.getItem('lw_test_physical_firmware_changed') === '1' ? '0.8.0' : evidence.firmwareVersion,
           };
         }
+        if (phase === 'verify' && projectIdMismatch) return { ...evidence, projectId: 'wrong-project-id' };
         return evidence;
       },
     };
@@ -324,7 +327,7 @@ async function installDriver(page, {
       }, 50);
       return { closed: false, focus() {}, postMessage() {} };
     };
-  }, { firmwareVersion: signedRelease.firmwareVersion, firmwareBuildId: signedRelease.buildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, connectErrorOnce, disconnectFailureAt, disconnectDelayMs, restartThrows, stationPreflight, handoffPreflight, stationAfterConnect, secondUsbWrong, installThrows, reconnectFirmwareMismatch, reconnectThrows, mappedRestore });
+  }, { firmwareVersion: signedRelease.firmwareVersion, firmwareBuildId: signedRelease.buildId, wrongReconnect, wrongLanCard, wrongBeforeRestore, preflightCurrent, preflightThrowsOnce, preflightMissingOnce, restoreThrows, restoreDelayMs, linkLossDuringRestore, invalidInspection, recordThrowsOnce, recordDelayMs, linkLossDuringRecord, candidateEvidenceMismatch, physicalIdentityMismatch, physicalFirmwareMismatch, activationFailure, activationLifecycleChange, rollbackFailure, rollbackRebootReads, physicalDeliveryFailure, physicalDeliveryFailureOnce, physicalDeliveryDelayMs, linkLossDuringPhysical, projectIdMismatch, connectErrorOnce, disconnectFailureAt, disconnectDelayMs, restartThrows, stationPreflight, handoffPreflight, stationAfterConnect, secondUsbWrong, installThrows, reconnectFirmwareMismatch, reconnectThrows, mappedRestore });
 }
 
 test('production fixture tracks the exact currently signed firmware release', async () => {
@@ -390,6 +393,7 @@ test('HTTPS production transport performs exact blank config then runtime frame 
         messageTypes.push(type);
         if (type === 'wifi-handoff-ack') {
           status = { ...status, runtimePhase: 'factory', knownGoodProject: false, commandReady: false, outputReady: false,
+            mode: 'factory-flash', source: 'defaults',
             wifi: { transport: 'station', transition: 'station', transitionPending: false, apActive: false, stationIp: stationHost, ip: stationHost, handoffGeneration: generation } };
           setTimeout(emitReady, 25);
         }
@@ -399,6 +403,7 @@ test('HTTPS production transport performs exact blank config then runtime frame 
         }
         const response = type === 'status' ? status : type === 'firmware-info' ? {
           app: 'Lightweaver', cardId: expectedCardId, firmwareVersion: firmware.version, buildId: firmware.buildId,
+          ...(configured ? { piece: { id: project.id } } : {}),
           projectRevision: configured ? project.revision : 0,
           projectFingerprint: configured ? project.fingerprint : '',
           productionJobId: configured ? jobId : '', productionJobDigest: configured ? digest : '',
@@ -586,6 +591,7 @@ test('an erased card retries once after WiFi returns and lets a slow ESP station
         app: 'Lightweaver', provisioningContractVersion: 1, cardId: expectedCardId,
         firmwareVersion: '0.9.0', buildId: oldBuild, bootId: 'boot-before-flash',
         runtimePhase: 'factory', knownGoodProject: false, commandReady: false, outputReady: false,
+        mode: 'factory-flash', source: 'defaults',
         wifi: { transport: 'station', transition: 'station', transitionPending: false, apActive: false, stationIp: stationHost, ip: stationHost, handoffGeneration: 1 },
       };
       return {
@@ -593,6 +599,7 @@ test('an erased card retries once after WiFi returns and lets a slow ESP station
         firmwareVersion: firmware.firmwareVersion, buildId: firmware.buildId, bootId: 'boot-after-flash',
         runtimePhase: acked ? 'factory' : 'ready', knownGoodProject: !acked,
         commandReady: !acked, outputReady: !acked,
+        ...(acked ? { mode: 'factory-flash', source: 'defaults' } : {}),
         wifi: acked
           ? { transport: 'station', transition: 'station', transitionPending: false, apActive: false, stationIp: stationHost, ip: stationHost, handoffGeneration: 2 }
           : { transport: 'station', transition: 'handoff-ready', transitionPending: true, apActive: true, stationIp: stationHost, ip: stationHost, handoffGeneration: 2 },
@@ -719,6 +726,7 @@ test('HTTPS ProductionScreen commissions a blank card through bridge, human ligh
       runtimePhase: configured ? 'ready' : acked ? 'factory' : 'ready',
       knownGoodProject: Boolean(configured),
       commandReady: Boolean(configured), outputReady: Boolean(configured),
+      ...(acked && !configured ? { mode: 'factory-flash', source: 'defaults' } : {}),
       wifi: acked
         ? { transport: 'station', transition: 'station', transitionPending: false, apActive: false, stationIp: stationHost, ip: stationHost, handoffGeneration }
         : { transport: 'station', transition: 'handoff-ready', transitionPending: true, apActive: true, stationIp: stationHost, ip: stationHost, handoffGeneration },
@@ -727,6 +735,7 @@ test('HTTPS ProductionScreen commissions a blank card through bridge, human ligh
       app: 'Lightweaver', cardId: expectedCardId,
       firmwareVersion: firmware.version, buildId: firmware.buildId,
       ...(configured ? {
+        piece: { id: project.id },
         projectRevision: project.revision,
         projectFingerprint: project.fingerprint,
         productionJobId: jobId,
@@ -1063,6 +1072,23 @@ test('exact-card firmware mismatch returns to same-card USB evidence before inst
   await recovery.getByRole('button', { name: 'Reconnect same card by USB' }).click();
   await page.getByRole('button', { name: 'Connect one USB card' }).click();
   await expect(page.getByRole('button', { name: 'Install verified firmware' })).toBeVisible();
+});
+
+test('matching production evidence with the wrong project ID is rejected before physical checks', async ({ page }) => {
+  await serveJob(page);
+  await installDriver(page, { preflightCurrent: true, projectIdMismatch: true });
+  await page.goto('/#screen=production');
+  await page.getByRole('button', { name: /Moon · batch 7/ }).click();
+  await page.getByRole('button', { name: 'Connect one USB card' }).click();
+  await page.getByRole('button', { name: 'Release USB and inspect firmware' }).click();
+  await page.getByRole('button', { name: 'Load verified artwork' }).click();
+  await page.getByRole('button', { name: 'Verify card read-back' }).click();
+
+  await expect(page.getByRole('region', { name: 'Safe recovery' })).toContainText('did not match the verified artwork job');
+  await expect(page.getByRole('button', { name: 'Yes, this boundary is correct' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Continue to pass record' })).toHaveCount(0);
+  await expect(page.evaluate(() => localStorage.getItem('lw_test_physical_frame'))).resolves.toBeNull();
+  await expect.poll(() => page.evaluate(async () => (await import('/src/lib/productionRun.js')).readProductionRun()?.state)).toBe('restore');
 });
 
 test('physical failures use stable structured recovery before bounded correction', async ({ page }) => {

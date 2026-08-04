@@ -54,6 +54,8 @@ export function normalizeCardIdentity(payload = {}, host = '') {
       .map(output => `GPIO ${output.gpio} · ${output.count}`)
       .join(', '),
     limits: source.limits && typeof source.limits === 'object' ? { ...source.limits } : {},
+    ...(cleanText(source.projectId || source.piece?.id, 128)
+      ? { projectId: cleanText(source.projectId || source.piece?.id, 128) } : {}),
     ...(Number.isSafeInteger(Number(source.projectRevision)) && Number(source.projectRevision) >= 0
       ? { projectRevision: Number(source.projectRevision) } : {}),
     ...(cleanText(source.projectFingerprint, 64) ? { projectFingerprint: cleanText(source.projectFingerprint, 64) } : {}),
@@ -113,6 +115,7 @@ export function normalizeCardProjectEvidence(payload = {}) {
     cardId: identity.id,
     firmwareVersion: identity.firmwareVersion,
     buildId: identity.buildId,
+    ...(identity.projectId ? { projectId: identity.projectId } : {}),
     ...(identity.projectRevision !== undefined ? { projectRevision: identity.projectRevision } : {}),
     ...(identity.projectFingerprint ? { projectFingerprint: identity.projectFingerprint } : {}),
     ...(identity.productionJobId ? { productionJobId: identity.productionJobId } : {}),
