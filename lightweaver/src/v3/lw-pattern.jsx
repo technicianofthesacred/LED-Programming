@@ -434,10 +434,30 @@ import { PatternPreview } from './PatternPreview.jsx';
         projectGeneration: projectLifecycle.generation,
       };
     }, [cardLink?.card, cardLink?.readiness, cardLink?.validatedBootId, projectId, projectLifecycle.generation, serializeProject]);
-    const patternAuthorizationRef = useRef(patternAuthorizationBinding);
-    patternAuthorizationRef.current = patternAuthorizationBinding;
+    const lastExactPatternAuthorizationBindingRef = useRef(null);
+    const exactAuthorizationExpiresAt = currentCardProjectAuthorizationExpiresAt(patternAuthorizationBinding);
+    if (exactAuthorizationExpiresAt > 0) {
+      lastExactPatternAuthorizationBindingRef.current = patternAuthorizationBinding;
+    }
+    const lastExactBinding = lastExactPatternAuthorizationBindingRef.current;
+    const canRetainAuthorizationDuringBridgeCheck = !cardLink?.readiness
+      && lastExactBinding
+      && patternAuthorizationBinding.studioProjectId === lastExactBinding.studioProjectId
+      && patternAuthorizationBinding.studioProjectFingerprint === lastExactBinding.studioProjectFingerprint
+      && patternAuthorizationBinding.projectGeneration === lastExactBinding.projectGeneration
+      && (!patternAuthorizationBinding.cardId || patternAuthorizationBinding.cardId === lastExactBinding.cardId)
+      && (!patternAuthorizationBinding.firmwareVersion || patternAuthorizationBinding.firmwareVersion === lastExactBinding.firmwareVersion)
+      && (!patternAuthorizationBinding.buildId || patternAuthorizationBinding.buildId === lastExactBinding.buildId)
+      && (!patternAuthorizationBinding.bootId || patternAuthorizationBinding.bootId === lastExactBinding.bootId);
+    const effectivePatternAuthorizationBinding = exactAuthorizationExpiresAt > 0
+      ? patternAuthorizationBinding
+      : canRetainAuthorizationDuringBridgeCheck
+        ? lastExactBinding
+        : patternAuthorizationBinding;
+    const patternAuthorizationRef = useRef(effectivePatternAuthorizationBinding);
+    patternAuthorizationRef.current = effectivePatternAuthorizationBinding;
     const [, refreshPatternAuthorization] = useReducer(value => value + 1, 0);
-    const authorizationExpiresAt = currentCardProjectAuthorizationExpiresAt(patternAuthorizationBinding);
+    const authorizationExpiresAt = currentCardProjectAuthorizationExpiresAt(effectivePatternAuthorizationBinding);
     const projectAuthorizationCurrent = authorizationExpiresAt > 0;
     useEffect(() => {
       if (!authorizationExpiresAt) return undefined;
@@ -508,7 +528,7 @@ import { PatternPreview } from './PatternPreview.jsx';
     useEffect(() => {
       const previous = previousProjectAuthorizationRef.current;
       previousProjectAuthorizationRef.current = projectAuthorizationCurrent;
-      if (previous && !projectAuthorizationCurrent) {
+      if (previous && !projectAuthorizationCurrent && patternAccessRef.current === 'ready') {
         setColorOrderOpen(false);
         blockPatternCardEffect('project');
       }

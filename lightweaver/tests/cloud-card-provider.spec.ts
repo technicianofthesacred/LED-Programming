@@ -129,6 +129,7 @@ async function installCloudCardProviderHarness(page: Page) {
         React.createElement('span', { 'data-testid': 'provider-project-id' }, project.projectId),
         React.createElement('span', { 'data-testid': 'provider-active-remote' }, library.activeRemoteProject?.id || ''),
         React.createElement('span', { 'data-testid': 'provider-active-count' }, String(library.activeProjects.length)),
+        React.createElement('span', { 'data-testid': 'provider-browser-count' }, String(library.browserProjects.length)),
       );
     }
 
@@ -141,6 +142,30 @@ async function installCloudCardProviderHarness(page: Page) {
   await expect(page.getByTestId('provider-session')).toHaveText('authenticated');
   await expect(page.getByTestId('provider-active-count')).toHaveText('2');
 }
+
+test('browser project list refreshes when another tab changes library storage', async ({ page }) => {
+  await installCloudCardProviderHarness(page);
+  await expect(page.getByTestId('provider-browser-count')).toHaveText('0');
+
+  await page.evaluate(() => {
+    const state = (window as any).__LW_CLOUD_CARD_PROVIDER__;
+    const project = structuredClone(state.source.document);
+    project.id = 'lwproj-cross-tab-browser';
+    project.name = 'Cross-tab browser project';
+    const record = {
+      id: 'browser-cross-tab-record',
+      name: project.name,
+      createdAt: 1,
+      updatedAt: 1,
+      projectVersion: project.version,
+      project,
+    };
+    localStorage.setItem('lw_project_library_v1', JSON.stringify({ version: 1, records: [record] }));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'lw_project_library_v1' }));
+  });
+
+  await expect(page.getByTestId('provider-browser-count')).toHaveText('1');
+});
 
 test('saveNow acknowledges only the exact remote and workspace marker', async ({ page }) => {
   await installCloudCardProviderHarness(page);

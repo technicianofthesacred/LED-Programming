@@ -6,7 +6,12 @@ import { downloadJsonFile, downloadTextFile } from '../lib/downloadFile.js';
 import { canonicalProjectFileName } from '../lib/projectFiles.js';
 import { createProjectId, migrateProject } from '../lib/projectModel.js';
 import { cardProjectId, matchesCardProjectEvidence } from '../lib/cardProjectResolver.js';
-import { listProjectLibraryRecords } from '../lib/projectStorage.js';
+import {
+  PROJECT_LIBRARY_BACKUP_STORAGE_KEY,
+  PROJECT_LIBRARY_CHANGED_EVENT,
+  PROJECT_LIBRARY_STORAGE_KEY,
+  listProjectLibraryRecords,
+} from '../lib/projectStorage.js';
 import {
   WORKSPACE_ASSETS_EVENT,
   WORKSPACE_ASSETS_VERSION,
@@ -339,6 +344,23 @@ export function CloudLibraryProvider({ children, client: suppliedClient }) {
     generation: 0,
   });
   const [, setBrowserClaimRevision] = useState(0);
+
+  useEffect(() => {
+    const refreshBrowserProjects = () => setBrowserClaimRevision(value => value + 1);
+    const refreshBrowserProjectsFromStorage = event => {
+      if (!event?.key || [
+        PROJECT_LIBRARY_STORAGE_KEY,
+        PROJECT_LIBRARY_BACKUP_STORAGE_KEY,
+        BROWSER_CLAIMS_KEY,
+      ].includes(event.key)) refreshBrowserProjects();
+    };
+    window.addEventListener(PROJECT_LIBRARY_CHANGED_EVENT, refreshBrowserProjects);
+    window.addEventListener('storage', refreshBrowserProjectsFromStorage);
+    return () => {
+      window.removeEventListener(PROJECT_LIBRARY_CHANGED_EVENT, refreshBrowserProjects);
+      window.removeEventListener('storage', refreshBrowserProjectsFromStorage);
+    };
+  }, []);
 
   const lifecycleRef = useRef(projectLifecycle);
   const documentRef = useRef(null);

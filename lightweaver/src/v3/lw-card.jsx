@@ -395,7 +395,8 @@ function CardOverview({
               ...(await readCloudProject(metadata.id)),
             })))
           : [];
-        resolved = resolveCardProject({ evidence, cloudProjects, browserProjects });
+        const freshBrowserProjects = readBrowserProjects?.() || browserProjects;
+        resolved = resolveCardProject({ evidence, cloudProjects, browserProjects: freshBrowserProjects });
       }
       // Source discovery may include production package fetches and multiple
       // cloud reads. Do not publish an offer/ambiguity from that stale window.
@@ -604,6 +605,16 @@ function CardOverview({
   const cardProjectProbeRef = useRef('');
   useEffect(() => {
     if (!ready) return;
+    const candidateSourceSignature = [
+      activeCloudProjects
+        .map(project => `${project?.id || ''}:${project?.revision ?? ''}:${project?.embeddedProjectId || ''}`)
+        .sort()
+        .join(','),
+      browserProjects
+        .map(record => `${record?.id || ''}:${record?.updatedAt ?? ''}:${record?.project?.id || ''}`)
+        .sort()
+        .join(','),
+    ].join('::');
     const signature = [
       normalizeCardHost(cardLink?.host || cardHost),
       cardLink?.card?.id,
@@ -617,12 +628,13 @@ function CardOverview({
       cardLink?.readiness?.productionJobId,
       cardLink?.readiness?.productionJobDigest,
       projectGeneration,
+      candidateSourceSignature,
     ].join('|');
     if (cardProjectProbeRef.current === signature) return;
     cardProjectProbeRef.current = signature;
     const autoIntent = cardEditIntent();
     void loadMatchingCardProject({ probeOnly: !autoIntent, autoIntent });
-  }, [cardHost, cardLink, loadMatchingCardProject, projectGeneration, ready]);
+  }, [activeCloudProjects, browserProjects, cardHost, cardLink, loadMatchingCardProject, projectGeneration, ready]);
   const renderAction = (action, primary = false) => action && (
     <button
       type="button"

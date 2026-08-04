@@ -1155,11 +1155,12 @@ test('missing runtime state proof recovers the card before asking for visible co
 test('production bridge transport sends only the newest selection to the source-bound popup', async ({ page }) => {
   const controlRequests: Record<string, unknown>[] = [];
   await pairReadyPatternCard(page, 'lw-bridge-test', '1.0.0', 'bridge-test-build');
+  const bridgeFixture = patternAuthorizationFixtures.get(page)!;
   await page.route('**/api/control', async route => {
     controlRequests.push(JSON.parse(route.request().postData() || '{}'));
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
   });
-  await page.addInitScript(() => {
+  await page.addInitScript(({ projectId, projectFingerprint }) => {
     (window as any).__bridgeOpenCalls = [];
     (window as any).__bridgeMessages = [];
     const originalOpen = window.open.bind(window);
@@ -1182,13 +1183,13 @@ test('production bridge transport sends only the newest selection to the source-
                   ok: true,
                   version: 1,
                   response: message.type === 'firmware-info'
-                    ? { cardId: 'lw-bridge-test', firmwareVersion: '1.0.0', buildId: 'bridge-test-build' }
+                    ? { app: 'Lightweaver', cardId: 'lw-bridge-test', firmwareVersion: '1.0.0', buildId: 'bridge-test-build', projectId, projectRevision: 0, projectFingerprint }
                     : message.type === 'status'
                       ? {
                           app: 'Lightweaver', provisioningContractVersion: 1,
                           cardId: 'lw-bridge-test', firmwareVersion: '1.0.0', buildId: 'bridge-test-build',
                           bootId: 'lw-bridge-test-boot', runtimePhase: 'ready', knownGoodProject: true,
-                          commandReady: true, outputReady: true,
+                          commandReady: true, outputReady: true, projectId, projectFingerprint,
                         }
                       : { ok: true, cardId: 'lw-bridge-test', patternId: message.payload?.patternId, revision: message.payload?.revision },
                 },
@@ -1199,7 +1200,7 @@ test('production bridge transport sends only the newest selection to the source-
       }
       return popup;
     }) as typeof window.open;
-  });
+  }, { projectId: bridgeFixture.project.id, projectFingerprint: bridgeFixture.projectFingerprint });
   await mockDefaultCardZones(page);
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => {
@@ -1210,6 +1211,7 @@ test('production bridge transport sends only the newest selection to the source-
     }));
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await issueRegisteredPatternAuthorization(page);
   await expect(page.getByRole('button', { name: 'Install on card' })).toBeEnabled();
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
@@ -1303,6 +1305,7 @@ test('a Ready pattern tap is never replayed when card readiness is lost before t
     }));
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await issueRegisteredPatternAuthorization(page);
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="fire"]').click();
   await page.evaluate(() => {
@@ -1387,6 +1390,7 @@ test('disabling live preview invalidates a pending bridge selection', async ({ p
     localStorage.setItem('lw_local_chip_default', '1');
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await issueRegisteredPatternAuthorization(page);
   await expect(page.getByRole('button', { name: 'Install on card' })).toBeEnabled();
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
@@ -1426,6 +1430,7 @@ test('leaving Patterns invalidates a pending bridge selection', async ({ page })
     localStorage.setItem('lw_local_chip_default', '1');
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await issueRegisteredPatternAuthorization(page);
   await expect(page.getByRole('button', { name: 'Install on card' })).toBeEnabled();
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
@@ -1454,6 +1459,7 @@ test('blocked automatic card window gives one concrete recovery action', async (
     localStorage.setItem('lw_local_chip_default', '1');
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await issueRegisteredPatternAuthorization(page);
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
 
@@ -1474,6 +1480,7 @@ test('an older card bridge points to the single Flash recovery action', async ({
     localStorage.setItem('lw_local_chip_default', '1');
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await issueRegisteredPatternAuthorization(page);
   await expect(page.getByRole('button', { name: 'Install on card' })).toBeEnabled();
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
@@ -1496,11 +1503,12 @@ test('an older card bridge points to the single Flash recovery action', async ({
 test('a legacy bridge lifecycle change blocks the next pattern before sending it', async ({ page }) => {
   const controlRequests: Record<string, unknown>[] = [];
   await pairReadyPatternCard(page, 'lw-legacy-test', '1.0.0', 'legacy-test-build');
+  const bridgeFixture = patternAuthorizationFixtures.get(page)!;
   await page.route('**/api/control', async route => {
     controlRequests.push(JSON.parse(route.request().postData() || '{}'));
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
   });
-  await page.addInitScript(() => {
+  await page.addInitScript(({ projectId, projectFingerprint }) => {
     (window as any).__legacyBridgeMessages = [];
     (window as any).__legacyReplyVersion = 1;
     const bridge = {
@@ -1516,13 +1524,13 @@ test('a legacy bridge lifecycle change blocks the next pattern before sending it
               ok: true,
               ...((window as any).__legacyReplyVersion ? { version: 1 } : {}),
               response: message.type === 'firmware-info'
-                ? { cardId: 'lw-legacy-test', firmwareVersion: '1.0.0', buildId: 'legacy-test-build' }
+                ? { app: 'Lightweaver', cardId: 'lw-legacy-test', firmwareVersion: '1.0.0', buildId: 'legacy-test-build', projectId, projectRevision: 0, projectFingerprint }
                 : message.type === 'status'
                   ? {
                       app: 'Lightweaver', provisioningContractVersion: 1,
                       cardId: 'lw-legacy-test', firmwareVersion: '1.0.0', buildId: 'legacy-test-build',
                       bootId: 'lw-legacy-test-boot', runtimePhase: 'ready', knownGoodProject: true,
-                      commandReady: true, outputReady: true,
+                      commandReady: true, outputReady: true, projectId, projectFingerprint,
                     }
                   : { ok: true, cardId: 'lw-legacy-test', patternId: message.payload?.patternId, revision: message.payload?.revision },
             },
@@ -1531,7 +1539,7 @@ test('a legacy bridge lifecycle change blocks the next pattern before sending it
       },
     };
     window.open = (() => bridge as any) as typeof window.open;
-  });
+  }, { projectId: bridgeFixture.project.id, projectFingerprint: bridgeFixture.projectFingerprint });
   await mockDefaultCardZones(page);
   await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => {
@@ -1542,6 +1550,7 @@ test('a legacy bridge lifecycle change blocks the next pattern before sending it
     }));
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await issueRegisteredPatternAuthorization(page);
   await expect(page.getByRole('button', { name: 'Install on card' })).toBeEnabled();
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();

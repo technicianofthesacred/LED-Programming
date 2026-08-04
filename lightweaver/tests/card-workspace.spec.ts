@@ -32,7 +32,7 @@ function readyStatus(cardId: string, overrides = {}) {
   };
 }
 
-async function renderProjectSwitchCardHarness(page, mode: 'offline' | 'duplicate' | 'cloud' | 'cloud-stale' | 'changed' | 'browser-deleted' | 'association' | 'association-failure' | 'post-read-failure') {
+async function renderProjectSwitchCardHarness(page, mode: 'offline' | 'duplicate' | 'cloud' | 'cloud-late' | 'cloud-stale' | 'changed' | 'browser-fresh' | 'browser-deleted' | 'association' | 'association-failure' | 'post-read-failure') {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await page.evaluate(async (scenario) => {
     const mainSource = await (await fetch('/src/main.jsx')).text();
@@ -50,7 +50,7 @@ async function renderProjectSwitchCardHarness(page, mode: 'offline' | 'duplicate
     const React = reactModule.default ?? reactModule;
     const createRoot = domModule.createRoot ?? domModule.default?.createRoot;
     if (typeof createRoot !== 'function') throw new Error('could not resolve createRoot');
-    const cloudScenario = scenario === 'cloud' || scenario === 'cloud-stale';
+    const cloudScenario = scenario === 'cloud' || scenario === 'cloud-late' || scenario === 'cloud-stale';
 
     const current = createDefaultProject();
     current.id = 'current-work-in-progress';
@@ -151,7 +151,7 @@ async function renderProjectSwitchCardHarness(page, mode: 'offline' | 'duplicate
       id: 'remote-installed', revision: 23, embeddedProjectId: installed.id,
       title: installed.name, document: installed,
     };
-    root.render(React.createElement(CardScreen, {
+    const cardProps = {
       connected: true,
       cardHost: 'lightweaver.local',
       cardLink,
@@ -160,9 +160,9 @@ async function renderProjectSwitchCardHarness(page, mode: 'offline' | 'duplicate
       replaceProject: async () => { calls.replace += 1; return { ok: true }; },
       currentProject: current,
       projectGeneration: 7,
-      activeCloudProjects: cloudScenario ? [cloudRecord] : [],
-      browserProjects: cloudScenario ? [] : [{ id: 'browser-installed', project: installed }],
-      readBrowserProjects: () => scenario === 'browser-deleted'
+      activeCloudProjects: cloudScenario && scenario !== 'cloud-late' ? [cloudRecord] : [],
+      browserProjects: cloudScenario || scenario === 'browser-fresh' ? [] : [{ id: 'browser-installed', project: installed }],
+      readBrowserProjects: () => scenario === 'browser-deleted' || cloudScenario
         ? []
         : [{ id: 'browser-installed', project: installed }],
       readCloudProject: async () => cloudRecord,
@@ -176,16 +176,25 @@ async function renderProjectSwitchCardHarness(page, mode: 'offline' | 'duplicate
           : { ok: true };
       },
       route: { section: 'overview', supportTool: '' },
-    }));
+    };
+    root.render(React.createElement(CardScreen, cardProps));
     (window as any).__projectSwitchHarness = {
       calls,
       releaseSave: () => releaseSave?.(),
       releasePostReplaceRead: () => releasePostReplaceRead?.(),
+      releaseCloudCandidates: () => root.render(React.createElement(CardScreen, {
+        ...cardProps,
+        activeCloudProjects: [cloudRecord],
+      })),
       host,
     };
   }, mode);
 
   const region = page.locator(`[data-testid="project-switch-${mode}"]`).getByRole('region', { name: 'Matching card project' });
+  if (mode === 'cloud-late') {
+    await expect(region.getByRole('alert')).toContainText('No active Studio project exactly matches');
+    await page.evaluate(() => (window as any).__projectSwitchHarness.releaseCloudCandidates());
+  }
   await expect(region.getByRole('button', { name: /^Load / })).toBeVisible();
   return region;
 }
@@ -942,6 +951,16 @@ test('Card project switch rereads the browser library and blocks a deleted match
     save: 1, replace: 0,
   });
   await expect(page).toHaveURL(/#screen=card&section=overview$/);
+});
+
+test('Card project discovery reads a browser match created outside the rendered snapshot', async ({ page }) => {
+  const region = await renderProjectSwitchCardHarness(page, 'browser-fresh');
+  await expect(region).toContainText('Browser installed project');
+});
+
+test('Card project discovery retries when a matching cloud candidate arrives late', async ({ page }) => {
+  const region = await renderProjectSwitchCardHarness(page, 'cloud-late');
+  await expect(region).toContainText('Cloud installed project');
 });
 
 test('Card project switch hands off persistence association before post-replacement card read', async ({ page }) => {
