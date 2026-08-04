@@ -22,6 +22,8 @@ export function normalizeCardReadiness(raw = {}) {
   const buildId = cleanText(source.buildId, 96);
   const bootId = cleanText(source.bootId, 96);
   const runtimePhase = cleanText(source.runtimePhase, 32).toLowerCase();
+  const mode = cleanText(source.mode, 32).toLowerCase();
+  const runtimeSource = cleanText(source.source ?? source.runtimeSource, 32).toLowerCase();
   const contractVersion = Number.isSafeInteger(source.provisioningContractVersion)
     ? source.provisioningContractVersion
     : null;
@@ -44,6 +46,8 @@ export function normalizeCardReadiness(raw = {}) {
     buildId,
     bootId,
     runtimePhase,
+    mode,
+    source: runtimeSource,
     knownGoodProject: explicitBoolean(source.knownGoodProject),
     commandReady: explicitBoolean(source.commandReady),
     outputReady: explicitBoolean(source.outputReady),
@@ -54,6 +58,7 @@ function classifiedResult(state, normalized, reason, additions = {}) {
   return Object.freeze({
     ...normalized,
     state,
+    patternAccess: state === 'connected' ? 'ready' : state === 'blank' ? 'blank' : 'recovery',
     connected: false,
     blank: null,
     reason,
@@ -84,7 +89,7 @@ export function classifyCardReadiness(raw = {}, {
   const expected = cleanText(expectedCard?.id ?? expectedCard?.cardId ?? expectedCardId, 64);
   if (expected && normalized.cardId !== expected) {
     return classifiedResult('identity-mismatch', normalized, 'unexpected-card', {
-      blank: !normalized.knownGoodProject || normalized.runtimePhase === 'factory',
+      blank: null,
     });
   }
   const expectedFirmwareVersion = cleanText(expectedCard?.firmwareVersion, 48);
@@ -95,7 +100,13 @@ export function classifyCardReadiness(raw = {}, {
   if (expectedBuildId && normalized.buildId !== expectedBuildId) {
     return classifiedResult('identity-mismatch', normalized, 'unexpected-firmware-build');
   }
-  if (!normalized.knownGoodProject || normalized.runtimePhase === 'factory') {
+  if (
+    normalized.runtimePhase === 'factory'
+    && normalized.knownGoodProject === false
+    && normalized.commandReady === false
+    && normalized.mode === 'factory-flash'
+    && normalized.source === 'defaults'
+  ) {
     return classifiedResult('blank', normalized, 'factory', { blank: true });
   }
   const previousBoot = cleanText(previousBootId, 96);
@@ -104,6 +115,7 @@ export function classifyCardReadiness(raw = {}, {
   }
   if (
     normalized.runtimePhase !== 'ready'
+    || normalized.knownGoodProject !== true
     || !normalized.commandReady
     || !normalized.outputReady
   ) {

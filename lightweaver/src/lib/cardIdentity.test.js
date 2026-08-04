@@ -14,7 +14,7 @@ import {
 const firmwareInfo = {
   app: 'Lightweaver',
   cardId: 'lw-001122aabbcc',
-  piece: { name: 'Front Mandala' },
+  piece: { id: 'front-mandala', name: 'Front Mandala' },
   firmwareVersion: '1.4.0',
   buildId: 'abc123',
   bridgeVersion: 1,
@@ -48,11 +48,18 @@ test('normalizes firmware info into stable card identity and output summary', ()
     pixelCount: 56,
     gpioSummary: 'GPIO 16 · 44, GPIO 17 · 12',
     limits: { pixels: 1024, outputs: 4, looks: 32 },
+    projectId: 'front-mandala',
     projectRevision: 7,
     projectFingerprint: 'a'.repeat(16),
     productionJobId: 'job-42',
     productionJobDigest: 'b'.repeat(64),
   });
+});
+
+test('preserves the exact installed piece id as card project evidence', () => {
+  const evidence = normalizeCardProjectEvidence(firmwareInfo);
+  assert.equal(evidence.projectId, 'front-mandala');
+  assert.equal(normalizeCardIdentity(firmwareInfo).projectId, 'front-mandala');
 });
 
 test('normalizes status payloads and rejects missing or wrong identities', () => {

@@ -206,7 +206,14 @@ String cardBridgeHost(const RuntimeConfig& cfg) {
 String studioBridgeUrl(const RuntimeConfig& cfg) {
   String url = "https://led.mandalacodes.com/?cardBridge=1&cardHost=";
   url += cardBridgeHost(cfg);
-  url += "#screen=patterns";
+  url += "#screen=card&section=overview";
+  return url;
+}
+
+String studioSetupUrl(const RuntimeConfig& cfg) {
+  String url = "https://led.mandalacodes.com/?cardBridge=1&cardHost=";
+  url += cardBridgeHost(cfg);
+  url += "#screen=layout";
   return url;
 }
 
@@ -221,8 +228,8 @@ String studioOpenScript() {
              "u.searchParams.set('cardBridge','1');"
              "u.searchParams.set('cardHost',location.host);"
              "for(const key of ['editPattern','editLook']){const value=requested.searchParams.get(key)||'';if(/^[a-z0-9_-]{1,64}$/i.test(value))u.searchParams.set(key,value)}"
-             "u.hash='#screen=patterns';url=u.href"
-           "}catch(_){url='https://led.mandalacodes.com/?cardBridge=1&cardHost='+encodeURIComponent(location.host)+'#screen=patterns'}"
+             "u.hash='#screen=card&section=overview';url=u.href"
+           "}catch(_){url='https://led.mandalacodes.com/?cardBridge=1&cardHost='+encodeURIComponent(location.host)+'#screen=card&section=overview'}"
            "const opened=window.open(url,'lightweaver-studio');"
            "if(!opened)alert('Allow pop-ups for this page, then tap Open Studio again.');"
            "else try{opened.focus()}catch(_){}"
@@ -652,7 +659,7 @@ void handleRoot() {
             "let customHue=32,customSat=230,customBreathe=false,customDrift=false,driftMin=0,driftMax=255;"
             "const swClass=id=>'sw-'+id.replace(/[^a-z0-9-]/g,'-');"
             "const selectedPattern=()=>patterns.find(x=>x.id===currentId)||null;"
-            "const studioUrlForPattern=id=>{const link=$('studio-link');let url=(link&&link.href)||'';try{const u=new URL(url,location.href);const pat=patterns.find(x=>x.id===id);if(id){if(pat&&pat.mode==='combo')u.searchParams.set('editLook',id);else u.searchParams.set('editPattern',id)}u.hash='#screen=patterns';return u.href}catch(_){return url}};"
+            "const studioUrlForPattern=id=>{const link=$('studio-link');let url=(link&&link.href)||'';try{const u=new URL(url,location.href);const pat=patterns.find(x=>x.id===id);if(id){if(pat&&pat.mode==='combo')u.searchParams.set('editLook',id);else u.searchParams.set('editPattern',id)}u.hash='#screen=card&section=overview';return u.href}catch(_){return url}};"
             "const openPatternStudio=(e,id)=>lwOpenStudio(e,studioUrlForPattern(id||currentId));"
             "$('edit-studio').onclick=e=>openPatternStudio(e,currentId);"
             /*LW_CONFIRMED_CONTROL_START*/
@@ -901,9 +908,12 @@ void handleAdvancedRoot() {
               "<p class='note'>This card is online. Return to Lightweaver Studio to load, recover, or verify its project before using the lights.</p>"
               "<p class='note'>If you are viewing this from the Lightweaver AP, rejoin gallery WiFi before returning to Studio.</p>"
               "<a class='link' href='");
-    page += escapeHtml(studioBridgeUrl(cfg));
-    page += F("' target='_blank'>Return to Lightweaver Studio \xE2\x86\x92</a>"
-              "</div>");
+    page += escapeHtml(factoryBlank ? studioSetupUrl(cfg) : studioBridgeUrl(cfg));
+    page += F("' target='lightweaver-studio'>");
+    page += factoryBlank
+        ? F("Set up LED strips and install on card \xE2\x86\x92")
+        : F("Return to Lightweaver Studio \xE2\x86\x92");
+    page += F("</a></div>");
   } else {
     // Live control surface
     page += F("<div class='card'>"
@@ -1068,7 +1078,7 @@ void handleAdvancedRoot() {
               "const swClass=id=>'sw-'+id.replace(/[^a-z0-9-]/g,'-');"
               "const selectedPattern=()=>patterns.find(x=>x.id===currentId)||null;"
               "const setNow=p=>{$('now-name').textContent=p?p.label:'—';$('now-mode').textContent=p?p.mode:'—'};"
-              "const studioUrlForPattern=id=>{const link=$('studio-link');let url=(link&&link.href)||'';try{const u=new URL(url,location.href);const pat=patterns.find(x=>x.id===id);if(id){if(pat&&pat.mode==='combo')u.searchParams.set('editLook',id);else u.searchParams.set('editPattern',id)}u.hash='#screen=patterns';return u.href}catch(_){return url}};"
+              "const studioUrlForPattern=id=>{const link=$('studio-link');let url=(link&&link.href)||'';try{const u=new URL(url,location.href);const pat=patterns.find(x=>x.id===id);if(id){if(pat&&pat.mode==='combo')u.searchParams.set('editLook',id);else u.searchParams.set('editPattern',id)}u.hash='#screen=card&section=overview';return u.href}catch(_){return url}};"
               "const openPatternStudio=(e,id)=>lwOpenStudio(e,studioUrlForPattern(id||currentId));"
               "$('edit-studio').onclick=e=>openPatternStudio(e,currentId);"
               "let patPending=false,patStreaming=false;"

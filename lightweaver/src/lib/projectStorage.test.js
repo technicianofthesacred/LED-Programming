@@ -8,6 +8,7 @@ import {
   createProjectLibraryRecord,
   deleteProjectLibraryRecord,
   duplicateProjectLibraryRecord,
+  isProjectLibrarySaveBlocked,
   PROJECT_LIBRARY_BACKUP_STORAGE_KEY,
   PROJECT_LIBRARY_STORAGE_KEY,
   quarantineAutosavePayload,
@@ -19,6 +20,7 @@ import {
   readStorageJsonWithBackup,
   saveCurrentProjectToLibrary,
   saveProjectLibraryRecord,
+  setProjectLibrarySaveBlocked,
   writeProjectLifecycleRecord,
   writeStorageJsonWithBackup,
   writeActiveProjectLibraryRecordId,
@@ -85,7 +87,8 @@ test('fails instead of reporting a save when browser storage is unavailable', ()
 
 test('saveCurrentProjectToLibrary updates the active project record', () => {
   const storage = memoryStorage();
-  const first = saveCurrentProjectToLibrary({ ...createDefaultProject(), name: 'Active' }, {
+  const activeProject = { ...createDefaultProject(), name: 'Active' };
+  const first = saveCurrentProjectToLibrary(activeProject, {
     storage,
     id: 'active-record',
     now: 1000,
@@ -94,7 +97,7 @@ test('saveCurrentProjectToLibrary updates the active project record', () => {
   assert.equal(readActiveProjectLibraryRecordId({ storage }), 'active-record');
   assert.equal(first.name, 'Active');
 
-  const updated = saveCurrentProjectToLibrary({ ...createDefaultProject(), name: 'Active revised' }, {
+  const updated = saveCurrentProjectToLibrary({ ...activeProject, name: 'Active revised' }, {
     storage,
     now: 2000,
   });
@@ -112,6 +115,43 @@ test('saveCurrentProjectToLibrary updates the active project record', () => {
   });
   assert.equal(fresh.id, 'fresh-record');
   assert.deepEqual(listProjectLibraryRecords({ storage }).map(record => record.name), ['Fresh', 'Active revised']);
+});
+
+test('a stale active record can never be overwritten by a different project id', () => {
+  const storage = memoryStorage();
+  const previous = { ...createDefaultProject(), id: 'previous-project', name: 'Previous project' };
+  const next = { ...createDefaultProject(), id: 'next-project', name: 'Next project' };
+  const previousRecord = saveCurrentProjectToLibrary(previous, {
+    storage,
+    id: 'previous-record',
+    now: 1000,
+  });
+
+  const nextRecord = saveCurrentProjectToLibrary(next, { storage, now: 2000 });
+
+  assert.equal(previousRecord.id, 'previous-record');
+  assert.notEqual(nextRecord.id, previousRecord.id);
+  assert.equal(readActiveProjectLibraryRecordId({ storage }), nextRecord.id);
+  assert.deepEqual(
+    listProjectLibraryRecords({ storage }).map(record => [record.project.id, record.name]),
+    [['next-project', 'Next project'], ['previous-project', 'Previous project']],
+  );
+});
+
+test('a global safety block stops every current-project browser library save', () => {
+  const storage = memoryStorage();
+  setProjectLibrarySaveBlocked(true);
+  try {
+    assert.equal(isProjectLibrarySaveBlocked(), true);
+    assert.throws(
+      () => saveCurrentProjectToLibrary(createDefaultProject(), { storage }),
+      /blocked until a safe project destination is established/,
+    );
+    assert.deepEqual(listProjectLibraryRecords({ storage }), []);
+  } finally {
+    setProjectLibrarySaveBlocked(false);
+  }
+  assert.equal(isProjectLibrarySaveBlocked(), false);
 });
 
 test('project library reads the backup copy when the primary entry is corrupt', () => {

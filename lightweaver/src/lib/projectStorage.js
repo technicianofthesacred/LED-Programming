@@ -9,6 +9,16 @@ export const PROJECT_LIBRARY_CHANGED_EVENT = 'lightweaver-project-library-change
 export const PROJECT_LIBRARY_VERSION = 1;
 export const PROJECT_LIBRARY_LIMIT = 24;
 
+let projectLibrarySaveBlocked = false;
+
+export function setProjectLibrarySaveBlocked(blocked) {
+  projectLibrarySaveBlocked = blocked === true;
+}
+
+export function isProjectLibrarySaveBlocked() {
+  return projectLibrarySaveBlocked;
+}
+
 function getDefaultStorage() {
   if (typeof window !== 'undefined' && window.localStorage) return window.localStorage;
   if (typeof localStorage !== 'undefined') return localStorage;
@@ -359,14 +369,23 @@ export function duplicateProjectLibraryRecord(id, options = {}) {
 }
 
 export function saveCurrentProjectToLibrary(project, options = {}) {
+  if (projectLibrarySaveBlocked) {
+    throw new Error('Project library saving is blocked until a safe project destination is established');
+  }
   const storage = storageFromOptions(options);
   requireStorage(storage);
   const activeId = options.id || readActiveProjectLibraryRecordId({ storage });
   const existing = activeId
     ? listProjectLibraryRecords({ storage }).find(record => record.id === activeId)
     : null;
+  const existingMatchesProject = existing?.project?.id === project?.id;
   const record = createProjectLibraryRecord(project, {
-    id: existing?.id || options.id || makeId(),
+    // An active-record pointer is only authority to update that same project.
+    // A stale pointer after reload/tab races must create a new record instead
+    // of overwriting a different project's last acknowledged save.
+    id: existing && !existingMatchesProject
+      ? makeId()
+      : existing?.id || options.id || activeId || makeId(),
     now: options.now || Date.now(),
   });
   const saved = saveProjectLibraryRecord(record, { storage, now: options.now });

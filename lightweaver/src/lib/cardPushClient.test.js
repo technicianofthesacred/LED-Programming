@@ -367,6 +367,7 @@ test('direct factory commissioning requires fresh exact blank authority and writ
             cardId: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'build-123',
             bootId: 'boot-blank-1', runtimePhase: 'factory', knownGoodProject: false,
             commandReady: false, outputReady: true,
+            mode: 'factory-flash', source: 'defaults',
           });
         }
         if (String(url).endsWith('/api/config')) return response({ ok: true, saved: true });

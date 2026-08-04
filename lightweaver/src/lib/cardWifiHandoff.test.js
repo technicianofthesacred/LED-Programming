@@ -36,6 +36,8 @@ function handoffStatus(overrides = {}) {
     buildId: expectedCard.buildId,
     bootId: 'boot-current',
     runtimePhase: 'factory',
+    mode: 'factory-flash',
+    source: 'defaults',
     knownGoodProject: false,
     commandReady: false,
     outputReady: true,

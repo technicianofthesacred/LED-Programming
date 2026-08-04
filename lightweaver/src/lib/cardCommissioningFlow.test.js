@@ -434,6 +434,7 @@ test('handoff-ready transport and incomplete station truth never acknowledge com
     ...base,
     runtimePhase: 'factory', knownGoodProject: false,
     commandReady: false, outputReady: true,
+    mode: 'factory-flash', source: 'defaults',
   });
   assert.equal(blankStation.ok, true,
     'exact complete blank station truth acknowledges station/config authority');
@@ -441,6 +442,7 @@ test('handoff-ready transport and incomplete station truth never acknowledge com
     ...base,
     runtimePhase: 'factory', knownGoodProject: false,
     commandReady: false, outputReady: true,
+    mode: 'factory-flash', source: 'defaults',
   }, { allowInitialConfig: true }).ok, true,
     'blank station commissioning can preflight only the initial project config');
 });

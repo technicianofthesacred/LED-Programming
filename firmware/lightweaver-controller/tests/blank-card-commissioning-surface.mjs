@@ -21,6 +21,21 @@ function functionBody(source, signature) {
 
 const visitorRoot = functionBody(web, /void\s+handleRoot\s*\(\)\s*\{/);
 const advancedRoot = functionBody(web, /void\s+handleAdvancedRoot\s*\(\)\s*\{/);
+const studioBridgeUrl = functionBody(web, /String\s+studioBridgeUrl\s*\([^;]*\)\s*\{/);
+
+assert.match(studioBridgeUrl, /#screen=card&section=overview/,
+  'configured and recovery card links must enter the Studio project resolver/overview first');
+assert.doesNotMatch(studioBridgeUrl, /#screen=patterns/,
+  'card-to-Studio links must not consume pattern intent against an arbitrary open project');
+
+const studioSetupUrl = functionBody(web, /String\s+studioSetupUrl\s*\([^;]*\)\s*\{/);
+assert.match(studioSetupUrl, /#screen=layout(?:&mode=draw)?/,
+  'factory-blank cards must open the existing LED layout/setup flow');
+assert.doesNotMatch(studioSetupUrl, /#screen=patterns/,
+  'factory-blank setup must never drop the operator into runtime Patterns');
+
+assert.match(web, /const studioUrlForPattern=id=>[\s\S]*?u\.searchParams\.set\('editPattern',id\)[\s\S]*?u\.hash='#screen=card&section=overview'/,
+  'ready-card Edit in Studio must preserve pattern intent while routing through exact project resolution');
 
 for (const [name, body] of [['visitor root', visitorRoot], ['advanced root', advancedRoot]]) {
   assert.match(body, /bool projectReady = cfg\.configValid && cfg\.knownGoodProject;/,
@@ -51,12 +66,18 @@ assert.match(commissioningMarkup, /No project loaded/,
   'factory commissioning must explain that no project has been loaded');
 assert.match(commissioningMarkup, /Project needs recovery\/verification/,
   'non-factory commissioning must explain that the project needs recovery or verification');
+assert.match(commissioningMarkup, /Set up LED strips and install on card/,
+  'factory-blank commissioning must provide one explicit setup CTA');
 assert.match(commissioningMarkup, /(?:Return to|Open) Lightweaver Studio/,
-  'blank-card commissioning must provide a clear Studio CTA');
+  'recovery commissioning must retain its existing Studio CTA');
 assert.match(commissioningMarkup, /If you are viewing this from the Lightweaver AP, rejoin gallery WiFi before (?:opening|returning to) Studio\./,
   'commissioning must tell AP-connected operators to restore gallery WiFi before using Studio');
-assert.match(commissioningMarkup, /studioBridgeUrl\(cfg\)/,
-  'commissioning CTA must retain the station-targeted Studio bridge URL');
+assert.match(commissioningMarkup, /factoryBlank\s*\?\s*studioSetupUrl\(cfg\)\s*:\s*studioBridgeUrl\(cfg\)/,
+  'factory blank must use setup while recovery retains the existing station-targeted Studio URL');
+assert.match(commissioningMarkup, /target='lightweaver-studio'/,
+  'commissioning must reuse the stable Studio window so session recovery remains available');
+assert.doesNotMatch(commissioningMarkup, /target='_blank'/,
+  'commissioning must not create an unrelated Studio browsing context');
 assert.doesNotMatch(commissioningMarkup, /lwOpenStudio/,
   'commissioning CTA must not rewrite the station cardHost to the AP page location');
 assert.doesNotMatch(commissioningMarkup, /id='pw'|Save and join Wi|Pattern bank|id='brightness'/,

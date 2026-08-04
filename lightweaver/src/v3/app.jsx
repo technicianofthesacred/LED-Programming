@@ -28,7 +28,15 @@ import {
   subscribeCardLink,
 } from '../lib/cardLink.js';
 import { downloadJsonFile } from '../lib/downloadFile.js';
-import { saveCurrentProjectToLibrary, writeActiveProjectLibraryRecordId } from '../lib/projectStorage.js';
+import {
+  isProjectLibrarySaveBlocked,
+  listProjectLibraryRecords,
+  readActiveProjectLibraryRecordId,
+  saveCurrentProjectToLibrary,
+  setProjectLibrarySaveBlocked,
+  writeActiveProjectLibraryRecordId,
+} from '../lib/projectStorage.js';
+import { runProjectSwitchSaveBarrier } from '../lib/projectSwitchSaveBarrier.js';
 import { formatBrowserProjectSaveLabel } from '../lib/studioActionStatus.js';
 import { beginCardCommissioning, writeCardCommissioning } from '../lib/cardCommissioningFlow.js';
 import { readTestStrip, writeTestStrip, TEST_STRIP_CHANGED_EVENT } from '../lib/testStrip.js';
@@ -392,7 +400,7 @@ function Shell() {
   const installRouteRef = useRef('#screen=card&section=install');
   const [connectionCenterOpen, setConnectionCenterOpen] = useState(false);
   const {
-    projectName, serializeProject, flushProjectAutosave, replaceProject, replaceWithNewProject,
+    projectName, serializeProject, flushProjectAutosave, replaceProject, replaceWithNewProject, requestReplacementConfirmation,
     projectLifecycle, projectLifecycleLabel, markProjectPersisted,
     strips, layoutDensity,
   } = useProject();
@@ -407,8 +415,22 @@ function Shell() {
   const flushProjectAutosaveRef = useRef(flushProjectAutosave);
   flushProjectAutosaveRef.current = flushProjectAutosave;
   const cloudLibrary = useCloudLibrary();
+  const latestProjectSaveStateRef = useRef(null);
+  latestProjectSaveStateRef.current = {
+    project: serializeProject(),
+    marker: {
+      generation: projectLifecycle.generation,
+      revision: projectLifecycle.editedRevision,
+    },
+    remoteId: cloudLibrary.activeRemoteProject?.id || '',
+  };
   const [loadDialogOpen, setLoadDialogOpen] = useState(false);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [projectAssociationSaveBlocked, setProjectAssociationSaveBlockedState] = useState(isProjectLibrarySaveBlocked);
+  const setProjectAssociationSaveBlocked = useCallback(blocked => {
+    setProjectLibrarySaveBlocked(blocked);
+    setProjectAssociationSaveBlockedState(blocked === true);
+  }, []);
   const [workspaceEvent, setWorkspaceEvent] = useState(null);
   const [dismissedPersistentKey, setDismissedPersistentKey] = useState('');
   const workspaceEventIdRef = useRef(0);
@@ -637,6 +659,45 @@ function Shell() {
     return connectCardLink(host);
   }, [directCardControl, cardStatus.connect]);
 
+  const isProjectSwitchSnapshotCurrent = useCallback(captured => {
+    const latest = latestProjectSaveStateRef.current;
+    return latest?.project?.id === captured?.project?.id
+      && latest.marker.generation === captured?.marker?.generation
+      && latest.marker.revision === captured?.marker?.revision
+      && latest.remoteId === captured?.remoteId;
+  }, []);
+
+  const saveBeforeCardProjectSwitch = useCallback(async () => {
+    const snapshot = latestProjectSaveStateRef.current;
+    return runProjectSwitchSaveBarrier({
+      snapshot,
+      flushBrowserRecovery: () => flushProjectAutosave(),
+      saveAuthoritative: async captured => {
+        if (projectAssociationSaveBlocked) {
+          return { ok: false, reason: 'association-handoff-failed' };
+        }
+        if (captured.remoteId) {
+          const result = await cloudLibrary.saveNow({
+            expectedRemoteId: captured.remoteId,
+            expectedMarker: captured.marker,
+          });
+          return result?.ok ? { ok: true, destination: 'cloud' } : result;
+        }
+        try {
+          const record = saveCurrentProjectToLibrary(captured.project);
+          if (record?.project?.id !== captured.project.id) {
+            return { ok: false, reason: 'browser-library-mismatch' };
+          }
+          markProjectPersisted('browser', captured.marker);
+          return { ok: true, destination: 'browser' };
+        } catch {
+          return { ok: false, reason: 'browser-library-failed' };
+        }
+      },
+      isSnapshotCurrent: isProjectSwitchSnapshotCurrent,
+    });
+  }, [cloudLibrary, flushProjectAutosave, isProjectSwitchSnapshotCurrent, markProjectPersisted, projectAssociationSaveBlocked]);
+
   // configured push rate; Tweaks fires lw-preview-settings when it changes
   const [pushFps, setPushFps] = useState(readPushFps);
   useEffect(() => {
@@ -664,6 +725,10 @@ function Shell() {
 
   // real project actions
   const onSave = useCallback(async () => {
+    if (projectAssociationSaveBlocked) {
+      showWorkspaceEvent('Saving is blocked because Studio could not establish a safe destination for this project. Open another project or restore browser storage before retrying.', { kind: 'error', persistent: true, review: true });
+      return;
+    }
     if (cloudLibrary.session.status === 'authenticated' && cloudLibrary.activeRemoteProject) {
       const result = await cloudLibrary.saveNow();
       if (result.ok) showWorkspaceEvent('Saved online');
@@ -685,7 +750,7 @@ function Shell() {
     } catch {
       showWorkspaceEvent('Browser save failed', { kind: 'error', persistent: true, review: true });
     }
-  }, [cloudLibrary, markProjectPersisted, serializeProject, showWorkspaceEvent]);
+  }, [cloudLibrary, markProjectPersisted, projectAssociationSaveBlocked, serializeProject, showWorkspaceEvent]);
   const onLaunchBridge = useCallback(async operation => {
     await launchBridgeOperation(operation, {
       persistProject: async () => {
@@ -718,12 +783,38 @@ function Shell() {
     else showWorkspaceEvent('Download failed', { kind: 'error', persistent: true, review: true });
   }, [markProjectPersisted, projectName, serializeProject, showWorkspaceEvent]);
   const onLoad = useCallback(() => setLoadDialogOpen(true), []);
+  const onMatchedCardProjectLoaded = useCallback(({ source, recordId }) => {
+    if (!['browser', 'production', 'unassociated'].includes(source)) return { ok: true };
+    // Detach cloud first and clear the old browser association before selecting
+    // the new destination. If browser storage fails at either step, manual and
+    // card-switch saves remain blocked so the previous project cannot be overwritten.
+    cloudLibrary.detachProject();
+    try {
+      writeActiveProjectLibraryRecordId('');
+      if (source === 'browser') {
+        if (!recordId) throw new Error('missing browser project record');
+        writeActiveProjectLibraryRecordId(recordId);
+        if (readActiveProjectLibraryRecordId() !== recordId) throw new Error('browser project association was not stored');
+        markProjectPersisted('browser');
+      } else if (readActiveProjectLibraryRecordId() !== '') {
+        throw new Error('browser project association was not cleared');
+      }
+      setProjectAssociationSaveBlocked(false);
+      return { ok: true };
+    } catch {
+      cloudLibrary.detachProject();
+      try { writeActiveProjectLibraryRecordId(''); } catch { /* Saving remains blocked below. */ }
+      setProjectAssociationSaveBlocked(true);
+      return { ok: false, reason: 'association-handoff-failed' };
+    }
+  }, [cloudLibrary, markProjectPersisted]);
   const onImport = useCallback(() => fileInputRef.current?.click(), []);
   const onNew = useCallback(async () => {
     const result = await replaceWithNewProject();
     if (result.ok) {
       writeActiveProjectLibraryRecordId('');
       cloudLibrary.detachProject();
+      setProjectAssociationSaveBlocked(false);
     }
   }, [cloudLibrary, replaceWithNewProject]);
   const onFile = useCallback((e) => {
@@ -737,6 +828,7 @@ function Shell() {
         if (result.ok) {
           writeActiveProjectLibraryRecordId('');
           cloudLibrary.detachProject();
+          setProjectAssociationSaveBlocked(false);
           setLoadDialogOpen(false);
         }
         if (result.reason === 'invalid') alert('Invalid project file (version mismatch).');
@@ -791,7 +883,28 @@ function Shell() {
       <ScreenErrorBoundary key={view} onBeforeReload={flushProjectAutosave} onRecover={() => navigateStudio('layout')}>
         <Suspense fallback={<div className="screen route-loading" role="status" aria-live="polite">Loading Studio screen…</div>}>
           {Screen ? <>
-            <Screen connected={connected} cardHost={cardLink.host || cardStatus.host} cardLink={cardLink} onConnectCard={onConnectCard} onOpenConnectionCenter={openConnectionCenter} go={navigateStudio} onOpenSection={openCardSection} replaceProject={replaceProject} route={cardRoute} />
+            <Screen
+              connected={connected}
+              cardHost={cardLink.host || cardStatus.host}
+              cardLink={cardLink}
+              onConnectCard={onConnectCard}
+              onOpenConnectionCenter={openConnectionCenter}
+              go={navigateStudio}
+              onOpenSection={openCardSection}
+              replaceProject={replaceProject}
+              currentProject={serializeProject()}
+              projectGeneration={projectLifecycle.generation}
+              activeCloudProjects={cloudLibrary.activeProjects}
+              browserProjects={cloudLibrary.browserProjects}
+              readBrowserProjects={listProjectLibraryRecords}
+              readCloudProject={cloudLibrary.readCardProjectCandidate}
+              openMatchingCardProject={cloudLibrary.openMatchingCardProject}
+              confirmProjectReplacement={requestReplacementConfirmation}
+              saveBeforeCardProjectSwitch={saveBeforeCardProjectSwitch}
+              isProjectSwitchSnapshotCurrent={isProjectSwitchSnapshotCurrent}
+              onMatchedProjectLoaded={onMatchedCardProjectLoaded}
+              route={cardRoute}
+            />
             <ScreenReady />
           </> : null}
         </Suspense>

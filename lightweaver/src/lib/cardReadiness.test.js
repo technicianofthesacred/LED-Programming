@@ -101,16 +101,44 @@ test('invalid Lightweaver identity and unsupported contracts remain checking', (
   assert.equal(unsupported.connected, false);
 });
 
-test('factory evidence is blank even when the command API is alive', () => {
-  for (const payload of [
-    readyEnvelope({ runtimePhase: 'factory', knownGoodProject: false }),
-    readyEnvelope({ runtimePhase: 'ready', knownGoodProject: false }),
+test('only corroborated factory evidence is blank', () => {
+  const result = classifyCardReadiness(readyEnvelope({
+    runtimePhase: 'factory',
+    knownGoodProject: false,
+    commandReady: false,
+    outputReady: false,
+    mode: 'factory-flash',
+    source: 'defaults',
+  }), { expectedCardId: CARD_ID });
+
+  assert.equal(result.state, 'blank');
+  assert.equal(result.blank, true);
+  assert.equal(result.connected, false);
+});
+
+test('non-factory and partial factory evidence stays in recovery', () => {
+  for (const override of [
+    { runtimePhase: 'recovering', knownGoodProject: true, commandReady: false },
+    { runtimePhase: 'recovering', knownGoodProject: false, commandReady: false },
+    { runtimePhase: 'factory', knownGoodProject: false, commandReady: true, mode: 'factory-flash', source: 'defaults' },
+    { runtimePhase: 'factory', knownGoodProject: false, commandReady: false, source: 'defaults' },
+    { runtimePhase: 'factory', knownGoodProject: false, commandReady: false, mode: 'factory-flash' },
   ]) {
-    const result = classifyCardReadiness(payload, { expectedCardId: CARD_ID });
-    assert.equal(result.state, 'blank');
-    assert.equal(result.blank, true);
-    assert.equal(result.connected, false);
+    const result = classifyCardReadiness(readyEnvelope(override), { expectedCardId: CARD_ID });
+    assert.equal(result.state, 'not-ready', JSON.stringify(override));
+    assert.equal(result.patternAccess, 'recovery', JSON.stringify(override));
+    assert.equal(result.blank, false, JSON.stringify(override));
   }
+});
+
+test('pattern access permits card effects only for exact ready evidence', () => {
+  const ready = classifyCardReadiness(readyEnvelope(), { expectedCardId: CARD_ID });
+  const incomplete = classifyCardReadiness(readyEnvelope({ outputReady: false }), {
+    expectedCardId: CARD_ID,
+  });
+
+  assert.equal(ready.patternAccess, 'ready');
+  assert.equal(incomplete.patternAccess, 'recovery');
 });
 
 test('an unexpected exact card ID is an identity mismatch', () => {
@@ -135,6 +163,7 @@ test('a changed boot ID revalidates before becoming connected', () => {
 test('incomplete runtime readiness is not ready', () => {
   for (const override of [
     { runtimePhase: 'recovering' },
+    { knownGoodProject: false },
     { commandReady: false },
     { outputReady: false },
   ]) {

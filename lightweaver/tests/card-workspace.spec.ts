@@ -32,6 +32,164 @@ function readyStatus(cardId: string, overrides = {}) {
   };
 }
 
+async function renderProjectSwitchCardHarness(page, mode: 'offline' | 'duplicate' | 'cloud' | 'cloud-stale' | 'changed' | 'browser-deleted' | 'association' | 'association-failure' | 'post-read-failure') {
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(async (scenario) => {
+    const mainSource = await (await fetch('/src/main.jsx')).text();
+    const domUrl = mainSource.match(/["']([^"']*react-dom_client[^"']*)["']/)?.[1];
+    const cardSource = await (await fetch('/src/v3/lw-card.jsx')).text();
+    const reactUrl = cardSource.match(/["']([^"']*\/deps\/react\.js[^"']*)["']/)?.[1];
+    if (!domUrl || !reactUrl) throw new Error('could not resolve React module URLs');
+    const [{ CardScreen }, { createDefaultProject }, resolver, reactModule, domModule] = await Promise.all([
+      import('/src/v3/lw-card.jsx'),
+      import('/src/lib/projectModel.js'),
+      import('/src/lib/cardProjectResolver.js'),
+      import(reactUrl),
+      import(domUrl),
+    ]);
+    const React = reactModule.default ?? reactModule;
+    const createRoot = domModule.createRoot ?? domModule.default?.createRoot;
+    if (typeof createRoot !== 'function') throw new Error('could not resolve createRoot');
+    const cloudScenario = scenario === 'cloud' || scenario === 'cloud-stale';
+
+    const current = createDefaultProject();
+    current.id = 'current-work-in-progress';
+    current.name = 'Work in progress';
+    current.layout.starterPending = false;
+    const installed = createDefaultProject();
+    installed.id = cloudScenario ? 'cloud-installed-project' : 'browser-installed-project';
+    installed.name = cloudScenario ? 'Cloud installed project' : 'Browser installed project';
+    installed.layout.starterPending = false;
+    const fingerprint = resolver.cardProjectFingerprint(installed);
+    const status = {
+      app: 'Lightweaver', provisioningContractVersion: 1,
+      cardId: 'lw-project-switch-harness', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
+      bootId: 'boot-harness', runtimePhase: 'ready', knownGoodProject: true,
+      commandReady: true, outputReady: true,
+    };
+    const evidence = {
+      ...status,
+      projectId: installed.id,
+      projectRevision: 23,
+      projectFingerprint: fingerprint,
+      piece: { id: installed.id, name: installed.name },
+    };
+    let releasePostReplaceRead;
+    const calls = { save: 0, replace: 0, open: 0, association: 0, openOptions: null };
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url === 'http://lightweaver.local/api/status') {
+        if (scenario === 'post-read-failure' && calls.replace > 0) {
+          return new Response(JSON.stringify({
+            ...status,
+            runtimePhase: 'recovery',
+            knownGoodProject: false,
+            commandReady: false,
+            outputReady: false,
+          }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (scenario === 'association' && calls.replace > 0) {
+          return new Promise(resolve => {
+            releasePostReplaceRead = () => resolve(new Response(JSON.stringify(status), {
+              status: 200, headers: { 'Content-Type': 'application/json' },
+            }));
+          });
+        }
+        return new Response(JSON.stringify(status), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url === 'http://lightweaver.local/api/firmware-info') {
+        return new Response(JSON.stringify(evidence), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return originalFetch(input, init);
+    };
+
+    let releaseSave;
+    const savedSnapshot = {
+      project: current,
+      marker: { generation: 7, revision: 4 },
+      remoteId: cloudScenario ? 'remote-current' : '',
+    };
+    const saveBeforeCardProjectSwitch = () => {
+      calls.save += 1;
+      if (scenario === 'offline') return Promise.resolve({ ok: false, reason: 'offline' });
+      if (scenario === 'duplicate') {
+        return new Promise(resolve => { releaseSave = () => resolve({ ok: true, destination: 'browser', snapshot: savedSnapshot }); });
+      }
+      return Promise.resolve({
+        ok: true,
+        destination: cloudScenario ? 'cloud' : 'browser',
+        snapshot: savedSnapshot,
+      });
+    };
+    const openMatchingCardProject = async (_remoteId, _evidence, options) => {
+      calls.open += 1;
+      calls.openOptions = {
+        expectedRevision: options?.expectedRevision,
+        currentProjectSaved: options?.currentProjectSaved,
+        beforeMutation: typeof options?.beforeMutation,
+      };
+      await options?.beforeMutation?.();
+      if (scenario === 'cloud-stale') {
+        calls.replace += 1;
+        return { ok: false, reason: 'stale-session', replacementCommitted: true };
+      }
+      return { ok: true };
+    };
+    const host = document.createElement('div');
+    host.dataset.testid = `project-switch-${scenario}`;
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const cardLink = {
+      state: 'connected-direct', transport: 'direct', host: 'lightweaver.local',
+      card: { id: status.cardId, firmwareVersion: status.firmwareVersion, buildId: status.buildId },
+      expectedCard: { id: status.cardId, firmwareVersion: status.firmwareVersion, buildId: status.buildId },
+      readiness: status, validatedBootId: status.bootId,
+      operationGeneration: 0, revalidationGeneration: 0,
+    };
+    const cloudRecord = {
+      id: 'remote-installed', revision: 23, embeddedProjectId: installed.id,
+      title: installed.name, document: installed,
+    };
+    root.render(React.createElement(CardScreen, {
+      connected: true,
+      cardHost: 'lightweaver.local',
+      cardLink,
+      onConnectCard: () => {},
+      onOpenSection: () => {},
+      replaceProject: async () => { calls.replace += 1; return { ok: true }; },
+      currentProject: current,
+      projectGeneration: 7,
+      activeCloudProjects: cloudScenario ? [cloudRecord] : [],
+      browserProjects: cloudScenario ? [] : [{ id: 'browser-installed', project: installed }],
+      readBrowserProjects: () => scenario === 'browser-deleted'
+        ? []
+        : [{ id: 'browser-installed', project: installed }],
+      readCloudProject: async () => cloudRecord,
+      openMatchingCardProject,
+      saveBeforeCardProjectSwitch,
+      isProjectSwitchSnapshotCurrent: () => scenario !== 'changed',
+      onMatchedProjectLoaded: () => {
+        calls.association += 1;
+        return scenario === 'association-failure'
+          ? { ok: false, reason: 'association-handoff-failed' }
+          : { ok: true };
+      },
+      route: { section: 'overview', supportTool: '' },
+    }));
+    (window as any).__projectSwitchHarness = {
+      calls,
+      releaseSave: () => releaseSave?.(),
+      releasePostReplaceRead: () => releasePostReplaceRead?.(),
+      host,
+    };
+  }, mode);
+
+  const region = page.locator(`[data-testid="project-switch-${mode}"]`).getByRole('region', { name: 'Matching card project' });
+  await expect(region.getByRole('button', { name: /^Load / })).toBeVisible();
+  return region;
+}
+
 async function seedCommissioningFlow(page, progress: 'wifi' | 'load-project' | 'test' | 'test-installed' | 'test-legacy') {
   await page.evaluate(async requestedProgress => {
     const api = await import('/src/lib/cardCommissioningFlow.js');
@@ -694,38 +852,264 @@ test('Hardware loads the verified production project that matches the paired car
   const index = await page.request.get('/production/jobs/index.json').then(response => response.json());
   const entry = index.jobs.find((job: any) => job.jobId === 'bench-fixture-44');
   expect(entry).toBeTruthy();
+  const job = await page.request.get(entry.url).then(response => response.json());
   const cardStatus = readyStatus('lw-bench-fixture', {
     buildId: 'bench-build',
     productionJobId: entry.jobId,
-    productionJobDigest: '437a0f7b32665112a734d515f7bdd97a3c18fffbf640854b6e76ecc39318e3c3',
+    productionJobDigest: entry.digest,
+    projectRevision: job.project.revision,
+    projectFingerprint: job.project.fingerprint,
     led: { pixels: 44, type: 'WS2815', colorOrder: 'GRB', maxMilliamps: 1500 },
     outputs: [{ id: 'out1', pin: 18, pixels: 44 }],
   });
   await page.route('http://lightweaver.local/api/status', route => route.fulfill({ json: cardStatus }));
-  await page.evaluate(() => {
+  await page.route('http://lightweaver.local/api/firmware-info', route => route.fulfill({ json: {
+    ...cardStatus,
+    piece: { id: job.project.id, name: job.project.restoreSnapshot.name },
+  } }));
+  await page.evaluate(async () => {
+    const { createDefaultProject } = await import('/src/lib/projectModel.js');
+    const project = createDefaultProject();
+    project.id = 'work-in-progress';
+    project.name = 'Work in progress';
+    project.layout.starterPending = false;
+    project.layout.strips = [{
+      id: 'wip-strip', name: 'Unfinished spiral', pixelCount: 17, pixels: [],
+    }];
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
+    localStorage.setItem('lw_autosave_v3_backup', JSON.stringify(project));
     localStorage.setItem('lw_card_identity_v1', JSON.stringify({
       version: 1, id: 'lw-bench-fixture', firmwareVersion: '1.0.0', buildId: 'bench-build',
     }));
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
-  await expect(page.getByRole('button', { name: 'Verify hardware' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Recover lights' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Color-order test' })).toBeVisible();
-  await page.getByRole('button', { name: 'Verify hardware' }).click();
-  await expect(page.getByRole('region', { name: 'Hardware checks and recovery' }).getByRole('status')).toContainText('Hardware readback verified');
-  await page.getByRole('button', { name: 'Color-order test' }).click();
-  await expect(page).toHaveURL(/#screen=card&section=settings&tool=color-order$/);
-  for (const color of ['Red', 'Green', 'Blue', 'White']) {
-    await expect(page.getByRole('button', { name: `Send ${color} test` })).toBeVisible();
-  }
-  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
 
-  await page.getByRole('button', { name: 'Load matching card project' }).click();
+  await page.getByRole('region', { name: 'Matching card project' })
+    .getByRole('button', { name: /Load .*production job bench-fixture-44, project revision/ }).click();
 
+  await expect(page.getByRole('dialog', { name: 'Replace current project?' })).toHaveCount(0);
   await expect(page).toHaveURL(/#screen=pattern$/);
+  const savedProjects = await page.evaluate(() => {
+    const envelope = JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}');
+    return envelope.records?.map(record => record.project) || [];
+  });
+  expect(savedProjects).toEqual(expect.arrayContaining([expect.objectContaining({
+    id: 'work-in-progress',
+    name: 'Work in progress',
+    layout: expect.objectContaining({
+      strips: expect.arrayContaining([expect.objectContaining({
+        sourceLayerId: 'wip-strip', name: 'Unfinished spiral', pixelCount: 17,
+      })]),
+    }),
+  })]));
   await expect(page.locator('.pm-targetcard .tc-layer .tc-total')).toHaveText('LEDs44');
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}').id)).toBe('bench-fixture');
+});
+
+test('Card project switch save failure keeps the current project open with actionable offline guidance', async ({ page }) => {
+  const region = await renderProjectSwitchCardHarness(page, 'offline');
+  await region.getByRole('button', { name: /^Load / }).click();
+
+  await expect(region.getByRole('alert')).toHaveText(
+    'The current online project has not been saved because Studio is offline. Reconnect, then retry.',
+  );
+  await expect.poll(() => page.evaluate(() => (window as any).__projectSwitchHarness.calls)).toMatchObject({
+    save: 1, replace: 0,
+  });
+  await expect(page).toHaveURL(/#screen=card&section=overview$/);
+});
+
+test('Card project switch blocks when the saved workspace changes before replacement', async ({ page }) => {
+  const region = await renderProjectSwitchCardHarness(page, 'changed');
+  await region.getByRole('button', { name: /^Load / }).click();
+
+  await expect(region.getByRole('alert')).toHaveText(
+    'The current project changed while Studio was saving it. Your edits are still open; retry to save the newest version.',
+  );
+  await expect.poll(() => page.evaluate(() => (window as any).__projectSwitchHarness.calls)).toMatchObject({
+    save: 1, replace: 0,
+  });
+  await expect(page).toHaveURL(/#screen=card&section=overview$/);
+});
+
+test('Card project switch rereads the browser library and blocks a deleted match', async ({ page }) => {
+  const region = await renderProjectSwitchCardHarness(page, 'browser-deleted');
+  await region.getByRole('button', { name: /^Load / }).click();
+
+  await expect(region.getByRole('alert')).toContainText('selected project changed');
+  await expect.poll(() => page.evaluate(() => (window as any).__projectSwitchHarness.calls)).toMatchObject({
+    save: 1, replace: 0,
+  });
+  await expect(page).toHaveURL(/#screen=card&section=overview$/);
+});
+
+test('Card project switch hands off persistence association before post-replacement card read', async ({ page }) => {
+  const region = await renderProjectSwitchCardHarness(page, 'association');
+  await region.getByRole('button', { name: /^Load / }).click();
+
+  await expect.poll(() => page.evaluate(() => (window as any).__projectSwitchHarness.calls)).toMatchObject({
+    save: 1, replace: 1, association: 1,
+  });
+  await expect(page).toHaveURL(/#screen=card&section=overview$/);
+  await page.evaluate(() => (window as any).__projectSwitchHarness.releasePostReplaceRead());
+  await expect(page).toHaveURL(/#screen=pattern$/);
+});
+
+test('Card project switch reports and blocks an unsafe persistence association handoff', async ({ page }) => {
+  const region = await renderProjectSwitchCardHarness(page, 'association-failure');
+  await region.getByRole('button', { name: /^Load / }).click();
+
+  await expect(region.getByRole('alert')).toHaveText(
+    'The matching project was loaded and your previous project was saved, but Studio could not establish a safe save destination for the loaded project. Saving is blocked; open another project or retry after browser storage is available.',
+  );
+  await expect.poll(() => page.evaluate(() => (window as any).__projectSwitchHarness.calls)).toMatchObject({
+    save: 1, replace: 1, association: 1,
+  });
+  await expect(page).toHaveURL(/#screen=card&section=overview$/);
+});
+
+test('Card project switch reports final card-check failure after replacement truthfully', async ({ page }) => {
+  const region = await renderProjectSwitchCardHarness(page, 'post-read-failure');
+  await region.getByRole('button', { name: /^Load / }).click();
+
+  await expect(region.getByRole('alert')).toHaveText(
+    'The matching project was loaded and your previous project was saved, but Studio could not complete the final card check. Reconnect the card before changing patterns.',
+  );
+  await expect.poll(() => page.evaluate(() => (window as any).__projectSwitchHarness.calls)).toMatchObject({
+    save: 1, replace: 1, association: 1,
+  });
+  await expect(page).toHaveURL(/#screen=card&section=overview$/);
+});
+
+test('duplicate project switch activation runs one save and one replacement', async ({ page }) => {
+  const region = await renderProjectSwitchCardHarness(page, 'duplicate');
+  const load = region.getByRole('button', { name: /^Load / });
+  await load.evaluate((button: HTMLButtonElement) => {
+    button.click();
+    button.click();
+  });
+
+  await expect(region.getByRole('status')).toHaveText('Saving current project…');
+  await expect.poll(() => page.evaluate(() => (window as any).__projectSwitchHarness.calls)).toMatchObject({
+    save: 1, replace: 0,
+  });
+  await page.evaluate(() => (window as any).__projectSwitchHarness.releaseSave());
+  await expect.poll(() => page.evaluate(() => (window as any).__projectSwitchHarness.calls)).toEqual({
+    save: 1, replace: 1, open: 0, association: 1, openOptions: null,
+  });
+  await expect(page).toHaveURL(/#screen=pattern$/);
+});
+
+test('cloud exact match opens with saved-current proof and fresh card verification callback', async ({ page }) => {
+  const region = await renderProjectSwitchCardHarness(page, 'cloud');
+  await region.getByRole('button', { name: /^Load / }).click();
+
+  await expect.poll(() => page.evaluate(() => (window as any).__projectSwitchHarness.calls)).toMatchObject({
+    save: 1,
+    replace: 0,
+    open: 1,
+    openOptions: {
+      expectedRevision: 23,
+      currentProjectSaved: true,
+      beforeMutation: 'function',
+    },
+  });
+});
+
+test('cloud exact match reports a committed replacement when the session changes mid-open', async ({ page }) => {
+  const region = await renderProjectSwitchCardHarness(page, 'cloud-stale');
+  await region.getByRole('button', { name: /^Load / }).click();
+
+  await expect(region.getByRole('alert')).toHaveText(
+    'The matching online project was loaded and your previous project was saved, but your session changed before Studio could associate the loaded project. Sign in again before saving online.',
+  );
+  await expect.poll(() => page.evaluate(() => (window as any).__projectSwitchHarness.calls)).toMatchObject({
+    save: 1, replace: 1, open: 1, association: 1,
+  });
+  await expect(page).toHaveURL(/#screen=card&section=overview$/);
+});
+
+test('Hardware refuses a published job when the card digest does not match its verified artifact', async ({ page }) => {
+  const index = await page.request.get('/production/jobs/index.json').then(response => response.json());
+  const entry = index.jobs.find((job: any) => job.jobId === 'bench-fixture-44');
+  const job = await page.request.get(entry.url).then(response => response.json());
+  const cardStatus = readyStatus('lw-bench-fixture-mismatch', {
+    productionJobId: entry.jobId,
+    productionJobDigest: 'f'.repeat(64),
+    projectRevision: job.project.revision,
+    projectFingerprint: job.project.fingerprint,
+  });
+  await page.route('http://lightweaver.local/api/status', route => route.fulfill({ json: cardStatus }));
+  await page.route('http://lightweaver.local/api/firmware-info', route => route.fulfill({ json: {
+    ...cardStatus,
+    piece: { id: job.project.id, name: job.project.restoreSnapshot.name },
+  } }));
+  await page.addInitScript(() => localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+    version: 1, id: 'lw-bench-fixture-mismatch', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
+  })));
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('button', { name: 'Load matching card project' })).toBeVisible();
+  await page.getByRole('button', { name: 'Load matching card project' }).click();
+  await expect(page.getByRole('alert')).toContainText(/exact|match|digest/i);
+  await expect(page).toHaveURL(/#screen=card&section=overview$/);
+});
+
+test('Hardware offers an exact current project without intent and auto-opens only with preserved edit intent', async ({ page }) => {
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(async () => {
+    const { createDefaultProject } = await import('/src/lib/projectModel.js');
+    const current = createDefaultProject();
+    current.id = 'ordinary-gallery-piece';
+    current.name = 'Ordinary gallery piece';
+    current.layout.starterPending = false;
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(current));
+    localStorage.setItem('lw_autosave_v3_backup', JSON.stringify(current));
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1, id: 'lw-ordinary-card', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
+    }));
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(650);
+  const fingerprint = await page.evaluate(async () => {
+    const resolver = await import('/src/lib/cardProjectResolver.js');
+    const { migrateProject } = await import('/src/lib/projectModel.js');
+    const normalized = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
+    return resolver.cardProjectFingerprint(migrateProject(normalized));
+  });
+  const cardStatus = readyStatus('lw-ordinary-card', {
+    projectRevision: 3,
+    projectFingerprint: fingerprint,
+  });
+  await page.route('http://lightweaver.local/api/status', route => route.fulfill({ json: cardStatus }));
+  await page.route('http://lightweaver.local/api/firmware-info', route => route.fulfill({ json: {
+    ...cardStatus,
+    projectFingerprint: fingerprint,
+    piece: { id: 'ordinary-gallery-piece', name: 'Ordinary gallery piece' },
+  } }));
+  await page.evaluate(() => { window.location.hash = '#screen=card&section=overview'; });
+  await dispatchCardLink(page, [{
+    type: 'direct-status', connected: true, host: 'lightweaver.local',
+    card: { id: cardStatus.cardId, firmwareVersion: cardStatus.firmwareVersion, buildId: cardStatus.buildId },
+    expectedCard: { id: cardStatus.cardId, firmwareVersion: cardStatus.firmwareVersion, buildId: cardStatus.buildId },
+    readiness: cardStatus,
+  }]);
+  await expect(page.getByRole('region', { name: 'Matching card project' })).toContainText(
+    'Exact match found: “Ordinary gallery piece — current Studio project”',
+  );
+  await expect(page).toHaveURL(/#screen=card&section=overview$/);
+  await expect(page.getByRole('button', {
+    name: 'Load Ordinary gallery piece — current Studio project',
+  })).toBeVisible();
+
+  await page.goto('/?editPattern=aurora#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await dispatchCardLink(page, [{
+    type: 'direct-status', connected: true, host: 'lightweaver.local',
+    card: { id: cardStatus.cardId, firmwareVersion: cardStatus.firmwareVersion, buildId: cardStatus.buildId },
+    expectedCard: { id: cardStatus.cardId, firmwareVersion: cardStatus.firmwareVersion, buildId: cardStatus.buildId },
+    readiness: cardStatus,
+  }]);
+  await expect(page).toHaveURL(/#screen=pattern$/);
 });
 
 test('Card section navigation wraps without page overflow on a 390px viewport', async ({ page }) => {
@@ -861,12 +1245,23 @@ test('connect actions prefer onOpenConnectionCenter and fall back to onConnectCa
 });
 
 test('connected Card overview identifies the card and makes Install on card primary', async ({ page }) => {
+  const status = readyStatus('lw-gallery-card');
+  await page.addInitScript(identity => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify(identity));
+  }, {
+    version: 1, id: status.cardId, name: 'Gallery card',
+    firmwareVersion: status.firmwareVersion, buildId: status.buildId,
+  });
+  await page.route('**/api/status', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(status),
+  }));
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Your Lightweaver hardware' })).toBeVisible();
   await dispatchCardLink(page, [{
-    type: 'card-verified', via: 'bridge',
-    card: { id: 'lw-gallery-card', name: 'Gallery card' },
-    readiness: readyStatus('lw-gallery-card'),
+    type: 'direct-status', connected: true, host: 'lightweaver.local',
+    card: { id: 'lw-gallery-card', name: 'Gallery card', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) },
+    expectedCard: { id: 'lw-gallery-card', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) },
+    readiness: status,
   }]);
 
   await expect(page.getByTestId('card-detected-state')).toContainText('Gallery card');
@@ -901,6 +1296,7 @@ test('Card overview distinguishes checking, blank, and ready evidence', async ({
 
   status = readyStatus('lw-overview-state', {
     runtimePhase: 'factory', knownGoodProject: false, commandReady: false,
+    mode: 'factory-flash', source: 'defaults',
   });
   await expect(page.getByTestId('card-detected-state')).toContainText('Blank — load a project');
 
@@ -909,12 +1305,23 @@ test('Card overview distinguishes checking, blank, and ready evidence', async ({
 });
 
 test('ready overview offers Batch production as a low-emphasis link, not a setup step', async ({ page }) => {
+  const status = readyStatus('lw-gallery-card');
+  await page.addInitScript(identity => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify(identity));
+  }, {
+    version: 1, id: status.cardId, name: 'Gallery card',
+    firmwareVersion: status.firmwareVersion, buildId: status.buildId,
+  });
+  await page.route('**/api/status', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(status),
+  }));
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Your Lightweaver hardware' })).toBeVisible();
   await dispatchCardLink(page, [{
-    type: 'card-verified', via: 'bridge',
-    card: { id: 'lw-gallery-card', name: 'Gallery card' },
-    readiness: readyStatus('lw-gallery-card'),
+    type: 'direct-status', connected: true, host: 'lightweaver.local',
+    card: { id: 'lw-gallery-card', name: 'Gallery card', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) },
+    expectedCard: { id: 'lw-gallery-card', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) },
+    readiness: status,
   }]);
   await expect(page.getByRole('button', { name: 'Install on card', exact: true })).toHaveClass(/primary/);
   await expect(page.getByRole('button', { name: 'Verify in workshop', exact: true })).toHaveCount(0);
@@ -1349,6 +1756,8 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
           status = {
             ...status,
             runtimePhase: 'factory',
+            mode: 'factory-flash',
+            source: 'defaults',
             knownGoodProject: false,
             commandReady: false,
             outputReady: false,
@@ -1588,6 +1997,7 @@ test('HTTPS Studio reload proves an ambiguous initial config without replaying e
               cardId: reportedCardId, firmwareVersion: expectedCard.firmwareVersion,
               buildId: expectedCard.buildId, bootId: 'boot-reload-blank',
               runtimePhase: configured ? 'ready' : 'factory',
+              ...(!configured ? { mode: 'factory-flash', source: 'defaults' } : {}),
               knownGoodProject: configured, commandReady: configured, outputReady: configured,
               wifi: {
                 transport: 'station', transition: 'station', transitionPending: false,

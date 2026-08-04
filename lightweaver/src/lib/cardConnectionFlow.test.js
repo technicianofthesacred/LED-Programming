@@ -296,7 +296,10 @@ test('offers one-tap pairing for a reachable-but-unpaired card', () => {
 test('routes classified factory evidence to install, not ready-local-card', () => {
   const action = nextCardConnectionAction({
     link: readyLink({
-      readiness: readyEnvelope({ runtimePhase: 'factory', knownGoodProject: false }),
+      readiness: readyEnvelope({
+        runtimePhase: 'factory', knownGoodProject: false,
+        commandReady: false, mode: 'factory-flash', source: 'defaults',
+      }),
       cardBlank: true,
     }),
   });
