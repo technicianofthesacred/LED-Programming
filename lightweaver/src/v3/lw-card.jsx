@@ -24,7 +24,11 @@ import {
 } from '../lib/cardProjectResolver.js';
 import { normalizeCardHost } from '../lib/cardConnection.js';
 import { classifyCardReadiness } from '../lib/cardReadiness.js';
-import { clearCardEditAuthorization, issueCardEditAuthorization } from '../lib/cardEditAuthorization.js';
+import {
+  clearCardEditAuthorization,
+  issueCardEditAuthorization,
+  issueSignedProductionCardEditAuthorization,
+} from '../lib/cardEditAuthorization.js';
 
 // Section bar labels. `workshop` is deliberately absent: Batch production is a
 // manufacturing surface reached from the overview link, the support tile, or a
@@ -363,8 +367,8 @@ function CardOverview({
         return evidence;
       };
       const evidence = await readExactCardSnapshot();
-      const authorizeResolvedProject = (project, generation) => {
-        const issued = issueCardEditAuthorization({
+      const authorizeResolvedProject = (project, generation, signedProductionProject = null) => {
+        const binding = {
           intent: cardEditIntent(),
           cardId: evidence.cardId,
           firmwareVersion: evidence.firmwareVersion,
@@ -375,7 +379,10 @@ function CardOverview({
           studioProjectId: project?.id,
           studioProjectFingerprint: cardProjectFingerprint(project),
           projectGeneration: generation,
-        });
+        };
+        const issued = signedProductionProject
+          ? issueSignedProductionCardEditAuthorization(binding, signedProductionProject)
+          : issueCardEditAuthorization(binding);
         if (!issued) {
           throw new Error('Studio could not authorize this exact card and project for Pattern commands. Nothing was opened in Patterns.');
         }
@@ -582,7 +589,12 @@ function CardOverview({
         throw new Error(projectSwitchSaveFailureMessage('association-handoff-failed'));
       }
       await readExactCardSnapshot(evidence, { workspace: false });
-      authorizeResolvedProject(studioProject, projectGeneration + 1);
+      authorizeResolvedProject(studioProject, projectGeneration + 1, resolved.source === 'production' ? {
+        jobId: resolved.candidate.jobId,
+        jobDigest: resolved.candidate.digest,
+        projectId: resolved.candidate.project.id,
+        projectFingerprint: resolved.candidate.project.fingerprint,
+      } : null);
       window.location.hash = '#screen=pattern';
     } catch (error) {
       setMatchingProjectState({

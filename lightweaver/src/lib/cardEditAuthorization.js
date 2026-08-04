@@ -66,14 +66,13 @@ function readCurrent(binding, options) {
   return hasExactCore(activeAuthorization, normalized) ? normalized : null;
 }
 
-export function issueCardEditAuthorization(binding, options) {
-  const normalized = normalizeBinding(binding);
-  if (!normalized
-    || normalized.installedProjectId !== normalized.studioProjectId
-    || normalized.installedProjectFingerprint !== normalized.studioProjectFingerprint) {
-    activeAuthorization = null;
-    return false;
-  }
+function rejectAuthorization() {
+  activeAuthorization = null;
+  return false;
+}
+
+function activateAuthorization(normalized, options) {
+  if (!normalized) return rejectAuthorization();
   const issuedAt = timestamp(options);
   activeAuthorization = Object.freeze({
     ...normalized,
@@ -82,6 +81,33 @@ export function issueCardEditAuthorization(binding, options) {
     intentConsumed: false,
   });
   return true;
+}
+
+export function issueCardEditAuthorization(binding, options) {
+  const normalized = normalizeBinding(binding);
+  if (!normalized
+    || normalized.installedProjectId !== normalized.studioProjectId
+    || normalized.installedProjectFingerprint !== normalized.studioProjectFingerprint) {
+    return rejectAuthorization();
+  }
+  return activateAuthorization(normalized, options);
+}
+
+export function issueSignedProductionCardEditAuthorization(binding, signedProductionProject, options) {
+  const normalized = normalizeBinding(binding);
+  const signedProjectId = text(signedProductionProject?.projectId);
+  const signedProjectFingerprint = text(signedProductionProject?.projectFingerprint).toLowerCase();
+  const jobId = text(signedProductionProject?.jobId);
+  const jobDigest = text(signedProductionProject?.jobDigest).toLowerCase();
+  if (!normalized
+    || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/.test(jobId)
+    || !/^[a-f0-9]{64}$/.test(jobDigest)
+    || normalized.installedProjectId !== normalized.studioProjectId
+    || normalized.installedProjectId !== signedProjectId
+    || normalized.installedProjectFingerprint !== signedProjectFingerprint) {
+    return rejectAuthorization();
+  }
+  return activateAuthorization(normalized, options);
 }
 
 export function consumeCardEditAuthorization(binding, options) {

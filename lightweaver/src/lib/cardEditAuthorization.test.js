@@ -6,6 +6,7 @@ import {
   consumeCardEditAuthorization,
   hasCurrentCardProjectAuthorization,
   issueCardEditAuthorization,
+  issueSignedProductionCardEditAuthorization,
 } from './cardEditAuthorization.js';
 
 const NOW = 10_000;
@@ -67,6 +68,67 @@ test('refuses to issue for mismatched or incomplete installed and Studio project
   }, { now: NOW }), false);
   assert.equal(issueCardEditAuthorization({ ...binding, bootId: '' }, { now: NOW }), false);
   assert.equal(hasCurrentCardProjectAuthorization(binding, { now: NOW }), false);
+});
+
+test('signed production authorization binds a verified legacy fingerprint to the exact Studio fingerprint', () => {
+  const productionBinding = {
+    ...binding,
+    installedProjectFingerprint: 'a'.repeat(16),
+    studioProjectFingerprint: 'b'.repeat(64),
+  };
+  const signedProject = {
+    jobId: 'job-42',
+    jobDigest: 'c'.repeat(64),
+    projectId: productionBinding.installedProjectId,
+    projectFingerprint: productionBinding.installedProjectFingerprint,
+  };
+
+  assert.equal(issueSignedProductionCardEditAuthorization(
+    productionBinding,
+    signedProject,
+    { now: NOW },
+  ), true);
+  assert.equal(hasCurrentCardProjectAuthorization(productionBinding, { now: NOW + 1 }), true);
+  assert.equal(hasCurrentCardProjectAuthorization({
+    ...productionBinding,
+    installedProjectFingerprint: 'd'.repeat(16),
+  }, { now: NOW + 1 }), false);
+  assert.equal(hasCurrentCardProjectAuthorization({
+    ...productionBinding,
+    studioProjectFingerprint: 'e'.repeat(64),
+  }, { now: NOW + 1 }), false);
+});
+
+test('signed production authorization rejects incomplete or mismatched signed proof', () => {
+  const productionBinding = {
+    ...binding,
+    installedProjectFingerprint: 'a'.repeat(16),
+    studioProjectFingerprint: 'b'.repeat(64),
+  };
+  const signedProject = {
+    jobId: 'job-42',
+    jobDigest: 'c'.repeat(64),
+    projectId: productionBinding.installedProjectId,
+    projectFingerprint: productionBinding.installedProjectFingerprint,
+  };
+  const invalidProofs = [
+    { ...signedProject, projectId: 'project-2' },
+    { ...signedProject, projectFingerprint: 'd'.repeat(16) },
+    { ...signedProject, jobId: '' },
+    { ...signedProject, jobId: 'job id with spaces' },
+    { ...signedProject, jobDigest: '' },
+    { ...signedProject, jobDigest: 'c'.repeat(63) },
+  ];
+
+  for (const proof of invalidProofs) {
+    clearCardEditAuthorization();
+    assert.equal(issueSignedProductionCardEditAuthorization(
+      productionBinding,
+      proof,
+      { now: NOW },
+    ), false);
+    assert.equal(hasCurrentCardProjectAuthorization(productionBinding, { now: NOW + 1 }), false);
+  }
 });
 
 test('expires in memory and a reload-style clear revokes it immediately', () => {

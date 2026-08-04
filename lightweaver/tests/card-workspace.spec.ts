@@ -174,7 +174,7 @@ async function renderProjectSwitchCardHarness(page, mode: 'offline' | 'duplicate
       projectGeneration: 7,
       activeCloudProjects: cloudScenario && scenario !== 'cloud-late' ? [cloudRecord] : [],
       browserProjects: cloudScenario || scenario === 'browser-fresh' ? [] : [{ id: 'browser-installed', project: installed }],
-      readBrowserProjects: () => scenario === 'browser-deleted' || cloudScenario
+      readBrowserProjects: () => cloudScenario || (scenario === 'browser-deleted' && calls.save > 0)
         ? []
         : [{ id: 'browser-installed', project: installed }],
       readCloudProject: async () => cloudRecord,
@@ -881,6 +881,7 @@ test('Hardware loads the verified production project that matches the paired car
     buildId: 'bench-build',
     productionJobId: entry.jobId,
     productionJobDigest: entry.digest,
+    projectId: job.project.id,
     projectRevision: job.project.revision,
     projectFingerprint: job.project.fingerprint,
     led: { pixels: 44, type: 'WS2815', colorOrder: 'GRB', maxMilliamps: 1500 },
@@ -914,6 +915,7 @@ test('Hardware loads the verified production project that matches the paired car
 
   await expect(page.getByRole('dialog', { name: 'Replace current project?' })).toHaveCount(0);
   await expect(page).toHaveURL(/#screen=pattern$/);
+  await expect(page.getByRole('button', { name: 'Install on card' })).toBeEnabled();
   const savedProjects = await page.evaluate(() => {
     const envelope = JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}');
     return envelope.records?.map(record => record.project) || [];
