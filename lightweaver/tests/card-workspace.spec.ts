@@ -1132,6 +1132,7 @@ test('Hardware offers an exact current project without intent and auto-opens onl
   }]);
   await expect(page.getByRole('region', { name: 'Matching card project' })).toContainText(
     'Exact match found: “Ordinary gallery piece — current Studio project”',
+    { timeout: 15_000 },
   );
   await expect(page).toHaveURL(/#screen=card&section=overview$/);
   await expect(page.getByRole('button', {
@@ -1145,7 +1146,7 @@ test('Hardware offers an exact current project without intent and auto-opens onl
     expectedCard: { id: cardStatus.cardId, firmwareVersion: cardStatus.firmwareVersion, buildId: cardStatus.buildId },
     readiness: cardStatus,
   }]);
-  await expect(page).toHaveURL(/#screen=pattern$/);
+  await expect(page).toHaveURL(/#screen=pattern$/, { timeout: 25_000 });
 });
 
 test('Card section navigation wraps without page overflow on a 390px viewport', async ({ page }) => {

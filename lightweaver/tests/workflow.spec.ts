@@ -2,13 +2,30 @@ import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createDefaultProject } from '../src/lib/projectModel.js';
+import { cardProjectFingerprint } from '../src/lib/cardProjectResolver.js';
 
 async function mockLocalCard(page: any, options: any = {}) {
   const cardId = options.cardId || 'lw-workflow-card';
   const cardName = options.cardName || 'Workflow test card';
   const firmwareVersion = '1.0.0';
   const buildId = 'workflow-test-build';
+  const bootId = 'boot-workflow-test';
+  const project = options.project || createDefaultProject();
+  const projectFingerprint = cardProjectFingerprint(project);
   const card = {
+    authorization: {
+      intent: '',
+      cardId,
+      firmwareVersion,
+      buildId,
+      bootId,
+      installedProjectId: project.id,
+      installedProjectFingerprint: projectFingerprint,
+      studioProjectId: project.id,
+      studioProjectFingerprint: projectFingerprint,
+      projectGeneration: 0,
+    },
     zones: options.zones || [
       { id: 'patch-default-outer-circle', label: 'Outer circle', ranges: [{ start: 0, count: 27 }] },
       { id: 'patch-default-inner-circle', label: 'Inner circle', ranges: [{ start: 27, count: 17 }] },
@@ -18,8 +35,9 @@ async function mockLocalCard(page: any, options: any = {}) {
     controls: [] as any[],
   };
 
-  await page.addInitScript(({ id, name, version, build }) => {
+  await page.addInitScript(({ id, name, version, build, savedProject }) => {
     localStorage.clear();
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
     localStorage.setItem('lw_card_identity_v1', JSON.stringify({
       version: 1,
       id,
@@ -30,7 +48,7 @@ async function mockLocalCard(page: any, options: any = {}) {
       buildId: build,
       acknowledgedAt: '2026-07-17T00:00:00.000Z',
     }));
-  }, { id: cardId, name: cardName, version: firmwareVersion, build: buildId });
+  }, { id: cardId, name: cardName, version: firmwareVersion, build: buildId, savedProject: project });
 
   await page.route('http://lightweaver.local/**', async (route: any) => {
     const request = route.request();
@@ -38,8 +56,9 @@ async function mockLocalCard(page: any, options: any = {}) {
     if (pathname === '/api/status') {
       await route.fulfill({ json: {
         app: 'Lightweaver', ok: true, cardId, cardName, firmwareVersion, buildId,
-        provisioningContractVersion: 1, bootId: 'boot-workflow-test', runtimePhase: 'ready',
+        provisioningContractVersion: 1, bootId, runtimePhase: 'ready',
         knownGoodProject: true, commandReady: true, outputReady: true,
+        piece: { id: project.id }, projectFingerprint,
         led: { pixels: 44 }, wifi: { ip: 'lightweaver.local' },
         source: 'internal-flash', wiringRevision: 4, wiringDigest: 'deadbeef',
       } });
@@ -58,9 +77,11 @@ async function mockLocalCard(page: any, options: any = {}) {
           cardName,
           firmwareVersion,
           buildId,
+          bootId,
           ok: true,
+          projectId: card.savedConfig?.projectId ?? project.id,
           projectRevision: card.savedConfig?.projectRevision ?? 0,
-          projectFingerprint: card.savedConfig?.projectFingerprint ?? '',
+          projectFingerprint: card.savedConfig?.projectFingerprint ?? projectFingerprint,
           pixels: 44,
           outputs: [
             { id: 'out1', pin: 16, pixels: 44 },
@@ -93,6 +114,18 @@ async function mockLocalCard(page: any, options: any = {}) {
     await route.fulfill({ json: { ok: true } });
   });
   return card;
+}
+
+async function gotoAuthorizedPatterns(page: any, card: any) {
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('card-link-status')).toContainText(/connected|direct/i, { timeout: 5000 });
+  const issued = await page.evaluate(async authorization => {
+    const { issueCardEditAuthorization } = await import('/src/lib/cardEditAuthorization.js');
+    return issueCardEditAuthorization(authorization);
+  }, card.authorization);
+  expect(issued).toBe(true);
+  await page.evaluate(() => { window.location.hash = '#screen=pattern'; });
+  await expect(page.locator('.pm')).toBeVisible();
 }
 
 function writeLayerFixture(tmp: string, fileName = 'workflow-layers.svg') {
@@ -308,9 +341,8 @@ test('clicked vector path can be deleted from the canvas with the keyboard', asy
 });
 
 test('quiet pattern preview does not render routine notifications', async ({ page }) => {
-  await mockLocalCard(page);
-  await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByTestId('card-link-status')).toContainText(/connected|direct/i, { timeout: 5000 });
+  const card = await mockLocalCard(page);
+  await gotoAuthorizedPatterns(page, card);
 
   await page.locator('[data-pattern-id="aurora"]').click();
   await page.waitForTimeout(350);
@@ -343,8 +375,7 @@ test('latest section preview installs dependencies once and wins rapid taps', as
     zones: [{ id: 'full-piece', label: 'Full piece', ranges: [{ start: 0, count: 44 }] }],
     configDelayMs: 1000,
   });
-  await page.goto('/#screen=pattern', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByTestId('card-link-status')).toContainText(/connected|direct/i, { timeout: 5000 });
+  await gotoAuthorizedPatterns(page, card);
 
   card.operations.length = 0;
   await page.getByRole('button', { name: 'Outer circle', exact: true }).click();
