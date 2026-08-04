@@ -1,14 +1,19 @@
 function hasSnapshotMarker(snapshot) {
   if (!snapshot || typeof snapshot !== 'object') return false;
 
-  const { marker } = snapshot;
+  const { marker, project } = snapshot;
   if (!marker || typeof marker !== 'object') return false;
+  if (!project || typeof project !== 'object' || typeof project.id !== 'string' || project.id.length === 0) {
+    return false;
+  }
 
   return (
     Object.hasOwn(marker, 'generation')
-    && marker.generation != null
+    && Number.isInteger(marker.generation)
+    && marker.generation >= 0
     && Object.hasOwn(marker, 'revision')
-    && marker.revision != null
+    && Number.isInteger(marker.revision)
+    && marker.revision >= 0
   );
 }
 
@@ -17,8 +22,12 @@ function hasRequiredCallbacks({ flushBrowserRecovery, saveAuthoritative, isSnaps
     .every((callback) => typeof callback === 'function');
 }
 
-function indicatesFailure(result) {
-  return result === false || (result && typeof result === 'object' && result.ok === false);
+function acknowledgesBrowserRecovery(result) {
+  return result === true || (result && typeof result === 'object' && result.ok === true);
+}
+
+function isAuthoritativeSuccess(result) {
+  return result && typeof result === 'object' && result.ok === true;
 }
 
 function isThenable(value) {
@@ -60,7 +69,7 @@ export async function runProjectSwitchSaveBarrier(options = {}) {
 
   try {
     const recoveryResult = flushBrowserRecovery(snapshot);
-    if (isThenable(recoveryResult) || indicatesFailure(recoveryResult)) {
+    if (isThenable(recoveryResult) || !acknowledgesBrowserRecovery(recoveryResult)) {
       return { ok: false, reason: 'browser-recovery-failed' };
     }
   } catch {
@@ -74,7 +83,7 @@ export async function runProjectSwitchSaveBarrier(options = {}) {
     return { ok: false, reason: 'authoritative-save-failed' };
   }
 
-  if (indicatesFailure(authoritativeResult)) {
+  if (!isAuthoritativeSuccess(authoritativeResult)) {
     return { ok: false, reason: safeFailureReason(authoritativeResult) };
   }
 
@@ -87,5 +96,9 @@ export async function runProjectSwitchSaveBarrier(options = {}) {
     return { ok: false, reason: 'workspace-changed' };
   }
 
-  return { ok: true, result: authoritativeResult };
+  return {
+    ok: true,
+    destination: authoritativeResult.destination,
+    snapshot,
+  };
 }
