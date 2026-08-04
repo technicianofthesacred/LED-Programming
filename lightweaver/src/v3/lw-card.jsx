@@ -93,6 +93,9 @@ function CardOverview({
   const [hardwareActionState, setHardwareActionState] = useState({ status: 'idle', message: '' });
   const resolutionContextRef = useRef(null);
   const projectSwitchInFlightRef = useRef(false);
+  const cardProjectProbeRef = useRef('');
+  const pendingCardProjectProbeRef = useRef(null);
+  const [cardProjectProbeRevision, requestCardProjectProbe] = React.useReducer(value => value + 1, 0);
   resolutionContextRef.current = {
     browserProjects,
     cardLink,
@@ -275,11 +278,21 @@ function CardOverview({
       setHardwareActionState({ status: 'error', message: error?.message || 'Recovery was not verified. Keep the card powered, reconnect, and retry.' });
     }
   };
-  const loadMatchingCardProject = useCallback(async ({ probeOnly = false, selectionKey = '', autoIntent = '' } = {}) => {
-    if (!ready || projectSwitchInFlightRef.current
-      || matchingProjectState.status === 'loading'
-      || matchingProjectState.status === 'saving') return;
+  const loadMatchingCardProject = useCallback(async ({ probeOnly = false, selectionKey = '', autoIntent = '', probeSignature = '' } = {}) => {
+    if (!ready) return;
+    if (projectSwitchInFlightRef.current) {
+      if (probeSignature) {
+        pendingCardProjectProbeRef.current = { probeOnly, autoIntent, probeSignature };
+      }
+      return;
+    }
     projectSwitchInFlightRef.current = true;
+    if (probeSignature) {
+      cardProjectProbeRef.current = probeSignature;
+      if (pendingCardProjectProbeRef.current?.probeSignature === probeSignature) {
+        pendingCardProjectProbeRef.current = null;
+      }
+    }
     setMatchingProjectState({ status: 'loading', message: 'Reading the exact project installed on this card…' });
     let replacementCommitted = false;
     let associationHandoffFailed = false;
@@ -584,6 +597,11 @@ function CardOverview({
       });
     } finally {
       projectSwitchInFlightRef.current = false;
+      const pendingProbe = pendingCardProjectProbeRef.current;
+      if (pendingProbe && pendingProbe.probeSignature !== cardProjectProbeRef.current) {
+        pendingCardProjectProbeRef.current = null;
+        requestCardProjectProbe();
+      }
     }
   }, [
     activeCloudProjects,
@@ -602,7 +620,6 @@ function CardOverview({
     saveBeforeCardProjectSwitch,
     isProjectSwitchSnapshotCurrent,
   ]);
-  const cardProjectProbeRef = useRef('');
   useEffect(() => {
     if (!ready) return;
     const candidateSourceSignature = [
@@ -631,10 +648,9 @@ function CardOverview({
       candidateSourceSignature,
     ].join('|');
     if (cardProjectProbeRef.current === signature) return;
-    cardProjectProbeRef.current = signature;
     const autoIntent = cardEditIntent();
-    void loadMatchingCardProject({ probeOnly: !autoIntent, autoIntent });
-  }, [activeCloudProjects, browserProjects, cardHost, cardLink, loadMatchingCardProject, projectGeneration, ready]);
+    void loadMatchingCardProject({ probeOnly: !autoIntent, autoIntent, probeSignature: signature });
+  }, [activeCloudProjects, browserProjects, cardHost, cardLink, cardProjectProbeRevision, loadMatchingCardProject, projectGeneration, ready]);
   const renderAction = (action, primary = false) => action && (
     <button
       type="button"

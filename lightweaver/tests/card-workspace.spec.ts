@@ -75,6 +75,9 @@ async function renderProjectSwitchCardHarness(page, mode: 'offline' | 'duplicate
       piece: { id: installed.id, name: installed.name },
     };
     let releasePostReplaceRead;
+    let releaseInitialEvidence;
+    let initialEvidenceHeld = false;
+    let shouldHoldInitialEvidence = scenario === 'cloud-late';
     const calls = { save: 0, replace: 0, open: 0, association: 0, openOptions: null };
     const originalFetch = window.fetch.bind(window);
     window.fetch = async (input, init) => {
@@ -99,6 +102,15 @@ async function renderProjectSwitchCardHarness(page, mode: 'offline' | 'duplicate
         return new Response(JSON.stringify(status), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       if (url === 'http://lightweaver.local/api/firmware-info') {
+        if (shouldHoldInitialEvidence) {
+          shouldHoldInitialEvidence = false;
+          initialEvidenceHeld = true;
+          return new Promise(resolve => {
+            releaseInitialEvidence = () => resolve(new Response(JSON.stringify(evidence), {
+              status: 200, headers: { 'Content-Type': 'application/json' },
+            }));
+          });
+        }
         return new Response(JSON.stringify(evidence), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       return originalFetch(input, init);
@@ -182,6 +194,8 @@ async function renderProjectSwitchCardHarness(page, mode: 'offline' | 'duplicate
       calls,
       releaseSave: () => releaseSave?.(),
       releasePostReplaceRead: () => releasePostReplaceRead?.(),
+      initialEvidenceHeld: () => initialEvidenceHeld,
+      releaseInitialEvidence: () => releaseInitialEvidence?.(),
       releaseCloudCandidates: () => root.render(React.createElement(CardScreen, {
         ...cardProps,
         activeCloudProjects: [cloudRecord],
@@ -192,8 +206,9 @@ async function renderProjectSwitchCardHarness(page, mode: 'offline' | 'duplicate
 
   const region = page.locator(`[data-testid="project-switch-${mode}"]`).getByRole('region', { name: 'Matching card project' });
   if (mode === 'cloud-late') {
-    await expect(region.getByRole('alert')).toContainText('No active Studio project exactly matches');
+    await expect.poll(() => page.evaluate(() => (window as any).__projectSwitchHarness.initialEvidenceHeld())).toBe(true);
     await page.evaluate(() => (window as any).__projectSwitchHarness.releaseCloudCandidates());
+    await page.evaluate(() => (window as any).__projectSwitchHarness.releaseInitialEvidence());
   }
   await expect(region.getByRole('button', { name: /^Load / })).toBeVisible();
   return region;
