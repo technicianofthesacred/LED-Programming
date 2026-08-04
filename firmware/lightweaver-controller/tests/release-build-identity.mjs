@@ -12,8 +12,11 @@ assert.match(manifest.buildId, /^[a-f0-9]{40}$/);
 assert.equal(manifest.provenance.sourceRevision, manifest.buildId);
 assert.ok(image.includes(Buffer.from(manifest.buildId)), 'factory image must contain the exact signed manifest build ID');
 assert.match(platformio, /extra_scripts\s*=\s*[\s\S]*pre:scripts\/inject-build-identity\.py/);
-assert.match(workflow, /LW_BUILD_ID:\s*\$\{\{ github\.sha \}\}/);
-assert.match(workflow, /--build-id "\$\{GITHUB_SHA\}"/);
+assert.match(workflow, /LW_BUILD_ID:\s*\$\{\{ github\.event\.workflow_run\.head_sha \}\}/);
+assert.match(workflow, /SOURCE_REVISION:\s*\$\{\{ github\.event\.workflow_run\.head_sha \}\}/);
+assert.match(workflow, /LW_BUILD_ID:\s*\$\{\{ env\.SOURCE_REVISION \}\}/);
+assert.match(workflow, /--build-id "\$SOURCE_REVISION"/);
+assert.match(workflow, /--source-revision "\$SOURCE_REVISION"/);
 assert.match(
   workflow,
   /'firmware\/lightweaver-controller\/scripts\/\*\*'/,
