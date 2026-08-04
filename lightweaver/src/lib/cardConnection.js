@@ -137,6 +137,15 @@ export function writeStoredCardHost(rawHost = '') {
   return host;
 }
 
+export function bootstrapCardHostFromLocation(location = typeof window !== 'undefined' ? window.location : null) {
+  const params = new URLSearchParams(location?.search || '');
+  const rawHost = params.get('cardHost') || params.get('host') || '';
+  if (!isLocalCardHost(rawHost)) return readStoredCardHost();
+  const host = normalizeCardHost(rawHost);
+  rememberCardHost(host);
+  return writeStoredCardHost(host);
+}
+
 export function readStoredCardHostHistory() {
   if (typeof window === 'undefined') return [];
   try {

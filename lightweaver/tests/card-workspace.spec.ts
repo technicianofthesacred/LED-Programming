@@ -1345,6 +1345,57 @@ test('Card overview distinguishes checking, blank, and ready evidence', async ({
   await expect(page.getByTestId('card-detected-state')).toContainText('ready for light check');
 });
 
+test('reachable recovering factory card uses URL IP and offers blank setup without automatic writes', async ({ page }) => {
+  const cardId = 'lw-b0fe81f61b44';
+  const buildId = '19369537be823b74362896fdadd32b8182f27417';
+  const cardHost = '192.168.18.70';
+  const writes: string[] = [];
+  const status = {
+    app: 'Lightweaver', ok: true, provisioningContractVersion: 1,
+    cardId, firmwareVersion: '1.0.0', buildId,
+    bootId: 'boot-e11c5733-b0fe81f61b44',
+    runtimePhase: 'recovering', knownGoodProject: false,
+    commandReady: false, outputReady: false,
+    mode: 'factory-flash', source: 'defaults',
+    projectId: '', projectRevision: 0, projectFingerprint: '',
+    led: { pixels: 0 },
+    wifi: {
+      transport: 'station', transition: 'handoff-abandoned', transitionPending: true,
+      handoffGeneration: 1, apActive: false, stationIp: cardHost, ip: cardHost,
+    },
+  };
+  await page.addInitScript(identity => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify(identity));
+    localStorage.setItem('lw_chip_card_host', 'lightweaver.local');
+  }, { version: 1, id: cardId, firmwareVersion: '1.0.0', buildId });
+  await page.route(`http://${cardHost}/**`, async route => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() !== 'GET' && request.method() !== 'OPTIONS') writes.push(`${request.method()} ${pathname}`);
+    if (pathname === '/api/status') {
+      await route.fulfill({ json: status });
+      return;
+    }
+    if (pathname === '/api/firmware-info') {
+      await route.fulfill({ json: { ...status, outputs: [] } });
+      return;
+    }
+    if (pathname === '/api/zones') {
+      await route.fulfill({ json: { zones: [] } });
+      return;
+    }
+    await route.fulfill({ json: { ok: true } });
+  });
+
+  await page.goto(`/?cardBridge=1&cardHost=${cardHost}#screen=card&section=overview`, { waitUntil: 'domcontentloaded' });
+
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_chip_card_host'))).toBe(cardHost);
+  await expect(page.getByTestId('card-detected-state')).toContainText('Blank — load a project');
+  await expect(page.getByRole('button', { name: 'Start layout', exact: true })).toBeVisible();
+  await page.waitForTimeout(500);
+  expect(writes.filter(entry => /\/api\/(?:control|config)$/.test(entry))).toEqual([]);
+});
+
 test('ready overview offers Batch production as a low-emphasis link, not a setup step', async ({ page }) => {
   const status = readyStatus('lw-gallery-card');
   await page.addInitScript(identity => {

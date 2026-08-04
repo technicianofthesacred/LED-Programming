@@ -101,8 +101,7 @@ export function classifyCardReadiness(raw = {}, {
     return classifiedResult('identity-mismatch', normalized, 'unexpected-firmware-build');
   }
   if (
-    normalized.runtimePhase === 'factory'
-    && normalized.knownGoodProject === false
+    normalized.knownGoodProject === false
     && normalized.commandReady === false
     && normalized.mode === 'factory-flash'
     && normalized.source === 'defaults'
