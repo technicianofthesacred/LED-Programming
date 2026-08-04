@@ -317,7 +317,6 @@ const SettingsFieldContext = createContext(null);
           reboot: 'if-needed',
           allowLayoutChange: true,
           factoryBlank: cardLink.cardBlank === true,
-          cardEvidence: cardLink.readiness,
         });
         if (response?.state === 'staged') {
           throw new Error('The card kept this hardware change staged. Open Test & Install and confirm it on the real LEDs before it can be installed.');
