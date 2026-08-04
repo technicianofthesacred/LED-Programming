@@ -22,6 +22,16 @@ function hasRequiredCallbacks({ flushBrowserRecovery, saveAuthoritative, isSnaps
     .every((callback) => typeof callback === 'function');
 }
 
+function deepFreeze(value, seen = new WeakSet()) {
+  if (!value || typeof value !== 'object' || seen.has(value)) return value;
+
+  seen.add(value);
+  for (const child of Object.values(value)) {
+    deepFreeze(child, seen);
+  }
+  return Object.freeze(value);
+}
+
 function acknowledgesBrowserRecovery(result) {
   return result === true || (result && typeof result === 'object' && result.ok === true);
 }
@@ -46,6 +56,17 @@ function safeFailureReason(result) {
     : 'authoritative-save-failed';
 }
 
+function safeRejectionReason(error) {
+  return (
+    error
+    && typeof error === 'object'
+    && typeof error.reason === 'string'
+    && error.reason.length > 0
+  )
+    ? error.reason
+    : 'authoritative-save-failed';
+}
+
 /**
  * Completes the two persistence steps that must precede a project switch.
  * The caller owns the persistence callbacks; this helper only enforces order
@@ -59,7 +80,11 @@ export async function runProjectSwitchSaveBarrier(options = {}) {
     isSnapshotCurrent,
   } = options || {};
 
-  if (!hasSnapshotMarker(snapshot) || !hasRequiredCallbacks({
+  if (!hasSnapshotMarker(snapshot)) {
+    return { ok: false, reason: 'snapshot-invalid' };
+  }
+
+  if (!hasRequiredCallbacks({
     flushBrowserRecovery,
     saveAuthoritative,
     isSnapshotCurrent,
@@ -67,8 +92,15 @@ export async function runProjectSwitchSaveBarrier(options = {}) {
     return { ok: false, reason: 'invalid-input' };
   }
 
+  let capturedSnapshot;
   try {
-    const recoveryResult = flushBrowserRecovery(snapshot);
+    capturedSnapshot = deepFreeze(structuredClone(snapshot));
+  } catch {
+    return { ok: false, reason: 'snapshot-invalid' };
+  }
+
+  try {
+    const recoveryResult = flushBrowserRecovery(capturedSnapshot);
     if (isThenable(recoveryResult) || !acknowledgesBrowserRecovery(recoveryResult)) {
       return { ok: false, reason: 'browser-recovery-failed' };
     }
@@ -78,9 +110,9 @@ export async function runProjectSwitchSaveBarrier(options = {}) {
 
   let authoritativeResult;
   try {
-    authoritativeResult = await saveAuthoritative(snapshot);
-  } catch {
-    return { ok: false, reason: 'authoritative-save-failed' };
+    authoritativeResult = await saveAuthoritative(capturedSnapshot);
+  } catch (error) {
+    return { ok: false, reason: safeRejectionReason(error) };
   }
 
   if (!isAuthoritativeSuccess(authoritativeResult)) {
@@ -88,7 +120,7 @@ export async function runProjectSwitchSaveBarrier(options = {}) {
   }
 
   try {
-    const currentness = isSnapshotCurrent(snapshot);
+    const currentness = isSnapshotCurrent(capturedSnapshot);
     if (isThenable(currentness) || currentness !== true) {
       return { ok: false, reason: 'workspace-changed' };
     }
@@ -99,6 +131,6 @@ export async function runProjectSwitchSaveBarrier(options = {}) {
   return {
     ok: true,
     destination: authoritativeResult.destination,
-    snapshot,
+    snapshot: capturedSnapshot,
   };
 }
