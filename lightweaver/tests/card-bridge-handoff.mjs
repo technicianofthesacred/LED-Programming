@@ -1094,6 +1094,53 @@ assert.equal(responseRecovery.harness.windowListenerCount('online'), 0);
 assert.equal(responseRecovery.harness.windowListenerCount('focus'), 0);
 assert.equal(responseRecovery.harness.documentListenerCount('visibilitychange'), 0);
 
+const errorResponseRecovery = beginNavigationRecovery({
+  flowId: 'flow-error-response-1234',
+  correlation: { ...recoveryCorrelation, handoffGeneration: 120 },
+});
+const errorResponseStaleCallbacks = [
+  ...errorResponseRecovery.harness.windowListeners('online'),
+  ...errorResponseRecovery.harness.windowListeners('focus'),
+  ...errorResponseRecovery.harness.documentListeners('visibilitychange'),
+  ...errorResponseRecovery.harness.clock.callbacks(),
+];
+const errorResponsePromise = sendCardBridgeRequest('status', {}, {
+  host: recoveryStationHost,
+  timeoutMs: 1000,
+  retryOnTimeout: false,
+});
+const errorStatusRequest = errorResponseRecovery.target.posts.at(-1)?.message;
+assert.equal(errorStatusRequest?.type, 'status', 'handoff reachability uses a read-only request');
+errorResponseRecovery.harness.emitMessage({
+  origin: `http://${recoveryStationHost}`,
+  source: errorResponseRecovery.target,
+  data: {
+    app: 'LightweaverCardBridge', id: errorStatusRequest.id, ok: false,
+    reason: 'card-busy', error: 'Card is still starting.',
+  },
+});
+await assert.rejects(errorResponsePromise, error => error?.reason === 'card-busy');
+assert.equal(errorResponseRecovery.harness.clock.pendingCount(), 0,
+  'an exact card error response proves navigation and cancels the retry timer');
+assert.equal(errorResponseRecovery.harness.windowListenerCount('online'), 0);
+assert.equal(errorResponseRecovery.harness.windowListenerCount('focus'), 0);
+assert.equal(errorResponseRecovery.harness.documentListenerCount('visibilitychange'), 0);
+assert.equal(getCardBridgeState().verified, false,
+  'an error response does not grant verified bridge readiness');
+assert.equal(getCardBridgeState().identityVerified, false);
+assert.equal(getCardBridgeState().runtimeCommandReady, false);
+assert.equal(getCardBridgeState().initialConfigAuthority, false);
+assert.deepEqual(errorResponseRecovery.target.posts.map(entry => entry.message.type), ['status'],
+  'error-response recovery sends no mutation, config, or acknowledgement');
+const errorResponseNavigationCount = errorResponseRecovery.target.navigations.length;
+errorResponseRecovery.harness.emitWindow('online');
+errorResponseRecovery.harness.emitWindow('focus');
+errorResponseRecovery.harness.emitDocument();
+for (const callback of errorResponseStaleCallbacks) callback();
+errorResponseRecovery.harness.clock.advance(300000);
+assert.equal(errorResponseRecovery.target.navigations.length, errorResponseNavigationCount,
+  'later lifecycle signals and stale callbacks cannot navigate after an exact error response');
+
 const malformedIdentityRecovery = beginNavigationRecovery({
   flowId: 'flow-malformed-identity-1234',
   correlation: { ...recoveryCorrelation, handoffGeneration: 121 },

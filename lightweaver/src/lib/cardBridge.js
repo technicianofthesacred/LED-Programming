@@ -692,6 +692,15 @@ function handleBridgeMessage(event) {
 
   pending.delete(data.id);
   clearTimeout(request.timer);
+  // Success and card-declared errors both prove that the exact navigated page
+  // loaded. Stop reload recovery only after the request lifecycle, WindowProxy,
+  // and target origin have all passed their existing validation. This does not
+  // grant bridge readiness or any identity/command authority.
+  if (event.source === bridgeWindow
+    && Boolean(request.origin)
+    && event.origin === request.origin) {
+    clearBridgeHandoffNavigationRetry();
+  }
 
   if (data.ok === false) {
     const error = new Error(data.error || 'Card bridge request failed');
@@ -777,7 +786,6 @@ function handleBridgeMessage(event) {
     connected: true,
     ready: verifiedReady ? true : undefined,
   });
-  if (verifiedReady) clearBridgeHandoffNavigationRetry();
   request.resolve(responsePayload);
 }
 
