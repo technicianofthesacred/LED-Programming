@@ -1336,7 +1336,8 @@ test('Card overview distinguishes checking, blank, and ready evidence', async ({
     mode: 'factory-flash', source: 'defaults',
   });
   await expect(page.getByTestId('card-detected-state')).toContainText('Blank — load a project');
-  await page.getByRole('button', { name: 'Start layout' }).click();
+  await expect(page.getByRole('button', { name: 'Install current project', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Start a new project', exact: true }).click();
   await expect(page).toHaveURL(/#screen=layout/);
 
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
@@ -1350,6 +1351,7 @@ test('reachable recovering factory card uses URL IP and offers blank setup witho
   const buildId = '19369537be823b74362896fdadd32b8182f27417';
   const cardHost = '192.168.18.70';
   const writes: string[] = [];
+  const statusRequests: string[] = [];
   const status = {
     app: 'Lightweaver', ok: true, provisioningContractVersion: 1,
     cardId, firmwareVersion: '1.0.0', buildId,
@@ -1367,12 +1369,35 @@ test('reachable recovering factory card uses URL IP and offers blank setup witho
   await page.addInitScript(identity => {
     localStorage.setItem('lw_card_identity_v1', JSON.stringify(identity));
     localStorage.setItem('lw_chip_card_host', 'lightweaver.local');
-  }, { version: 1, id: cardId, firmwareVersion: '1.0.0', buildId });
+  }, {
+    version: 1, id: cardId, firmwareVersion: '1.0.0', buildId,
+    hostname: 'lightweaver.local', address: '192.168.4.1',
+  });
   await page.route(`http://${cardHost}/**`, async route => {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
     if (request.method() !== 'GET' && request.method() !== 'OPTIONS') writes.push(`${request.method()} ${pathname}`);
     if (pathname === '/api/status') {
+      statusRequests.push(cardHost);
+      await route.fulfill({ json: status });
+      return;
+    }
+    if (pathname === '/api/firmware-info') {
+      await route.fulfill({ json: { ...status, outputs: [] } });
+      return;
+    }
+    if (pathname === '/api/zones') {
+      await route.fulfill({ json: { zones: [] } });
+      return;
+    }
+    await route.fulfill({ json: { ok: true } });
+  });
+  await page.route('http://lightweaver.local/**', async route => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() !== 'GET' && request.method() !== 'OPTIONS') writes.push(`${request.method()} ${pathname}`);
+    if (pathname === '/api/status') {
+      statusRequests.push('lightweaver.local');
       await route.fulfill({ json: status });
       return;
     }
@@ -1389,9 +1414,18 @@ test('reachable recovering factory card uses URL IP and offers blank setup witho
 
   await page.goto(`/?cardBridge=1&cardHost=${cardHost}#screen=card&section=overview`, { waitUntil: 'domcontentloaded' });
 
+  await expect.poll(() => statusRequests.length).toBeGreaterThan(0);
+  expect(statusRequests[0]).toBe(cardHost);
   await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_chip_card_host'))).toBe(cardHost);
   await expect(page.getByTestId('card-detected-state')).toContainText('Blank — load a project');
-  await expect(page.getByRole('button', { name: 'Start layout', exact: true })).toBeVisible();
+  const setupSteps = page.getByTestId('card-setup-steps').locator('li');
+  await expect(setupSteps.nth(0)).toHaveAttribute('data-step-state', 'complete');
+  await expect(setupSteps.nth(3)).toHaveAttribute('data-step-state', 'current');
+  await expect(page.getByRole('button', { name: 'Install current project', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Start a new project', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Install current project', exact: true }).click();
+  await expect(page).toHaveURL(/#screen=card&section=settings$/);
+  await expect(page.getByRole('button', { name: 'Install on card', exact: true })).toBeVisible();
   await page.waitForTimeout(500);
   expect(writes.filter(entry => /\/api\/(?:control|config)$/.test(entry))).toEqual([]);
 });

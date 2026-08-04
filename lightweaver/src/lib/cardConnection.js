@@ -10,6 +10,8 @@ export const CARD_HOST_HISTORY_LIMIT = 8;
 export const CARD_SPECIFIC_DISCOVERY_HEAD_START_MS = 180;
 export const PRODUCTION_READ_ONLY_PREFLIGHT_FALLBACK_MS = 5_000;
 
+let sessionPreferredCardHost = '';
+
 function stripProtocolAndPath(rawHost = '') {
   const value = String(rawHost || '').trim().toLowerCase();
   if (!value) return '';
@@ -138,10 +140,12 @@ export function writeStoredCardHost(rawHost = '') {
 }
 
 export function bootstrapCardHostFromLocation(location = typeof window !== 'undefined' ? window.location : null) {
+  sessionPreferredCardHost = '';
   const params = new URLSearchParams(location?.search || '');
   const rawHost = params.get('cardHost') || params.get('host') || '';
   if (!isLocalCardHost(rawHost)) return readStoredCardHost();
   const host = normalizeCardHost(rawHost);
+  sessionPreferredCardHost = host;
   rememberCardHost(host);
   return writeStoredCardHost(host);
 }
@@ -185,8 +189,10 @@ function cardSpecificHosts(expectedCard = null) {
 export function candidateCardHosts(preferredHost = '', expectedCard = readPersistedCardIdentity()) {
   const normalizedPreferred = normalizeCardHost(preferredHost || readStoredCardHost());
   const preferred = isLocalCardHost(normalizedPreferred) ? normalizedPreferred : DEFAULT_CARD_HOST;
+  const sessionPreferred = isLocalCardHost(sessionPreferredCardHost) ? sessionPreferredCardHost : '';
   const history = readStoredCardHostHistory();
   const hosts = [
+    sessionPreferred,
     ...cardSpecificHosts(expectedCard),
     preferred,
     ...history,
@@ -289,8 +295,9 @@ export async function discoverCardStatus({
   fetchImpl = globalThis.fetch,
 } = {}) {
   const hosts = candidateCardHosts(preferredHost, expectedCard);
-  const specificHosts = cardSpecificHosts(expectedCard);
-  const fallbackHosts = hosts.filter(host => !specificHosts.includes(host));
+  const sessionPreferred = isLocalCardHost(sessionPreferredCardHost) ? sessionPreferredCardHost : '';
+  const preferredTierHosts = sessionPreferred ? [sessionPreferred] : cardSpecificHosts(expectedCard);
+  const fallbackHosts = hosts.filter(host => !preferredTierHosts.includes(host));
   const controllers = [];
   const priorErrors = [];
   const probe = host => probeCardStatusHost(host, {
@@ -300,7 +307,7 @@ export async function discoverCardStatus({
     expectedCard,
   });
   try {
-    let attempts = specificHosts.map(probe);
+    let attempts = preferredTierHosts.map(probe);
     if (attempts.length && fallbackHosts.length) {
       let timer;
       const firstTier = Promise.any(attempts);
@@ -316,7 +323,15 @@ export async function discoverCardStatus({
         return persistSelectedWinner(headStart.found, { persist, expectedCard });
       }
       if (headStart.error) {
-        priorErrors.push(...(Array.isArray(headStart.error?.errors) ? headStart.error.errors : [headStart.error]));
+        const failures = Array.isArray(headStart.error?.errors) ? headStart.error.errors : [headStart.error];
+        if (sessionPreferred) {
+          const discoveredMismatch = failures.find(error => error?.discoveredResult)?.discoveredResult;
+          if (discoveredMismatch) {
+            controllers.forEach(ctrl => ctrl.abort());
+            return discoveredMismatch;
+          }
+        }
+        priorErrors.push(...failures);
       }
       // A short head start preserves the preferred route without turning two
       // stale remembered hints into a multi-second onboarding stall. If those

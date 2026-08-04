@@ -68,8 +68,45 @@ test('URL bootstrap adopts a private card IP before mDNS and dispatches one host
       type: cardConnection.CARD_HOST_CHANGED_EVENT,
       detail: { host: '192.168.18.70' },
     }]);
+    assert.deepEqual(cardConnection.candidateCardHosts('', {
+      id: 'lw-gallery',
+      hostname: 'lightweaver.local',
+      address: '192.168.4.1',
+    }).slice(0, 3), [
+      '192.168.18.70',
+      'lightweaver.local',
+      '192.168.4.1',
+    ]);
     assert.equal(cardConnection.bootstrapCardHostFromLocation(), '192.168.18.70');
     assert.equal(browser.events.length, 1);
+  });
+});
+
+test('a stalled URL card hint gets only a bounded head start before mDNS fallback', async () => {
+  const browser = fakeBrowser('?cardHost=192.168.18.70');
+  await withFakeBrowser(browser, async () => {
+    cardConnection.bootstrapCardHostFromLocation();
+    const startedAt = Date.now();
+    const requested = [];
+    const found = await cardConnection.discoverCardStatus({
+      expectedCard: { id: 'lw-gallery', hostname: 'lightweaver.local' },
+      timeoutMs: 5_000,
+      persist: false,
+      fetchImpl: (url, { signal } = {}) => {
+        const host = new URL(url).hostname;
+        requested.push(host);
+        if (host === '192.168.18.70') {
+          return new Promise((resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ cardId: 'lw-gallery' }),
+        });
+      },
+    });
+    assert.equal(requested[0], '192.168.18.70');
+    assert.equal(found.host, 'lightweaver.local');
+    assert.ok(Date.now() - startedAt < 1_000, 'fallback should start after the bounded head start, not the fetch timeout');
   });
 });
 

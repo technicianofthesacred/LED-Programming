@@ -12,6 +12,8 @@ import {
 } from '../lib/cardCommissioningFlow.js';
 import { loadProductionJobFromIndexEntry, loadProductionJobIndex } from '../lib/productionJobPackage.js';
 import { createDefaultProject } from '../lib/projectModel.js';
+import { prepareCardDeployment } from '../lib/cardDeployment.js';
+import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
 import { readCardProjectEvidence, readCardStatusEnvelope } from '../lib/cardPushClient.js';
 import { recoverCardLights } from '../lib/cardLiveControl.js';
 import {
@@ -91,6 +93,7 @@ function CardOverview({
   saveBeforeCardProjectSwitch,
   isProjectSwitchSnapshotCurrent,
   onMatchedProjectLoaded,
+  onStartNewProject,
 }) {
   const [commissioningFlow, setCommissioningFlow] = useState(() => inspectCardCommissioning().flow);
   const [matchingProjectState, setMatchingProjectState] = useState({ status: 'idle', message: '' });
@@ -132,8 +135,16 @@ function CardOverview({
   const verifiedTransport = Boolean(cardLink?.card?.id && (
     state === 'connected-direct' || state === 'connected-bridge'
   ));
+  const blankCard = verifiedTransport && cardLink?.cardBlank === true;
+  let currentProjectInstallable = false;
+  try {
+    prepareCardStoragePayload(prepareCardDeployment(currentProject).runtimePackage);
+    currentProjectInstallable = true;
+  } catch {
+    currentProjectInstallable = false;
+  }
   const setupLabels = ['Connect', 'Install firmware', 'WiFi', 'Install on card', 'Test lights'];
-  let currentSetupIndex = ready ? 3 : 0;
+  let currentSetupIndex = ready || blankCard ? 3 : 0;
   if (commissioningFlow?.stage === 'install-safely') currentSetupIndex = 1;
   else if (commissioningFlow?.stage === 'set-up-card') {
     currentSetupIndex = ['setup-required', 'setup-joined'].includes(commissioningFlow.networkState) ? 2 : 3;
@@ -199,12 +210,12 @@ function CardOverview({
       primary: { label: activity === 'pending' ? 'Card operation in progress…' : 'Connecting…', disabled: true },
       secondary: { label: 'Open support', section: 'support' },
     };
-  } else if (verifiedTransport && cardLink?.cardBlank === true) {
+  } else if (blankCard) {
     presentation = {
       tone: 'failure',
       message: 'Blank — load a project before using this card.',
-      primary: { label: 'Start layout', view: 'layout' },
-      secondary: { label: 'Open support', section: 'support' },
+      primary: { label: 'Install current project', section: 'settings', disabled: !currentProjectInstallable },
+      secondary: { label: 'Start a new project', action: 'new-project' },
     };
   } else if (ready) {
     presentation = {
@@ -670,6 +681,8 @@ function CardOverview({
       disabled={action.disabled}
       onClick={() => action.action === 'connect'
         ? openConnection()
+        : action.action === 'new-project'
+          ? onStartNewProject?.()
         : action.view
           ? go(action.view)
           : onOpenSection(action.section)}
@@ -843,7 +856,7 @@ function CardSupport({ initialTool, cardProps, onOpenConnectionCenter, onOpenSec
   );
 }
 
-export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection, go, replaceProject, currentProject, projectGeneration, activeCloudProjects, browserProjects, readBrowserProjects, readCloudProject, openMatchingCardProject, confirmProjectReplacement, saveBeforeCardProjectSwitch, saveProjectToBrowserGuarded, isProjectSwitchSnapshotCurrent, onMatchedProjectLoaded, route = { section: 'overview', supportTool: '' } }) {
+export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection, go, replaceProject, currentProject, projectGeneration, activeCloudProjects, browserProjects, readBrowserProjects, readCloudProject, openMatchingCardProject, confirmProjectReplacement, saveBeforeCardProjectSwitch, saveProjectToBrowserGuarded, isProjectSwitchSnapshotCurrent, onMatchedProjectLoaded, onStartNewProject, route = { section: 'overview', supportTool: '' } }) {
   const headingRef = useRef(null);
   const mountedRef = useRef(false);
 
@@ -875,7 +888,7 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
   else if (route.section === 'workshop') content = <ProductionScreen embedded cardHost={cardHost} cardLink={cardLink} onConnectCard={onConnectCard} />;
   else if (route.section === 'preferences') content = <SettingsScreen embedded mode="preferences" {...cardProps} />;
   else if (route.section === 'support') content = <CardSupport initialTool={route.supportTool} cardProps={cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} />;
-  else content = <CardOverview {...cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} go={go} replaceProject={replaceProject} currentProject={currentProject} projectGeneration={projectGeneration} activeCloudProjects={activeCloudProjects} browserProjects={browserProjects} readBrowserProjects={readBrowserProjects} readCloudProject={readCloudProject} openMatchingCardProject={openMatchingCardProject} confirmProjectReplacement={confirmProjectReplacement} saveBeforeCardProjectSwitch={saveBeforeCardProjectSwitch} isProjectSwitchSnapshotCurrent={isProjectSwitchSnapshotCurrent} onMatchedProjectLoaded={onMatchedProjectLoaded} />;
+  else content = <CardOverview {...cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} go={go} replaceProject={replaceProject} currentProject={currentProject} projectGeneration={projectGeneration} activeCloudProjects={activeCloudProjects} browserProjects={browserProjects} readBrowserProjects={readBrowserProjects} readCloudProject={readCloudProject} openMatchingCardProject={openMatchingCardProject} confirmProjectReplacement={confirmProjectReplacement} saveBeforeCardProjectSwitch={saveBeforeCardProjectSwitch} isProjectSwitchSnapshotCurrent={isProjectSwitchSnapshotCurrent} onMatchedProjectLoaded={onMatchedProjectLoaded} onStartNewProject={onStartNewProject} />;
 
   // Batch production (route.section === 'workshop') renders outside the tab
   // set: its own heading and kicker, no section tab highlighted.

@@ -892,7 +892,13 @@ function Shell() {
       cloudLibrary.detachProject();
       setProjectAssociationSaveBlocked(false);
     }
+    return result;
   }, [cloudLibrary, replaceWithNewProject]);
+  const onStartNewProject = useCallback(async () => {
+    const result = await onNew();
+    if (result?.ok) navigateStudio('layout');
+    return result;
+  }, [navigateStudio, onNew]);
   const onFile = useCallback((e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -981,6 +987,7 @@ function Shell() {
               saveProjectToBrowserGuarded={saveProjectToBrowserGuarded}
               isProjectSwitchSnapshotCurrent={isProjectSwitchSnapshotCurrent}
               onMatchedProjectLoaded={onMatchedCardProjectLoaded}
+              onStartNewProject={onStartNewProject}
               route={cardRoute}
             />
             <ScreenReady />
