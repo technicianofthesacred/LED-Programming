@@ -370,17 +370,19 @@ export function LayoutCanvas({
                         style={{ filter: isSel && !isEditingGesture ? `drop-shadow(0 0 3px ${stripColor})` : 'none' }}/>
                   {isSel && !isHid && (
                     <>
+                      {/* Thin translucent ribbon, not a thick tube — keeps LED dots readable */}
                       <path
                         data-testid="selected-strip-halo"
                         d={s.pathData}
                         fill="none"
                         stroke="oklch(0.78 0.16 205)"
-                        strokeWidth={selectionVbScale * 10}
+                        strokeWidth={selectionVbScale * 4.5}
                         strokeLinecap="round"
                         strokeLinejoin="round"
                         pointerEvents="none"
-                        opacity={0.9}
+                        opacity={0.55}
                       />
+                      {/* Faint core spine, not a solid line — same readability goal */}
                       <path
                         data-testid="selected-strip-core"
                         d={s.pathData}
@@ -390,6 +392,7 @@ export function LayoutCanvas({
                         strokeLinecap="round"
                         strokeLinejoin="round"
                         pointerEvents="none"
+                        opacity={0.35}
                       />
                     </>
                   )}
@@ -493,7 +496,7 @@ export function LayoutCanvas({
                     // Warm identity color at rest; pattern-driven tint only when lit.
                     const ledColor = effectiveShowLight ? ledCssColor(ledFrame, s.color || 'oklch(58% 0.04 70)') : (s.color || 'oklch(58% 0.04 70)');
                     // Keep unlit LEDs clearly visible so the strip's pixels are countable at rest.
-                    const shellOpacity = Math.max(selected ? 0.85 : 0.62, restingLedAlpha(ledFrame, { selected }));
+                    const shellOpacity = Math.max(selected ? 0.95 : 0.62, restingLedAlpha(ledFrame, { selected }));
                     const coreOpacity = activeLedCoreAlpha(ledFrame, { selected });
                     return (
                     <g key={i} data-testid={`strip-led-${s.id}-${i}`}
@@ -506,8 +509,10 @@ export function LayoutCanvas({
                          else onKaleidoscopeLedPick(s.id, i);
                        }}>
                       <circle cx={px.x} cy={px.y}
-                              r={s.id === selStripId ? vbScale * 5.2 : vbScale * 3.8}
-                              fill={ledColor} opacity={shellOpacity}/>
+                              r={selected ? vbScale * 5.2 : vbScale * 3.8}
+                              fill={ledColor} opacity={shellOpacity}
+                              stroke={selected ? 'oklch(0.22 0.03 235 / 0.9)' : 'none'}
+                              strokeWidth={selected ? vbScale * 1.3 : 0}/>
                       {coreOpacity > 0 && (
                         <circle cx={px.x} cy={px.y}
                                 r={selected ? vbScale * 2.9 : vbScale * 2.25}
@@ -527,7 +532,7 @@ export function LayoutCanvas({
                     // Warm identity color at rest; pattern-driven tint only when lit.
                     const ledColor = effectiveShowLight ? ledCssColor(ledFrame, s.color || 'oklch(58% 0.04 70)') : (s.color || 'oklch(58% 0.04 70)');
                     const coreOpacity = activeLedCoreAlpha(ledFrame, { selected });
-                    const restOpacity = Math.max(selected ? 0.72 : 0.5, restingLedAlpha(ledFrame, { selected }));
+                    const restOpacity = Math.max(selected ? 0.8 : 0.5, restingLedAlpha(ledFrame, { selected }));
                     return (
                     <g key={i} data-testid={`strip-led-${s.id}-${i}`}
                        style={{ cursor: firstLedPicker?.stripId === s.id || kaleidoscopeEditor?.mode === 'pick' ? 'crosshair' : undefined }}
@@ -539,7 +544,7 @@ export function LayoutCanvas({
                          else onKaleidoscopeLedPick(s.id, i);
                        }}>
                       <circle cx={px.x} cy={px.y}
-                              r={s.id === selStripId ? vbScale * 2.8 : vbScale * 2.2}
+                              r={selected ? vbScale * 3.1 : vbScale * 2.2}
                               fill={ledColor}
                               opacity={Math.max(coreOpacity * (effectiveGlowMode === 'outward' ? 0.58 : 0.74), restOpacity)}/>
                       {(firstLedPicker?.stripId === s.id || (kaleidoscopeEditor?.stripId === s.id && kaleidoscopeEditor.mode === 'pick')) && <circle cx={px.x} cy={px.y} r={vbScale * 20}
