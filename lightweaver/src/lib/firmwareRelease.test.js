@@ -362,26 +362,34 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
   assert.match(workflow, /firmware\/releases/);
   assert.doesNotMatch(workflow, /workflow_dispatch/);
   assert.match(workflow, /environment:\s*firmware-release/);
-  assert.match(workflow, /github\.ref == 'refs\/heads\/main'/);
-  assert.match(workflow, /gh workflow run deploy-site\.yml --ref main/);
+  assert.match(
+    workflow,
+    /workflow_run:\s*\n\s*workflows: \["Tests"\]\s*\n\s*types: \[completed\]\s*\n\s*branches: \[main\]/,
+  );
+  assert.match(workflow, /if: github\.event\.workflow_run\.conclusion == 'success'/);
+  assert.ok(
+    (workflow.match(/ref: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/g) ?? []).length >= 3,
+    'classification, verification, and signing must check out the exact tested revision',
+  );
+  assert.match(workflow, /SOURCE_REVISION: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/);
+  assert.match(workflow, /gh workflow run deploy-site\.yml --ref main -f source=ci -f revision="\$SIGNED_SHA"/);
   assert.doesNotMatch(workflow, /uses:\s*actions\/[^@]+@v\d/);
   assert.match(workflow, /platformio==6\.1\.19/);
-  assert.match(workflow, /LW_BUILD_ID:\s*\$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /LW_BUILD_ID:\s*\$\{\{ github\.event\.workflow_run\.head_sha \}\}/);
   assert.ok(workflow.indexOf('  verify:') > workflow.indexOf('jobs:'));
   assert.match(workflow, /build:\s*\n\s*needs: verify/);
   const verifyJob = workflow.slice(workflow.indexOf('  verify:'), workflow.indexOf('  build:'));
   assert.doesNotMatch(verifyJob, /LIGHTWEAVER_RELEASE_SIGNING_KEY|environment:/);
   assert.match(verifyJob, /permissions:\s*\n\s*contents: read/);
-  assert.match(verifyJob, /npm run test:core:source/);
-  assert.match(verifyJob, /node scripts\/ensure-rollup-native\.mjs/);
+  assert.match(verifyJob, /npm run ci:firmware-sensitive --prefix lightweaver/);
   assert.match(verifyJob, /pio run/);
   assert.ok(
-    verifyJob.indexOf('npm run test:core:source') < verifyJob.indexOf('pio run'),
-    'every source/core contract must pass before the protected signer can run',
+    verifyJob.indexOf('npm run ci:firmware-sensitive') < verifyJob.indexOf('pio run'),
+    'every signer-sensitive contract must pass before the unprivileged firmware compile',
   );
-  assert.ok(
-    verifyJob.indexOf('node scripts/ensure-rollup-native.mjs') < verifyJob.indexOf('npm run build'),
-    'CI must repair npm optional Rollup binaries before the Studio build',
+  assert.equal(
+    packageJson.scripts['ci:firmware-sensitive'],
+    'npm run test:production-jobs && npm run test:core:source',
   );
   assert.equal(
     packageJson.scripts['test:core:source'],
@@ -414,20 +422,35 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
     'the source-only runner must fail closed if the normal launch gate changes',
   );
   const signedVerification = workflow.indexOf('Verify signed release set');
-  const releaseCommit = workflow.indexOf('Commit updated signed release');
+  const releaseCommit = workflow.indexOf('Commit the signed release if it changed');
   const artifactUpload = workflow.indexOf('Upload signed release set');
   assert.ok(signedVerification > 0 && signedVerification < releaseCommit);
   assert.ok(releaseCommit < artifactUpload);
-  assert.match(workflow.slice(signedVerification, releaseCommit), /release-build-identity\.mjs/);
-  assert.match(workflow.slice(signedVerification, releaseCommit), /firmwareRelease\.test\.js/);
+  assert.match(workflow.slice(signedVerification, releaseCommit), /npm run ci:artifact --prefix lightweaver/);
+  assert.match(packageJson.scripts['ci:artifact'], /release-build-identity\.mjs/);
+  assert.match(packageJson.scripts['ci:artifact'], /firmwareRelease\.test\.js/);
   const releaseCommitStep = workflow.slice(releaseCommit, artifactUpload);
   assert.match(releaseCommitStep, /git fetch origin main/);
-  assert.match(releaseCommitStep, /git diff --quiet "\$GITHUB_SHA\.\.origin\/main" -- "\$\{RELEASE_INPUTS\[@\]\}"/);
+  assert.match(releaseCommitStep, /git diff --quiet "\$SOURCE_REVISION\.\.origin\/main" -- "\$\{RELEASE_INPUTS\[@\]\}"/);
   assert.ok(
-    releaseCommitStep.indexOf('git rebase origin/main') < releaseCommitStep.indexOf('git push origin "HEAD:main"'),
+    releaseCommitStep.indexOf('git rebase origin/main') < releaseCommitStep.indexOf('git push origin HEAD:main'),
     'a signer must integrate harmless concurrent main updates before publishing',
   );
-  assert.match(deployWorkflow, /if: github\.ref == 'refs\/heads\/main'/);
+  assert.match(
+    deployWorkflow,
+    /workflow_run:\s*\n\s*workflows: \["Tests"\]\s*\n\s*types: \[completed\]\s*\n\s*branches: \[main\]/,
+  );
+  assert.match(
+    deployWorkflow,
+    /if: github\.event_name == 'workflow_dispatch' \|\| github\.event\.workflow_run\.conclusion == 'success'/,
+  );
+  assert.match(deployWorkflow, /revision:\s*\n\s*description: Exact tested or signed main revision to deploy\s*\n\s*required: true/);
+  assert.match(deployWorkflow, /TESTED_REVISION: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/);
+  assert.match(deployWorkflow, /DISPATCH_REVISION: \$\{\{ github\.event\.inputs\.revision \}\}/);
+  assert.ok(
+    (deployWorkflow.match(/ref: \$\{\{ (?:steps\.revision|needs\.preflight)\.outputs\.revision \}\}/g) ?? []).length >= 2,
+    'preflight and deploy must both check out the explicitly resolved revision',
+  );
   assert.doesNotMatch(deployWorkflow, /uses:\s*actions\/[^@]+@v\d/);
 });
 
