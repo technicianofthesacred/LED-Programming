@@ -379,20 +379,77 @@ function bridgeWindowHarness({
   opener = null,
   parent = null,
   openResult = undefined,
+  fakeClock = false,
+  initialNow = 0,
 } = {}) {
   const eventListeners = new Map();
+  const documentListeners = new Map();
   const opened = [];
+  let now = initialNow;
+  let nextTimerId = 1;
+  let nextTimerOrder = 1;
+  const timers = new Map();
+  const addListener = (listeners, type, listener) => {
+    const listenersForType = listeners.get(type) || new Set();
+    listenersForType.add(listener);
+    listeners.set(type, listenersForType);
+  };
+  const removeListener = (listeners, type, listener) => {
+    listeners.get(type)?.delete(listener);
+  };
+  const emit = (listeners, event) => {
+    for (const listener of [...(listeners.get(event.type) || [])]) listener(event);
+  };
+  const fakeSetTimeout = (callback, delay = 0) => {
+    const id = nextTimerId++;
+    timers.set(id, {
+      callback,
+      dueAt: now + Math.max(0, Number(delay) || 0),
+      order: nextTimerOrder++,
+    });
+    return id;
+  };
+  const fakeClearTimeout = id => timers.delete(id);
+  const advance = ms => {
+    const end = now + ms;
+    while (true) {
+      const due = [...timers.entries()]
+        .filter(([, timer]) => timer.dueAt <= end)
+        .sort((left, right) => (
+          left[1].dueAt - right[1].dueAt || left[1].order - right[1].order
+        ))[0];
+      if (!due) break;
+      const [id, timer] = due;
+      timers.delete(id);
+      now = timer.dueAt;
+      timer.callback();
+    }
+    now = end;
+  };
   const identityId = `lw-${String(host).replace(/[^a-z0-9]/gi, '')}`;
   const storageValues = new Map([
     ['lw_chip_card_host', host],
     ['lw_card_identity_v1', JSON.stringify({ version: 1, id: identityId })],
   ]);
   const sessionValues = new Map();
+  const document = {
+    visibilityState: 'visible',
+    addEventListener(type, listener) {
+      addListener(documentListeners, type, listener);
+    },
+    removeEventListener(type, listener) {
+      removeListener(documentListeners, type, listener);
+    },
+    dispatchEvent(event) {
+      emit(documentListeners, event);
+    },
+  };
   const win = {
     location: {
       href: 'https://led.mandalacodes.com/#screen=patterns',
       search: opener || parent ? `?cardBridge=1&cardHost=${host}` : '',
     },
+    document,
     opener,
     parent,
     localStorage: {
@@ -406,15 +463,13 @@ function bridgeWindowHarness({
       removeItem: key => sessionValues.delete(key),
     },
     addEventListener(type, listener) {
-      const listenersForType = eventListeners.get(type) || new Set();
-      listenersForType.add(listener);
-      eventListeners.set(type, listenersForType);
+      addListener(eventListeners, type, listener);
     },
     removeEventListener(type, listener) {
-      eventListeners.get(type)?.delete(listener);
+      removeListener(eventListeners, type, listener);
     },
     dispatchEvent(event) {
-      for (const listener of eventListeners.get(event.type) || []) listener(event);
+      emit(eventListeners, event);
     },
     open(url, name) {
       opened.push({ url, name });
@@ -425,14 +480,43 @@ function bridgeWindowHarness({
       this.focusCalls += 1;
     },
   };
+  if (fakeClock) {
+    win.Date = { now: () => now };
+    win.setTimeout = fakeSetTimeout;
+    win.clearTimeout = fakeClearTimeout;
+  }
   return {
     win,
     opened,
     storageValues,
     sessionValues,
     emitMessage(event) {
-      for (const listener of eventListeners.get('message') || []) listener(event);
+      emit(eventListeners, { ...event, type: 'message' });
     },
+    emitWindow(type) {
+      emit(eventListeners, { type });
+    },
+    emitDocument(type = 'visibilitychange') {
+      emit(documentListeners, { type });
+    },
+    windowListenerCount(type) {
+      return eventListeners.get(type)?.size || 0;
+    },
+    documentListenerCount(type) {
+      return documentListeners.get(type)?.size || 0;
+    },
+    windowListeners(type) {
+      return [...(eventListeners.get(type) || [])];
+    },
+    documentListeners(type) {
+      return [...(documentListeners.get(type) || [])];
+    },
+    clock: fakeClock ? {
+      advance,
+      now: () => now,
+      pendingCount: () => timers.size,
+      callbacks: () => [...timers.values()].map(timer => timer.callback),
+    } : null,
   };
 }
 
@@ -817,6 +901,255 @@ assert.equal(blockedVisitHarness.opened.length, 1);
 assert.deepEqual(openLocalCardPage('evil.example.com'), { ok: false, reason: 'invalid-host' });
 assert.deepEqual(openLocalCardPage('192.168.18.79', { path: '//evil.example/' }), { ok: false, reason: 'invalid-host' });
 assert.equal(blockedVisitHarness.opened.length, 1, 'invalid hosts and paths never reach window.open');
+
+// A failed cross-subnet navigation can leave the named card WindowProxy on a
+// browser network-error document. Recovery owns only that exact WindowProxy,
+// correlation, flow, and station URL for one absolute five-minute window.
+const recoveryApHost = '192.168.4.1';
+const recoveryStationHost = '192.168.18.91';
+const recoveryFlowId = 'flow-navigation-recovery-1234';
+const recoveryCorrelation = {
+  host: recoveryStationHost,
+  expectedCardId: 'lw-navigation-recovery',
+  expectedFirmwareVersion: '2.0.0',
+  expectedBuildId: 'build-navigation-recovery',
+  expectedBootId: 'boot-navigation-recovery',
+  handoffGeneration: 11,
+};
+
+function recoveryTargetFor(harness, { throwAssignments = 0 } = {}) {
+  const target = {
+    closed: false,
+    navigations: [],
+    posts: [],
+    postMessage(message, targetOrigin) {
+      this.posts.push({ message, targetOrigin });
+    },
+    focus() {},
+  };
+  let href = '';
+  let throwsRemaining = throwAssignments;
+  target.location = {
+    get href() { return href; },
+    set href(value) {
+      target.navigations.push({ at: harness.clock.now(), url: String(value) });
+      if (throwsRemaining > 0) {
+        throwsRemaining -= 1;
+        throw new Error('network-error document rejected navigation');
+      }
+      href = String(value);
+    },
+  };
+  return target;
+}
+
+function beginNavigationRecovery({
+  host = recoveryStationHost,
+  flowId = recoveryFlowId,
+  correlation = recoveryCorrelation,
+  throwAssignments = 0,
+  initialNow = 0,
+} = {}) {
+  const harness = bridgeWindowHarness({
+    host: recoveryApHost,
+    fakeClock: true,
+    initialNow,
+  });
+  const target = recoveryTargetFor(harness, { throwAssignments });
+  harness.win.open = (url, name) => {
+    harness.opened.push({ url, name });
+    return target;
+  };
+  globalThis.window = harness.win;
+  assert.equal(openLocalCardPage(recoveryApHost).ok, true);
+  const result = retargetCardBridge(host, correlation, { flowId });
+  return { harness, target, result };
+}
+
+const deadlineRecovery = beginNavigationRecovery();
+assert.equal(deadlineRecovery.result.ok, true);
+const exactRecoveryUrl = deadlineRecovery.result.url;
+assert.deepEqual(deadlineRecovery.target.navigations.map(entry => entry.at), [0]);
+assert.equal(deadlineRecovery.harness.windowListenerCount('online'), 1);
+assert.equal(deadlineRecovery.harness.windowListenerCount('focus'), 1);
+assert.equal(deadlineRecovery.harness.documentListenerCount('visibilitychange'), 1);
+assert.equal(deadlineRecovery.harness.clock.pendingCount(), 1, 'one retry timer is armed');
+deadlineRecovery.harness.clock.advance(130001);
+assert.equal(deadlineRecovery.target.navigations.at(-1).at, 130000,
+  'retries remain active after the former 130-second cutoff');
+assert.equal(deadlineRecovery.harness.clock.pendingCount(), 1);
+deadlineRecovery.harness.clock.advance(169998);
+assert.deepEqual(
+  deadlineRecovery.target.navigations.map(entry => entry.at),
+  [0, 4000, 16000, 40000, 70000, 100000, 130000, 160000, 190000, 220000, 250000, 280000],
+  'fast retries settle into a 30-second cadence without navigating at the deadline',
+);
+assert.ok(deadlineRecovery.target.navigations.every(entry => entry.url === exactRecoveryUrl),
+  'every recovery attempt uses the one computed station URL');
+assert.deepEqual(deadlineRecovery.target.posts, [],
+  'navigation recovery never sends config, wifi-handoff-ack, or any other postMessage traffic');
+assert.equal(deadlineRecovery.harness.windowListenerCount('online'), 1);
+deadlineRecovery.harness.clock.advance(1);
+assert.equal(deadlineRecovery.harness.clock.now(), 300000);
+assert.equal(deadlineRecovery.harness.clock.pendingCount(), 0,
+  'the absolute five-minute deadline releases its final timer');
+assert.equal(deadlineRecovery.harness.windowListenerCount('online'), 0);
+assert.equal(deadlineRecovery.harness.windowListenerCount('focus'), 0);
+assert.equal(deadlineRecovery.harness.documentListenerCount('visibilitychange'), 0);
+
+const lifecycleRecovery = beginNavigationRecovery();
+const lifecycleUrl = lifecycleRecovery.result.url;
+lifecycleRecovery.harness.clock.advance(1000);
+lifecycleRecovery.harness.emitWindow('online');
+assert.deepEqual(lifecycleRecovery.target.navigations.map(entry => entry.at), [0, 1000]);
+assert.equal(lifecycleRecovery.harness.clock.pendingCount(), 1,
+  'an online retry replaces, rather than duplicates, the pending timer');
+lifecycleRecovery.harness.emitWindow('focus');
+assert.deepEqual(lifecycleRecovery.target.navigations.map(entry => entry.at), [0, 1000, 1000]);
+lifecycleRecovery.harness.win.document.visibilityState = 'hidden';
+lifecycleRecovery.harness.emitDocument();
+assert.equal(lifecycleRecovery.target.navigations.length, 3,
+  'a hidden visibilitychange does not navigate');
+lifecycleRecovery.harness.win.document.visibilityState = 'visible';
+lifecycleRecovery.harness.emitDocument();
+assert.equal(lifecycleRecovery.target.navigations.length, 4,
+  'a visible visibilitychange retries immediately');
+assert.ok(lifecycleRecovery.target.navigations.every(entry => entry.url === lifecycleUrl));
+assert.deepEqual(lifecycleRecovery.target.posts, [], 'lifecycle retries are navigation-only');
+lifecycleRecovery.harness.emitMessage({
+  origin: `http://${recoveryStationHost}`,
+  source: lifecycleRecovery.target,
+  data: {
+    app: 'LightweaverCardBridge', type: 'ready', host: recoveryStationHost, version: 2,
+  },
+});
+assert.equal(lifecycleRecovery.harness.clock.pendingCount(), 0,
+  'an exact verified ready cancels the retry timer');
+assert.equal(lifecycleRecovery.harness.windowListenerCount('online'), 0);
+assert.equal(lifecycleRecovery.harness.windowListenerCount('focus'), 0);
+assert.equal(lifecycleRecovery.harness.documentListenerCount('visibilitychange'), 0);
+
+const responseRecovery = beginNavigationRecovery({
+  flowId: 'flow-response-recovery-1234',
+  correlation: { ...recoveryCorrelation, handoffGeneration: 12 },
+});
+const responsePromise = sendCardBridgeRequest('status', {}, {
+  host: recoveryStationHost,
+  timeoutMs: 1000,
+  retryOnTimeout: false,
+});
+const statusRequest = responseRecovery.target.posts.at(-1)?.message;
+assert.equal(statusRequest?.type, 'status');
+responseRecovery.harness.emitMessage({
+  origin: `http://${recoveryStationHost}`,
+  source: responseRecovery.target,
+  data: {
+    app: 'LightweaverCardBridge', version: 2, id: statusRequest.id, ok: true,
+    response: {
+      app: 'Lightweaver', provisioningContractVersion: 1,
+      cardId: recoveryCorrelation.expectedCardId,
+      firmwareVersion: recoveryCorrelation.expectedFirmwareVersion,
+      buildId: recoveryCorrelation.expectedBuildId,
+      bootId: recoveryCorrelation.expectedBootId,
+      runtimePhase: 'ready', knownGoodProject: true, commandReady: true, outputReady: true,
+      wifi: {
+        transport: 'station', transition: 'station', transitionPending: false,
+        apActive: false, stationIp: recoveryStationHost, ip: recoveryStationHost,
+        handoffGeneration: 12,
+      },
+    },
+  },
+});
+await responsePromise;
+assert.equal(getCardBridgeState().verified, true);
+assert.equal(responseRecovery.harness.clock.pendingCount(), 0,
+  'a verified exact-origin request response cancels recovery immediately');
+assert.equal(responseRecovery.harness.windowListenerCount('online'), 0);
+assert.equal(responseRecovery.harness.windowListenerCount('focus'), 0);
+assert.equal(responseRecovery.harness.documentListenerCount('visibilitychange'), 0);
+
+const duplicateRecovery = beginNavigationRecovery({
+  flowId: 'flow-duplicate-recovery-1234',
+  correlation: { ...recoveryCorrelation, handoffGeneration: 13 },
+});
+duplicateRecovery.harness.clock.advance(200000);
+const duplicateResult = retargetCardBridge(recoveryStationHost, {
+  ...recoveryCorrelation,
+  handoffGeneration: 13,
+}, { flowId: 'flow-duplicate-recovery-1234' });
+assert.equal(duplicateResult.ok, true);
+duplicateRecovery.harness.clock.advance(99999);
+assert.equal(duplicateRecovery.harness.windowListenerCount('online'), 1);
+duplicateRecovery.harness.clock.advance(1);
+assert.equal(duplicateRecovery.harness.clock.pendingCount(), 0,
+  'duplicate exact retarget evidence cannot extend the original absolute deadline');
+assert.equal(duplicateRecovery.harness.windowListenerCount('online'), 0);
+
+const staleRecovery = beginNavigationRecovery({
+  flowId: 'flow-stale-recovery-1234',
+  correlation: { ...recoveryCorrelation, handoffGeneration: 15 },
+});
+const staleResult = retargetCardBridge(recoveryStationHost, {
+  ...recoveryCorrelation,
+  handoffGeneration: 14,
+}, { flowId: 'flow-stale-recovery-1234' });
+assert.equal(staleResult.reason, 'stale-correlation');
+assert.equal(staleRecovery.harness.clock.pendingCount(), 0,
+  'stale-correlation rejection releases the prior recovery timer');
+assert.equal(staleRecovery.harness.windowListenerCount('online'), 0);
+assert.equal(staleRecovery.harness.windowListenerCount('focus'), 0);
+assert.equal(staleRecovery.harness.documentListenerCount('visibilitychange'), 0);
+
+const throwingRecovery = beginNavigationRecovery({
+  flowId: 'flow-throwing-recovery-1234',
+  correlation: { ...recoveryCorrelation, handoffGeneration: 16 },
+  throwAssignments: 1,
+});
+assert.equal(throwingRecovery.result.reason, 'bridge-navigation-failed');
+assert.equal(throwingRecovery.harness.clock.pendingCount(), 1,
+  'bounded recovery is armed before the initial location assignment');
+throwingRecovery.harness.clock.advance(4000);
+assert.equal(throwingRecovery.target.navigations.length, 2);
+assert.equal(throwingRecovery.target.location.href, throwingRecovery.result.url,
+  'a later bounded retry succeeds once location assignment is writable');
+
+const oldRecovery = beginNavigationRecovery({
+  flowId: 'flow-old-owner-recovery-1234',
+  correlation: { ...recoveryCorrelation, handoffGeneration: 17 },
+});
+const staleWindowCallbacks = [
+  ...oldRecovery.harness.windowListeners('online'),
+  ...oldRecovery.harness.windowListeners('focus'),
+];
+const staleDocumentCallbacks = oldRecovery.harness.documentListeners('visibilitychange');
+const staleTimerCallbacks = oldRecovery.harness.clock.callbacks();
+oldRecovery.target.closed = true;
+const successorCorrelation = {
+  ...recoveryCorrelation,
+  host: '192.168.18.92',
+  expectedBootId: 'boot-successor-recovery',
+  handoffGeneration: 18,
+};
+const successorRecovery = beginNavigationRecovery({
+  host: successorCorrelation.host,
+  flowId: 'flow-successor-recovery-1234',
+  correlation: successorCorrelation,
+});
+assert.equal(oldRecovery.harness.clock.pendingCount(), 0,
+  'replacing the listener owner releases the old owner recovery resources');
+assert.equal(oldRecovery.harness.windowListenerCount('online'), 0);
+assert.equal(oldRecovery.harness.windowListenerCount('focus'), 0);
+assert.equal(oldRecovery.harness.documentListenerCount('visibilitychange'), 0);
+const successorNavigationCount = successorRecovery.target.navigations.length;
+for (const callback of [...staleWindowCallbacks, ...staleDocumentCallbacks, ...staleTimerCallbacks]) callback();
+assert.equal(oldRecovery.target.navigations.length, 1,
+  'stale callbacks cannot navigate their closed former target');
+assert.equal(successorRecovery.target.navigations.length, successorNavigationCount,
+  'stale owner/flow/correlation callbacks cannot navigate the successor target');
+assert.equal(successorRecovery.harness.clock.pendingCount(), 1,
+  'stale callbacks cannot clear the successor timer');
+assert.equal(successorRecovery.harness.windowListenerCount('online'), 1,
+  'stale callbacks cannot clear successor lifecycle listeners');
 
 // A station page reached through the correlated WiFi handoff cannot restore
 // command authority with a wrong/stale status envelope. Only an exact fresh

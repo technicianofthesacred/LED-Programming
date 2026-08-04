@@ -42,13 +42,12 @@ const PRIVILEGED_BRIDGE_TYPES = new Set([
   'wifi-handoff-ack',
 ]);
 const IDENTITY_FREE_BRIDGE_TYPES = new Set(['ping', 'status', 'firmware-info']);
-// Retry once soon after the operator has had an opportunity to switch networks,
-// then give each subsequent ESP page load materially more time to complete.
-// The last automatic navigation starts after 130 seconds and gets the remainder
-// of Production's three-minute station-return window without another reload.
+// Retry quickly while the operator switches networks, then settle into a
+// 30-second cadence for the firmware's complete bounded handoff window.
 const WIFI_HANDOFF_NAVIGATION_RETRY_DELAYS_MS = Object.freeze([
-  4000, 12000, 24000, 30000, 30000, 30000,
+  4000, 12000, 24000, 30000,
 ]);
+const WIFI_HANDOFF_NAVIGATION_DEADLINE_MS = 300000;
 
 // Reads and idempotent transaction operations may safely cross one transient
 // bridge timeout. Candidate staging is intentionally absent: retrying it could
@@ -123,11 +122,28 @@ function browserWindow() {
   return typeof window !== 'undefined' ? window : null;
 }
 
-function clearBridgeHandoffNavigationRetry() {
-  if (bridgeHandoffNavigationRetry?.timer != null) {
-    clearTimeout(bridgeHandoffNavigationRetry.timer);
-  }
+function clearBridgeHandoffNavigationRetry(expectedWork = null) {
+  const work = bridgeHandoffNavigationRetry;
+  if (!work || (expectedWork && work !== expectedWork)) return false;
+  // Invalidate queued callbacks before invoking browser APIs. A stale callback
+  // can then never clear or navigate a successor recovery job, even if cleanup
+  // itself synchronously dispatches application work.
   bridgeHandoffNavigationRetry = null;
+  if (work.timer != null) {
+    try { work.clearTimeout(work.timer); } catch { /* noop */ }
+    work.timer = null;
+  }
+  try { work.owner?.removeEventListener?.('online', work.onOnline); } catch { /* noop */ }
+  try { work.owner?.removeEventListener?.('focus', work.onFocus); } catch { /* noop */ }
+  try {
+    work.document?.removeEventListener?.('visibilitychange', work.onVisibilityChange);
+  } catch {
+    /* noop */
+  }
+  work.onOnline = null;
+  work.onFocus = null;
+  work.onVisibilityChange = null;
+  return true;
 }
 
 function normalizeCommissioningFlowId(value) {
@@ -184,6 +200,7 @@ function clearBridgeTarget({
   origin = bridgeOrigin,
   preserveHandoff = false,
 } = {}) {
+  clearBridgeHandoffNavigationRetry();
   bridgeWindow = null;
   bridgeOrigin = origin || '';
   bridgeHost = normalizeCardHost(host || bridgeHost || readStoredCardHost());
@@ -198,7 +215,6 @@ function clearBridgeTarget({
   bridgeRuntimeCommandReady = false;
   bridgeInitialConfigAvailable = false;
   if (!preserveHandoff) {
-    clearBridgeHandoffNavigationRetry();
     bridgeHandoffCorrelation = null;
     bridgeHandoffFlowId = '';
     bridgeInitialConfigAttempted = false;
@@ -292,48 +308,119 @@ function sameHandoffCorrelation(left, right) {
 // acknowledgement or configuration command. The station page's verified ready
 // handshake cancels the bounded retry before the handoff orchestrator runs.
 function scheduleBridgeHandoffNavigationRetry({ target, url, correlation, flowId }) {
-  clearBridgeHandoffNavigationRetry();
   const owner = browserWindow();
+  const ownerDocument = owner?.document
+    || (typeof document !== 'undefined' ? document : null);
+  const now = typeof owner?.Date?.now === 'function'
+    ? () => owner.Date.now()
+    : () => Date.now();
+  const scheduleTimeout = typeof owner?.setTimeout === 'function'
+    ? owner.setTimeout.bind(owner)
+    : globalThis.setTimeout.bind(globalThis);
+  const cancelTimeout = typeof owner?.clearTimeout === 'function'
+    ? owner.clearTimeout.bind(owner)
+    : globalThis.clearTimeout.bind(globalThis);
+  const origin = cardHostToUrl(correlation.host);
+  const prior = bridgeHandoffNavigationRetry;
+  const duplicateExactWork = Boolean(
+    prior
+    && prior.owner === owner
+    && prior.target === target
+    && prior.url === url
+    && prior.origin === origin
+    && prior.flowId === flowId
+    && sameHandoffCorrelation(prior.correlation, correlation)
+  );
+  const deadline = duplicateExactWork
+    ? prior.deadline
+    : now() + WIFI_HANDOFF_NAVIGATION_DEADLINE_MS;
+  clearBridgeHandoffNavigationRetry();
   const work = {
-    target, url, correlation, flowId, owner,
+    owner,
+    document: ownerDocument,
+    target,
+    url,
+    origin,
+    correlation,
+    flowId,
+    now,
+    setTimeout: scheduleTimeout,
+    clearTimeout: cancelTimeout,
+    deadline,
     nextDelayIndex: 0,
     timer: null,
+    onOnline: null,
+    onFocus: null,
+    onVisibilityChange: null,
   };
+  const isExactActiveWork = () => (
+    bridgeHandoffNavigationRetry === work
+    && browserWindow() === work.owner
+    && bridgeWindow === work.target
+    && !bridgeTargetClosed(work.target)
+    && bridgeHandoffFlowId === work.flowId
+    && sameHandoffCorrelation(bridgeHandoffCorrelation, work.correlation)
+    && normalizeCardHost(bridgeHost) === work.correlation.host
+    && bridgeOrigin === work.origin
+  );
   const scheduleNext = () => {
     if (bridgeHandoffNavigationRetry !== work) return;
-    const delay = WIFI_HANDOFF_NAVIGATION_RETRY_DELAYS_MS[work.nextDelayIndex];
-    if (!Number.isFinite(delay)) {
-      clearBridgeHandoffNavigationRetry();
+    const remaining = work.deadline - work.now();
+    if (remaining <= 0) {
+      clearBridgeHandoffNavigationRetry(work);
       return;
     }
+    const delay = WIFI_HANDOFF_NAVIGATION_RETRY_DELAYS_MS[work.nextDelayIndex]
+      ?? WIFI_HANDOFF_NAVIGATION_RETRY_DELAYS_MS.at(-1);
     work.nextDelayIndex += 1;
-    work.timer = setTimeout(retry, delay);
+    work.timer = work.setTimeout(retry, Math.min(delay, remaining));
     work.timer?.unref?.();
   };
   const retry = () => {
     if (bridgeHandoffNavigationRetry !== work) return;
-    const currentOrigin = cardHostToUrl(correlation.host);
-    if (bridgeReady && bridgeConnected && bridgeOrigin === currentOrigin) {
-      clearBridgeHandoffNavigationRetry();
+    if (work.timer != null) {
+      try { work.clearTimeout(work.timer); } catch { /* noop */ }
+      work.timer = null;
+    }
+    if (work.now() >= work.deadline) {
+      clearBridgeHandoffNavigationRetry(work);
       return;
     }
-    if (browserWindow() !== owner
-      || bridgeWindow !== target
-      || bridgeTargetClosed(target)
-      || bridgeHandoffFlowId !== flowId
-      || !sameHandoffCorrelation(bridgeHandoffCorrelation, correlation)) {
-      clearBridgeHandoffNavigationRetry();
+    if (bridgeReady && bridgeConnected && bridgeOrigin === work.origin) {
+      clearBridgeHandoffNavigationRetry(work);
+      return;
+    }
+    if (!isExactActiveWork()) {
+      clearBridgeHandoffNavigationRetry(work);
       return;
     }
     revokeBridgeForNavigation({
-      host: correlation.host,
-      origin: currentOrigin,
+      host: work.correlation.host,
+      origin: work.origin,
       preserveHandoff: true,
     });
-    try { target.location.href = url; } catch { /* retry stays bounded */ }
+    // revokeBridgeForNavigation dispatches synchronously. Re-check the exact
+    // ownership/correlation after that dispatch before touching WindowProxy.
+    if (!isExactActiveWork()) {
+      clearBridgeHandoffNavigationRetry(work);
+      return;
+    }
+    try { work.target.location.href = work.url; } catch { /* retry stays bounded */ }
     scheduleNext();
   };
+  work.onOnline = retry;
+  work.onFocus = retry;
+  work.onVisibilityChange = () => {
+    if (work.document?.visibilityState === 'visible') retry();
+  };
   bridgeHandoffNavigationRetry = work;
+  try { owner?.addEventListener?.('online', work.onOnline); } catch { /* noop */ }
+  try { owner?.addEventListener?.('focus', work.onFocus); } catch { /* noop */ }
+  try {
+    ownerDocument?.addEventListener?.('visibilitychange', work.onVisibilityChange);
+  } catch {
+    /* noop */
+  }
   scheduleNext();
 }
 
@@ -656,6 +743,7 @@ function handleBridgeMessage(event) {
     connected: true,
     ready: verifiedReady ? true : undefined,
   });
+  if (verifiedReady) clearBridgeHandoffNavigationRetry();
   request.resolve(responsePayload);
 }
 
@@ -664,6 +752,7 @@ export function attachCardBridgeListener() {
   if (!win) return;
   if (listenerAttached && listenerWindow === win) return;
   if (listenerWindow && listenerWindow !== win) {
+    clearBridgeHandoffNavigationRetry();
     try {
       listenerWindow.removeEventListener?.('message', handleBridgeMessage);
     } catch {
@@ -818,6 +907,7 @@ export function retargetCardBridge(rawHost = '', rawCorrelation = {}, { flowId: 
       && previous.expectedBootId === correlation.expectedBootId;
     if (bridgeHandoffFlowId === flowId
       && (!sameCardBoot || correlation.handoffGeneration <= previous.handoffGeneration)) {
+      clearBridgeHandoffNavigationRetry();
       return { ok: false, state: 'stale-correlation', reason: 'stale-correlation', retryable: false };
     }
   }
@@ -877,6 +967,12 @@ export function retargetCardBridge(rawHost = '', rawCorrelation = {}, { flowId: 
   if (repeated) {
     revokeBridgeForNavigation({ host, origin, preserveHandoff: true });
   }
+  scheduleBridgeHandoffNavigationRetry({
+    target,
+    url: url.href,
+    correlation,
+    flowId,
+  });
   try {
     target.location.href = url.href;
   } catch (cause) {
@@ -893,12 +989,6 @@ export function retargetCardBridge(rawHost = '', rawCorrelation = {}, { flowId: 
       error: cause,
     };
   }
-  scheduleBridgeHandoffNavigationRetry({
-    target,
-    url: url.href,
-    correlation,
-    flowId,
-  });
   return {
     ok: true,
     state: 'retargeted',
