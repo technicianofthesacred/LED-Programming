@@ -331,6 +331,14 @@ function sameBridgeNavigationTarget({ owner, target, host, origin }) {
     && bridgeOrigin === origin;
 }
 
+function sameExactHandoffCorrelationState({ owner, origin, correlation, flowId }) {
+  return browserWindow() === owner
+    && normalizeCardHost(bridgeHost) === correlation.host
+    && bridgeOrigin === origin
+    && bridgeHandoffFlowId === flowId
+    && sameHandoffCorrelation(bridgeHandoffCorrelation, correlation);
+}
+
 function sameExactHandoffNavigationState({ owner, target, origin, correlation, flowId }) {
   return sameBridgeNavigationTarget({
     owner,
@@ -338,8 +346,7 @@ function sameExactHandoffNavigationState({ owner, target, origin, correlation, f
     host: correlation.host,
     origin,
   })
-    && bridgeHandoffFlowId === flowId
-    && sameHandoffCorrelation(bridgeHandoffCorrelation, correlation);
+    && sameExactHandoffCorrelationState({ owner, origin, correlation, flowId });
 }
 
 // A station address is unreachable while the workshop computer is still on the
@@ -1153,7 +1160,18 @@ export function restoreCardBridgeHandoff(rawFlowId = '') {
   const host = correlation.host;
   const origin = cardHostToUrl(host);
   attachCardBridgeListener();
+  const lifecycleBeforeRevoke = bridgeLifecycle;
   revokeBridgeForNavigation({ host, origin });
+  if (bridgeLifecycle !== lifecycleBeforeRevoke + 1
+    || browserWindow() !== win
+    || normalizeCardHost(bridgeHost) !== host
+    || bridgeOrigin !== origin
+    || bridgeHandoffFlowId
+    || bridgeHandoffCorrelation) {
+    return {
+      ok: false, state: 'stale-correlation', reason: 'stale-correlation', retryable: false,
+    };
+  }
   bridgeHandoffCorrelation = correlation;
   bridgeHandoffFlowId = flowId;
   bridgeInitialConfigAttempted = recovery.configAttempted;
@@ -1168,6 +1186,20 @@ export function restoreCardBridgeHandoff(rawFlowId = '') {
     expectedBootId: correlation.expectedBootId,
     studioOrigin,
   }).toString();
+  const staleRestoreResult = (window = null) => ({
+    ok: false,
+    state: 'stale-correlation',
+    reason: 'stale-correlation',
+    retryable: false,
+    ...(window ? { window } : {}),
+    host,
+    url: url.href,
+    correlation,
+    flowId,
+  });
+  if (!sameExactHandoffCorrelationState({
+    owner: win, origin, correlation, flowId,
+  })) return staleRestoreResult();
   let opened = null;
   try {
     opened = win.open(url.href, CARD_BRIDGE_WINDOW_NAME);
@@ -1178,14 +1210,36 @@ export function restoreCardBridgeHandoff(rawFlowId = '') {
     dispatchBridgeChange();
     return { ok: false, reason: 'popup-blocked', retryable: true };
   }
+  if (bridgeTargetClosed(opened)
+    || !sameExactHandoffCorrelationState({
+      owner: win, origin, correlation, flowId,
+    })) return staleRestoreResult(opened);
   trackNavigatedBridgeWindow(opened, { host, origin, persistHost: false });
-  scheduleBridgeHandoffNavigationRetry({
+  if (!sameExactHandoffNavigationState({
+    owner: win, target: opened, origin, correlation, flowId,
+  })) return staleRestoreResult(opened);
+  const navigationRecovery = scheduleBridgeHandoffNavigationRetry({
     target: opened,
     url: url.href,
     correlation,
     flowId,
   });
+  if (!navigationRecovery.ok) return staleRestoreResult(opened);
+  const ownsRecovery = () => (
+    bridgeHandoffNavigationRetry === navigationRecovery.work
+    && sameExactHandoffNavigationState({
+      owner: win, target: opened, origin, correlation, flowId,
+    })
+  );
+  if (!ownsRecovery()) {
+    clearBridgeHandoffNavigationRetry(navigationRecovery.work);
+    return staleRestoreResult(opened);
+  }
   try { opened.focus?.(); } catch { /* best effort */ }
+  if (!ownsRecovery()) {
+    clearBridgeHandoffNavigationRetry(navigationRecovery.work);
+    return staleRestoreResult(opened);
+  }
   return {
     ok: true, state: 'restored', window: opened, host, url: url.href,
     correlation, flowId, ackAttempted: recovery.ackAttempted,

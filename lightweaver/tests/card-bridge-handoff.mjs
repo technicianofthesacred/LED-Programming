@@ -969,6 +969,121 @@ function beginNavigationRecovery({
   return { harness, target, result };
 }
 
+function prepareRestoreRecovery({ flowId, correlation }) {
+  const seeded = beginNavigationRecovery({ flowId, correlation });
+  seeded.staleCallbacks = [
+    ...seeded.harness.windowListeners('online'),
+    ...seeded.harness.windowListeners('focus'),
+    ...seeded.harness.documentListeners('visibilitychange'),
+    ...seeded.harness.clock.callbacks(),
+  ];
+  // Preserve the session recovery envelope while dropping live handoff state,
+  // matching a Studio document that must reacquire the named card window.
+  assert.equal(openLocalCardPage(recoveryApHost).ok, true);
+  seeded.harness.storageValues.set('lw_chip_card_host', correlation.host);
+  return seeded;
+}
+
+const clearedRestoreFlow = 'flow-restore-clear-1234';
+const clearedRestoreCorrelation = {
+  ...recoveryCorrelation,
+  handoffGeneration: 91,
+};
+const clearedRestoreSeed = prepareRestoreRecovery({
+  flowId: clearedRestoreFlow,
+  correlation: clearedRestoreCorrelation,
+});
+const clearedRestoreTarget = recoveryTargetFor(clearedRestoreSeed.harness);
+clearedRestoreSeed.harness.win.open = (url, name) => {
+  clearedRestoreSeed.harness.opened.push({ url, name });
+  return clearedRestoreTarget;
+};
+let clearedRestoreCount = 0;
+clearedRestoreSeed.harness.win.addEventListener(CARD_BRIDGE_CHANGED_EVENT, event => {
+  if (event.detail?.handoffFlowId !== clearedRestoreFlow
+    || event.detail?.host !== recoveryStationHost) return;
+  if (clearCardBridgeHandoff(clearedRestoreFlow)) clearedRestoreCount += 1;
+});
+const clearedRestoreResult = restoreCardBridgeHandoff(clearedRestoreFlow);
+assert.equal(clearedRestoreCount, 1,
+  'the harness clears restored state during tracked-window publication');
+assert.equal(clearedRestoreResult.ok, false);
+assert.equal(clearedRestoreResult.reason, 'stale-correlation');
+assert.equal(clearedRestoreResult.retryable, false);
+assert.equal(clearedRestoreSeed.harness.clock.pendingCount(), 0,
+  'cleared restore cannot retain a recovery timer');
+assert.equal(clearedRestoreSeed.harness.windowListenerCount('online'), 0);
+assert.equal(clearedRestoreSeed.harness.windowListenerCount('focus'), 0);
+assert.equal(clearedRestoreSeed.harness.documentListenerCount('visibilitychange'), 0);
+const clearedRestoreNavigationCount = clearedRestoreTarget.navigations.length;
+clearedRestoreSeed.harness.emitWindow('online');
+clearedRestoreSeed.harness.emitWindow('focus');
+clearedRestoreSeed.harness.emitDocument();
+for (const callback of clearedRestoreSeed.staleCallbacks) callback();
+clearedRestoreSeed.harness.clock.advance(300000);
+assert.equal(clearedRestoreTarget.navigations.length, clearedRestoreNavigationCount,
+  'later lifecycle signals cannot revive synchronously cleared restore work');
+
+const replacedRestoreFlow = 'flow-restore-replaced-1234';
+const replacedRestoreCorrelation = {
+  ...recoveryCorrelation,
+  handoffGeneration: 92,
+};
+const replacedRestoreSeed = prepareRestoreRecovery({
+  flowId: replacedRestoreFlow,
+  correlation: replacedRestoreCorrelation,
+});
+const replacedRestoreTarget = recoveryTargetFor(replacedRestoreSeed.harness);
+const restoreSuccessorCorrelation = {
+  ...recoveryCorrelation,
+  host: '192.168.18.95',
+  expectedBootId: 'boot-restore-successor',
+  handoffGeneration: 93,
+};
+const restoreSuccessorFlow = 'flow-restore-successor-1234';
+const restoreSuccessorTarget = recoveryTargetFor(replacedRestoreSeed.harness);
+replacedRestoreSeed.harness.win.open = (url, name) => {
+  replacedRestoreSeed.harness.opened.push({ url, name });
+  return replacedRestoreTarget;
+};
+let replacedRestoreHandled = false;
+replacedRestoreSeed.harness.win.addEventListener(CARD_BRIDGE_CHANGED_EVENT, event => {
+  if (replacedRestoreHandled
+    || event.detail?.handoffFlowId !== replacedRestoreFlow
+    || event.detail?.host !== recoveryStationHost) return;
+  replacedRestoreHandled = true;
+  clearCardBridgeHandoff(replacedRestoreFlow);
+  replacedRestoreSeed.harness.win.open = (url, name) => {
+    replacedRestoreSeed.harness.opened.push({ url, name });
+    return restoreSuccessorTarget;
+  };
+  assert.equal(openLocalCardPage(recoveryApHost).ok, true);
+  assert.equal(retargetCardBridge(
+    restoreSuccessorCorrelation.host,
+    restoreSuccessorCorrelation,
+    { flowId: restoreSuccessorFlow },
+  ).ok, true);
+});
+const replacedRestoreResult = restoreCardBridgeHandoff(replacedRestoreFlow);
+assert.equal(replacedRestoreHandled, true,
+  'the harness installs a successor during restored-window publication');
+assert.equal(replacedRestoreResult.ok, false);
+assert.equal(replacedRestoreResult.reason, 'stale-correlation');
+assert.equal(replacedRestoreResult.retryable, false);
+assert.equal(getCardBridgeState().handoffFlowId, restoreSuccessorFlow);
+assert.equal(restoreSuccessorTarget.navigations.length, 1);
+assert.equal(replacedRestoreSeed.harness.clock.pendingCount(), 1,
+  'restore replacement leaves only the successor timer');
+assert.equal(replacedRestoreSeed.harness.windowListenerCount('online'), 1);
+assert.equal(replacedRestoreSeed.harness.windowListenerCount('focus'), 1);
+assert.equal(replacedRestoreSeed.harness.documentListenerCount('visibilitychange'), 1);
+const restoreSuccessorNavigationCount = restoreSuccessorTarget.navigations.length;
+for (const callback of replacedRestoreSeed.staleCallbacks) callback();
+replacedRestoreSeed.harness.clock.advance(3999);
+assert.equal(restoreSuccessorTarget.navigations.length, restoreSuccessorNavigationCount);
+assert.equal(replacedRestoreSeed.harness.clock.pendingCount(), 1,
+  'outer restore cleanup cannot clear successor recovery resources');
+
 const initialReentrantHarness = bridgeWindowHarness({
   host: recoveryApHost,
   fakeClock: true,
