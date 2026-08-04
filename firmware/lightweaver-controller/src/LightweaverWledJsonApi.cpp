@@ -259,7 +259,7 @@ bool hexToRgb(const char* s, uint8_t& r, uint8_t& g, uint8_t& b) {
 // native runtime API.
 void handleStatePost() {
   sendCors();
-  if (!runtimeCommandReady() || totalPixels == 0) {
+  if (!runtimePlaybackReady() || totalPixels == 0) {
     serverPtr->send(423, "application/json",
                     "{\"success\":false,\"error\":\"card is not ready for runtime control\"}");
     return;

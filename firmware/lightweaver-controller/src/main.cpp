@@ -1943,8 +1943,8 @@ String runtimeCardId() {
 
 String runtimeBootId() { return bootId; }
 
-bool runtimeTransitionPending() {
-  if (restartTransitionPending || wifiTransitionPending || runtimeSafeMode || safeDiscoveryMode ||
+bool runtimeSafetyTransitionPending() {
+  if (restartTransitionPending || runtimeSafeMode || safeDiscoveryMode ||
       wiringProbationActive || runtimeRecoveryAfterRestartPending()) {
     return true;
   }
@@ -1952,6 +1952,10 @@ bool runtimeTransitionPending() {
   return safety.discoveryActive ||
          safety.candidateState == WIRING_CANDIDATE_BOOTING ||
          safety.candidateState == WIRING_CANDIDATE_AWAITING_CONFIRMATION;
+}
+
+bool runtimeTransitionPending() {
+  return runtimeSafetyTransitionPending() || wifiTransitionPending;
 }
 
 ProvisioningPhase runtimeReportedProvisioningPhase() {
@@ -1979,18 +1983,39 @@ void runtimeApplySavedConfig() {
   else if (currentLookIndex >= lookCount) currentLookIndex = findStartupLook();
 }
 
-bool runtimeCommandReady() {
-  bool transitionPending = runtimeTransitionPending() || errorCode != ERROR_NONE;
+bool runtimePlaybackReady() {
+  bool safetyTransitionPending =
+      runtimeSafetyTransitionPending() || errorCode != ERROR_NONE;
   ProvisioningReadinessInputs inputs;
-  inputs.phase = transitionPending
+  inputs.phase = safetyTransitionPending
       ? ProvisioningPhase::Recovering
       : runtimeConfig.runtimePhase;
   inputs.configValid = runtimeConfig.configValid;
   inputs.knownGoodProject = runtimeConfig.knownGoodProject;
   inputs.webServing = webRuntimeServing;
   inputs.outputReady = runtimeOutputReady();
-  inputs.transitionPending = transitionPending;
-  return provisioningCommandReady(inputs);
+  inputs.safetyTransitionPending = safetyTransitionPending;
+  return provisioningPlaybackReady(inputs);
+}
+
+bool runtimeMutationReady() {
+  bool safetyTransitionPending =
+      runtimeSafetyTransitionPending() || errorCode != ERROR_NONE;
+  ProvisioningReadinessInputs inputs;
+  inputs.phase = safetyTransitionPending
+      ? ProvisioningPhase::Recovering
+      : runtimeConfig.runtimePhase;
+  inputs.configValid = runtimeConfig.configValid;
+  inputs.knownGoodProject = runtimeConfig.knownGoodProject;
+  inputs.webServing = webRuntimeServing;
+  inputs.outputReady = runtimeOutputReady();
+  inputs.safetyTransitionPending = safetyTransitionPending;
+  inputs.networkTransitionPending = wifiTransitionPending;
+  return provisioningMutationReady(inputs);
+}
+
+bool runtimeCommandReady() {
+  return runtimeMutationReady();
 }
 
 void runtimeMarkRestartPending() {
@@ -2038,6 +2063,8 @@ String runtimeFirmwareInfo() {
   doc["provisioningContractVersion"] = LW_PROVISIONING_CONTRACT_VERSION;
   doc["runtimePhase"] = runtimeProvisioningPhase();
   doc["commandReady"] = runtimeCommandReady();
+  doc["playbackReady"] = runtimePlaybackReady();
+  doc["mutationReady"] = runtimeMutationReady();
   doc["outputReady"] = runtimeOutputReady();
   doc["configValid"] = runtimeConfigValid();
   doc["knownGoodProject"] = runtimeKnownGoodProject();
@@ -2271,6 +2298,7 @@ bool runtimeRename(const String& newPieceName, const String& newHostname, String
     doc["ssid"] = runtimeConfig.wifi.ssid;
     doc["password"] = runtimeConfig.wifi.password;
     doc["hostname"] = newHostname;
+    doc["proven"] = runtimeConfig.wifi.proven;
     String serialized;
     serializeJson(doc, serialized);
     prefs.putString("wifi", serialized);

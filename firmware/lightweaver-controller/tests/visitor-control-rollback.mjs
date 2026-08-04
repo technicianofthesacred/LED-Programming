@@ -13,11 +13,24 @@ assert.match(source, /\.grid\.pending \.tile\{[^}]*pointer-events:none/, 'pendin
 assert.match(source, /'b-slider'\)\.disabled=on/, 'pending brightness changes should disable the slider');
 assert.match(source, /'off-btn'\)\.disabled=on/, 'pending blackout changes should disable the blackout button');
 assert.match(source, /payload\.ok!==true/, 'controls should commit only after an explicit card acknowledgement');
+assert.match(source,
+  /playbackReady===true[\s\S]*typeof s\.playbackReady!==['"]boolean['"][\s\S]*commandReady===true/,
+  'visitor control enablement must prefer playbackReady and conservatively fall back to commandReady');
 assert.match(
   source,
   /send:async value=>\{const payload=await controlPost\(\{patternId:value,syncZones:true\}\);if\(payload\.appliedPatternId!==value\)throw new Error/,
   'whole-piece visitor scene taps must broadcast to all sections and require authoritative applied-pattern confirmation',
 );
+assert.match(source, /try\{await controlPost\(\{\[key\]:v\}\)\}/,
+  'visitor slider senders must respect playback readiness');
+for (const body of [
+  'breathe:customBreathe',
+  'drift:customDrift',
+  'drift:customDrift,driftMin:lo,driftMax:hi',
+]) {
+  assert.match(source, new RegExp(`controlPost\\(\\{${body}\\}\\)`),
+    `visitor ${body} control must respect playback readiness`);
+}
 
 const visitorInitStart = source.indexOf('"(async()=>{try{', source.indexOf('/*LW_CONFIRMED_CONTROL_END*/'));
 const visitorInitEnd = source.indexOf('// Streaming-state poll.', visitorInitStart);

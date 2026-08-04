@@ -41,6 +41,15 @@ const PRIVILEGED_BRIDGE_TYPES = new Set([
   'wiring-discover',
   'wifi-handoff-ack',
 ]);
+const PLAYBACK_BRIDGE_TYPES = new Set(['control', 'frame']);
+const MUTATION_BRIDGE_TYPES = new Set([
+  'config',
+  'wiring-candidate',
+  'wiring-activate',
+  'wiring-confirm',
+  'wiring-rollback',
+  'wiring-discover',
+]);
 const IDENTITY_FREE_BRIDGE_TYPES = new Set(['ping', 'status', 'firmware-info']);
 // Retry once soon after the operator has had an opportunity to switch networks,
 // then give each subsequent ESP page load materially more time to complete.
@@ -108,6 +117,10 @@ let bridgeHandoffFlowId = '';
 let bridgeHandoffAckReady = false;
 let bridgeStationIdentityVerified = false;
 let bridgeRuntimeCommandReady = false;
+let bridgePlaybackReady = false;
+let bridgeMutationReady = false;
+let bridgeStatusCandidateBootId = '';
+let bridgeStatusEnvelopeCount = 0;
 let bridgeInitialConfigAvailable = false;
 let bridgeInitialConfigAttempted = false;
 let bridgeAuthorityLifecycle = -1;
@@ -121,6 +134,11 @@ const bridgeAcquisitions = new Map();
 
 function browserWindow() {
   return typeof window !== 'undefined' ? window : null;
+}
+
+function resetBridgeStatusValidation() {
+  bridgeStatusCandidateBootId = '';
+  bridgeStatusEnvelopeCount = 0;
 }
 
 function clearBridgeHandoffNavigationRetry() {
@@ -196,6 +214,9 @@ function clearBridgeTarget({
   bridgeHandoffAckReady = false;
   bridgeStationIdentityVerified = false;
   bridgeRuntimeCommandReady = false;
+  bridgePlaybackReady = false;
+  bridgeMutationReady = false;
+  resetBridgeStatusValidation();
   bridgeInitialConfigAvailable = false;
   if (!preserveHandoff) {
     clearBridgeHandoffNavigationRetry();
@@ -239,6 +260,9 @@ function revokeBridgeForNavigation({
   bridgeHandoffAckReady = false;
   bridgeStationIdentityVerified = false;
   bridgeRuntimeCommandReady = false;
+  bridgePlaybackReady = false;
+  bridgeMutationReady = false;
+  resetBridgeStatusValidation();
   bridgeInitialConfigAvailable = false;
   if (!preserveHandoff) {
     clearBridgeHandoffNavigationRetry();
@@ -339,10 +363,13 @@ function scheduleBridgeHandoffNavigationRetry({ target, url, correlation, flowId
 
 function applyAuthoritativeBridgeStatus(status, host = bridgeHost) {
   bridgeRuntimeCommandReady = false;
+  bridgePlaybackReady = false;
+  bridgeMutationReady = false;
   bridgeInitialConfigAvailable = false;
   bridgeAuthorityLifecycle = -1;
 
   if (bridgeHandoffCorrelation) {
+    resetBridgeStatusValidation();
     const authority = inspectFinalStationHandoff({
       status,
       correlation: bridgeHandoffCorrelation,
@@ -374,7 +401,12 @@ function applyAuthoritativeBridgeStatus(status, host = bridgeHost) {
         bridgeRestoredFinalEnvelopeCount = Math.min(2, bridgeRestoredFinalEnvelopeCount + 1);
       }
       const stableAfterRestore = !bridgeRestoredHandoff || bridgeRestoredFinalEnvelopeCount >= 2;
+      const readiness = classifyCardReadiness(status || {}, {
+        expectedCard: handoffExpectedIdentity(bridgeHandoffCorrelation),
+      });
       bridgeRuntimeCommandReady = stableAfterRestore && authority.runtimeReady;
+      bridgePlaybackReady = stableAfterRestore && readiness.patternAccess === 'ready';
+      bridgeMutationReady = stableAfterRestore && readiness.mutationReady === true;
       bridgeInitialConfigAvailable = Boolean(
         stableAfterRestore
         &&
@@ -399,6 +431,7 @@ function applyAuthoritativeBridgeStatus(status, host = bridgeHost) {
   const expected = readPersistedCardIdentity();
   const readiness = classifyCardReadiness(status || {}, { expectedCard: expected });
   if (!expected?.id || ['checking', 'identity-mismatch'].includes(readiness.state)) {
+    resetBridgeStatusValidation();
     bridgeStationIdentityVerified = false;
     bridgeCard = null;
     bridgeIdentityError = readiness.reason === 'unexpected-card' ? 'wrong-card' : 'identity-missing';
@@ -410,18 +443,30 @@ function applyAuthoritativeBridgeStatus(status, host = bridgeHost) {
     bridgeDiscoveredCard = identity;
     bridgeCard = identity;
     bridgeStationIdentityVerified = true;
-    bridgeAuthorityLifecycle = bridgeLifecycle;
-    bridgeRuntimeCommandReady = readiness.connected === true;
+    if (bridgeStatusCandidateBootId === readiness.bootId) {
+      bridgeStatusEnvelopeCount = Math.min(2, bridgeStatusEnvelopeCount + 1);
+    } else {
+      bridgeStatusCandidateBootId = readiness.bootId;
+      bridgeStatusEnvelopeCount = 1;
+    }
+    const stableEnvelopePair = bridgeStatusEnvelopeCount >= 2;
+    bridgeAuthorityLifecycle = stableEnvelopePair ? bridgeLifecycle : -1;
+    bridgeRuntimeCommandReady = stableEnvelopePair && readiness.connected === true;
+    bridgePlaybackReady = stableEnvelopePair && readiness.patternAccess === 'ready';
+    bridgeMutationReady = stableEnvelopePair && readiness.mutationReady === true;
     bridgeIdentityError = bridgeRuntimeCommandReady ? '' : 'runtime-not-ready';
     writeStoredCardHost(host);
     return Object.freeze({
       verified: true,
       commandReady: status.commandReady === true,
-      runtimeReady: readiness.connected === true,
+      runtimeReady: bridgeRuntimeCommandReady,
+      playbackReady: bridgePlaybackReady,
+      mutationReady: bridgeMutationReady,
       blank: readiness.blank === true,
       readinessState: readiness.state,
     });
   } catch (error) {
+    resetBridgeStatusValidation();
     bridgeStationIdentityVerified = false;
     bridgeCard = null;
     bridgeIdentityError = error?.reason || 'identity-missing';
@@ -471,6 +516,9 @@ function setBridgeState({
     bridgeHandoffAckReady = false;
     bridgeStationIdentityVerified = false;
     bridgeRuntimeCommandReady = false;
+    bridgePlaybackReady = false;
+    bridgeMutationReady = false;
+    resetBridgeStatusValidation();
     bridgeInitialConfigAvailable = false;
   }
   if (source) bridgeWindow = source;
@@ -544,6 +592,9 @@ function handleBridgeMessage(event) {
     bridgeHandoffAckReady = false;
     bridgeStationIdentityVerified = false;
     bridgeRuntimeCommandReady = false;
+    bridgePlaybackReady = false;
+    bridgeMutationReady = false;
+    resetBridgeStatusValidation();
     bridgeInitialConfigAvailable = false;
     bridgeVersion = Number(data.version) || 0;
     setBridgeState({
@@ -611,6 +662,8 @@ function handleBridgeMessage(event) {
           ? sameVerifiedIdentity
           : true;
         bridgeRuntimeCommandReady = sameVerifiedIdentity && bridgeRuntimeCommandReady;
+        bridgePlaybackReady = sameVerifiedIdentity && bridgePlaybackReady;
+        bridgeMutationReady = sameVerifiedIdentity && bridgeMutationReady;
         bridgeInitialConfigAvailable = sameVerifiedIdentity && bridgeInitialConfigAvailable;
         bridgeIdentityError = '';
       } catch (error) {
@@ -619,6 +672,9 @@ function handleBridgeMessage(event) {
         bridgeCard = null;
         bridgeStationIdentityVerified = false;
         bridgeRuntimeCommandReady = false;
+        bridgePlaybackReady = false;
+        bridgeMutationReady = false;
+        resetBridgeStatusValidation();
         bridgeInitialConfigAvailable = false;
         bridgeIdentityError = error?.reason || 'identity-missing';
         if (bridgeHandoffFlowId) clearWifiHandoffRecovery(bridgeHandoffFlowId);
@@ -628,6 +684,9 @@ function handleBridgeMessage(event) {
       bridgeCard = null;
       bridgeStationIdentityVerified = false;
       bridgeRuntimeCommandReady = false;
+      bridgePlaybackReady = false;
+      bridgeMutationReady = false;
+      resetBridgeStatusValidation();
       bridgeInitialConfigAvailable = false;
       bridgeIdentityError = error?.reason || 'identity-missing';
       if (bridgeHandoffFlowId) clearWifiHandoffRecovery(bridgeHandoffFlowId);
@@ -997,6 +1056,10 @@ export function getCardBridgeState() {
     identityVerified,
     stationIdentityVerified: bridgeStationIdentityVerified,
     runtimeCommandReady: bridgeRuntimeCommandReady,
+    playbackReady: bridgePlaybackReady,
+    mutationReady: bridgeMutationReady,
+    statusEnvelopeCount: bridgeStatusEnvelopeCount,
+    statusCandidateBootId: bridgeStatusCandidateBootId,
     initialConfigAuthority: bridgeInitialConfigAvailable,
     // Monotonic target generation. A card-page reload can keep the same
     // WindowProxy, host, and card identity, so consumers need this to revoke
@@ -1041,6 +1104,9 @@ export function clearCardBridgeHandoff(rawFlowId = '') {
   bridgeHandoffAckReady = false;
   bridgeStationIdentityVerified = false;
   bridgeRuntimeCommandReady = false;
+  bridgePlaybackReady = false;
+  bridgeMutationReady = false;
+  resetBridgeStatusValidation();
   bridgeInitialConfigAvailable = false;
   bridgeInitialConfigAttempted = false;
   bridgeRestoredHandoff = false;
@@ -1227,6 +1293,9 @@ export async function verifyCardBridgeIdentity(rawHost = bridgeHost) {
       bridgeHandoffAckReady = false;
       bridgeStationIdentityVerified = false;
       bridgeRuntimeCommandReady = false;
+      bridgePlaybackReady = false;
+      bridgeMutationReady = false;
+      resetBridgeStatusValidation();
       bridgeInitialConfigAvailable = false;
       bridgeIdentityError = error?.reason || 'identity-missing';
       dispatchBridgeChange();
@@ -1378,6 +1447,9 @@ function markBridgeTimeout(startedAt) {
     bridgeHandoffAckReady = false;
     bridgeStationIdentityVerified = false;
     bridgeRuntimeCommandReady = false;
+    bridgePlaybackReady = false;
+    bridgeMutationReady = false;
+    resetBridgeStatusValidation();
     bridgeInitialConfigAvailable = false;
     bridgeAuthorityLifecycle = -1;
     bridgeIdentityError = 'bridge-timeout';
@@ -1477,7 +1549,9 @@ export function sendCardBridgeRequest(type, payload = {}, {
       if (normalizeCardHost(bridgeHost) !== resolvedHost) {
         throw bridgeError('The verified card belongs to an older bridge host.', 'stale-host');
       }
-      if (PRIVILEGED_BRIDGE_TYPES.has(type) && !bridgeRuntimeCommandReady) {
+      const playbackBlocked = PLAYBACK_BRIDGE_TYPES.has(type) && !bridgePlaybackReady;
+      const mutationBlocked = MUTATION_BRIDGE_TYPES.has(type) && !bridgeMutationReady;
+      if (playbackBlocked || mutationBlocked) {
         const exactInitialConfig = type === 'config'
           && bridgeInitialConfigAvailable
           && !bridgeInitialConfigAttempted
@@ -1486,7 +1560,7 @@ export function sendCardBridgeRequest(type, payload = {}, {
           && Boolean(bridgeHandoffCorrelation);
         if (!exactInitialConfig) {
           throw bridgeError(
-            'The verified card is not runtime-ready for this mutation.',
+            'The verified card is not ready for this command class.',
             'runtime-not-ready',
           );
         }

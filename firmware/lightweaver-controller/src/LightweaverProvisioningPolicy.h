@@ -30,7 +30,8 @@ struct ProvisioningReadinessInputs {
   bool knownGoodProject = false;
   bool webServing = false;
   bool outputReady = false;
-  bool transitionPending = false;
+  bool safetyTransitionPending = false;
+  bool networkTransitionPending = false;
 };
 
 enum class ProvisioningOutputScope : uint8_t {
@@ -78,13 +79,22 @@ constexpr const char* provisioningPhaseLabel(ProvisioningPhase phase) {
       : phase == ProvisioningPhase::Recovering ? "recovering" : "factory";
 }
 
-constexpr bool provisioningCommandReady(const ProvisioningReadinessInputs& input) {
+constexpr bool provisioningPlaybackReady(const ProvisioningReadinessInputs& input) {
   return input.phase == ProvisioningPhase::Ready &&
          input.configValid &&
          input.knownGoodProject &&
          input.webServing &&
          input.outputReady &&
-         !input.transitionPending;
+         !input.safetyTransitionPending;
+}
+
+constexpr bool provisioningMutationReady(const ProvisioningReadinessInputs& input) {
+  return provisioningPlaybackReady(input) &&
+         !input.networkTransitionPending;
+}
+
+constexpr bool provisioningCommandReady(const ProvisioningReadinessInputs& input) {
+  return provisioningMutationReady(input);
 }
 
 constexpr bool provisioningOutputReady(bool controllerReady,
@@ -100,6 +110,20 @@ constexpr bool provisioningUsesFactoryBeacon(ProvisioningPhase phase,
 
 constexpr bool provisioningControlAdmitted(bool commandReady) {
   return commandReady;
+}
+
+constexpr bool provisioningMutationAdmitted(bool mutationReady,
+                                             bool allowInitialBlank,
+                                             bool initialBlank) {
+  return mutationReady || (allowInitialBlank && initialBlank);
+}
+
+constexpr bool provisioningWifiMutationAdmitted(bool mutationReady,
+                                                 bool credentialsAbsent,
+                                                 bool requestThroughSetupAp,
+                                                 bool stationConnected) {
+  return mutationReady || credentialsAbsent ||
+         (requestThroughSetupAp && !stationConnected);
 }
 
 constexpr bool provisioningStorageReadFailed(ProvisioningStorageState state) {

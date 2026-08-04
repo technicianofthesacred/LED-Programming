@@ -103,6 +103,8 @@ const exactFields = [
   'provisioningContractVersion',
   'runtimePhase',
   'commandReady',
+  'playbackReady',
+  'mutationReady',
   'outputReady',
   'configValid',
   'knownGoodProject',
@@ -128,13 +130,29 @@ assert.match(status, /doc\["commandReady"\]\s*=\s*runtimeCommandReady\(\)/,
   'status command readiness must come from live runtime truth');
 assert.match(firmwareInfo, /doc\["commandReady"\]\s*=\s*runtimeCommandReady\(\)/,
   'firmware-info command readiness must come from live runtime truth');
+for (const source of [status, firmwareInfo]) {
+  assert.match(source, /doc\["playbackReady"\]\s*=\s*runtimePlaybackReady\(\)/,
+    'public readiness must expose network-independent playback truth');
+  assert.match(source, /doc\["mutationReady"\]\s*=\s*runtimeMutationReady\(\)/,
+    'public readiness must expose conservative mutation truth');
+}
 assert.match(runtimeApi, /bool\s+runtimeCommandReady\s*\(\)/);
+assert.match(runtimeApi, /bool\s+runtimePlaybackReady\s*\(\)/);
+assert.match(runtimeApi, /bool\s+runtimeMutationReady\s*\(\)/);
 assert.match(runtimeApi, /bool\s+runtimeOutputReady\s*\(\)/);
 const commandReady = functionBody(main, /bool\s+runtimeCommandReady\s*\(/);
-assert.match(commandReady, /inputs\.outputReady\s*=\s*runtimeOutputReady\(\)/,
-  'command readiness must consume public project-output readiness, not controller-only state');
-assert.match(main, /ProvisioningReadinessInputs[\s\S]*webRuntimeServing[\s\S]*runtimeOutputReady\(\)[\s\S]*transitionPending/,
-  'commandReady must require web serving, initialized output, and no transition');
+assert.match(commandReady, /return\s+runtimeMutationReady\(\)/,
+  'legacy commandReady must remain the conservative mutation-readiness alias');
+const playbackReady = functionBody(main, /bool\s+runtimePlaybackReady\s*\(/);
+assert.match(playbackReady, /inputs\.outputReady\s*=\s*runtimeOutputReady\(\)/,
+  'playback readiness must consume public project-output readiness');
+assert.match(playbackReady, /inputs\.safetyTransitionPending\s*=/,
+  'playback readiness must retain non-network safety interlocks');
+assert.doesNotMatch(playbackReady, /wifiTransitionPending|networkTransitionPending/,
+  'WiFi transport and listener binding state must not block safe local playback');
+const mutationReady = functionBody(main, /bool\s+runtimeMutationReady\s*\(/);
+assert.match(mutationReady, /inputs\.networkTransitionPending\s*=\s*wifiTransitionPending/,
+  'mutation readiness must fail closed during WiFi and listener transitions');
 
 const affectedOutputCount = functionBody(main, /uint8_t\s+runtimeAffectedOutputCount\s*\(/);
 const affectedOutputId = functionBody(main, /String\s+runtimeAffectedOutputId\s*\(/);
@@ -157,7 +175,7 @@ for (const source of [affectedOutputCount, affectedOutputId]) {
 }
 
 const control = functionBody(web, /void\s+handleControlPost\s*\(/);
-const commandGate = control.indexOf('provisioningControlAdmitted(runtimeCommandReady())');
+const commandGate = control.indexOf('provisioningControlAdmitted(runtimePlaybackReady())');
 const deserialize = control.indexOf('deserializeJson(');
 assert.ok(commandGate !== -1 && commandGate < deserialize,
   'control admission must reject an unready card before parsing or applying intent');
@@ -169,26 +187,52 @@ assert.match(control.slice(commandGate, deserialize), /server\.send\((409|423)[\
   'unready control requests must return a lock/conflict response immediately');
 assert.doesNotMatch(control.slice(commandGate, deserialize), /stateRevision|confirmedRevision|runtimeAdvanceStateRevision/,
   'unready control rejection must not echo or advance revisions');
+const initialAuthority = functionBody(web, /bool\s+initialBlankCardMutationAuthority\s*\(/);
+assert.match(initialAuthority, /ProvisioningPhase::Factory/);
+assert.match(initialAuthority, /!config\.configValid[\s\S]*!config\.knownGoodProject/,
+  'initial mutation exemption must be restricted to exact factory-blank truth');
+const mutationAdmission = functionBody(web, /bool\s+requireMutationAdmission\s*\(/);
+assert.match(mutationAdmission, /runtimeMutationReady\(\)/);
+assert.match(mutationAdmission, /allowInitialBlank[\s\S]*initialBlankCardMutationAuthority/,
+  'commissioned mutation admission must fail closed while preserving first install');
 for (const handlerName of [
   'handleConfigPost',
   'handleWiringCandidate',
   'handleWiringActivate',
-  'handleWiringConfirm',
-  'handleWiringRollback',
   'handleWiringDiscover',
-  'handleRecoverLights',
 ]) {
   const provisioningHandler = functionBody(
       web, new RegExp(`void\\s+${handlerName}\\s*\\(`));
-  assert.doesNotMatch(provisioningHandler, /runtimeCommandReady|provisioningControlAdmitted/,
-    `${handlerName} must remain available while runtime control is locked`);
+  assert.match(provisioningHandler, /requireMutationAdmission\(true/,
+    `${handlerName} must block unstable commissioned mutation but allow exact first install`);
 }
+for (const handlerName of ['handleWiringConfirm', 'handleWiringRollback']) {
+  const safetyCompletion = functionBody(
+      web, new RegExp(`void\\s+${handlerName}\\s*\\(`));
+  assert.doesNotMatch(safetyCompletion, /requireMutationAdmission/,
+    `${handlerName} must remain available to complete or escape an in-progress safety transaction`);
+}
+const wifiAdmission = functionBody(web, /bool\s+requireWifiMutationAdmission\s*\(/);
+assert.match(wifiAdmission, /runtimeMutationReady\(\)/);
+assert.match(wifiAdmission, /wifi\.ssid\.length\(\)\s*==\s*0/,
+  'first credentials must remain admissible');
+assert.match(wifiAdmission, /provisioningWifiMutationAdmitted\([\s\S]*requestArrivedThroughSetupAp\(\)[\s\S]*WiFi\.status\(\)\s*==\s*WL_CONNECTED/,
+  'broken-station recovery must require the setup AP interface');
+assert.match(functionBody(web, /void\s+handleWifiPost\s*\(/), /requireWifiMutationAdmission\(\)/,
+  'ordinary commissioned WiFi changes must fail closed while unstable');
+const recoverLightsHandler = functionBody(web, /void\s+handleRecoverLights\s*\(/);
+assert.doesNotMatch(recoverLightsHandler, /requireMutationAdmission/,
+  'explicit known-good lighting recovery must remain available while runtime control is locked');
 const identifyHandler = functionBody(web, /void\s+handleIdentify\s*\(/);
-assert.match(identifyHandler, /provisioningControlAdmitted\(runtimeCommandReady\(\)\)/,
-  'identify must share the command-readiness gate');
-assert.ok(identifyHandler.indexOf('provisioningControlAdmitted(runtimeCommandReady())') <
+assert.match(identifyHandler, /provisioningControlAdmitted\(runtimePlaybackReady\(\)\)/,
+  'identify must share the playback-readiness gate');
+assert.ok(identifyHandler.indexOf('provisioningControlAdmitted(runtimePlaybackReady())') <
           identifyHandler.indexOf('runtimeTriggerIdentify()'),
   'identify must reject before changing output ownership');
+const colorOrderStrictGate = control.indexOf('colorOrderRequested && !runtimeMutationReady()');
+assert.ok(colorOrderStrictGate > control.indexOf('deserializeJson(') &&
+    colorOrderStrictGate < control.indexOf('runtimeSetLedColorOrder('),
+  'live color-order changes must retain conservative mutation readiness after parsing and before mutation');
 assert.match(control, /colorOrder[\s\S]*400[\s\S]*invalid color order/,
   'invalid live color order must receive a 4xx acknowledgement');
 assert.match(control, /runtimeControlTargetExists\s*\([\s\S]*422/,

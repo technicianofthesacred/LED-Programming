@@ -144,13 +144,13 @@ assert.ok(
 );
 assert.match(
   advancedRegion,
-  /const r=await post\('\/api\/control',\{patternId:id,syncZones:true\}\);if\(r\.appliedPatternId!==id\)throw new Error/,
+  /const r=await playbackPost\('\/api\/control',\{patternId:id,syncZones:true\}\);if\(r\.appliedPatternId!==id\)throw new Error/,
   'advanced whole-piece pattern taps must broadcast to all sections and require authoritative applied-pattern confirmation',
 );
 assert.match(
   advancedRegion,
-  /b\.disabled=patPending\|\|patStreaming/,
-  'advanced grid buttons must be disabled while a request is pending or a stream is active',
+  /b\.disabled=!cardPlaybackReady\|\|patPending\|\|patStreaming/,
+  'advanced grid buttons must be disabled while playback is unready, a request is pending, or a stream is active',
 );
 assert.ok(
   advancedRegion.includes('Streaming from <b id=') &&
@@ -163,8 +163,8 @@ assert.ok(
 );
 assert.match(
   advancedRegion,
-  /const pollStream=async\(\)=>\{try\{const s=await get\('\/api\/status'\);applyStream\(s\)/,
-  'advanced page must poll /api/status to track streaming state',
+  /const pollStream=async\(\)=>\{try\{const s=await get\('\/api\/status'\);cardPlaybackReady=statusPlaybackReady\(s\);applyStream\(s\);renderGrid\(\)/,
+  'advanced page must poll /api/status to track readiness and streaming state',
 );
 
 console.log('web-pattern-thumbnails tests passed');

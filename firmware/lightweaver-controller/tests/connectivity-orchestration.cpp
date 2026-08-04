@@ -94,6 +94,37 @@ ConnectivityState run(FakeHardware& hardware,
 
 int main() {
   FakeHardware hardware;
+
+  ConnectivityState resume{};
+  resume.phase = ConnectivityPhase::Resuming;
+  resume.apActive = true;
+  resume.phaseStartedMs = 100;
+  resume.lastAttemptMs = 100;
+  hardware.actions.clear();
+  resume = run(hardware, resume,
+               observation(100 + kReconnectCadenceMs, false, false, true));
+  assert(resume.phase == ConnectivityPhase::Resuming);
+  assert(resume.apActive);
+  assert((hardware.actions == std::vector<std::string>{
+      "readiness-pending", "station-begin"}));
+
+  hardware.nextWledBind = true;
+  hardware.nextArtnetBind = false;
+  hardware.actions.clear();
+  resume = run(hardware, resume,
+               observation(100 + kReconnectCadenceMs + 250,
+                           true, false, true));
+  assert(resume.phase == ConnectivityPhase::Station);
+  assert(!resume.apActive);
+  assert(resume.networkBindingsPending);
+  assert((hardware.actions == std::vector<std::string>{
+      "station-associated", "force-bindings", "retire-setup-ap",
+      "readiness-pending"}));
+  hardware.stationAttempts.clear();
+  hardware.bindingAttempts.clear();
+  hardware.actions.clear();
+  hardware.nextArtnetBind = true;
+
   ConnectivityState state{};
   state.phase = ConnectivityPhase::Station;
   state.apActive = false;
@@ -228,11 +259,14 @@ int main() {
       "preack-station-lost", "readiness-pending", "station-begin"}));
 
   hardware.actions.clear();
+  hardware.setupApResults = {{true, true}};
+  hardware.setupApResultIndex = 0;
   preAck = run(hardware, preAck, observation(301250, false, false, false));
-  assert(preAck.phase == ConnectivityPhase::Reconnecting);
-  assert(!preAck.apActive);
+  assert(preAck.phase == ConnectivityPhase::Joining);
+  assert(preAck.apActive);
   assert((hardware.actions == std::vector<std::string>{
-      "station-lost", "readiness-pending", "station-reconnect"}));
+      "preack-station-lost", "ensure-setup-ap", "readiness-pending",
+      "station-begin"}));
 
   ConnectivityState joining{};
   joining.phase = ConnectivityPhase::Joining;
@@ -245,6 +279,8 @@ int main() {
       {true, false},
       {true, true},
   };
+  hardware.setupApResultIndex = 0;
+  hardware.setupApAttempts.clear();
   hardware.actions.clear();
   joining = run(hardware, joining, observation(105000, false, false, false));
   assert(joining.phase == ConnectivityPhase::SetupAp);

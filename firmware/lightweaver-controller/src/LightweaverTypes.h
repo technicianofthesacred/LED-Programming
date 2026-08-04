@@ -185,6 +185,7 @@ struct WifiConfig {
   String ssid;
   String password;
   String hostname = "lightweaver";
+  bool proven = false;
 };
 
 // Live network truth is intentionally separate from WifiConfig: credentials

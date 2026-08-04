@@ -120,7 +120,7 @@ assert.match(factoryBranch, /runtimeRecoveryAfterRestartPending\(\)/);
 assert.match(factoryBranch, /clearRuntimeRecoveryAfterRestart/,
   'a factory boot must complete recovery intent without starting normal project output');
 const identify = functionBody(web, 'void handleIdentify()', 'void handleZones()');
-assert.match(identify, /provisioningControlAdmitted\(runtimeCommandReady\(\)\)/,
+assert.match(identify, /provisioningControlAdmitted\(runtimePlaybackReady\(\)\)/,
   'identify must not take output ownership on a factory card');
 
 const loop = functionBody(main, 'void loop()', 'void applyRuntimeConfig(');

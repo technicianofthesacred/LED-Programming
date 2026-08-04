@@ -91,6 +91,8 @@ String runtimeCardId();
 String runtimeBootId();
 const char* runtimeProvisioningPhase();
 bool runtimeCommandReady();
+bool runtimePlaybackReady();
+bool runtimeMutationReady();
 bool runtimeOutputReady();
 bool runtimeConfigValid();
 bool runtimeKnownGoodProject();

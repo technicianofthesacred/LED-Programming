@@ -119,3 +119,24 @@ test('URL bootstrap rejects a public card host and preserves the stored local ho
     assert.equal(browser.events.length, 0);
   });
 });
+
+test('direct transport permits local development and same-origin card pages only', () => {
+  assert.equal(cardConnection.canPushDirectlyToCard('http:', 'http://localhost:5173'), true);
+  assert.equal(cardConnection.canPushDirectlyToCard('http:', 'http://127.0.0.1:4173'), true);
+  assert.equal(cardConnection.canPushDirectlyToCard('http:', 'http://192.168.4.1'), true);
+  assert.equal(cardConnection.canPushDirectlyToCard('http:', 'http://192.168.18.70'), true);
+  assert.equal(cardConnection.canPushDirectlyToCard('http:', 'http://lightweaver.local'), true);
+  assert.equal(cardConnection.canPushDirectlyToCard('https:', 'https://led.mandalacodes.com'), false);
+  assert.equal(cardConnection.canPushDirectlyToCard('file:', 'null'), false);
+  assert.equal(cardConnection.canPushDirectlyToCard('http:', 'http://studio.lan'), false);
+  assert.equal(cardConnection.canPushDirectlyToCard('http:', 'http://studio.example.com'), false);
+});
+
+test('legacy browser fixtures without location.origin retain protocol-only direct behavior', async () => {
+  const browser = fakeBrowser('');
+  browser.window.location.protocol = 'http:';
+  await withFakeBrowser(browser, () => {
+    assert.equal(cardConnection.canPushDirectlyToCard(), true);
+    assert.equal(cardConnection.canPushDirectlyToCard('file:', 'null'), false);
+  });
+});

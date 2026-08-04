@@ -72,6 +72,7 @@ struct ConnectivityActionPlan {
 constexpr bool phaseUsesSetupAp(ConnectivityPhase phase) {
   return phase == ConnectivityPhase::SetupAp ||
          phase == ConnectivityPhase::Joining ||
+         phase == ConnectivityPhase::Resuming ||
          phase == ConnectivityPhase::HandoffReady;
 }
 
@@ -82,8 +83,7 @@ inline ConnectivityActionPlan planConnectivityActions(
   plan.nextState = current;
   ConnectivityPhase previousPhase = current.phase;
 
-  if (current.phase == ConnectivityPhase::Station ||
-      current.phase == ConnectivityPhase::HandoffAbandoned) {
+  if (current.phase == ConnectivityPhase::Station) {
     if (!observed.stationReady) {
       plan.nextState = advanceConnectivity(
           current, {ConnectivityEvent::StationLost, observed.nowMs, 0});
@@ -98,8 +98,20 @@ inline ConnectivityActionPlan planConnectivityActions(
       plan.nextState = advanceConnectivity(
           current, {ConnectivityEvent::Tick, observed.nowMs, 0});
     }
+  } else if (!observed.stationReady && current.stationAssociated &&
+             (current.phase == ConnectivityPhase::HandoffReady ||
+              current.phase == ConnectivityPhase::HandoffAbandoned)) {
+    plan.nextState = advanceConnectivity(
+        current, {ConnectivityEvent::StationLost, observed.nowMs, 0});
+    plan.stationLost = true;
+    plan.preAckStationLoss = true;
+    plan.stationAttempt = ConnectivityStationAttempt::Begin;
+  } else if (current.phase == ConnectivityPhase::HandoffAbandoned) {
+    plan.nextState = advanceConnectivity(
+        current, {ConnectivityEvent::Tick, observed.nowMs, 0});
   } else if (observed.stationReady && !current.stationAssociated &&
              (current.phase == ConnectivityPhase::Joining ||
+              current.phase == ConnectivityPhase::Resuming ||
               current.phase == ConnectivityPhase::Reconnecting ||
               current.phase == ConnectivityPhase::RecoveryAp)) {
     plan.nextState = advanceConnectivity(
@@ -108,13 +120,6 @@ inline ConnectivityActionPlan planConnectivityActions(
     plan.forceNetworkBindingRefresh = true;
     plan.retireRecoveryAp =
         previousPhase == ConnectivityPhase::RecoveryAp;
-  } else if (!observed.stationReady && current.stationAssociated &&
-             current.phase == ConnectivityPhase::HandoffReady) {
-    plan.nextState = advanceConnectivity(
-        current, {ConnectivityEvent::StationLost, observed.nowMs, 0});
-    plan.stationLost = true;
-    plan.preAckStationLoss = true;
-    plan.stationAttempt = ConnectivityStationAttempt::Begin;
   } else {
     plan.nextState = advanceConnectivity(
         current, {ConnectivityEvent::Tick, observed.nowMs, 0});
@@ -125,7 +130,8 @@ inline ConnectivityActionPlan planConnectivityActions(
     plan.initialJoinTimedOut = true;
   }
 
-  if (previousPhase == ConnectivityPhase::HandoffReady &&
+  if ((previousPhase == ConnectivityPhase::HandoffReady ||
+       previousPhase == ConnectivityPhase::Resuming) &&
       (plan.nextState.phase == ConnectivityPhase::Station ||
        plan.nextState.phase == ConnectivityPhase::HandoffAbandoned) &&
       observed.stationReady) {
@@ -145,7 +151,8 @@ inline ConnectivityActionPlan planConnectivityActions(
 
   if (plan.stationAttempt == ConnectivityStationAttempt::None &&
       plan.nextState.reconnectDue) {
-    if (plan.nextState.phase == ConnectivityPhase::Joining) {
+    if (plan.nextState.phase == ConnectivityPhase::Joining ||
+        plan.nextState.phase == ConnectivityPhase::Resuming) {
       plan.stationAttempt = ConnectivityStationAttempt::Begin;
     } else if (plan.nextState.phase == ConnectivityPhase::Reconnecting ||
                plan.nextState.phase == ConnectivityPhase::RecoveryAp) {

@@ -183,6 +183,7 @@ void resetWifi(WifiConfig& wifi) {
   snprintf(hostname, sizeof(hostname), "lightweaver-%04llx",
            static_cast<unsigned long long>(ESP.getEfuseMac() & 0xFFFFULL));
   wifi.hostname = hostname;
+  wifi.proven = false;
 }
 
 void resetZone(ZoneConfig& zone) {
@@ -1396,6 +1397,7 @@ void overlayNvsWifi(RuntimeConfig& config) {
   config.wifi.ssid = String(doc["ssid"] | config.wifi.ssid.c_str());
   config.wifi.password = String(doc["password"] | config.wifi.password.c_str());
   config.wifi.hostname = String(doc["hostname"] | config.wifi.hostname.c_str());
+  config.wifi.proven = doc["proven"] | false;
 }
 
 void setRuntimeLoadTruth(RuntimeConfig& config,
@@ -2199,6 +2201,7 @@ bool saveWifiConfigJson(const String& json, RuntimeConfig& config, String& messa
       ? String(doc["password"].as<const char*>()) : String();
   candidate.hostname = doc["hostname"].is<const char*>()
       ? String(doc["hostname"].as<const char*>()) : String("lightweaver");
+  candidate.proven = false;
   if (candidate.ssid.length() == 0 || candidate.ssid.length() > 32) {
     message = "wifi ssid must be 1..32 bytes";
     return false;
@@ -2220,6 +2223,7 @@ bool saveWifiConfigJson(const String& json, RuntimeConfig& config, String& messa
   out["ssid"] = candidate.ssid;
   out["password"] = candidate.password;
   out["hostname"] = candidate.hostname;
+  out["proven"] = candidate.proven;
   String serialized;
   serializeJson(out, serialized);
   bool ok = prefs.putString(NVS_WIFI_KEY, serialized) == serialized.length();
@@ -2230,6 +2234,37 @@ bool saveWifiConfigJson(const String& json, RuntimeConfig& config, String& messa
   }
   config.wifi = candidate;
   message = "wifi credentials saved";
+  return true;
+}
+
+bool markWifiConfigProven(RuntimeConfig& config, String& message) {
+  JsonDocument out;
+  out["ssid"] = config.wifi.ssid;
+  out["password"] = config.wifi.password;
+  out["hostname"] = config.wifi.hostname;
+  out["proven"] = true;
+  String serialized;
+  serializeJson(out, serialized);
+
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    message = "wifi proof write open failed";
+    return false;
+  }
+  bool written = prefs.putString(NVS_WIFI_KEY, serialized) == serialized.length();
+  prefs.end();
+  if (!written || !prefs.begin(NVS_NAMESPACE, true)) {
+    message = written ? "wifi proof readback open failed" : "wifi proof write failed";
+    return false;
+  }
+  String readback = prefs.getString(NVS_WIFI_KEY, "");
+  prefs.end();
+  if (readback != serialized) {
+    message = "wifi proof readback mismatch";
+    return false;
+  }
+  config.wifi.proven = true;
+  message = "wifi reachability proven";
   return true;
 }
 
@@ -2248,6 +2283,8 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["provisioningContractVersion"] = LW_PROVISIONING_CONTRACT_VERSION;
   doc["runtimePhase"] = runtimeProvisioningPhase();
   doc["commandReady"] = runtimeCommandReady();
+  doc["playbackReady"] = runtimePlaybackReady();
+  doc["mutationReady"] = runtimeMutationReady();
   doc["outputReady"] = runtimeOutputReady();
   doc["configValid"] = config.configValid;
   doc["knownGoodProject"] = config.knownGoodProject;
@@ -2344,6 +2381,7 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   const char* wifiPhase = "setup-ap";
   switch (wifiState.phase) {
     case lightweaver::ConnectivityPhase::Joining: wifiPhase = "joining"; break;
+    case lightweaver::ConnectivityPhase::Resuming: wifiPhase = "resuming"; break;
     case lightweaver::ConnectivityPhase::HandoffReady: wifiPhase = "handoff-ready"; break;
     case lightweaver::ConnectivityPhase::HandoffAbandoned: wifiPhase = "handoff-abandoned"; break;
     case lightweaver::ConnectivityPhase::Station: wifiPhase = "station"; break;
@@ -2370,7 +2408,12 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["wifi"]["wledListenerReady"] = wifiState.wledListenerReady;
   doc["wifi"]["artnetListenerReady"] = wifiState.artnetListenerReady;
   doc["wifi"]["lastBindingAttemptMs"] = wifiState.lastBindingAttemptMs;
-  doc["wifi"]["configured"] = config.wifi.ssid.length() > 0;
+  const bool wifiConfigured = config.wifi.ssid.length() > 0;
+  doc["wifi"]["configured"] = wifiConfigured;
+  doc["wifi"]["proven"] = config.wifi.proven;
+  doc["wifi"]["nextAction"] = !wifiConfigured
+      ? "enter-wifi-credentials"
+      : (config.wifi.proven ? "none" : "complete-wifi-handoff");
   String output;
   serializeJson(doc, output);
   return output;

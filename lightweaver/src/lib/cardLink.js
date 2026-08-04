@@ -71,7 +71,10 @@ export function initialCardLinkState(host = '') {
     expectedCard: null,
     validatedBootId: '',
     candidateBootId: '',
-    requiresStableRevalidation: false,
+    // No transport becomes authoritative from a single status response. The
+    // first complete envelope nominates a boot; a second fresh envelope from
+    // that same boot establishes the initial connection.
+    requiresStableRevalidation: true,
     revalidationGeneration: 0,
     operationGeneration: 0,
     handoffCorrelation: null,
@@ -490,7 +493,9 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
       const transport = event.via === 'direct' ? 'direct' : 'bridge';
       const repeatedBridgeVerification = transport === 'bridge'
         && event.bridgeLifecycle === prev.bridgeLifecycle
-        && (prev.state === 'connected-bridge' || prev.state === 'reconnecting-bridge')
+        && (prev.state === 'connected-bridge'
+          || prev.state === 'reconnecting-bridge'
+          || (prev.state === 'revalidating' && prev.transport === 'bridge'))
         && prev.host === host
         && prev.card?.id === event.card.id;
       const readiness = Object.hasOwn(event, 'readiness')
@@ -502,25 +507,27 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
       if (Object.hasOwn(event, 'readiness')) {
         return applyStatusEnvelope(prev, { ...event, readiness, blank: cardBlank }, transport, host);
       }
-      return {
-        ...prev,
-        state: transport === 'direct' ? 'connected-direct' : 'connected-bridge',
-        reason: '', transport, host, missedPings: 0,
+      if (repeatedBridgeVerification) return prev;
+      return clearedLiveEvidence(prev, {
+        state: 'revalidating', reason: 'checking-card', transport, host, missedPings: 0,
         card: event.card,
+        expectedCard: event.expectedCard || prev.expectedCard || event.card,
         readiness,
         cardBlank,
         bridgeLifecycle: transport === 'bridge'
           ? (event.bridgeLifecycle ?? (repeatedBridgeVerification ? prev.bridgeLifecycle : null))
           : null,
-        acknowledgedAt: event.acknowledgedAt || new Date().toISOString(),
-      };
+        acknowledgedAt: '',
+      });
     }
     case 'bridge-blank': {
       // Late blank-state refinement for the bridge path: the card answered
       // /api/status after the green transition. Only touch an established bridge
       // link for the same card/host, and return the same reference when nothing
       // changes so subscribers do not re-render.
-      if (prev.state !== 'connected-bridge' && prev.state !== 'reconnecting-bridge') return prev;
+      if (prev.state !== 'connected-bridge'
+        && prev.state !== 'reconnecting-bridge'
+        && !(prev.state === 'revalidating' && prev.transport === 'bridge')) return prev;
       if (prev.host !== host || prev.card?.id !== event.cardId) return prev;
       const readiness = event.readiness ?? null;
       if (!readiness) return prev;
@@ -843,7 +850,9 @@ export function createCardLink({
       state.state === 'connected-bridge'
       || state.state === 'reconnecting-bridge'
       || (state.state === 'revalidating' && state.transport === 'bridge')
-    )) schedulePing(state.state === 'revalidating' ? 500 : pingIntervalMs);
+    )) schedulePing(state.state === 'revalidating'
+      ? Math.min(500, Math.max(5, connectTimeoutMs / 4))
+      : pingIntervalMs);
   }
 
   async function runDirectPing() {
@@ -911,11 +920,28 @@ export function createCardLink({
       if (!pingTimer && !pinging) schedulePing();
       stopDirectKeepalive();
     } else if (state.state === 'revalidating') {
-      clearConnectTimer();
+      // Correlated WiFi handoff has its own bounded orchestration because the
+      // card is expected to disappear while changing networks. Every ordinary
+      // initial/recovery validation remains under the generic connect deadline
+      // so a missing confirming envelope cannot leave an endless spinner.
+      if (state.handoffCorrelation) {
+        clearConnectTimer();
+      } else if (!connectTimer && connectTimeoutMs > 0) {
+        const validationTransport = state.transport;
+        const validationHost = state.host;
+        connectTimer = setTimeout(() => {
+          connectTimer = null;
+          if (validationTransport === 'direct') {
+            dispatch({ type: 'direct-status', connected: false, host: validationHost, reason: 'no-answer' });
+          } else {
+            dispatch({ type: 'bridge-lost', host: validationHost, reason: 'no-answer' });
+          }
+        }, connectTimeoutMs);
+      }
       if (state.transport === 'bridge') {
         stopDirectKeepalive();
         if (state.handoffCorrelation) stopKeepalive();
-        else if (!pinging && (prev.state !== 'revalidating' || !pingTimer)) schedulePing(500);
+        else if (!pinging && (prev.state !== 'revalidating' || !pingTimer)) schedulePing(0);
       } else {
         stopKeepalive();
         if (!directPinging && (prev.state !== 'revalidating' || !directPingTimer)) scheduleDirectPing(0);
@@ -1529,6 +1555,15 @@ export async function adoptDiscoveredDirectCard({ fetchImpl, link = getSharedCar
     error.reason = readinessReason(classified) || 'identity-missing';
     throw error;
   }
+  const confirmationReadiness = await probeDirectCardReadiness(state.host, fetchImpl);
+  const confirmation = classifyCardReadiness(confirmationReadiness || {}, { expectedCard: verified });
+  if (confirmation.state === 'checking'
+    || confirmation.state === 'identity-mismatch'
+    || confirmation.bootId !== classified.bootId) {
+    const error = new Error('Studio could not confirm two fresh status reports from the same card boot before pairing.');
+    error.reason = readinessReason(confirmation) || 'checking-card';
+    throw error;
+  }
   const blank = classified.blank;
   if (persistedIdentityAuthorityToken(readPersistedCardIdentity()) !== snapshot.persistedAuthority) {
     const error = new Error('The paired card changed in another tab while this check was running. Review the card now shown and try again.');
@@ -1553,6 +1588,11 @@ export async function adoptDiscoveredDirectCard({ fetchImpl, link = getSharedCar
   link.dispatch({
     type: 'direct-status', connected: true, host: state.host, card: verified,
     expectedCard: verified, allowAdopt: true, acknowledgedAt, blank, readiness,
+  });
+  link.dispatch({
+    type: 'direct-status', connected: true, host: state.host, card: verified,
+    expectedCard: verified, allowAdopt: true, acknowledgedAt, blank,
+    readiness: confirmationReadiness,
   });
   return verified;
 }
@@ -1591,6 +1631,14 @@ export async function bootstrapCardLink() {
       card, expectedCard, acknowledgedAt, blank, readiness,
       bridgeLifecycle: getCardBridgeState().lifecycle,
     });
+    if (comparison.ok && readiness) {
+      const confirmationReadiness = await fetchBridgeCardReadiness(getCardBridgeState().host);
+      link.dispatch({
+        type: 'bridge-ping-ok', host: getCardBridgeState().host,
+        card, expectedCard, readiness: confirmationReadiness,
+        bridgeLifecycle: getCardBridgeState().lifecycle,
+      });
+    }
   } catch (error) {
     // The remembered bridge is gone — forget it, so future app loads do not
     // pay this failing re-ping on every startup. A successful bridge

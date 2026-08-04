@@ -22,8 +22,9 @@ function functionBody(source, signature) {
 const http = functionBody(read('LightweaverWledJsonApi.cpp'), 'void handleStatePost()');
 const websocket = functionBody(read('LightweaverWledWebSocket.cpp'), 'void applyState(');
 const udp = functionBody(read('LightweaverWledRealtime.cpp'), 'void handleWledRealtime()');
+const artnet = functionBody(read('LightweaverArtnet.cpp'), 'void decodePacket(');
 
-const httpGate = http.indexOf('runtimeCommandReady()');
+const httpGate = http.indexOf('runtimePlaybackReady()');
 assert.ok(httpGate >= 0 && httpGate < http.indexOf('deserializeJson('),
   'WLED HTTP state writes must reject an unready or zero-pixel runtime before parsing intent');
 assert.ok(httpGate < http.indexOf('frameSourceClaim('),
@@ -32,7 +33,7 @@ assert.match(http.slice(httpGate, http.indexOf('deserializeJson(')),
   /totalPixels\s*==\s*0[\s\S]*serverPtr->send\((409|423)[\s\S]*\\"success\\":false[\s\S]*return;/,
   'WLED HTTP must explicitly reject a zero-pixel/unready card instead of returning success');
 
-const wsGate = websocket.indexOf('runtimeCommandReady()');
+const wsGate = websocket.indexOf('runtimePlaybackReady()');
 assert.ok(wsGate >= 0 && wsGate < websocket.indexOf('deserializeJson('),
   'WLED WebSocket state writes must be dropped before parsing when runtime control is unavailable');
 assert.ok(wsGate < websocket.indexOf('frameSourceClaim('),
@@ -40,12 +41,18 @@ assert.ok(wsGate < websocket.indexOf('frameSourceClaim('),
 assert.match(websocket.slice(0, websocket.indexOf('deserializeJson(')), /totalPixels\s*==\s*0/,
   'WLED WebSocket must explicitly reject a zero-pixel runtime');
 
-const udpGate = udp.indexOf('runtimeCommandReady()');
+const udpGate = udp.indexOf('runtimePlaybackReady()');
 assert.ok(udpGate >= 0 && udpGate < udp.indexOf('frameSourceClaim('),
   'WLED UDP frames must not claim output ownership while runtime control is unavailable');
 assert.match(udp.slice(0, udp.indexOf('frameSourceClaim(')), /g_totalPixels\s*==\s*0/,
   'WLED UDP must explicitly reject a zero-pixel runtime');
 assert.match(udp.slice(udpGate, udp.indexOf('frameSourceClaim(')), /g_udp\.read\(/,
   'unready UDP packets must be drained so stale frames cannot take ownership after readiness changes');
+
+const artnetGate = artnet.indexOf('runtimePlaybackReady()');
+assert.ok(artnetGate >= 0 && artnetGate < artnet.indexOf('frameSourceClaim('),
+  'Art-Net frames must fail playback readiness before claiming output ownership');
+assert.ok(artnetGate < artnet.indexOf('dst[i] ='),
+  'Art-Net frames must fail playback readiness before physical pixel mutation');
 
 console.log('wled-command-readiness tests passed');

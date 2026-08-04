@@ -242,6 +242,82 @@ test('pattern access permits card effects only for exact ready evidence', () => 
   assert.equal(incomplete.patternAccess, 'recovery');
 });
 
+test('playback and mutation readiness conservatively fall back to command readiness', () => {
+  const legacyReady = normalizeCardReadiness(readyEnvelope());
+  const legacyBlocked = normalizeCardReadiness(readyEnvelope({ commandReady: false }));
+
+  assert.equal(legacyReady.playbackReady, true);
+  assert.equal(legacyReady.mutationReady, true);
+  assert.equal(legacyBlocked.playbackReady, false);
+  assert.equal(legacyBlocked.mutationReady, false);
+});
+
+test('playback-ready exact cards expose patterns without weakening strict green readiness', () => {
+  const result = classifyCardReadiness(readyEnvelope({
+    runtimePhase: 'recovering',
+    commandReady: false,
+    playbackReady: true,
+    mutationReady: false,
+  }), { expectedCardId: CARD_ID });
+
+  assert.equal(result.state, 'not-ready');
+  assert.equal(result.connected, false);
+  assert.equal(result.patternAccess, 'ready');
+  assert.equal(result.playbackReady, true);
+  assert.equal(result.mutationReady, false);
+});
+
+test('playback access still requires exact ready project and output evidence', () => {
+  for (const override of [
+    { knownGoodProject: false },
+    { outputReady: false },
+    { playbackReady: false },
+  ]) {
+    const result = classifyCardReadiness(readyEnvelope({
+      commandReady: false,
+      playbackReady: true,
+      mutationReady: false,
+      ...override,
+    }), { expectedCardId: CARD_ID });
+    assert.equal(result.patternAccess, 'recovery', JSON.stringify(override));
+  }
+});
+
+test('playback evidence cannot bypass contract, identity, completeness, or boot validation', () => {
+  const playbackEvidence = {
+    runtimePhase: 'recovering',
+    commandReady: false,
+    playbackReady: true,
+    mutationReady: false,
+  };
+  const incomplete = readyEnvelope(playbackEvidence);
+  delete incomplete.commandReady;
+
+  const cases = [
+    ['unsupported contract', readyEnvelope({ ...playbackEvidence, provisioningContractVersion: 2 }), {
+      expectedCardId: CARD_ID,
+    }, 'checking'],
+    ['invalid identity', readyEnvelope({ ...playbackEvidence, app: 'OtherProduct' }), {
+      expectedCardId: CARD_ID,
+    }, 'checking'],
+    ['incomplete evidence', incomplete, { expectedCardId: CARD_ID }, 'checking'],
+    ['wrong card', readyEnvelope({ ...playbackEvidence, cardId: 'lw-112233445566' }), {
+      expectedCardId: CARD_ID,
+    }, 'identity-mismatch'],
+    ['changed boot', readyEnvelope({ ...playbackEvidence, bootId: 'boot-2' }), {
+      expectedCardId: CARD_ID,
+      previousBootId: 'boot-1',
+    }, 'revalidating'],
+  ];
+
+  for (const [label, envelope, options, expectedState] of cases) {
+    const result = classifyCardReadiness(envelope, options);
+    assert.equal(result.state, expectedState, label);
+    assert.equal(result.patternAccess, 'recovery', label);
+    assert.equal(result.connected, false, label);
+  }
+});
+
 test('an unexpected exact card ID is an identity mismatch', () => {
   const result = classifyCardReadiness(readyEnvelope({ cardId: 'lw-112233445566' }), {
     expectedCardId: CARD_ID,

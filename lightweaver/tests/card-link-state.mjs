@@ -88,11 +88,29 @@ assert.equal(reduceCardLink(connecting, { type: 'connecting', via: 'bridge', hos
 const bridgeReadyOnly = reduceCardLink(connecting, { type: 'bridge-ready', host: '192.168.4.1' });
 assert.equal(bridgeReadyOnly.state, 'connecting', 'bridge transport readiness is not card verification');
 assert.equal(isCardLinkConnected(bridgeReadyOnly), false);
-const bridged = reduceCardLink(bridgeReadyOnly, {
+const bridgeCandidate = reduceCardLink(bridgeReadyOnly, {
   type: 'card-verified',
   via: 'bridge',
   host: '192.168.4.1',
   card: { id: 'lw-001122aabbcc', name: 'Front Mandala' },
+  readiness: readyEnvelope('lw-001122aabbcc'),
+  bridgeLifecycle: 4,
+  acknowledgedAt: '2026-07-14T12:00:00.000Z',
+});
+assert.equal(bridgeCandidate.state, 'revalidating', 'one initial bridge envelope cannot establish authority');
+assert.equal(isCardLinkConnected(bridgeCandidate), false);
+const mismatchedBridgeCandidate = reduceCardLink(bridgeCandidate, {
+  type: 'bridge-ping-ok', host: '192.168.4.1',
+  card: { id: 'lw-001122aabbcc', name: 'Front Mandala' },
+  expectedCard: { id: 'lw-001122aabbcc' },
+  readiness: readyEnvelope('lw-001122aabbcc', { bootId: 'boot-other' }),
+});
+assert.equal(mismatchedBridgeCandidate, bridgeCandidate,
+  'a mismatched second envelope cannot replace the same-boot candidate');
+const bridged = reduceCardLink(bridgeCandidate, {
+  type: 'bridge-ping-ok', host: '192.168.4.1',
+  card: { id: 'lw-001122aabbcc', name: 'Front Mandala' },
+  expectedCard: { id: 'lw-001122aabbcc' },
   readiness: readyEnvelope('lw-001122aabbcc'),
   bridgeLifecycle: 4,
   acknowledgedAt: '2026-07-14T12:00:00.000Z',
@@ -532,13 +550,21 @@ assert.equal(missingDirectIdentity.state, 'disconnected');
 assert.equal(missingDirectIdentity.reason, 'identity-missing');
 assert.equal(isCardLinkConnected(missingDirectIdentity), false);
 const directReadiness = readyEnvelope('lw-001122aabbcc');
-const direct = reduceCardLink(initial, {
+const directCandidate = reduceCardLink(initial, {
   type: 'direct-status',
   connected: true,
   host: '192.168.18.70',
   card: { id: 'lw-001122aabbcc', name: 'Front Mandala' },
   readiness: directReadiness,
   allowAdopt: true,
+});
+assert.equal(directCandidate.state, 'revalidating', 'one initial direct envelope cannot establish authority');
+assert.equal(isCardLinkConnected(directCandidate), false);
+const direct = reduceCardLink(directCandidate, {
+  type: 'direct-status', connected: true, host: '192.168.18.70',
+  card: { id: 'lw-001122aabbcc', name: 'Front Mandala' },
+  expectedCard: { id: 'lw-001122aabbcc' },
+  readiness: directReadiness,
 });
 assert.equal(direct.state, 'connected-direct');
 assert.equal(direct.transport, 'direct');
@@ -645,7 +671,12 @@ assert.equal(passiveBridgeCard.discoveredCard.id, 'lw-passive-bridge');
 assert.equal(isCardLinkConnected(passiveBridgeCard), false, 'ordinary bridge Connect only discovers; Pair is explicit');
 
 // A paired card reporting factory/blank stays connected but carries cardBlank.
-const blankPaired = reduceCardLink(initial, {
+const blankCandidate = reduceCardLink(initial, {
+  type: 'direct-status', connected: true, host: '192.168.18.72',
+  card: { id: 'lw-blank' }, expectedCard: { id: 'lw-blank' }, blank: true,
+  readiness: readyEnvelope('lw-blank', { runtimePhase: 'factory', knownGoodProject: false }),
+});
+const blankPaired = reduceCardLink(blankCandidate, {
   type: 'direct-status', connected: true, host: '192.168.18.72',
   card: { id: 'lw-blank' }, expectedCard: { id: 'lw-blank' }, blank: true,
   readiness: readyEnvelope('lw-blank', { runtimePhase: 'factory', knownGoodProject: false }),
@@ -653,7 +684,12 @@ const blankPaired = reduceCardLink(initial, {
 assert.equal(blankPaired.state, 'connected-direct');
 assert.equal(isCardLinkConnected(blankPaired), false);
 assert.equal(blankPaired.cardBlank, true);
-const configuredPaired = reduceCardLink(initial, {
+const configuredCandidate = reduceCardLink(initial, {
+  type: 'direct-status', connected: true, host: '192.168.18.72',
+  card: { id: 'lw-blank' }, expectedCard: { id: 'lw-blank' }, blank: false,
+  readiness: readyEnvelope('lw-blank'),
+});
+const configuredPaired = reduceCardLink(configuredCandidate, {
   type: 'direct-status', connected: true, host: '192.168.18.72',
   card: { id: 'lw-blank' }, expectedCard: { id: 'lw-blank' }, blank: false,
   readiness: readyEnvelope('lw-blank'),
@@ -700,9 +736,14 @@ assert.equal(nextCardConnectionAction({
 // ── bridge transport carries blank state too (the only live path on HTTPS) ──
 // A bridged card-verified with a known blank status is "needs project", never
 // plain green — this is the led.mandalacodes.com case the direct poll misses.
-const bridgedBlank = reduceCardLink(bridgeReadyOnly, {
+const bridgedBlankCandidate = reduceCardLink(bridgeReadyOnly, {
   type: 'card-verified', via: 'bridge', host: '192.168.4.1',
   card: { id: 'lw-bridge-blank' }, blank: true,
+  readiness: readyEnvelope('lw-bridge-blank', { runtimePhase: 'factory', knownGoodProject: false }),
+});
+const bridgedBlank = reduceCardLink(bridgedBlankCandidate, {
+  type: 'bridge-ping-ok', host: '192.168.4.1',
+  card: { id: 'lw-bridge-blank' }, expectedCard: { id: 'lw-bridge-blank' },
   readiness: readyEnvelope('lw-bridge-blank', { runtimePhase: 'factory', knownGoodProject: false }),
 });
 assert.equal(bridgedBlank.state, 'connected-bridge');
@@ -714,8 +755,14 @@ const bridgedUnknown = reduceCardLink(bridgeReadyOnly, {
   type: 'card-verified', via: 'bridge', host: '192.168.4.1', card: { id: 'lw-bridge-x' },
 });
 assert.equal(bridgedUnknown.cardBlank, null, 'unknown blank state stays unknown');
-const refinedBlank = reduceCardLink(bridgedUnknown, {
+assert.equal(bridgedUnknown.state, 'revalidating', 'identity alone is not a status envelope');
+const refinedBlankCandidate = reduceCardLink(bridgedUnknown, {
   type: 'bridge-blank', host: '192.168.4.1', cardId: 'lw-bridge-x', blank: true,
+  readiness: readyEnvelope('lw-bridge-x', { runtimePhase: 'factory', knownGoodProject: false }),
+});
+const refinedBlank = reduceCardLink(refinedBlankCandidate, {
+  type: 'bridge-ping-ok', host: '192.168.4.1',
+  card: { id: 'lw-bridge-x' }, expectedCard: { id: 'lw-bridge-x' },
   readiness: readyEnvelope('lw-bridge-x', { runtimePhase: 'factory', knownGoodProject: false }),
 });
 assert.equal(refinedBlank.cardBlank, true, 'a late bridge-blank demotes the bridge link');
@@ -820,7 +867,8 @@ const link = createCardLink({
 const seen = [];
 const unsubscribe = link.subscribe(state => seen.push(state.state));
 link.dispatch({ type: 'card-verified', via: 'bridge', host: '192.168.4.1', card: { id: 'lw-test' }, readiness: readyEnvelope('lw-test') });
-assert.equal(link.getState().state, 'connected-bridge');
+assert.equal(link.getState().state, 'revalidating');
+await waitFor(() => link.getState().state === 'connected-bridge', 2000, 'initial same-boot confirmation');
 await waitFor(() => pingCount >= 2, 2000, 'two keepalive pings');
 assert.equal(link.getState().state, 'connected-bridge');
 failPings = true;
@@ -895,6 +943,35 @@ assert.equal(slowLink.getState().state, 'connecting');
 await waitFor(() => slowLink.getState().state === 'disconnected', 2000, 'connect timeout');
 assert.equal(slowLink.getState().reason, 'no-answer');
 slowLink.destroy();
+
+// The first complete envelope starts same-boot validation, but cannot leave
+// the UI spinning forever when the confirming envelope never arrives.
+const stalledRevalidation = createCardLink({
+  sendRequest: async () => new Promise(() => {}),
+  pingIntervalMs: 1000,
+  connectTimeoutMs: 15,
+});
+stalledRevalidation.dispatch({ type: 'connecting', via: 'bridge', host: 'lightweaver.local' });
+stalledRevalidation.dispatch({
+  type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
+  card: { id: 'lw-stalled' }, readiness: readyEnvelope('lw-stalled'),
+});
+assert.equal(stalledRevalidation.getState().state, 'revalidating');
+await waitFor(() => stalledRevalidation.getState().state === 'disconnected', 2000, 'revalidation timeout');
+assert.equal(stalledRevalidation.getState().reason, 'no-answer');
+stalledRevalidation.destroy();
+
+// A correlated WiFi handoff owns its own bounded orchestration and must not be
+// terminated by the generic connect timer while the card changes networks.
+const correlatedHandoff = createCardLink({ host: wifiCorrelation.host, connectTimeoutMs: 15 });
+correlatedHandoff.dispatch({
+  type: 'wifi-handoff-retargeted', host: wifiCorrelation.host,
+  correlation: wifiCorrelation, bridgeLifecycle: 100, flowId: wifiFlowId,
+});
+await sleep(35);
+assert.equal(correlatedHandoff.getState().state, 'revalidating');
+assert.ok(correlatedHandoff.getState().handoffCorrelation);
+correlatedHandoff.destroy();
 
 // ── runtime: a direct probe cannot cancel the bridge no-answer timer ────────
 // Before the guard, a direct 'connecting' dispatched mid-bridge-connect moved
@@ -1292,6 +1369,11 @@ blankLink.dispatch({
   blank: isFactoryCardStatus({ mode: 'factory-flash', source: 'defaults', wiringRevision: 0, wiringDigest: '' }),
   readiness: readyEnvelope('lw-honest-01', { runtimePhase: 'factory', knownGoodProject: false }),
 });
+blankLink.dispatch({
+  type: 'direct-status', connected: true, host: '192.168.18.72',
+  card: { id: 'lw-honest-01' }, expectedCard: { id: 'lw-honest-01' }, blank: true,
+  readiness: readyEnvelope('lw-honest-01', { runtimePhase: 'factory', knownGoodProject: false }),
+});
 assert.equal(blankLink.getState().state, 'connected-direct');
 assert.equal(blankLink.getState().cardBlank, true, 'a factory status marks the paired card blank');
 assert.equal(nextCardConnectionAction({
@@ -1353,6 +1435,11 @@ directPingLink.dispatch({
   card: { id: 'lw-ping-test' }, expectedCard: { id: 'lw-ping-test' }, blank: false,
   readiness: readyEnvelope('lw-ping-test'),
 });
+directPingLink.dispatch({
+  type: 'direct-status', connected: true, host: '192.168.1.100',
+  card: { id: 'lw-ping-test' }, expectedCard: { id: 'lw-ping-test' }, blank: false,
+  readiness: readyEnvelope('lw-ping-test'),
+});
 assert.equal(directPingLink.getState().state, 'connected-direct', 'start connected-direct');
 assert.equal(directPingLink.getState().missedPings, 0);
 
@@ -1371,6 +1458,11 @@ const dropLink = createCardLink({
     pingMisses += 1;
     throw new Error('timeout'); // simulate card stopped answering
   },
+});
+dropLink.dispatch({
+  type: 'direct-status', connected: true, host: '192.168.1.101',
+  card: { id: 'lw-drop-test' }, expectedCard: { id: 'lw-drop-test' }, blank: false,
+  readiness: readyEnvelope('lw-drop-test'),
 });
 dropLink.dispatch({
   type: 'direct-status', connected: true, host: '192.168.1.101',

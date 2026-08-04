@@ -52,7 +52,7 @@ assert.equal(
 
 assert.equal(canPushDirectlyToCard('https:'), false);
 assert.equal(canPushDirectlyToCard('http:'), true);
-assert.equal(canPushDirectlyToCard('file:'), true);
+assert.equal(canPushDirectlyToCard('file:'), false);
 
 assert.deepEqual(cardLoadMethodForProtocol('https:'), {
   mode: 'copy-download',

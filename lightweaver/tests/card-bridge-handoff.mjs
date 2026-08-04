@@ -191,6 +191,34 @@ await assert.rejects(
 parentStatusOverrides = {};
 await sendCardBridgeRequest('status', {}, { host: '192.168.18.70', timeoutMs: 100 });
 
+// A fresh bridge page lifecycle needs two complete status envelopes from the
+// same boot before any privileged command authority exists.
+listeners.get('message')?.({
+  origin: 'http://192.168.18.70',
+  source: parentBridge,
+  data: { app: 'LightweaverCardBridge', type: 'ready', host: '192.168.18.70', version: 1 },
+});
+await new Promise(resolve => setTimeout(resolve, 5));
+await sendCardBridgeRequest('status', {}, { host: '192.168.18.70', timeoutMs: 100 });
+assert.equal(getCardBridgeState().statusEnvelopeCount, 1);
+const messagesBeforeSingleEnvelopeControl = messages.length;
+await assert.rejects(
+  sendCardBridgeRequest('control', {}, { host: '192.168.18.70', timeoutMs: 25 }),
+  error => ['runtime-not-ready', 'stale-host'].includes(error?.reason),
+  'one exact status envelope cannot authorize a privileged command',
+);
+assert.equal(messages.length, messagesBeforeSingleEnvelopeControl);
+parentStatusOverrides = { bootId: 'boot-race' };
+await sendCardBridgeRequest('status', {}, { host: '192.168.18.70', timeoutMs: 100 });
+assert.equal(getCardBridgeState().statusEnvelopeCount, 1,
+  'a mismatched second boot replaces rather than confirms the candidate');
+parentStatusOverrides = {};
+await sendCardBridgeRequest('status', {}, { host: '192.168.18.70', timeoutMs: 100 });
+assert.equal(getCardBridgeState().statusEnvelopeCount, 1);
+await sendCardBridgeRequest('status', {}, { host: '192.168.18.70', timeoutMs: 100 });
+assert.equal(getCardBridgeState().statusEnvelopeCount, 2);
+await sendCardBridgeRequest('control', {}, { host: '192.168.18.70', timeoutMs: 100 });
+
 // The card page can reload without changing its WindowProxy or host. A new
 // ready lifecycle must revoke the prior card synchronously while fresh identity
 // is still in flight, so no stale command or adoption window exists.
@@ -350,6 +378,7 @@ const stageTimeoutParent = {
 globalThis.window.parent = stageTimeoutParent;
 assert.equal(bootstrapCardBridgeFromOpener(), true);
 await verifyCardBridgeIdentity('192.168.18.70');
+await sendCardBridgeRequest('status', {}, { host: '192.168.18.70', timeoutMs: 100 });
 await sendCardBridgeRequest('status', {}, { host: '192.168.18.70', timeoutMs: 100 });
 await assert.rejects(
   sendCardBridgeRequest('wiring-candidate', { candidate: {} }, {
@@ -639,6 +668,15 @@ respondFromSwitchHost(bStatusMessage, switchHostB, {
   commandReady: true, outputReady: true,
 });
 await freshBStatus;
+const confirmedBStatus = sendCardBridgeRequest('status', {}, { host: switchHostB, timeoutMs: 1000 });
+const bConfirmationMessage = switchMessages.at(-1);
+respondFromSwitchHost(bConfirmationMessage, switchHostB, {
+  app: 'Lightweaver', provisioningContractVersion: 1,
+  cardId: 'lw-1921681876', firmwareVersion: '1.0.0', buildId: 'build-switch-b',
+  bootId: 'boot-switch-b', runtimePhase: 'ready', knownGoodProject: true,
+  commandReady: true, outputReady: true,
+});
+await confirmedBStatus;
 const allowedBControl = sendCardBridgeRequest('control', { patternId: 'fire' }, { host: switchHostB, timeoutMs: 1000 });
 const bControlMessage = switchMessages.at(-1);
 respondFromSwitchHost(bControlMessage, switchHostB, { ok: true });
@@ -1042,6 +1080,35 @@ assert.equal(getCardBridgeState().runtimeCommandReady, true);
 assert.equal(handoffHarness.storageValues.get('lw_chip_card_host'), stationHost,
   'preferred host persists only after exact final station verification');
 await sendCardBridgeRequest('control', {}, { host: stationHost, timeoutMs: 100 });
+
+stationStatus = {
+  ...stationStatus,
+  runtimePhase: 'recovering', commandReady: false,
+  playbackReady: true, mutationReady: false, outputReady: true,
+};
+await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().runtimeCommandReady, false,
+  'strict all-command readiness remains false during network recovery');
+assert.equal(getCardBridgeState().playbackReady, true);
+assert.equal(getCardBridgeState().mutationReady, false);
+await sendCardBridgeRequest('control', {}, { host: stationHost, timeoutMs: 100 });
+await sendCardBridgeRequest('frame', {}, { host: stationHost, timeoutMs: 100 });
+for (const mutationType of ['config', 'wiring-candidate']) {
+  await assert.rejects(
+    sendCardBridgeRequest(mutationType, {}, { host: stationHost, timeoutMs: 25 }),
+    error => error?.reason === 'runtime-not-ready',
+    `${mutationType} remains fail-closed without mutation readiness`,
+  );
+}
+await sendCardBridgeRequest('recover-lights', {}, { host: stationHost, timeoutMs: 100 });
+await sendCardBridgeRequest('reboot', {}, { host: stationHost, timeoutMs: 100 });
+
+stationStatus = {
+  ...stationStatus,
+  runtimePhase: 'ready', commandReady: true,
+  playbackReady: true, mutationReady: true,
+};
+await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
 const messagesBeforeTimeout = handoffMessages.length;
 suppressStationStatus = true;
 await assert.rejects(
@@ -1071,7 +1138,10 @@ assert.deepEqual(
   'no mutation is posted after liveness loss',
 );
 suppressStationStatus = false;
-stationStatus = { ...stationStatus, commandReady: false };
+stationStatus = {
+  ...stationStatus,
+  commandReady: false, playbackReady: false, mutationReady: false,
+};
 await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
 assert.equal(getCardBridgeState().runtimeCommandReady, false);
 await assert.rejects(

@@ -13,6 +13,7 @@ constexpr std::uint32_t kHandoffMaxMs = 300000;
 enum class ConnectivityPhase {
   SetupAp,
   Joining,
+  Resuming,
   HandoffReady,
   HandoffAbandoned,
   Station,
@@ -23,6 +24,7 @@ enum class ConnectivityPhase {
 enum class ConnectivityEvent {
   Tick,
   CredentialsAccepted,
+  ResumeRequested,
   StationAssociated,
   StationLost,
   StationOriginAck,
@@ -63,6 +65,7 @@ constexpr bool elapsed(std::uint32_t nowMs,
 
 constexpr bool connectivityPhaseIsPending(ConnectivityPhase phase) {
   return phase == ConnectivityPhase::Joining ||
+         phase == ConnectivityPhase::Resuming ||
          phase == ConnectivityPhase::HandoffReady ||
          phase == ConnectivityPhase::HandoffAbandoned ||
          phase == ConnectivityPhase::Reconnecting ||
@@ -107,6 +110,18 @@ inline ConnectivityState advanceConnectivity(
   next.networkBindingsRetryDue = false;
 
   switch (input.event) {
+    case ConnectivityEvent::ResumeRequested:
+      next.phase = ConnectivityPhase::Resuming;
+      next.apActive = true;
+      next.stationAssociated = false;
+      next.reconnectDue = true;
+      next.networkBindingsPending = false;
+      next.wledListenerReady = false;
+      next.artnetListenerReady = false;
+      next.phaseStartedMs = input.nowMs;
+      next.generation = 0;
+      return next;
+
     case ConnectivityEvent::CredentialsAccepted:
       next.phase = ConnectivityPhase::Joining;
       next.apActive = true;
@@ -120,7 +135,10 @@ inline ConnectivityState advanceConnectivity(
       return next;
 
     case ConnectivityEvent::StationAssociated:
-      if (current.phase == ConnectivityPhase::Joining) {
+      if (current.phase == ConnectivityPhase::Resuming) {
+        next.phase = ConnectivityPhase::Station;
+        next.apActive = false;
+      } else if (current.phase == ConnectivityPhase::Joining) {
         next.phase = ConnectivityPhase::HandoffReady;
         next.apActive = true;
       } else if (current.phase == ConnectivityPhase::Reconnecting ||
@@ -145,9 +163,11 @@ inline ConnectivityState advanceConnectivity(
 
     case ConnectivityEvent::StationLost:
       if (!current.stationAssociated) return next;
-      next.phase = current.phase == ConnectivityPhase::HandoffReady
+      next.phase = (current.phase == ConnectivityPhase::HandoffReady ||
+                    current.phase == ConnectivityPhase::HandoffAbandoned)
           ? ConnectivityPhase::Joining
           : ConnectivityPhase::Reconnecting;
+      if (next.phase == ConnectivityPhase::Joining) next.apActive = true;
       next.stationAssociated = false;
       next.reconnectDue = true;
       next.networkBindingsPending = false;
@@ -192,6 +212,11 @@ inline ConnectivityState advanceConnectivity(
     next.reconnectDue = true;
     next.phaseStartedMs = input.nowMs;
     return next;
+  }
+
+  if (current.phase == ConnectivityPhase::Resuming &&
+      elapsed(input.nowMs, current.lastAttemptMs, kReconnectCadenceMs)) {
+    next.reconnectDue = true;
   }
 
   if (current.phase == ConnectivityPhase::HandoffReady &&

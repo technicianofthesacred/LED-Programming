@@ -82,6 +82,7 @@ String apTeardownStationIp;
 void startApMode(RuntimeConfig& config);
 void ensureRecoveryAp(RuntimeConfig& config);
 void beginStationJoin(RuntimeConfig& config, uint32_t generation);
+void beginStationResume(RuntimeConfig& config);
 void scheduleApTeardown(uint32_t generation);
 
 // Bridge protocol version — the card-page postMessage bridge contract shared
@@ -132,6 +133,50 @@ void sendCors() {
 void handleOptions() {
   sendCors();
   server.send(204, "text/plain", "");
+}
+
+bool initialBlankCardMutationAuthority() {
+  if (!runtimeConfigPtr) return false;
+  const RuntimeConfig& config = *runtimeConfigPtr;
+  return config.runtimePhase == ProvisioningPhase::Factory &&
+         !config.configValid && !config.knownGoodProject;
+}
+
+void sendMutationNotReady(const char* action) {
+  JsonDocument rejected;
+  rejected["ok"] = false;
+  rejected["error"] = String(action) +
+      " is locked until the card connection and safety state are stable";
+  rejected["runtimePhase"] = runtimeProvisioningPhase();
+  rejected["mutationReady"] = false;
+  rejected["nextAction"] = "wait-for-stable-card";
+  String body;
+  serializeJson(rejected, body);
+  server.send(423, "application/json", body);
+}
+
+bool requireMutationAdmission(bool allowInitialBlank, const char* action) {
+  if (provisioningMutationAdmitted(runtimeMutationReady(), allowInitialBlank,
+                                   initialBlankCardMutationAuthority())) {
+    return true;
+  }
+  sendMutationNotReady(action);
+  return false;
+}
+
+bool requestArrivedThroughSetupAp() {
+  return apRadioStarted &&
+      server.client().localIP() == WiFi.softAPIP();
+}
+
+bool requireWifiMutationAdmission() {
+  if (provisioningWifiMutationAdmitted(
+          runtimeMutationReady(), runtimeConfigPtr->wifi.ssid.length() == 0,
+          requestArrivedThroughSetupAp(), WiFi.status() == WL_CONNECTED)) {
+    return true;
+  }
+  sendMutationNotReady("WiFi settings");
+  return false;
 }
 
 bool hasControlField(JsonDocument& doc, const char* key) {
@@ -643,7 +688,9 @@ void handleRoot() {
             "<script>"
             "const $=id=>document.getElementById(id);"
             "const post=async(p,b)=>{const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false)throw new Error(j.error||('HTTP '+r.status));return j};"
-            "const get=p=>fetch(p).then(r=>r.json());");
+            "const get=p=>fetch(p).then(r=>r.json());"
+            "const statusPlaybackReady=s=>!!s&&(s.playbackReady===true||(typeof s.playbackReady!=='boolean'&&s.commandReady===true));"
+            "let cardPlaybackReady=false;");
   page += studioOpenScript();
   page += studioBridgeScript();
   page += F(
@@ -665,9 +712,9 @@ void handleRoot() {
             /*LW_CONFIRMED_CONTROL_START*/
             "const makeConfirmedControl=({initial,render,setDisabled,send,description})=>{let confirmed=initial,activeRequest=0,failed=null,state='idle';const owner={};const request=async value=>{const requestId=++activeRequest;failed=null;state='pending';setDisabled(true);render(value);try{await send(value);if(requestId!==activeRequest)return;confirmed=value;state='confirmed';setDisabled(false);render(confirmed);clearControlError(owner)}catch(error){if(requestId!==activeRequest)return;failed=value;state='failed';setDisabled(false);render(confirmed);showControlError('Could not '+description+'. '+((error&&error.message)||'Try again.'),retry,owner)}};const retry=()=>{if(failed===null)return Promise.resolve();const value=failed;clearControlError(owner);return request(value)};const setConfirmed=value=>{activeRequest++;confirmed=value;failed=null;state='confirmed';render(value);setDisabled(false);clearControlError(owner)};const snapshot=()=>({state,confirmed,failed,activeRequest});return{request,retry,setConfirmed,snapshot}};"
             /*LW_CONFIRMED_CONTROL_END*/
-            "const controlPost=async body=>{const response=await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const payload=await response.json().catch(()=>({}));if(!response.ok||payload.ok!==true)throw new Error(payload.error||('HTTP '+response.status));return payload};"
+            "const controlPost=async body=>{if(!cardPlaybackReady)throw new Error('Card is not ready for playback yet.');const response=await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const payload=await response.json().catch(()=>({}));if(!response.ok||payload.ok!==true)throw new Error(payload.error||('HTTP '+response.status));return payload};"
             // Generic coalescing sender per field
-            "const makeSender=key=>{let pending=null,inflight=false;const flush=async()=>{if(inflight||pending===null)return;inflight=true;const v=pending;pending=null;try{await post('/api/control',{[key]:v})}catch(e){}finally{inflight=false;if(pending!==null)flush()}};return v=>{pending=v;flush()}};"
+            "const makeSender=key=>{let pending=null,inflight=false;const flush=async()=>{if(inflight||pending===null)return;inflight=true;const v=pending;pending=null;try{await controlPost({[key]:v})}catch(e){}finally{inflight=false;if(pending!==null)flush()}};return v=>{pending=v;flush()}};"
             "const sendHue=makeSender('hue');"
             "const sendSat=makeSender('saturation');"
             "const sendSpeed=makeSender('speed');"
@@ -700,9 +747,9 @@ void handleRoot() {
             "const showColorPanel=show=>{$('color-panel').classList.toggle('open',show)};"
             "$('hue-slider').oninput=e=>{customHue=parseInt(e.target.value,10);renderColorPanel();sendHue(customHue)};"
             "$('sat-slider').oninput=e=>{customSat=parseInt(e.target.value,10);renderColorPanel();sendSat(customSat)};"
-            "$('breathe-btn').onclick=async()=>{customBreathe=!customBreathe;renderColorPanel();await post('/api/control',{breathe:customBreathe})};"
-            "$('drift-btn').onclick=async()=>{customDrift=!customDrift;renderColorPanel();await post('/api/control',{drift:customDrift})};"
-            "const setPalette=async(lo,hi)=>{driftMin=lo;driftMax=hi;if(!customDrift){customDrift=true}renderColorPanel();await post('/api/control',{drift:customDrift,driftMin:lo,driftMax:hi})};"
+            "$('breathe-btn').onclick=async()=>{customBreathe=!customBreathe;renderColorPanel();await controlPost({breathe:customBreathe})};"
+            "$('drift-btn').onclick=async()=>{customDrift=!customDrift;renderColorPanel();await controlPost({drift:customDrift})};"
+            "const setPalette=async(lo,hi)=>{driftMin=lo;driftMax=hi;if(!customDrift){customDrift=true}renderColorPanel();await controlPost({drift:customDrift,driftMin:lo,driftMax:hi})};"
             "$('pal-warm').onclick=()=>setPalette(0,60);"
             "$('pal-cool').onclick=()=>setPalette(130,200);"
             "$('pal-rainbow').onclick=()=>setPalette(0,255);"
@@ -747,7 +794,7 @@ void handleRoot() {
                 "if(r.ok&&j.ok){setMsg('Saved on card. Rebooting to apply.','ok');setTimeout(()=>{location.reload()},2000);await post('/api/reboot',{})}"
                 "else{setMsg(j.error||('HTTP '+r.status),'err')}}"
               "catch(e){setMsg('Failed: '+e.message,'err')}};"
-            "(async()=>{try{const e=await get('/api/zones');const z=(e.zones||[])[0]||{};const p=await get('/api/patterns');patterns=p.patterns||[];sceneControl.setConfirmed(p.currentId||'');blackoutControl.setConfirmed(!!z.blackout);"
+            "(async()=>{try{const s=await get('/api/status');cardPlaybackReady=statusPlaybackReady(s);const e=await get('/api/zones');const z=(e.zones||[])[0]||{};const p=await get('/api/patterns');patterns=p.patterns||[];sceneControl.setConfirmed(p.currentId||'');blackoutControl.setConfirmed(!!z.blackout);"
               "if(typeof z.customHue==='number'){customHue=z.customHue;customSat=z.customSaturation;customBreathe=!!z.customBreathe;customDrift=!!z.customDrift}"
               "if(typeof z.driftHueMin==='number')driftMin=z.driftHueMin;"
               "if(typeof z.driftHueMax==='number')driftMax=z.driftHueMax;"
@@ -777,7 +824,7 @@ void handleRoot() {
             "$('stream-cancel').onclick=async()=>{try{await post('/api/control',{cancelStream:true});applyStream({streaming:false})}catch(_){}};"
             // The same 1Hz status poll also clears the AP-fallback WiFi warning
             // banner if the background rejoin succeeds while the page is open.
-            "const pollStream=async()=>{try{const s=await get('/api/status');applyStream(s);const ww=$('wifi-warn');if(ww&&s.wifi&&s.wifi.transport==='station')ww.remove()}catch(_){}};"
+            "const pollStream=async()=>{try{const s=await get('/api/status');cardPlaybackReady=statusPlaybackReady(s);applyStream(s);const ww=$('wifi-warn');if(ww&&s.wifi&&s.wifi.transport==='station')ww.remove()}catch(_){}};"
             "pollStream();setInterval(pollStream,1000);"
             "</script></body></html>");
 
@@ -1037,7 +1084,9 @@ void handleAdvancedRoot() {
   page += F("<script>"
             "const $=id=>document.getElementById(id);"
             "const post=async(p,b)=>{const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});const j=await r.json().catch(()=>({}));if(!r.ok||j.ok===false)throw new Error(j.error||('HTTP '+r.status));return j};"
-            "const get=p=>fetch(p).then(r=>r.json());");
+            "const get=p=>fetch(p).then(r=>r.json());"
+            "const statusPlaybackReady=s=>!!s&&(s.playbackReady===true||(typeof s.playbackReady!=='boolean'&&s.commandReady===true));"
+            "let cardPlaybackReady=false;");
   page += studioOpenScript();
   page += studioBridgeScript();
   page += F(
@@ -1075,6 +1124,7 @@ void handleAdvancedRoot() {
               "else{m.textContent=r.error||'Save failed';m.className='note err';btn.disabled=false}}catch(e){m.textContent=e.message;m.className='note err';btn.disabled=false}};");
   } else if (!needsCommissioning) {
     page += F("let patterns=[],currentId='',blackoutOn=false;"
+              "const playbackPost=(p,b)=>cardPlaybackReady?post(p,b):Promise.reject(new Error('Card is not ready for playback yet.'));"
               "const swClass=id=>'sw-'+id.replace(/[^a-z0-9-]/g,'-');"
               "const selectedPattern=()=>patterns.find(x=>x.id===currentId)||null;"
               "const setNow=p=>{$('now-name').textContent=p?p.label:'—';$('now-mode').textContent=p?p.mode:'—'};"
@@ -1083,13 +1133,13 @@ void handleAdvancedRoot() {
               "$('edit-studio').onclick=e=>openPatternStudio(e,currentId);"
               "let patPending=false,patStreaming=false;"
               "const patError=t=>{$('pat-msg-text').textContent=t||'';$('pat-msg').style.display=t?'block':'none'};"
-              "const renderGrid=()=>{const g=$('pat-grid');g.innerHTML='';g.setAttribute('aria-busy',String(patPending));patterns.forEach(p=>{const b=document.createElement('button');b.className='pat-btn'+(p.id===currentId?' active':'');b.innerHTML='<span class=\"name\"></span><span class=\"swatch '+swClass(p.id)+'\"></span>';b.querySelector('.name').textContent=p.label;b.disabled=patPending||patStreaming;b.onclick=()=>{if(patPending||patStreaming||p.id===currentId)return;patternControl.request(p.id)};g.appendChild(b)})};"
+              "const renderGrid=()=>{const g=$('pat-grid');g.innerHTML='';g.setAttribute('aria-busy',String(patPending));patterns.forEach(p=>{const b=document.createElement('button');b.className='pat-btn'+(p.id===currentId?' active':'');b.innerHTML='<span class=\"name\"></span><span class=\"swatch '+swClass(p.id)+'\"></span>';b.querySelector('.name').textContent=p.label;b.disabled=!cardPlaybackReady||patPending||patStreaming;b.onclick=()=>{if(!cardPlaybackReady||patPending||patStreaming||p.id===currentId)return;patternControl.request(p.id)};g.appendChild(b)})};"
               // Minimal confirmed-control (same contract as the customer page's
               // makeConfirmedControl): optimistic render, rollback to the last
               // confirmed pattern on failed/non-ok POST, Retry re-sends.
               "const patternControl=(()=>{let confirmed='',active=0,failed=null;"
                 "const request=async id=>{const req=++active;failed=null;patPending=true;currentId=id;renderGrid();setNow(selectedPattern());"
-                  "try{const r=await post('/api/control',{patternId:id,syncZones:true});if(r.appliedPatternId!==id)throw new Error('Card did not confirm the requested pattern.');if(req!==active)return;confirmed=id;patPending=false;renderGrid();patError(null)}"
+                  "try{const r=await playbackPost('/api/control',{patternId:id,syncZones:true});if(r.appliedPatternId!==id)throw new Error('Card did not confirm the requested pattern.');if(req!==active)return;confirmed=id;patPending=false;renderGrid();patError(null)}"
                   "catch(e){if(req!==active)return;failed=id;currentId=confirmed;patPending=false;renderGrid();setNow(selectedPattern());patError('Could not change pattern. '+((e&&e.message)||'Try again.'))}};"
                 "const retry=()=>{if(failed===null)return;const id=failed;patError(null);return request(id)};"
                 "const setConfirmed=id=>{active++;confirmed=id;failed=null;currentId=id;patPending=false;patError(null)};"
@@ -1098,10 +1148,10 @@ void handleAdvancedRoot() {
               "const srcLabel=k=>k==='artnet'?'Madrix / Art-Net':k==='wled-realtime'?'designer live preview':'external source';"
               "const applyStream=s=>{const on=!!(s&&s.streaming);if(on)$('stream-src').textContent=srcLabel(s.frameSource);if(on===patStreaming)return;patStreaming=on;$('stream-note').style.display=on?'block':'none';renderGrid()};"
               "$('stream-cancel').onclick=async()=>{try{await post('/api/control',{cancelStream:true});applyStream({streaming:false})}catch(_){}};"
-              "const pollStream=async()=>{try{const s=await get('/api/status');applyStream(s)}catch(_){}};"
+              "const pollStream=async()=>{try{const s=await get('/api/status');cardPlaybackReady=statusPlaybackReady(s);applyStream(s);renderGrid()}catch(_){}};"
               "setInterval(pollStream,1000);"
               "const loadOnce=async()=>{try{"
-                "const s=await get('/api/status');"
+                "const s=await get('/api/status');cardPlaybackReady=statusPlaybackReady(s);"
                 "const p=await get('/api/patterns');"
                 "patterns=p.patterns||[];patternControl.setConfirmed(p.currentId||'');"
                 "applyStream(s);"
@@ -1114,16 +1164,16 @@ void handleAdvancedRoot() {
                 "$('h-val').textContent=$('hue').value;"
               "}catch(e){}};"
               // Coalescing in-flight sender — at most 1 request per slider in flight
-              "const makeSender=(key,fmt)=>{let pending=null,inflight=false;const flush=async()=>{if(inflight||pending===null)return;inflight=true;const v=pending;pending=null;try{const r=await post('/api/control',{[key]:v});if(typeof r[key]!=='undefined')fmt(r[key])}catch(e){}finally{inflight=false;if(pending!==null)flush()}};return v=>{pending=v;flush()}};"
+              "const makeSender=(key,fmt)=>{let pending=null,inflight=false;const flush=async()=>{if(inflight||pending===null)return;inflight=true;const v=pending;pending=null;try{const r=await playbackPost('/api/control',{[key]:v});if(typeof r[key]!=='undefined')fmt(r[key])}catch(e){}finally{inflight=false;if(pending!==null)flush()}};return v=>{pending=v;flush()}};"
               "const sendB=makeSender('brightness',v=>$('b-val').textContent=Math.round(v*100)+'%');"
               "const sendS=makeSender('speed',v=>$('s-val').textContent=v.toFixed(2)+'×');"
               "const sendH=makeSender('hueShift',v=>$('h-val').textContent=v);"
               "$('brightness').oninput=e=>{$('b-val').textContent=e.target.value+'%';sendB(parseInt(e.target.value,10)/100)};"
               "$('speed').oninput=e=>{$('s-val').textContent=(e.target.value/100).toFixed(2)+'×';sendS(parseInt(e.target.value,10)/100)};"
               "$('hue').oninput=e=>{$('h-val').textContent=e.target.value;sendH(parseInt(e.target.value,10))};"
-              "$('prev').onclick=async()=>{await post('/api/control',{previous:true});loadOnce()};"
-              "$('next').onclick=async()=>{await post('/api/control',{next:true});loadOnce()};"
-              "$('blackout').onclick=async()=>{blackoutOn=!blackoutOn;$('blackout').classList.toggle('primary',blackoutOn);await post('/api/control',{blackout:blackoutOn})};"
+              "$('prev').onclick=async()=>{await playbackPost('/api/control',{previous:true});loadOnce()};"
+              "$('next').onclick=async()=>{await playbackPost('/api/control',{next:true});loadOnce()};"
+              "$('blackout').onclick=async()=>{blackoutOn=!blackoutOn;$('blackout').classList.toggle('primary',blackoutOn);await playbackPost('/api/control',{blackout:blackoutOn})};"
               "const refreshWiringSafety=async()=>{try{const s=await get('/api/wiring/status');const el=$('wiring-safe-status');el.textContent=s.state==='testing'?'Testing new wiring — confirm it in Studio before the timer ends.':s.state==='staged'?'New wiring is staged but the working setup is still active.':'Current setup is safe.';el.className='note '+(s.state==='known-good'?'ok':'')}catch(_){}};"
               "$('restore-wiring').onclick=async()=>{const el=$('wiring-safe-status');try{el.textContent='Restoring the working setup…';const r=await post('/api/recover-lights',{patternId:'warm-white',brightness:.65,syncZones:true});if(r.rebooting){el.textContent='Working setup selected. The card is rebooting and will show warm white after restart.'}else if(r.diagnostics&&r.diagnostics.frameSubmitted){el.textContent='Working setup restored and recovery light sent.'}else{el.textContent='Working setup selected, but no recovery frame was submitted.'}el.className='note '+((r.rebooting||(r.diagnostics&&r.diagnostics.frameSubmitted))?'ok':'err')}catch(e){el.textContent=e.message;el.className='note err'}};"
               "$('find-wire').onclick=async()=>{const el=$('wiring-safe-status');try{const d=await post('/api/wiring/discover',{step:0});el.textContent=(d.rebooting||d.requiresReboot?'Card is restarting into wire discovery. Reconnect, then watch':'Watch')+' the dim amber pulse on GPIO '+d.pin+' (step '+(d.step+1)+' of '+d.stepCount+'). Confirm what you observe before trying step '+(d.nextStep+1)+'.'}catch(e){el.textContent=e.message;el.className='note err'}};"
@@ -1166,6 +1216,7 @@ void handleStatus() {
 
 void handleConfigPost() {
   sendCors();
+  if (!requireMutationAdmission(true, "Project configuration")) return;
   if (!runtimeRequestBodyReady || runtimeRequestBodyRejected) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing json body\"}");
     return;
@@ -1249,6 +1300,7 @@ void handleWiringStatus() {
 
 void handleWiringCandidate() {
   sendCors();
+  if (!requireMutationAdmission(true, "Wiring candidate")) return;
   JsonDocument doc;
   String message;
   if (!runtimeRequestBodyReady || runtimeRequestBodyRejected) {
@@ -1289,6 +1341,7 @@ String wiringActivationId(JsonDocument& doc) {
 
 void handleWiringActivate() {
   sendCors();
+  if (!requireMutationAdmission(true, "Wiring activation")) return;
   JsonDocument doc;
   String message;
   if (!readWiringRequest(doc, message)) {
@@ -1330,6 +1383,7 @@ void handleWiringRollback() {
 
 void handleWiringDiscover() {
   sendCors();
+  if (!requireMutationAdmission(true, "Wiring discovery")) return;
   JsonDocument doc;
   if (server.hasArg("plain") && server.arg("plain").length()) {
     DeserializationError parseError = deserializeJson(doc, server.arg("plain"));
@@ -1374,6 +1428,7 @@ void handleWiringDiscover() {
 
 void handleWifiPost() {
   sendCors();
+  if (!requireWifiMutationAdmission()) return;
   if (!wifiRequestBodyReady || wifiRequestBodyRejected) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"wifi request body unavailable\"}");
     return;
@@ -1404,6 +1459,11 @@ void handleWifiPost() {
 
 void handleWifiHandoffAck() {
   sendCors();
+  // This is a reachability receipt, not browser command authority. The
+  // exact-origin and two-fresh-envelope rules remain in Studio/the card-page
+  // bridge; native clients on the local network intentionally retain direct
+  // local API access. This receipt proves only that the current credential
+  // generation reached this exact boot through its station interface.
   if (!wifiRequestBodyReady || wifiRequestBodyRejected) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"wifi acknowledgement body unavailable\"}");
     return;
@@ -1724,7 +1784,7 @@ class BoundedControlRequestHandler final : public RequestHandler {
 
 void handleControlPost() {
   sendCors();
-  if (!provisioningControlAdmitted(runtimeCommandReady())) {
+  if (!provisioningControlAdmitted(runtimePlaybackReady())) {
     controlRequestBodyReady = false;
     controlRequestBodyLength = 0;
     JsonDocument rejected;
@@ -1734,6 +1794,7 @@ void handleControlPost() {
     rejected["bootId"] = runtimeBootId();
     rejected["runtimePhase"] = runtimeProvisioningPhase();
     rejected["commandReady"] = false;
+    rejected["playbackReady"] = false;
     String body;
     serializeJson(rejected, body);
     server.send(423, "application/json", body);
@@ -1773,6 +1834,11 @@ void handleControlPost() {
   if (colorOrderRequested &&
       !runtimeCanSetLedColorOrder(controlString(doc, "colorOrder"))) {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid color order\"}");
+    return;
+  }
+  if (colorOrderRequested && !runtimeMutationReady()) {
+    server.send(423, "application/json",
+                "{\"ok\":false,\"error\":\"card is not ready for color-order mutation\"}");
     return;
   }
   const bool breatheSettingsRequested = hasControlField(doc, "breatheLowerPct") ||
@@ -2043,7 +2109,7 @@ void handleRecoverLights() {
 
 void handleIdentify() {
   sendCors();
-  if (!provisioningControlAdmitted(runtimeCommandReady())) {
+  if (!provisioningControlAdmitted(runtimePlaybackReady())) {
     JsonDocument rejected;
     rejected["ok"] = false;
     rejected["error"] = "runtime is not ready for output commands";
@@ -2051,6 +2117,7 @@ void handleIdentify() {
     rejected["bootId"] = runtimeBootId();
     rejected["runtimePhase"] = runtimeProvisioningPhase();
     rejected["commandReady"] = false;
+    rejected["playbackReady"] = false;
     String body;
     serializeJson(rejected, body);
     server.send(423, "application/json", body);
@@ -2350,6 +2417,29 @@ void beginStationJoin(RuntimeConfig& config, uint32_t generation) {
   startStationAttempt(config, now);
 }
 
+void beginStationResume(RuntimeConfig& config) {
+  if (!config.wifiRuntime.connectivity.apActive) startApMode(config);
+  apTeardownScheduled = false;
+  apTeardownGeneration = 0;
+  apTeardownDeadlineMs = 0;
+  apTeardownStationIp = "";
+  config.wifiRuntime.attemptCount = 0;
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false, false);
+  uint32_t now = millis();
+  config.wifiRuntime.connectivity = lightweaver::advanceConnectivity(
+      config.wifiRuntime.connectivity,
+      {lightweaver::ConnectivityEvent::ResumeRequested, now, 0});
+  config.wifiRuntime.stationIp = "";
+  config.wifiRuntime.lastError = "";
+  config.wifiRuntime.stationLinkPending = false;
+  config.activeTransport = WIFI_TRANSPORT_AP;
+  config.activeIp = WiFi.softAPIP().toString();
+  config.activeHostname = "";
+  syncWifiReadiness(config);
+  startStationAttempt(config, now);
+}
+
 void scheduleApTeardown(uint32_t generation) {
   apTeardownGeneration = generation;
   apTeardownStationIp = WiFi.localIP().toString();
@@ -2397,6 +2487,14 @@ void processScheduledApTeardown(
       apTeardownStationIp.length() > 0 &&
       WiFi.localIP().toString() == apTeardownStationIp;
   if (proofStillValid) {
+    String proofMessage;
+    if (!markWifiConfigProven(config, proofMessage)) {
+      config.wifiRuntime.lastError = proofMessage;
+      apTeardownGeneration = 0;
+      apTeardownDeadlineMs = 0;
+      apTeardownStationIp = "";
+      return;
+    }
     state = lightweaver::advanceConnectivity(
         state, {lightweaver::ConnectivityEvent::StationOriginAck,
                 now, apTeardownGeneration});
@@ -2554,7 +2652,10 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   currentLookIndexPtr = &currentLookIndex;
 
   startApMode(config);
-  if (config.wifi.ssid.length()) beginStationJoin(config, 1);
+  if (config.wifi.ssid.length()) {
+    if (config.wifi.proven) beginStationResume(config);
+    else beginStationJoin(config, 1);
+  }
 
   server.on("/", HTTP_GET, handleRoot);
   server.on("/api/status", HTTP_OPTIONS, handleOptions);

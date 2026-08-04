@@ -36,6 +36,9 @@ export function normalizeCardReadiness(raw = {}) {
     && /^lw-[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(cardId)
     && hasBoundedText(source.firmwareVersion, 48)
     && hasBoundedText(source.buildId, 96);
+  const commandReady = explicitBoolean(source.commandReady);
+  const playbackReady = explicitBoolean(source.playbackReady) ?? commandReady;
+  const mutationReady = explicitBoolean(source.mutationReady) ?? commandReady;
 
   return Object.freeze({
     app,
@@ -53,16 +56,26 @@ export function normalizeCardReadiness(raw = {}) {
     projectId,
     projectFingerprint,
     knownGoodProject: explicitBoolean(source.knownGoodProject),
-    commandReady: explicitBoolean(source.commandReady),
+    commandReady,
+    playbackReady,
+    mutationReady,
     outputReady: explicitBoolean(source.outputReady),
   });
 }
 
 function classifiedResult(state, normalized, reason, additions = {}) {
+  // Playback evidence is meaningful only after the contract, identity, full
+  // envelope, and boot checks have succeeded. A checking, mismatched, or
+  // boot-changed envelope must never unlock card patterns even if its raw
+  // playbackReady bit is true.
+  const playbackAccess = (state === 'connected' || state === 'not-ready')
+    && normalized.knownGoodProject === true
+    && normalized.outputReady === true
+    && normalized.playbackReady === true;
   return Object.freeze({
     ...normalized,
     state,
-    patternAccess: state === 'connected' ? 'ready' : state === 'blank' ? 'blank' : 'recovery',
+    patternAccess: state === 'blank' ? 'blank' : playbackAccess ? 'ready' : 'recovery',
     connected: false,
     blank: null,
     reason,

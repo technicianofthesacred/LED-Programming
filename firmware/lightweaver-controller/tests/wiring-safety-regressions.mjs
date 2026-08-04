@@ -142,12 +142,12 @@ test('factory reset acknowledges pending verification before radio erase and reb
 
 test('identify is locked out before it can suppress the factory beacon', () => {
   const identify = body(web, 'void handleIdentify()', 'void handleZones()');
-  const gateAt = identify.indexOf('provisioningControlAdmitted(runtimeCommandReady())');
+  const gateAt = identify.indexOf('provisioningControlAdmitted(runtimePlaybackReady())');
   const triggerAt = identify.indexOf('runtimeTriggerIdentify()');
   assert.ok(gateAt >= 0 && gateAt < triggerAt,
     'identify readiness gate must run before output ownership changes');
   assert.match(identify.slice(gateAt, triggerAt), /server\.send\(423/);
-  for (const field of ['cardId', 'bootId', 'runtimePhase', 'commandReady']) {
+  for (const field of ['cardId', 'bootId', 'runtimePhase', 'commandReady', 'playbackReady']) {
     assert.match(identify.slice(gateAt, triggerAt), new RegExp(`rejected\\["${field}"\\]`));
   }
 });

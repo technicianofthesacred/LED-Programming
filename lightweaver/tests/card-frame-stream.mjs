@@ -623,6 +623,7 @@ globalThis.window = {
 const {
   bootstrapCardBridgeFromOpener,
   cardBridgeFeatureGap,
+  getCardBridgeState,
   getCardBridgeVersion,
   sendCardBridgeRequest,
   verifyCardBridgeIdentity,
@@ -647,6 +648,11 @@ await assert.rejects(
 );
 await verifyCardBridgeIdentity('192.168.18.70');
 await sendCardBridgeRequest('status', {}, { host: '192.168.18.70' });
+assert.equal(getCardBridgeState().runtimeCommandReady, false,
+  'one exact status envelope cannot authorize frame playback');
+await sendCardBridgeRequest('status', {}, { host: '192.168.18.70' });
+assert.equal(getCardBridgeState().playbackReady, true,
+  'two matching-boot envelopes authorize frame playback');
 posted.length = 0;
 
 // A frame request relays through the bridge and its versioned reply clears the gap.

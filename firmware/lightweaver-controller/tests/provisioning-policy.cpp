@@ -28,14 +28,23 @@ int main() {
   readiness.knownGoodProject = true;
   readiness.webServing = true;
   readiness.outputReady = true;
+  assert(provisioningPlaybackReady(readiness));
+  assert(provisioningMutationReady(readiness));
   assert(provisioningCommandReady(readiness));
 
   readiness.outputReady = false;
+  assert(!provisioningPlaybackReady(readiness));
   assert(!provisioningCommandReady(readiness));
   readiness.outputReady = true;
-  readiness.transitionPending = true;
+  readiness.networkTransitionPending = true;
+  assert(provisioningPlaybackReady(readiness));
+  assert(!provisioningMutationReady(readiness));
   assert(!provisioningCommandReady(readiness));
-  readiness.transitionPending = false;
+  readiness.networkTransitionPending = false;
+  readiness.safetyTransitionPending = true;
+  assert(!provisioningPlaybackReady(readiness));
+  assert(!provisioningMutationReady(readiness));
+  readiness.safetyTransitionPending = false;
   readiness.phase = ProvisioningPhase::Factory;
   assert(!provisioningCommandReady(readiness));
   readiness.phase = ProvisioningPhase::Recovering;
@@ -43,6 +52,16 @@ int main() {
 
   assert(provisioningControlAdmitted(true));
   assert(!provisioningControlAdmitted(false));
+  assert(provisioningMutationAdmitted(true, false, false));
+  assert(!provisioningMutationAdmitted(false, false, false));
+  assert(provisioningMutationAdmitted(false, true, true));
+  assert(!provisioningMutationAdmitted(false, true, false));
+  assert(!provisioningMutationAdmitted(false, false, true));
+  assert(provisioningWifiMutationAdmitted(true, false, false, true));
+  assert(provisioningWifiMutationAdmitted(false, true, false, false));
+  assert(provisioningWifiMutationAdmitted(false, false, true, false));
+  assert(!provisioningWifiMutationAdmitted(false, false, false, false));
+  assert(!provisioningWifiMutationAdmitted(false, false, true, true));
 
   assert(provisioningStorageReadFailed(ProvisioningStorageState::Error));
   assert(!provisioningStorageReadFailed(ProvisioningStorageState::Absent));

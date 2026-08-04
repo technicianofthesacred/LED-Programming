@@ -42,6 +42,8 @@ assert.match(types, /struct WifiRuntimeState\s*{[\s\S]*ConnectivityState[\s\S]*s
   'transient WiFi truth must be separate from saved credentials and include transition/retry metadata');
 assert.match(types, /struct RuntimeConfig\s*{[\s\S]*WifiConfig wifi;[\s\S]*WifiRuntimeState wifiRuntime;/,
   'runtime configuration must carry live WiFi truth separately from WifiConfig');
+assert.match(types, /struct WifiConfig\s*{[\s\S]*bool proven\s*=\s*false/,
+  'saved WiFi credentials must carry fail-closed reachability proof');
 
 const saveWifi = functionBody(storage, /bool\s+saveWifiConfigJson\s*\(/);
 assert.match(storageHeader, /bool\s+saveWifiConfigJson\s*\(const String& json, RuntimeConfig& config, String& message\)/,
@@ -64,6 +66,17 @@ assert.match(saveWifi, /hostname\.length\(\)[\s\S]*32/,
   'hostname must be bounds checked');
 assert.ok(saveWifi.indexOf('prefs.putString') < saveWifi.indexOf('config.wifi = candidate'),
   'runtime credentials must change only after persistence succeeds');
+assert.match(saveWifi, /candidate\.proven\s*=\s*false/,
+  'every live WiFi credential replacement must revoke prior proof');
+assert.match(saveWifi, /out\["proven"\]\s*=\s*candidate\.proven/,
+  'the exact persisted credential blob must include its proof bit');
+const proveWifi = functionBody(storage, /bool\s+markWifiConfigProven\s*\(/);
+assert.match(storageHeader, /bool\s+markWifiConfigProven\s*\(RuntimeConfig& config, String& message\)/,
+  'handoff completion must have a checked proof-persistence interface');
+assert.match(proveWifi, /out\["ssid"\][\s\S]*out\["password"\][\s\S]*out\["hostname"\][\s\S]*out\["proven"\]\s*=\s*true/,
+  'proof must be committed in the same blob as the exact current credentials');
+assert.ok(proveWifi.indexOf('putString') < proveWifi.indexOf('config.wifi.proven = true'),
+  'runtime proof must change only after persistent readback succeeds');
 
 const wifiPost = functionBody(web, /void\s+handleWifiPost\s*\(/);
 assert.match(wifiPost, /beginStationJoin\s*\(/,
@@ -247,8 +260,13 @@ assert.doesNotMatch(web, /bool\s+tryStationJoin\s*\(/,
 assert.doesNotMatch(web, /while\s*\(WiFi\.status\(\)[\s\S]{0,300}delay\s*\(/,
   'station association must never freeze rendering while polling');
 const setupWeb = functionBody(web, /void\s+setupLightweaverWeb\s*\(/);
-assert.match(setupWeb, /startApMode\s*\([\s\S]*beginStationJoin\s*\(/,
-  'boot with saved credentials must use the same reachable AP+STA lifecycle');
+assert.match(setupWeb, /startApMode\s*\([\s\S]*config\.wifi\.proven[\s\S]*beginStationResume\s*\([\s\S]*beginStationJoin\s*\(/,
+  'only proven saved credentials may use the boot-resume lifecycle');
+const beginResume = functionBody(web, /void\s+beginStationResume\s*\([^;]*\)\s*\{/);
+assert.match(beginResume, /ConnectivityEvent::ResumeRequested/,
+  'boot resume must be explicit policy input, never a fabricated handoff generation');
+assert.doesNotMatch(beginResume, /CredentialsAccepted/,
+  'boot resume must never mint or reuse commissioning correlation');
 const beginJoin = functionBody(web, /void\s+beginStationJoin\s*\([^;]*\)\s*\{/);
 assert.match(beginJoin, /apTeardownScheduled\s*=\s*false[\s\S]*attemptCount\s*=\s*0[\s\S]*CredentialsAccepted/,
   'new credentials must replace pending teardown and retry metadata before starting a new generation');
@@ -421,6 +439,8 @@ assert.equal(abandonedAcknowledgementPosts, 1,
   'a correlated station page must finalize an abandoned handoff after AP retirement');
 
 const ack = functionBody(web, /void\s+handleWifiHandoffAck\s*\(/);
+assert.match(ack, /reachability receipt[\s\S]*not browser command authority/i,
+  'firmware must document that durable WiFi proof does not replace exact-origin/two-envelope browser authority');
 assert.match(storage, /HandoffAbandoned[\s\S]*handoff-abandoned/,
   'status must distinguish an abandoned handoff from acknowledged station success');
 assert.match(ack, /HandoffReady[\s\S]*HandoffAbandoned/,
@@ -451,6 +471,12 @@ assert.match(ack, /duplicate/,
   'an idempotent duplicate acknowledgement must return explicit success');
 assert.equal((ack.match(/scheduleApTeardown\s*\(/g) || []).length, 1,
   'a duplicate acknowledgement must not reschedule or extend the teardown deadline');
+const proofTeardown = functionBody(web, /void\s+processScheduledApTeardown\s*\(/);
+assert.match(proofTeardown, /proofStillValid[\s\S]*markWifiConfigProven\s*\(/,
+  'only the delayed exact station proof may persist credentials as proven');
+assert.ok(proofTeardown.indexOf('markWifiConfigProven') <
+    proofTeardown.indexOf('ConnectivityEvent::StationOriginAck'),
+  'proof persistence failure must leave the handoff pending and AP reachable');
 
 const scheduleTeardown = functionBody(web, /void\s+scheduleApTeardown\s*\([^;]*\)\s*\{/);
 assert.match(scheduleTeardown, /LW_HANDOFF_RESPONSE_SETTLE_MS/,
@@ -607,12 +633,28 @@ for (const field of [
   'transition', 'phase', 'transitionPending', 'apActive', 'stationIp',
   'handoffGeneration', 'phaseStartedMs', 'lastAttemptMs',
   'attemptCount', 'lastError', 'networkBindingsPending',
-  'wledListenerReady', 'artnetListenerReady', 'lastBindingAttemptMs',
+  'wledListenerReady', 'artnetListenerReady', 'lastBindingAttemptMs', 'proven',
+  'nextAction',
 ]) {
   assert.match(status, new RegExp(`doc\\["wifi"\\]\\["${field}"\\]\\s*=`),
     `status must expose safe WiFi field ${field}`);
 }
 assert.doesNotMatch(status, /doc\["wifi"\]\["(?:ssid|password)"\]/,
   'status must never expose WiFi credentials');
+assert.match(storage, /ConnectivityPhase::Resuming[\s\S]*resuming/,
+  'status must distinguish autonomous proven-credential resume from commissioning');
+assert.match(status, /complete-wifi-handoff/,
+  'unproven and legacy credentials must expose one actionable recovery step');
+assert.match(status, /wifiConfigured\s*=\s*config\.wifi\.ssid\.length\(\)\s*>\s*0/,
+  'status must determine whether WiFi credentials are configured');
+assert.match(status,
+  /!wifiConfigured[\s\S]*enter-wifi-credentials[\s\S]*config\.wifi\.proven[\s\S]*complete-wifi-handoff/,
+  'only configured unproven credentials may request handoff; blank cards must request credentials');
+const overlayWifi = functionBody(storage, /void\s+overlayNvsWifi\s*\(/);
+assert.match(overlayWifi, /config\.wifi\.proven\s*=\s*doc\["proven"\][^;]*false/,
+  'legacy WiFi blobs without proof must remain unproven');
+const rename = functionBody(main, /bool\s+runtimeRename\s*\(/);
+assert.match(rename, /doc\["proven"\]\s*=\s*runtimeConfig\.wifi\.proven/,
+  'renaming a card must preserve credential proof in the exact WiFi blob');
 
 console.log('wifi handoff source contract tests passed');

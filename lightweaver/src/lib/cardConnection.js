@@ -403,9 +403,28 @@ export function reduceCardConnectionState(previous = {}, result = {}, {
   };
 }
 
-export function canPushDirectlyToCard(protocol = '') {
-  const currentProtocol = protocol || (typeof window !== 'undefined' ? window.location.protocol : '');
-  return currentProtocol === 'http:' || currentProtocol === 'file:';
+export function canPushDirectlyToCard(protocol = '', origin = '') {
+  const win = typeof window !== 'undefined' ? window : null;
+  const currentProtocol = protocol || win?.location?.protocol || '';
+  const currentOrigin = origin || win?.location?.origin || '';
+  // Keep protocol-only Node contracts useful for transport-independent modules.
+  // In browsers, direct control is available from the explicit local-dev
+  // origins and from an HTTP page actually served on a recognized local card
+  // host (same-origin card UI). file: stays blocked: its Origin is `null`,
+  // which the firmware does not allow, so direct fetch is neither functional
+  // nor trustworthy there.
+  // Older/native fixtures expose protocol but no origin. Preserve that legacy
+  // protocol-only contract; a real opaque file origin is the literal string
+  // `null`, so it continues through the strict checks and remains blocked.
+  if (!currentOrigin) return currentProtocol === 'http:';
+  if (currentProtocol !== 'http:') return false;
+  try {
+    const url = new URL(currentOrigin);
+    return url.protocol === 'http:'
+      && isLocalCardHost(url.hostname);
+  } catch {
+    return false;
+  }
 }
 
 export function cardLoadMethodForProtocol(protocol = '') {

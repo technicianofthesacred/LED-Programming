@@ -292,9 +292,21 @@ export function CardConnectionCenter({
   const setupSteps = action.id === 'recoverable-failure' && action.route === 'setup-network';
   const stableRecoveryHost = ordinaryCardRecoveryHost(link.host || host, rememberedCard);
   const ordinaryRetry = action.id === 'recoverable-failure' && action.route === 'local-card-recovery';
-  const setupRecovery = ordinaryRetry
+  const stationAddressRecovery = ordinaryRetry
     && normalizeCardHost(link.host || host) === stableRecoveryHost;
-  const showSetupSteps = setupSteps || setupRecovery;
+  const showSetupSteps = setupSteps;
+
+  const connectRouterAddress = (event) => {
+    event.preventDefault();
+    const normalizedHost = normalizeCardHost(host);
+    if (!isLocalCardHost(normalizedHost)) {
+      setFailure('Enter the local IP address shown by your router.');
+      return;
+    }
+    setHost(writeStoredCardHost(normalizedHost));
+    setFailure('');
+    connect(normalizedHost, { bridge: true });
+  };
 
   const renderPrimaryAction = () => {
     switch (action.id) {
@@ -324,10 +336,13 @@ export function CardConnectionCenter({
       case 'install-native-bridge':
         return <button type="button" className="btn primary" onClick={() => launchBridge(bridgeOperation)} disabled={bridgeBusy}>Try Lightweaver Bridge again</button>;
       case 'handoff-supported-device':
-        return null;
+        return <button type="button" className="btn primary" onClick={openInstall}>Show computer steps</button>;
       case 'wrong-card':
         return <button type="button" className="btn primary" onClick={() => connect()}>Reconnect expected card</button>;
       case 'recoverable-failure':
+        if (stationAddressRecovery) {
+          return <button type="button" className="btn primary" onClick={openInstall}>Use power or USB recovery</button>;
+        }
         return (
           <>
             <button
@@ -339,14 +354,9 @@ export function CardConnectionCenter({
               )}
               disabled={action.primaryDisabled}
             >
-              {setupRecovery ? 'Continue after joining' : setupSteps ? 'Continue' : ordinaryRetry ? 'Look for the card again' : action.primaryLabel}
+              {setupSteps ? 'Continue' : ordinaryRetry ? 'Look for the card again' : action.primaryLabel}
             </button>
-            {setupRecovery && (
-              <button type="button" className="btn" onClick={() => connect(stableRecoveryHost, { bridge: true })}>
-                Try local network again
-              </button>
-            )}
-            {ordinaryRetry && !setupRecovery && (
+            {ordinaryRetry && (
               <button type="button" className="btn" onClick={chooseFactoryBeacon}>
                 Eight lights flash twice, then pause
               </button>
@@ -408,8 +418,8 @@ export function CardConnectionCenter({
         </div>
       ) : (
         <div className="card-connection-action" data-action-id={effectiveActionId} aria-live="polite" aria-busy={(action.busy || bridgeBusy) || undefined}>
-          <h3>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Waiting for Lightweaver Bridge' : bridgeLifecycleState === 'return-pending' ? 'Return pending' : bridgeLifecycleState === 'installer-unavailable' ? 'Signed Bridge installer unavailable' : setupRecovery ? 'Join the Lightweaver setup network' : action.title}</h3>
-          <p>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Studio sent the launch request but cannot confirm whether Bridge opened. Keep this tab available for the result, or paste the return code below.' : bridgeLifecycleState === 'return-pending' ? 'Studio is validating the one-time return. Bridge will clear its saved result only after this tab accepts it.' : setupRecovery ? 'If the card is pulsing amber, join its Lightweaver-XXXX Wi-Fi network, then continue.' : action.explanation}</p>
+          <h3>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Waiting for Lightweaver Bridge' : bridgeLifecycleState === 'return-pending' ? 'Return pending' : bridgeLifecycleState === 'installer-unavailable' ? 'Signed Bridge installer unavailable' : stationAddressRecovery ? 'Find the card’s current address' : action.title}</h3>
+          <p>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Studio sent the launch request but cannot confirm whether Bridge opened. Keep this tab available for the result, or paste the return code below.' : bridgeLifecycleState === 'return-pending' ? 'Studio is validating the one-time return. Bridge will clear its saved result only after this tab accepts it.' : stationAddressRecovery ? 'Open your router device list and enter the router-reported local IP below. If the card is absent, power it once; if it still does not appear, use power or USB recovery.' : action.explanation}</p>
           {action.id === 'escape-insecure-card-frame' && (
             <p>Your browser only allows USB install from a separate secure top-level tab, so the installer opens in the Lightweaver Studio tab.</p>
           )}
@@ -435,7 +445,7 @@ export function CardConnectionCenter({
             <ol className="card-connection-setup-steps">
               <li>Power the Lightweaver card.</li>
               <li>Join the <strong>Lightweaver-XXXX</strong> Wi-Fi network.</li>
-              <li>{setupRecovery ? 'Return to Studio, then press Continue after joining.' : 'Finish setup, return to Studio, then press Continue.'}</li>
+              <li>Finish setup, return to Studio, then press Continue.</li>
             </ol>
           )}
 
@@ -466,10 +476,10 @@ export function CardConnectionCenter({
         </div>
       )}
 
-      <details className="card-connection-details">
+      <details className="card-connection-details" open={stationAddressRecovery || undefined}>
         <summary>Connection details</summary>
-        <form onSubmit={saveHost}>
-          <label htmlFor="card-connection-host">Card hostname</label>
+        <form onSubmit={stationAddressRecovery ? connectRouterAddress : saveHost}>
+          <label htmlFor="card-connection-host">{stationAddressRecovery ? 'Card IP from router' : 'Card hostname'}</label>
           <div>
             <input
               id="card-connection-host"
@@ -478,7 +488,7 @@ export function CardConnectionCenter({
               autoComplete="off"
               spellCheck="false"
             />
-            <button type="submit" className="btn">Save</button>
+            <button type="submit" className="btn">{stationAddressRecovery ? 'Connect router address' : 'Save'}</button>
           </div>
         </form>
       </details>

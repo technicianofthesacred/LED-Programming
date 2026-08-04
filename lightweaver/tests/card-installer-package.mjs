@@ -267,6 +267,7 @@ globalThis.CustomEvent = class CustomEvent {
 bootstrapCardBridgeFromOpener();
 await verifyCardBridgeIdentity('lightweaver.local');
 await sendCardBridgeRequest('status', {}, { host: 'lightweaver.local' });
+await sendCardBridgeRequest('status', {}, { host: 'lightweaver.local' });
 bridgeMessages.length = 0;
 
 const bridgePushed = await pushConfigToCard(pkg, {

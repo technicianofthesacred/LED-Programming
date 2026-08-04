@@ -328,7 +328,7 @@ test('desktop Bridge launch persists the project and commissioning flow without 
   await peer.close();
 });
 
-test('mobile handoff stays passive', async ({ page }) => {
+test('mobile handoff provides a concrete computer recovery route', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
     Object.defineProperty(navigator, 'userAgent', { configurable: true, value: 'Mozilla/5.0 (Linux; Android 14) Mobile' });
@@ -338,7 +338,8 @@ test('mobile handoff stays passive', async ({ page }) => {
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await page.getByRole('button', { name: 'Blank or not responding' }).click();
   await expect(actionRegion(page)).toHaveAttribute('data-action-id', 'handoff-supported-device');
-  await expect(actionRegion(page).locator('.card-connection-actions').getByRole('button')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Show computer steps' }).click();
+  await expect.poll(() => page.evaluate(() => window.location.hash)).toContain('screen=flash');
 });
 
 test('missing native Bridge does not expose an unsigned download', async ({ page }) => {
@@ -560,23 +561,18 @@ test('wrong-card and ordinary no-answer recovery use the stable LAN name before 
   await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_chip_card_host'))).toBe('192.168.18.70');
 
   await dispatchCardLinkEvent(page, { type: 'bridge-lost', reason: 'no-answer', host: 'gallery-card.local' });
-  await expect(actionRegion(page)).toContainText('pulsing amber');
-  await expect(page.getByRole('button', { name: 'Continue after joining' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Try local network again' })).toBeVisible();
+  await expect(actionRegion(page)).toContainText(/router.*local IP/i);
+  await expect(actionRegion(page)).not.toContainText('Lightweaver-XXXX');
+  await expect(page.getByRole('button', { name: 'Use power or USB recovery' })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Card IP from router' })).toBeVisible();
   await expect.poll(() => page.evaluate(() => (
     (window as any).__openedUrls.some((url: string) => url.includes('192.168.4.1'))
   ))).toBe(false);
 
-  await page.getByRole('button', { name: 'Try local network again' }).click();
+  await page.getByRole('textbox', { name: 'Card IP from router' }).fill('192.168.18.99');
+  await page.getByRole('button', { name: 'Connect router address' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__openedWindows.at(-1))).toMatchObject({
-    url: expect.stringContaining('http://gallery-card.local/'),
-    target: 'lightweaver-card-bridge',
-  });
-  await dispatchCardLinkEvent(page, { type: 'bridge-lost', reason: 'no-answer', host: 'gallery-card.local' });
-
-  await page.getByRole('button', { name: 'Continue after joining' }).click();
-  await expect.poll(() => page.evaluate(() => (window as any).__openedWindows.at(-1))).toMatchObject({
-    url: expect.stringContaining('http://192.168.4.1/'),
+    url: expect.stringContaining('http://192.168.18.99/'),
     target: 'lightweaver-card-bridge',
   });
 });

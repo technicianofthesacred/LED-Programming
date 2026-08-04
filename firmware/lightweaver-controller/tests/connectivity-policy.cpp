@@ -40,6 +40,33 @@ ConnectivityInput input(ConnectivityEvent event,
 }
 
 int main() {
+  ConnectivityState resume{};
+  resume = advanceConnectivity(
+      resume, input(ConnectivityEvent::ResumeRequested, 50));
+  assert(resume.phase == ConnectivityPhase::Resuming);
+  assert(resume.apActive);
+  assert(!resume.stationAssociated);
+  assert(resume.reconnectDue);
+  assert(resume.generation == 0);
+  resume = recordStationAttempt(resume, 50);
+  resume = advanceConnectivity(
+      resume, input(ConnectivityEvent::Tick, 50 + kReconnectCadenceMs - 1));
+  assert(resume.phase == ConnectivityPhase::Resuming);
+  assert(!resume.reconnectDue);
+  resume = advanceConnectivity(
+      resume, input(ConnectivityEvent::Tick, 50 + kReconnectCadenceMs));
+  assert(resume.phase == ConnectivityPhase::Resuming);
+  assert(resume.apActive);
+  assert(resume.reconnectDue);
+  resume = recordStationAttempt(resume, 50 + kReconnectCadenceMs);
+  resume = advanceConnectivity(
+      resume, input(ConnectivityEvent::StationAssociated,
+                    50 + kReconnectCadenceMs + 100));
+  assert(resume.phase == ConnectivityPhase::Station);
+  assert(!resume.apActive);
+  assert(resume.stationAssociated);
+  assert(resume.networkBindingsPending);
+
   ConnectivityState state{};
   assert(state.phase == ConnectivityPhase::SetupAp);
   assert(state.apActive);
@@ -149,6 +176,18 @@ int main() {
   assert(!unacknowledged.apActive);
   assert(unacknowledged.stationAssociated);
   assert(connectivityTransitionPending(unacknowledged));
+
+  ConnectivityState abandonedLoss = advanceConnectivity(
+      unacknowledged,
+      input(ConnectivityEvent::StationLost, 1100 + kHandoffMaxMs + 1));
+  assert(abandonedLoss.phase == ConnectivityPhase::Joining);
+  assert(abandonedLoss.apActive);
+  assert(!abandonedLoss.stationAssociated);
+  abandonedLoss = advanceConnectivity(
+      abandonedLoss,
+      input(ConnectivityEvent::StationAssociated, 1100 + kHandoffMaxMs + 100));
+  assert(abandonedLoss.phase == ConnectivityPhase::HandoffReady);
+  assert(abandonedLoss.generation == 9);
 
   ConnectivityState acknowledged = advanceConnectivity(
       unacknowledged,
