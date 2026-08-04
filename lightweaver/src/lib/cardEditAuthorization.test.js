@@ -25,6 +25,11 @@ const binding = Object.freeze({
 
 test.afterEach(() => clearCardEditAuthorization());
 
+test('never consumes an exact intent before authorization is issued', () => {
+  assert.equal(consumeCardEditAuthorization(binding, { now: NOW }), false);
+  assert.equal(hasCurrentCardProjectAuthorization(binding, { now: NOW }), false);
+});
+
 test('consumes an exact card-edit intent once while retaining command authorization', () => {
   issueCardEditAuthorization(binding, { now: NOW });
 
