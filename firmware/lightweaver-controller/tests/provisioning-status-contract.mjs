@@ -120,6 +120,10 @@ for (const [payload, source] of [['/api/status', status], ['/api/firmware-info',
   assert.match(source, /doc\["cardId"\]\s*=\s*runtimeCardId\(\)|doc\["cardId"\]\s*=\s*cardId/,
     `${payload} must use stable card identity`);
 }
+for (const field of ['mode', 'source', 'runtimeSource']) {
+  assert.match(status, new RegExp(`doc\\["${field}"\\]\\s*=`),
+    `/api/status must serialize ${field} so Studio can prove factory provenance`);
+}
 assert.match(status, /doc\["commandReady"\]\s*=\s*runtimeCommandReady\(\)/,
   'status command readiness must come from live runtime truth');
 assert.match(firmwareInfo, /doc\["commandReady"\]\s*=\s*runtimeCommandReady\(\)/,
