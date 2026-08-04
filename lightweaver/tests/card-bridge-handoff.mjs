@@ -386,7 +386,7 @@ function bridgeWindowHarness({
   initialNow = 0,
 } = {}) {
   const eventListeners = new Map();
-  const documentListeners = new Map();
+  const documentListenerMaps = new WeakMap();
   const opened = [];
   let now = initialNow;
   let nextTimerId = 1;
@@ -435,18 +435,24 @@ function bridgeWindowHarness({
     ['lw_card_identity_v1', JSON.stringify({ version: 1, id: identityId })],
   ]);
   const sessionValues = new Map();
-  const document = {
-    visibilityState: 'visible',
-    addEventListener(type, listener) {
-      addListener(documentListeners, type, listener);
-    },
-    removeEventListener(type, listener) {
-      removeListener(documentListeners, type, listener);
-    },
-    dispatchEvent(event) {
-      emit(documentListeners, event);
-    },
+  const makeDocument = (visibilityState = 'visible') => {
+    const listeners = new Map();
+    const document = {
+      visibilityState,
+      addEventListener(type, listener) {
+        addListener(listeners, type, listener);
+      },
+      removeEventListener(type, listener) {
+        removeListener(listeners, type, listener);
+      },
+      dispatchEvent(event) {
+        emit(listeners, event);
+      },
+    };
+    documentListenerMaps.set(document, listeners);
+    return document;
   };
+  const document = makeDocument();
   const win = {
     location: {
       href: 'https://led.mandalacodes.com/#screen=patterns',
@@ -499,20 +505,25 @@ function bridgeWindowHarness({
     emitWindow(type) {
       emit(eventListeners, { type });
     },
-    emitDocument(type = 'visibilitychange') {
-      emit(documentListeners, { type });
+    emitDocument(type = 'visibilitychange', target = win.document) {
+      emit(documentListenerMaps.get(target) || new Map(), { type });
     },
     windowListenerCount(type) {
       return eventListeners.get(type)?.size || 0;
     },
-    documentListenerCount(type) {
-      return documentListeners.get(type)?.size || 0;
+    documentListenerCount(type, target = win.document) {
+      return documentListenerMaps.get(target)?.get(type)?.size || 0;
     },
     windowListeners(type) {
       return [...(eventListeners.get(type) || [])];
     },
-    documentListeners(type) {
-      return [...(documentListeners.get(type) || [])];
+    documentListeners(type, target = win.document) {
+      return [...(documentListenerMaps.get(target)?.get(type) || [])];
+    },
+    replaceDocument(visibilityState = 'visible') {
+      const replacement = makeDocument(visibilityState);
+      win.document = replacement;
+      return replacement;
     },
     clock: fakeClock ? {
       advance,
@@ -969,6 +980,88 @@ function beginNavigationRecovery({
   return { harness, target, result };
 }
 
+const replacedDocumentRecovery = beginNavigationRecovery({
+  flowId: 'flow-replaced-document-1234',
+  correlation: { ...recoveryCorrelation, handoffGeneration: 201 },
+});
+const replacedOldDocument = replacedDocumentRecovery.harness.win.document;
+const replacedDocumentCallbacks = [
+  ...replacedDocumentRecovery.harness.windowListeners('online'),
+  ...replacedDocumentRecovery.harness.windowListeners('focus'),
+  ...replacedDocumentRecovery.harness.documentListeners('visibilitychange', replacedOldDocument),
+  ...replacedDocumentRecovery.harness.clock.callbacks(),
+];
+const replacedCurrentDocument = replacedDocumentRecovery.harness.replaceDocument();
+const replacedDocumentNavigationCount = replacedDocumentRecovery.target.navigations.length;
+for (const callback of replacedDocumentCallbacks) callback();
+assert.equal(replacedDocumentRecovery.target.navigations.length, replacedDocumentNavigationCount,
+  'callbacks captured by the prior document cannot navigate after same-owner document replacement');
+assert.equal(replacedDocumentRecovery.harness.clock.pendingCount(), 0);
+assert.equal(replacedDocumentRecovery.harness.windowListenerCount('online'), 0);
+assert.equal(replacedDocumentRecovery.harness.windowListenerCount('focus'), 0);
+assert.equal(replacedDocumentRecovery.harness.documentListenerCount(
+  'visibilitychange', replacedOldDocument,
+), 0, 'cleanup removes visibility listener from its captured document');
+assert.equal(replacedDocumentRecovery.harness.documentListenerCount(
+  'visibilitychange', replacedCurrentDocument,
+), 0, 'stale cleanup never attaches to the replacement document');
+
+const documentSuccessorRecovery = beginNavigationRecovery({
+  flowId: 'flow-document-old-1234',
+  correlation: { ...recoveryCorrelation, handoffGeneration: 202 },
+});
+const documentSuccessorOldDocument = documentSuccessorRecovery.harness.win.document;
+const documentSuccessorOldCallbacks = [
+  ...documentSuccessorRecovery.harness.windowListeners('online'),
+  ...documentSuccessorRecovery.harness.windowListeners('focus'),
+  ...documentSuccessorRecovery.harness.documentListeners(
+    'visibilitychange', documentSuccessorOldDocument,
+  ),
+  ...documentSuccessorRecovery.harness.clock.callbacks(),
+];
+const documentSuccessorNewDocument = documentSuccessorRecovery.harness.replaceDocument();
+const documentSuccessorCorrelation = {
+  ...recoveryCorrelation,
+  host: '192.168.18.96',
+  expectedBootId: 'boot-document-successor',
+  handoffGeneration: 203,
+};
+const documentSuccessorFlow = 'flow-document-successor-1234';
+const documentSuccessorTarget = recoveryTargetFor(documentSuccessorRecovery.harness);
+documentSuccessorRecovery.harness.win.open = (url, name) => {
+  documentSuccessorRecovery.harness.opened.push({ url, name });
+  return documentSuccessorTarget;
+};
+assert.equal(openLocalCardPage(recoveryApHost).ok, true);
+assert.equal(retargetCardBridge(
+  documentSuccessorCorrelation.host,
+  documentSuccessorCorrelation,
+  { flowId: documentSuccessorFlow },
+).ok, true);
+assert.equal(documentSuccessorRecovery.harness.clock.pendingCount(), 1);
+assert.equal(documentSuccessorRecovery.harness.windowListenerCount('online'), 1);
+assert.equal(documentSuccessorRecovery.harness.windowListenerCount('focus'), 1);
+assert.equal(documentSuccessorRecovery.harness.documentListenerCount(
+  'visibilitychange', documentSuccessorOldDocument,
+), 0);
+assert.equal(documentSuccessorRecovery.harness.documentListenerCount(
+  'visibilitychange', documentSuccessorNewDocument,
+), 1);
+const documentSuccessorOldNavigationCount = documentSuccessorRecovery.target.navigations.length;
+const documentSuccessorNavigationCount = documentSuccessorTarget.navigations.length;
+for (const callback of documentSuccessorOldCallbacks) callback();
+assert.equal(documentSuccessorRecovery.target.navigations.length, documentSuccessorOldNavigationCount,
+  'old-document callbacks cannot navigate their original target');
+assert.equal(documentSuccessorTarget.navigations.length, documentSuccessorNavigationCount,
+  'old-document callbacks cannot navigate the new-document successor');
+assert.equal(documentSuccessorRecovery.harness.clock.pendingCount(), 1,
+  'old-document cleanup cannot clear the successor timer');
+assert.equal(documentSuccessorRecovery.harness.windowListenerCount('online'), 1);
+assert.equal(documentSuccessorRecovery.harness.windowListenerCount('focus'), 1);
+assert.equal(documentSuccessorRecovery.harness.documentListenerCount(
+  'visibilitychange', documentSuccessorNewDocument,
+), 1);
+
 function prepareRestoreRecovery({ flowId, correlation }) {
   const seeded = beginNavigationRecovery({ flowId, correlation });
   seeded.staleCallbacks = [
@@ -1096,6 +1189,38 @@ function successfulRestore({ flowId, correlation }) {
   assert.equal(result.state, 'restored');
   return { ...seeded, target, result };
 }
+
+const documentRestoreFlow = 'flow-restore-document-1234';
+const documentRestoreCorrelation = {
+  ...recoveryCorrelation,
+  handoffGeneration: 204,
+};
+const documentRestore = successfulRestore({
+  flowId: documentRestoreFlow,
+  correlation: documentRestoreCorrelation,
+});
+const documentRestoreOldDocument = documentRestore.harness.win.document;
+const documentRestoreNewDocument = documentRestore.harness.replaceDocument();
+const documentRestoreTarget = recoveryTargetFor(documentRestore.harness);
+documentRestore.harness.win.open = (url, name) => {
+  documentRestore.harness.opened.push({ url, name });
+  return documentRestoreTarget;
+};
+const documentRestoreResult = restoreCardBridgeHandoff(documentRestoreFlow);
+assert.equal(documentRestoreResult.ok, true);
+assert.equal(documentRestoreResult.state, 'restored',
+  'already-restored rejects active work captured by the prior document');
+assert.equal(documentRestoreResult.window, documentRestoreTarget);
+assert.equal(getCardBridgeState().verified, false);
+assert.equal(getCardBridgeState().identityVerified, false);
+assert.equal(getCardBridgeState().runtimeCommandReady, false);
+assert.equal(documentRestore.harness.clock.pendingCount(), 1);
+assert.equal(documentRestore.harness.documentListenerCount(
+  'visibilitychange', documentRestoreOldDocument,
+), 0);
+assert.equal(documentRestore.harness.documentListenerCount(
+  'visibilitychange', documentRestoreNewDocument,
+), 1);
 
 const activeRestoreFlow = 'flow-restore-active-1234';
 const activeRestoreCorrelation = {
