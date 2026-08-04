@@ -405,6 +405,16 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
     packageJson.scripts['firmware:check-bin'],
     'node ../firmware/lightweaver-controller/tests/factory-bin-freshness.mjs',
   );
+  assert.equal(
+    packageJson.scripts['ci:artifact:contracts'],
+    'npm run test:production-jobs && node --test src/lib/firmwareRelease.test.js && node ../firmware/lightweaver-controller/tests/release-build-identity.mjs',
+    'the signer needs a pre-commit artifact check that validates rebuilt bytes without pretending they are already committed',
+  );
+  assert.equal(
+    packageJson.scripts['ci:artifact'],
+    'npm run ci:artifact:contracts && npm run firmware:check-bin',
+    'ordinary artifact and deploy gates must retain committed factory-binary freshness',
+  );
   const ordinaryCoreCommands = packageJson.scripts['test:core'].split(' && ');
   assert.equal(
     ordinaryCoreCommands.at(-1),
@@ -426,15 +436,25 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
   const artifactUpload = workflow.indexOf('Upload signed release set');
   assert.ok(signedVerification > 0 && signedVerification < releaseCommit);
   assert.ok(releaseCommit < artifactUpload);
-  assert.match(workflow.slice(signedVerification, releaseCommit), /npm run ci:artifact --prefix lightweaver/);
-  assert.match(packageJson.scripts['ci:artifact'], /release-build-identity\.mjs/);
-  assert.match(packageJson.scripts['ci:artifact'], /firmwareRelease\.test\.js/);
+  assert.match(workflow.slice(signedVerification, releaseCommit), /npm run ci:artifact:contracts --prefix lightweaver/);
+  assert.match(packageJson.scripts['ci:artifact:contracts'], /release-build-identity\.mjs/);
+  assert.match(packageJson.scripts['ci:artifact:contracts'], /firmwareRelease\.test\.js/);
   const releaseCommitStep = workflow.slice(releaseCommit, artifactUpload);
   assert.match(releaseCommitStep, /git fetch origin main/);
   assert.match(releaseCommitStep, /git diff --quiet "\$SOURCE_REVISION\.\.origin\/main" -- "\$\{RELEASE_INPUTS\[@\]\}"/);
+  assert.match(
+    releaseCommitStep,
+    /if git diff --quiet[\s\S]*?npm run ci:artifact --prefix lightweaver[\s\S]*?changed=false[\s\S]*?exit 0/,
+    'an unchanged signer result must still prove committed binary freshness',
+  );
   assert.ok(
     releaseCommitStep.indexOf('git rebase origin/main') < releaseCommitStep.indexOf('git push origin HEAD:main'),
     'a signer must integrate harmless concurrent main updates before publishing',
+  );
+  assert.ok(
+    releaseCommitStep.indexOf('git rebase origin/main') < releaseCommitStep.lastIndexOf('npm run ci:artifact --prefix lightweaver')
+      && releaseCommitStep.lastIndexOf('npm run ci:artifact --prefix lightweaver') < releaseCommitStep.indexOf('git push origin HEAD:main'),
+    'the signer must verify committed binary freshness after rebase and before publishing main',
   );
   assert.match(
     deployWorkflow,

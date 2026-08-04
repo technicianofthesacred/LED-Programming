@@ -198,11 +198,19 @@ test('focused package scripts compose existing checks without weakening launch c
     'ci:cloud',
     'ci:production',
     'ci:firmware-sensitive',
+    'ci:artifact:contracts',
     'ci:artifact',
   ]) assert.ok(packageJson.scripts[name], `${name} must exist`);
+  assert.equal(
+    packageJson.scripts['ci:artifact'],
+    'npm run ci:artifact:contracts && npm run firmware:check-bin',
+  );
   assert.match(packageJson.scripts['launch:source'], /test:release-ui/);
   assert.match(packageJson.scripts['launch:check'], /launch:source/);
   assert.match(packageJson.scripts['launch:check'], /firmware:check-bin/);
+  const signer = await readFile(resolve(repoRoot, '.github/workflows/build-firmware.yml'), 'utf8');
+  assert.match(signer, /Verify signed release set\s*\n\s*run: npm run ci:artifact:contracts --prefix lightweaver/);
+  assert.match(signer, /git rebase origin\/main\s*\n\s*npm run ci:artifact --prefix lightweaver\s*\n\s*git push origin HEAD:main/);
 });
 
 test('deploy workflow explicitly records a credential-skipped publish as not run', async () => {
