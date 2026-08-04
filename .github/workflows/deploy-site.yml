@@ -16,61 +16,139 @@ name: Deploy site
 # on THIS repo. Until then the deploy step skips cleanly and nothing reaches the
 # live domain.
 #
-# Runs automatically on every push to main that touches the deployable surface
-# (the lightweaver/ app, including the firmware binary it serves), and manually
-# via "Run workflow". Credential and configuration names are documented in
-# docs/led-mandalacodes-setup.md. The normal Pages token is deliberately not
-# authorized to administer D1; migrations use a second D1-only token.
-#
-# Until those secrets exist, a push-triggered DEPLOY skips cleanly (green, with
-# a notice) so it never reddens main; a HUMAN manual run fails loudly so you
-# know why. Dispatches from build-firmware.yml pass source=ci and skip cleanly
-# like push runs — otherwise every firmware rebuild would redden CI until the
-# Cloudflare secrets are configured.
-#
-# The `test` job is NOT gated on those secrets: it reuses the standalone Tests
-# workflow (.github/workflows/test.yml, via workflow_call) on every trigger of
-# this workflow, and the deploy job hard-depends on it. (Before 2026-07-09,
-# tests only ran when the Cloudflare secrets were present — a push could go
-# green having run zero tests.) Pushes and PRs on other branches get the same
-# gate from test.yml's own push/pull_request triggers.
+# A successful main Tests run supplies the exact revision. Firmware-sensitive
+# revisions wait for the protected signer, which dispatches the resulting
+# signed commit explicitly. Deploy never silently substitutes a newer main.
 
 on:
+  workflow_run:
+    workflows: ["Tests"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       source:
         description: Set to "ci" by build-firmware.yml; leave as "manual" for human runs
         required: false
         default: manual
-  push:
-    branches:
-      - main
-    paths:
-      - 'lightweaver/**'
-      - '.github/workflows/deploy-site.yml'
+      revision:
+        description: Exact tested or signed main revision to deploy
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
   group: deploy-site
-  cancel-in-progress: true
+  # Automatic Tests completions queue behind a signer-owned dispatch so an
+  # artifact-only completion cannot cancel/restart the exact signed deploy.
+  # An explicit signed/manual dispatch may supersede an older automatic run.
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 jobs:
-  # Always-on test gate — runs regardless of Cloudflare secrets, so this
-  # workflow can never go green without having run the tests. Reuses the
-  # standalone Tests workflow so the gate (fetch-depth: 0 for the
-  # factory-bin-freshness history walk, npm ci, launch:check) is defined once.
-  test:
-    if: github.ref == 'refs/heads/main'
-    uses: ./.github/workflows/test.yml
+  preflight:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.resolve.outputs.enabled }}
+      revision: ${{ steps.resolve.outputs.revision }}
+      reason: ${{ steps.resolve.outputs.reason }}
+    steps:
+      - name: Resolve the authorized revision
+        id: revision
+        env:
+          DISPATCH_REVISION: ${{ github.event.inputs.revision }}
+          EVENT_NAME: ${{ github.event_name }}
+          TESTED_REVISION: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            revision="$TESTED_REVISION"
+          else
+            revision="$DISPATCH_REVISION"
+          fi
+          if [[ ! "$revision" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Deploy revision must be a complete 40-character commit SHA."
+            exit 1
+          fi
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ steps.revision.outputs.revision }}
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Confirm main still names that exact revision
+        env:
+          DEPLOY_REVISION: ${{ steps.revision.outputs.revision }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          remote_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          if [ "$remote_main" != "$DEPLOY_REVISION" ]; then
+            if [ "$EVENT_NAME" = "workflow_run" ]; then
+              echo "stale=true" >> "$GITHUB_ENV"
+            else
+              echo "::error::Requested revision is not current origin/main."
+              exit 1
+            fi
+          fi
+      - name: Classify the exact revision
+        id: changes
+        env:
+          CI_ACTOR: ${{ github.event.workflow_run.actor.login }}
+          CI_BASE_SHA: ${{ steps.revision.outputs.revision }}^
+          CI_HEAD_SHA: ${{ steps.revision.outputs.revision }}
+        run: |
+          if [ "$CI_ACTOR" = "github-actions[bot]" ] \
+            && [ "$(git log -1 --format=%s "$CI_HEAD_SHA")" = "CI: publish signed Lightweaver firmware release" ]; then
+            export CI_GENERATED_RELEASE=true
+          fi
+          node scripts/ci-changed-lanes.mjs
+      - name: Authorize direct deployment or defer to signer
+        id: resolve
+        env:
+          ARTIFACT_ONLY: ${{ steps.changes.outputs.artifact }}
+          DEPLOY_REVISION: ${{ steps.revision.outputs.revision }}
+          EVENT_NAME: ${{ github.event_name }}
+          FIRMWARE_SENSITIVE: ${{ steps.changes.outputs.firmware }}
+        run: |
+          echo "revision=$DEPLOY_REVISION" >> "$GITHUB_OUTPUT"
+          if [ "${stale:-}" = "true" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "reason=A newer main revision owns deployment." >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_NAME" = "workflow_run" ] && [ "$ARTIFACT_ONLY" = "true" ] && [ "$FIRMWARE_SENSITIVE" != "true" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "reason=Signer artifact commits deploy only through their explicit signed-SHA dispatch." >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_NAME" = "workflow_run" ] && [ "$FIRMWARE_SENSITIVE" = "true" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "reason=Firmware-sensitive source is waiting for the protected signer." >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "reason=Exact tested revision authorized." >> "$GITHUB_OUTPUT"
+          fi
+
+  deferred:
+    needs: preflight
+    if: needs.preflight.outputs.enabled != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          REASON: ${{ needs.preflight.outputs.reason }}
+        run: |
+          echo "## Production publish: DEFERRED" >> "$GITHUB_STEP_SUMMARY"
+          echo "$REASON" >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
-    if: github.ref == 'refs/heads/main'
+    if: needs.preflight.outputs.enabled == 'true'
     runs-on: ubuntu-latest
-    needs: test
+    needs: preflight
+    env:
+      DEPLOY_REVISION: ${{ needs.preflight.outputs.revision }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.preflight.outputs.revision }}
+          fetch-depth: 0
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -138,6 +216,20 @@ jobs:
           # Rollup native binding on fresh installs, breaking `vite build`.
           node scripts/ensure-rollup-native.mjs
 
+      - name: Reconfirm the exact main revision before publish
+        if: steps.creds.outputs.enabled == 'true'
+        run: |
+          remote_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          if [ "$remote_main" != "$DEPLOY_REVISION" ]; then
+            echo "::error::Main advanced after preflight; refusing to publish an obsolete revision."
+            exit 1
+          fi
+
+      - name: Verify the deployable signed artifacts
+        if: steps.creds.outputs.enabled == 'true'
+        working-directory: lightweaver
+        run: npm run ci:artifact
+
       # Schema changes are expand-only. This token is account-scoped to D1
       # writes and is never exposed to the normal Pages deployment step.
       - name: Apply additive production D1 migrations
@@ -190,9 +282,8 @@ jobs:
           chmod 600 "$migration_config"
           npm exec -- wrangler d1 migrations apply PROJECTS_DB --config "$migration_config" --remote
 
-      # Core tests already ran in the required `test` job above. deploy:pages
-      # still builds, stages, and runs artifact assertions immediately before
-      # the pinned Wrangler upload so an invalid artifact cannot be published.
+      # The exact revision's Tests run is the source gate. deploy:pages still
+      # builds, stages, and checks the graph immediately before upload.
       - name: Build and deploy to Cloudflare Pages
         id: publish
         if: steps.creds.outputs.enabled == 'true'

@@ -40,22 +40,28 @@ the final shipment gate.
 The release is deliberately split so feature branches never receive signing
 keys:
 
-1. Merge reviewed source to protected `main`.
-2. The always-on Tests workflow runs `npm run launch:source`. It verifies
-   source contracts, Production Setup, production-job consistency, the Studio
-   build, cloud project/API contracts, local D1/R2 bindings and migrations,
-   compiled Pages Functions, staged Pages artifact, and build graph. Firmware
-   source changes are expected to make the signed-binary freshness gate red at
-   this point.
-3. The protected `build-firmware.yml` workflow compiles the merged ESP32-S3
-   factory image, creates and signs its manifest/provenance, regenerates every
-   production job against that exact release, and commits the complete release
-   set to `main`. Generator, job-source, schema, and job-builder changes trigger
-   this workflow even when firmware C++ is unchanged. Generated artifact-only
-   commits do not re-trigger it.
-4. On the protected release commit, `npm run launch:check` must pass. It repeats
-   the source gate and proves the committed signed factory binary is fresh.
-5. `deploy-site.yml` applies every pending expand-only D1 migration, including
+1. A reviewed branch must pass the repository-owned changed-path lanes and the
+   single required `Tests / gate` check. Merge queue is enabled, so the same
+   gate runs on the proposed merge group instead of trusting an out-of-date
+   branch result.
+2. The successful `Tests` run on protected `main` is the source of deployment
+   authority. Its classifier selects bounded source/build, browser, cloud,
+   production, firmware-sensitive, and artifact lanes; selected lanes run in
+   parallel and the aggregate gate fails if any selected lane fails or is
+   cancelled. Workflow and classifier changes conservatively run every lane.
+3. When that exact tested revision is firmware-sensitive, protected
+   `build-firmware.yml` checks out `workflow_run.head_sha`, recompiles the
+   ESP32-S3 factory image with that identity, signs its manifest/provenance,
+   regenerates every production job, and commits the complete release set to
+   `main`. It refuses to publish if a signing input changed while it ran and
+   dispatches deployment with the exact signed commit SHA. Generated
+   artifact-only commits never re-trigger signing.
+4. UI-only tested revisions may deploy directly. Firmware-sensitive source
+   revisions are deferred until the signer dispatches their signed commit.
+   `deploy-site.yml` rejects stale revisions, checks that `origin/main` still
+   names the requested SHA immediately before publish, and runs
+   `npm run ci:artifact`; it never substitutes a newer checkout.
+5. `deploy-site.yml` then applies every pending expand-only D1 migration, including
    `0002_account_access.sql` and `0003_account_session_generation.sql`, with the
    separate D1-only credential before publishing compatible Studio and Pages
    Functions. The first deployment keeps Cloudflare Access in front of the
@@ -69,6 +75,12 @@ keys:
 7. One fully erased physical card completes the live Production Setup route and
    [`new-card-checklist.md`](new-card-checklist.md). Only then may a batch begin.
 
+The unchanged exhaustive `npm run launch:check` runs nightly and on manual
+dispatch in `exhaustive.yml`. Its failure is a release incident: investigate it
+and keep the next shipment blocked until the exact current `main` revision is
+green. It does not retroactively turn a previously proven live revision into a
+different deployment or replace the exact-revision gate above.
+
 If Cloudflare credentials are absent, push/CI-triggered deployment intentionally
 does not fail the source build, but the workflow summary says **Production
 publish: NOT RUN**. That green CI result is not a deployment and cannot satisfy
@@ -77,11 +89,12 @@ steps 5–7. A human manual deploy with missing credentials fails loudly.
 ## Release evidence
 
 - [ ] Reviewed source commit is on `main`; record commit: `____________`.
-- [ ] `npm run launch:source` passed for that source.
+- [ ] `Tests / gate` passed for that exact main revision; record run: `____________`.
 - [ ] Protected signer committed the image, manifest, signature, provenance,
       regenerated job source, content-addressed job, and job index.
 - [ ] Signed release commit is current; record commit: `____________`.
-- [ ] `npm run launch:check` passed on the signed release commit.
+- [ ] The most recent nightly/manual `Exhaustive launch check` is green on
+      current `main`; if not, this shipment remains blocked.
 - [ ] Deploy workflow says the Cloudflare upload ran—not **NOT RUN**.
 - [ ] `PROD_CHECK_REQUIRED=1 npm run check:prod` passed after publish, including
       every file in the live Studio build graph.
@@ -244,8 +257,9 @@ Automated source gate:
       from `firmware/lightweaver-controller/`.
 - [ ] Confirm existing Patterns, Layout, Playlist, Show, Card, installer,
       Production Setup, persistence, migration, and recovery suites still pass.
-- [ ] On the protected signed release commit, run `npm run launch:check`; never
-      accept a feature-branch binary as current production firmware.
+- [ ] Confirm the protected signer and exact-revision deploy completed; never
+      accept a feature-branch binary as current production firmware. Run the
+      manual `Exhaustive launch check` when this acceptance is part of a release.
 
 Browser/operator gate:
 

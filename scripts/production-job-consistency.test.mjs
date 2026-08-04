@@ -151,68 +151,67 @@ test('generator and job builder reproduce the committed source, artifact, and in
   }
 });
 
-test('always-on tests watch every production-job and signing input', async () => {
+test('fast Tests workflow exposes one aggregate gate over every focused lane', async () => {
   const workflow = await readFile(resolve(repoRoot, '.github/workflows/test.yml'), 'utf8');
-  assert.match(
-    workflow,
-    /npm ci --prefix \.\.\/led-art-mapper\/app/,
-    'the launch gate builds the Mapper, so CI must install its pinned dependencies',
-  );
-  assert.equal(
-    workflow.match(/- 'led-art-mapper\/\*\*'/g)?.length,
-    2,
-    'Mapper-only pushes and pull requests must both trigger the launch gate',
-  );
-  for (const path of [
-    'release/job-generators/**',
-    'release/job-sources/**',
-    'release/firmware-manifest.schema.json',
-    'release/production-job.schema.json',
-    'release/production-job-signing.md',
-    'scripts/build-firmware-manifest.mjs',
-    'scripts/build-production-job.mjs',
-    'scripts/rebuild-production-jobs.mjs',
-    'scripts/sign-release-artifacts.mjs',
-    'scripts/production-job-consistency.test.mjs',
-    'docs/card-provisioning-audit.md',
-    'docs/card-provisioning-checklist.md',
-    'docs/card-provisioning-fixes.md',
-    'docs/new-card-checklist.md',
-    'docs/deployment-checklist.md',
-    'docs/worker-flash-runbook.md',
-    'docs/worker-job-card.md',
-    'docs/roadmap.md',
-    '.github/workflows/**',
-  ]) {
-    const occurrences = workflow.split(`'${path}'`).length - 1;
-    assert.equal(occurrences, 2, `${path} must trigger both push and pull_request tests`);
+  assert.match(workflow, /merge_group:/);
+  assert.match(workflow, /branches:\s*\n\s*- main/);
+  assert.doesNotMatch(workflow, /workflow_call:/);
+  for (const job of ['classify', 'source', 'browser', 'cloud', 'production', 'firmware', 'artifact', 'gate']) {
+    assert.match(workflow, new RegExp(`^  ${job}:`, 'm'), `Tests workflow must define ${job}`);
   }
+  assert.match(workflow, /gate:\s*\n\s*name: gate\s*\n\s*if: \$\{\{ always\(\) \}\}/);
+  assert.match(workflow, /needs: \[classify, source, browser, cloud, production, firmware, artifact\]/);
+  assert.doesNotMatch(workflow, /npm run launch:(?:source|check)/, 'fast lanes must not rerun the monolithic launch gate');
 });
 
-test('protected release rebuild watches job inputs without an artifact commit loop', async () => {
+test('protected signer consumes the exact successful Tests revision without an artifact loop', async () => {
   const workflow = await readFile(resolve(repoRoot, '.github/workflows/build-firmware.yml'), 'utf8');
-  for (const path of [
-    'release/job-generators/**',
-    'release/job-sources/**',
-    'release/production-job.schema.json',
-    'scripts/build-production-job.mjs',
-    'scripts/rebuild-production-jobs.mjs',
-    'lightweaver/src/lib/**',
-  ]) {
-    assert.ok(workflow.includes(`'${path}'`), `${path} must trigger the protected release rebuild`);
-  }
+  assert.match(workflow, /workflow_run:/);
+  assert.match(workflow, /workflows: \["Tests"\]/);
+  assert.match(workflow, /github\.event\.workflow_run\.head_sha/);
+  assert.match(workflow, /npm run ci:firmware-sensitive/);
+  assert.match(workflow, /-f revision="\$SIGNED_SHA"/);
   assert.doesNotMatch(
     workflow,
-    /^\s+- 'lightweaver\/public\/production\/jobs\/\*\*'$/m,
-    'generated production artifacts must not retrigger the signer',
+    /^\s+push:/m,
+    'generated signer commits must not retrigger the signer through a push event',
   );
+});
+
+test('focused package scripts compose existing checks without weakening launch contracts', async () => {
+  const packageJson = await readJson('lightweaver/package.json');
+  for (const name of [
+    'ci:source-build',
+    'ci:browser-smoke',
+    'ci:cloud',
+    'ci:production',
+    'ci:firmware-sensitive',
+    'ci:artifact',
+  ]) assert.ok(packageJson.scripts[name], `${name} must exist`);
+  assert.match(packageJson.scripts['launch:source'], /test:release-ui/);
+  assert.match(packageJson.scripts['launch:check'], /launch:source/);
+  assert.match(packageJson.scripts['launch:check'], /firmware:check-bin/);
 });
 
 test('deploy workflow explicitly records a credential-skipped publish as not run', async () => {
   const workflow = await readFile(resolve(repoRoot, '.github/workflows/deploy-site.yml'), 'utf8');
+  assert.match(workflow, /workflow_run:/);
+  assert.match(workflow, /revision:/);
+  assert.match(workflow, /npm run ci:artifact/);
+  assert.match(workflow, /git ls-remote origin refs\/heads\/main/);
+  assert.doesNotMatch(workflow, /uses: \.\/\.github\/workflows\/test\.yml/);
   assert.match(workflow, /Production publish: NOT RUN/);
   assert.match(workflow, /is not a deployment and must not be used as shipment evidence/);
   assert.match(workflow, /PROD_CHECK_REQUIRED: '1'/);
+});
+
+test('artifact-only Tests completion defers to the signer exact-SHA dispatch', async () => {
+  const workflow = await readFile(resolve(repoRoot, '.github/workflows/deploy-site.yml'), 'utf8');
+  assert.match(workflow, /group: deploy-site\s*\n[\s\S]*?cancel-in-progress: \$\{\{ github\.event_name == 'workflow_dispatch' \}\}/);
+  assert.match(workflow, /ARTIFACT_ONLY: \$\{\{ steps\.changes\.outputs\.artifact \}\}/);
+  assert.match(workflow, /EVENT_NAME" = "workflow_run".*ARTIFACT_ONLY" = "true".*FIRMWARE_SENSITIVE" != "true"/s);
+  assert.match(workflow, /Signer artifact commits deploy only through their explicit signed-SHA dispatch/);
+  assert.match(workflow, /EVENT_NAME" = "workflow_run".*FIRMWARE_SENSITIVE" = "true"/s);
 });
 
 test('deploy allows the Cloudflare asset graph to converge before declaring failure', async () => {
