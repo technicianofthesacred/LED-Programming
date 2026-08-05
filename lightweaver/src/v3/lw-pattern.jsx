@@ -52,11 +52,14 @@ import {
 } from '../lib/cardConnection.js';
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
 import { classifyCardReadiness } from '../lib/cardReadiness.js';
+import { isCardLinkPlaybackReady } from '../lib/cardConnectionFlow.js';
+import { evaluateCardInstallGate } from '../lib/cardInstallGate.js';
 import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
 import {
   consumeCardEditAuthorization,
   currentCardProjectAuthorizationExpiresAt,
   hasCurrentCardProjectAuthorization,
+  renewCardEditAuthorization,
 } from '../lib/cardEditAuthorization.js';
 import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard, readCardProjectEvidence } from '../lib/cardPushClient.js';
 import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
@@ -474,9 +477,17 @@ import { PatternPreview } from './PatternPreview.jsx';
       const expectedCardId = String(expectedCard?.id || expectedCard?.cardId || '').trim().toLowerCase();
       const exactPair = Boolean(expectedCardId) && readiness.cardId.toLowerCase() === expectedCardId;
       if (!exactPair) return 'recovery';
-      if (readiness.patternAccess === 'blank') return 'blank';
-      return readiness.patternAccess === 'ready' && connected ? 'ready' : 'recovery';
-    }, [cardLink?.expectedCard, cardLink?.readiness, connected]);
+      // Playback access, not command access: this screen only sends patterns,
+      // brightness, and scenes, which the card keeps serving across a WiFi
+      // transition. Installs from here re-check the command gate themselves.
+      if (readiness.playbackAccess === 'blank') return 'blank';
+      // `connected` is the command gate (isCardLinkConnected), which closes
+      // during a WiFi transition. Use its playback sibling so a lit, matching
+      // card does not lose pattern control while the radio reassociates.
+      const playbackLinkReady = isCardLinkPlaybackReady(cardLink || {}, { expectedCard })
+        && !cardLink?.cardBlank;
+      return readiness.playbackAccess === 'ready' && (connected || playbackLinkReady) ? 'ready' : 'recovery';
+    }, [cardLink, connected]);
     const patternAccessRef = useRef(patternCardAccess);
     patternAccessRef.current = patternCardAccess;
     const previousPatternAccessRef = useRef(patternCardAccess);
@@ -491,12 +502,18 @@ import { PatternPreview } from './PatternPreview.jsx';
     }, [hasCurrentProjectAuthorization]);
     const matchesCurrentCardProjectEvidence = useCallback((evidence = {}) => {
       const binding = patternAuthorizationRef.current;
-      return hasCurrentProjectAuthorization()
+      const matches = hasCurrentProjectAuthorization()
         && String(evidence.cardId || '').trim().toLowerCase() === String(binding.cardId || '').trim().toLowerCase()
         && String(evidence.firmwareVersion || '').trim() === String(binding.firmwareVersion || '').trim()
         && String(evidence.buildId || '').trim() === String(binding.buildId || '').trim()
         && String(evidence.projectId || '').trim() === String(binding.installedProjectId || '').trim()
         && String(evidence.projectFingerprint || '').trim().toLowerCase() === String(binding.installedProjectFingerprint || '').trim().toLowerCase();
+      // This ran against a fresh /api/firmware-info read, so a match is the
+      // strongest proof available that the authorization's claim still holds.
+      // Renew the staleness window off it rather than let a clock revoke a
+      // fact the card just re-confirmed. Never called during render.
+      if (matches) renewCardEditAuthorization(binding);
+      return matches;
     }, [hasCurrentProjectAuthorization]);
 
     const invalidatePendingPreview = useCallback(() => {
@@ -524,6 +541,17 @@ import { PatternPreview } from './PatternPreview.jsx';
       );
     }, [invalidatePendingPreview]);
 
+    useEffect(() => {
+      // Every readiness poll that still reports the exact bound card, boot,
+      // and installed project is fresh evidence that the authorization's claim
+      // holds, so it renews the window. This can only renew, never issue:
+      // renewCardEditAuthorization re-checks the full identity binding, so a
+      // poll describing a different card or a diverged project fingerprint
+      // renews nothing and the authorization lapses exactly as before.
+      if (patternCardAccess !== 'ready') return;
+      renewCardEditAuthorization(effectivePatternAuthorizationBinding);
+    }, [patternCardAccess, effectivePatternAuthorizationBinding]);
+
     const previousProjectAuthorizationRef = useRef(projectAuthorizationCurrent);
     useEffect(() => {
       const previous = previousProjectAuthorizationRef.current;
@@ -547,7 +575,7 @@ import { PatternPreview } from './PatternPreview.jsx';
         || linkState === 'reconnecting-bridge'
         || (linkState === 'connected-bridge' && !cardLink?.readiness);
       const explicitReadinessLoss = Boolean(cardLink?.readiness)
-        && classifyCardReadiness(cardLink.readiness, { expectedCard: cardLink?.expectedCard || null }).patternAccess !== 'ready';
+        && classifyCardReadiness(cardLink.readiness, { expectedCard: cardLink?.expectedCard || null }).playbackAccess !== 'ready';
       if (patternCardAccess !== 'ready' && previousAccess === 'ready'
         && (explicitReadinessLoss || !transitionalBridgeCheck)) {
         setColorOrderOpen(false);
@@ -810,7 +838,7 @@ import { PatternPreview } from './PatternPreview.jsx';
         return Boolean(
           state.verified
           && state.identityVerified
-          && state.runtimeCommandReady
+          && state.runtimePlaybackReady
           && state.lifecycle === bridgeAuthority.lifecycle
           && normalizeCardHost(state.host) === bridgeAuthority.host
           && state.card?.id === bridgeAuthority.cardId
@@ -1046,7 +1074,7 @@ import { PatternPreview } from './PatternPreview.jsx';
         });
         const readiness = classifyCardReadiness(status, { expectedCard });
         const bridgeState = getCardBridgeState();
-        const exactFreshAuthority = readiness.patternAccess === 'ready'
+        const exactFreshAuthority = readiness.playbackAccess === 'ready'
           && readiness.cardId === String(expectedCard?.id || expectedCard?.cardId || '')
           && (!expectedCard?.firmwareVersion || status.firmwareVersion === expectedCard.firmwareVersion)
           && (!expectedCard?.buildId || status.buildId === expectedCard.buildId)
@@ -1054,7 +1082,7 @@ import { PatternPreview } from './PatternPreview.jsx';
           && readiness.bootId === originalBootId
           && bridgeState.verified
           && bridgeState.identityVerified
-          && bridgeState.runtimeCommandReady
+          && bridgeState.runtimePlaybackReady
           && normalizeCardHost(bridgeState.host) === normalizeCardHost(cardHost);
         if (!exactFreshAuthority || sequence !== browsePreviewSeq.current) {
           blockPatternCardEffect(currentPatternCardAccess());
@@ -1076,7 +1104,7 @@ import { PatternPreview } from './PatternPreview.jsx';
       const bridgeOpen = hasCardBridge();
       const bridgeState = getCardBridgeState();
       if (
-        bridgeOpen && bridgeState.verified && bridgeState.identityVerified && bridgeState.runtimeCommandReady &&
+        bridgeOpen && bridgeState.verified && bridgeState.identityVerified && bridgeState.runtimePlaybackReady &&
         normalizeCardHost(bridgeState.host) === normalizeCardHost(cardHost)
       ) {
         void scheduleVerifiedBridgePreview().catch(error => {
@@ -1724,6 +1752,16 @@ import { PatternPreview } from './PatternPreview.jsx';
     const authorizedPatternCardAccess = patternCardAccess === 'ready' && !projectAuthorizationCurrent
       ? 'project'
       : patternCardAccess;
+    // Shared install precondition (src/lib/cardInstallGate.js). savePreviewToCard
+    // only sets allowLayoutChange for the explicit bench test-strip override, and
+    // it aborts if the card stages the write as a wiring change, so a normal
+    // install from this screen cannot rewrite the physical layout and does not
+    // carry the commissioning requirement.
+    const installGate = evaluateCardInstallGate({
+      hardwareIssue: hardwareConfigurationIssue,
+      busy: cardSave.conflictsDisabled,
+      cardAccess: authorizedPatternCardAccess,
+    });
     const runPreviewFailureAction = () => {
       switch (previewFailure?.actionId) {
         case 'update-card':
@@ -1758,7 +1796,7 @@ import { PatternPreview } from './PatternPreview.jsx';
                 <JourneyHint step={2} nextLabel="Arrange playlist" onNext={() => go?.('playlist')} />
               </div>
               <div className="pm-actions">
-                <button className="btn primary" title="Install the current look on the card" onClick={savePreviewToCard} disabled={authorizedPatternCardAccess !== 'ready' || cardSave.conflictsDisabled || Boolean(hardwareConfigurationIssue)}>{I.bolt}{cardSave.status === 'pending' ? 'Sending…' : cardSave.status === 'failed' ? 'Retry install' : 'Install on card'}</button>
+                <button className="btn primary" title="Install the current look on the card" onClick={savePreviewToCard} disabled={!installGate.allowed}>{I.bolt}{cardSave.status === 'pending' ? 'Sending…' : cardSave.status === 'failed' ? 'Retry install' : 'Install on card'}</button>
                 {connected &&
                   <button className="btn" title="Bring the lights back with a warm-white recovery" data-testid="recover-lights" onClick={repairLed} disabled={authorizedPatternCardAccess !== 'ready' || cardSave.conflictsDisabled}>{I.wrench}Recover lights</button>
                 }

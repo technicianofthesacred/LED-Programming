@@ -215,6 +215,18 @@ export function isCardLinkConnected(link = {}, options = {}) {
   return transportConnected && classifiedLinkReadiness(link, options).connected;
 }
 
+// Playback sibling of `isCardLinkConnected`: same transport requirement and
+// the same contract/identity/blank checks, but it reads the card's separate
+// `playbackReady` claim instead of the command gate, so patterns, brightness,
+// and scenes stay available while the card is reassociating. On firmware that
+// predates the split `playbackAccess` mirrors the command gate, making this
+// identical to `isCardLinkConnected` there.
+export function isCardLinkPlaybackReady(link = {}, options = {}) {
+  if (!link || typeof link !== 'object' || Array.isArray(link)) return false;
+  const transportConnected = link.state === 'connected-bridge' || link.state === 'connected-direct';
+  return transportConnected && classifiedLinkReadiness(link, options).playbackAccess === 'ready';
+}
+
 export function nextCardConnectionAction(input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return action('recoverable-failure');

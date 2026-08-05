@@ -54,15 +54,26 @@ export function normalizeCardReadiness(raw = {}) {
     projectFingerprint,
     knownGoodProject: explicitBoolean(source.knownGoodProject),
     commandReady: explicitBoolean(source.commandReady),
+    // Reported separately from `commandReady` by the firmware. Playback is
+    // entirely on-card, so it stays admitted while the radio reassociates.
+    // Firmware from before that split omits the field, which normalizes to
+    // null and means "no separate claim" — never "not ready".
+    playbackReady: explicitBoolean(source.playbackReady),
     outputReady: explicitBoolean(source.outputReady),
   });
 }
 
 function classifiedResult(state, normalized, reason, additions = {}) {
+  const patternAccess = state === 'connected' ? 'ready' : state === 'blank' ? 'blank' : 'recovery';
   return Object.freeze({
     ...normalized,
     state,
-    patternAccess: state === 'connected' ? 'ready' : state === 'blank' ? 'blank' : 'recovery',
+    patternAccess,
+    // Defaults to the command gate. Only the two terminal branches below —
+    // reached after every contract, identity, blank, and boot check has
+    // passed — may widen it, so an unexpected or unproven card is never
+    // admitted for playback either.
+    playbackAccess: patternAccess,
     connected: false,
     blank: null,
     reason,
@@ -116,13 +127,35 @@ export function classifyCardReadiness(raw = {}, {
   if (previousBoot && normalized.bootId !== previousBoot) {
     return classifiedResult('revalidating', normalized, 'boot-changed', { blank: false });
   }
+  // Patterns, brightness, and scenes run entirely on-card, so the firmware
+  // admits them through `playbackReady` rather than `commandReady`. While the
+  // radio reassociates, a lit and healthy card reports commandReady=false and
+  // runtimePhase='recovering' (both fold in the WiFi transition) but keeps
+  // playbackReady=true — and its own /json/state, /api/control, frame, and
+  // recover-lights handlers keep answering off exactly that flag. So the
+  // command gate below still governs config, wiring, and credential writes,
+  // while playback follows the card's separate claim.
+  //
+  // playbackReady=true already implies configValid, knownGoodProject,
+  // outputReady, a serving web stack, and no local transition, so it is a
+  // complete statement and needs no extra conditions here. Firmware without
+  // the field reports null and falls through to the command gate unchanged.
   if (
     normalized.runtimePhase !== 'ready'
     || normalized.knownGoodProject !== true
     || !normalized.commandReady
     || !normalized.outputReady
   ) {
-    return classifiedResult('not-ready', normalized, 'runtime-not-ready', { blank: false });
+    return classifiedResult('not-ready', normalized, 'runtime-not-ready', {
+      blank: false,
+      ...(normalized.playbackReady === true ? { playbackAccess: 'ready' } : {}),
+    });
   }
-  return classifiedResult('connected', normalized, '', { connected: true, blank: false });
+  return classifiedResult('connected', normalized, '', {
+    connected: true,
+    blank: false,
+    // Never wider than the command gate: an explicit playback refusal still
+    // stops playback even when the command gate is open.
+    ...(normalized.playbackReady === false ? { playbackAccess: 'recovery' } : {}),
+  });
 }

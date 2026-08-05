@@ -41,6 +41,15 @@ const PRIVILEGED_BRIDGE_TYPES = new Set([
   'wiring-discover',
   'wifi-handoff-ack',
 ]);
+
+// The playback subset of the privileged types. These three drive the lights
+// and nothing else -- they mutate no stored config, wiring, or credential --
+// and the card admits them off its own `playbackReady` flag
+// (LightweaverWeb.cpp /api/control + recover-lights, LightweaverWledJsonApi,
+// LightweaverWledRealtime, LightweaverWledWebSocket all gate on
+// runtimePlaybackReady()). Studio matches that split so a WiFi transition
+// stops installs and wiring changes without also stopping pattern control.
+const PLAYBACK_BRIDGE_TYPES = new Set(['control', 'frame', 'recover-lights']);
 const IDENTITY_FREE_BRIDGE_TYPES = new Set(['ping', 'status', 'firmware-info']);
 // Retry quickly while the operator switches networks, then settle into a
 // 30-second cadence for the firmware's complete bounded handoff window.
@@ -107,6 +116,11 @@ let bridgeHandoffFlowId = '';
 let bridgeHandoffAckReady = false;
 let bridgeStationIdentityVerified = false;
 let bridgeRuntimeCommandReady = false;
+// The card admits playback (patterns, brightness, scenes) through its own
+// `playbackReady` flag, which stays true while the radio reassociates and the
+// command gate is shut. Tracked separately so a WiFi transition stops config,
+// wiring, and credential writes without also killing pattern control.
+let bridgeRuntimePlaybackReady = false;
 let bridgeInitialConfigAvailable = false;
 let bridgeInitialConfigAttempted = false;
 let bridgeAuthorityLifecycle = -1;
@@ -228,6 +242,7 @@ function clearBridgeTarget({
   bridgeHandoffAckReady = false;
   bridgeStationIdentityVerified = false;
   bridgeRuntimeCommandReady = false;
+  bridgeRuntimePlaybackReady = false;
   bridgeInitialConfigAvailable = false;
   if (!preserveHandoff) {
     bridgeHandoffCorrelation = null;
@@ -270,6 +285,7 @@ function revokeBridgeForNavigation({
   bridgeHandoffAckReady = false;
   bridgeStationIdentityVerified = false;
   bridgeRuntimeCommandReady = false;
+  bridgeRuntimePlaybackReady = false;
   bridgeInitialConfigAvailable = false;
   if (!preserveHandoff) {
     invalidateBridgeHandoffNavigationContext();
@@ -515,6 +531,7 @@ function scheduleBridgeHandoffNavigationRetry({ target, url, correlation, flowId
 
 function applyAuthoritativeBridgeStatus(status, host = bridgeHost) {
   bridgeRuntimeCommandReady = false;
+  bridgeRuntimePlaybackReady = false;
   bridgeInitialConfigAvailable = false;
   bridgeAuthorityLifecycle = -1;
 
@@ -552,6 +569,7 @@ function applyAuthoritativeBridgeStatus(status, host = bridgeHost) {
       }
       const stableAfterRestore = !bridgeRestoredHandoff || bridgeRestoredFinalEnvelopeCount >= 2;
       bridgeRuntimeCommandReady = stableAfterRestore && authority.runtimeReady;
+      bridgeRuntimePlaybackReady = stableAfterRestore && authority.playbackReady;
       bridgeInitialConfigAvailable = Boolean(
         stableAfterRestore
         &&
@@ -590,12 +608,14 @@ function applyAuthoritativeBridgeStatus(status, host = bridgeHost) {
     bridgeStationIdentityVerified = true;
     bridgeAuthorityLifecycle = bridgeLifecycle;
     bridgeRuntimeCommandReady = readiness.connected === true;
+    bridgeRuntimePlaybackReady = readiness.playbackAccess === 'ready';
     bridgeIdentityError = bridgeRuntimeCommandReady ? '' : 'runtime-not-ready';
     writeStoredCardHost(host);
     return Object.freeze({
       verified: true,
       commandReady: status.commandReady === true,
       runtimeReady: readiness.connected === true,
+      playbackReady: readiness.playbackAccess === 'ready',
       blank: readiness.blank === true,
       readinessState: readiness.state,
     });
@@ -649,6 +669,7 @@ function setBridgeState({
     bridgeHandoffAckReady = false;
     bridgeStationIdentityVerified = false;
     bridgeRuntimeCommandReady = false;
+    bridgeRuntimePlaybackReady = false;
     bridgeInitialConfigAvailable = false;
   }
   if (source) bridgeWindow = source;
@@ -722,6 +743,7 @@ function handleBridgeMessage(event) {
     bridgeHandoffAckReady = false;
     bridgeStationIdentityVerified = false;
     bridgeRuntimeCommandReady = false;
+    bridgeRuntimePlaybackReady = false;
     bridgeInitialConfigAvailable = false;
     bridgeVersion = Number(data.version) || 0;
     setBridgeState({
@@ -798,6 +820,7 @@ function handleBridgeMessage(event) {
           ? sameVerifiedIdentity
           : true;
         bridgeRuntimeCommandReady = sameVerifiedIdentity && bridgeRuntimeCommandReady;
+        bridgeRuntimePlaybackReady = sameVerifiedIdentity && bridgeRuntimePlaybackReady;
         bridgeInitialConfigAvailable = sameVerifiedIdentity && bridgeInitialConfigAvailable;
         bridgeIdentityError = '';
       } catch (error) {
@@ -806,6 +829,7 @@ function handleBridgeMessage(event) {
         bridgeCard = null;
         bridgeStationIdentityVerified = false;
         bridgeRuntimeCommandReady = false;
+        bridgeRuntimePlaybackReady = false;
         bridgeInitialConfigAvailable = false;
         bridgeIdentityError = error?.reason || 'identity-missing';
         if (bridgeHandoffFlowId) {
@@ -818,6 +842,7 @@ function handleBridgeMessage(event) {
       bridgeCard = null;
       bridgeStationIdentityVerified = false;
       bridgeRuntimeCommandReady = false;
+      bridgeRuntimePlaybackReady = false;
       bridgeInitialConfigAvailable = false;
       bridgeIdentityError = error?.reason || 'identity-missing';
       if (bridgeHandoffFlowId) {
@@ -1362,6 +1387,7 @@ export function getCardBridgeState() {
     identityVerified,
     stationIdentityVerified: bridgeStationIdentityVerified,
     runtimeCommandReady: bridgeRuntimeCommandReady,
+    runtimePlaybackReady: bridgeRuntimePlaybackReady,
     initialConfigAuthority: bridgeInitialConfigAvailable,
     // Monotonic target generation. A card-page reload can keep the same
     // WindowProxy, host, and card identity, so consumers need this to revoke
@@ -1406,6 +1432,7 @@ export function clearCardBridgeHandoff(rawFlowId = '') {
   bridgeHandoffAckReady = false;
   bridgeStationIdentityVerified = false;
   bridgeRuntimeCommandReady = false;
+  bridgeRuntimePlaybackReady = false;
   bridgeInitialConfigAvailable = false;
   bridgeInitialConfigAttempted = false;
   bridgeRestoredHandoff = false;
@@ -1592,6 +1619,7 @@ export async function verifyCardBridgeIdentity(rawHost = bridgeHost) {
       bridgeHandoffAckReady = false;
       bridgeStationIdentityVerified = false;
       bridgeRuntimeCommandReady = false;
+      bridgeRuntimePlaybackReady = false;
       bridgeInitialConfigAvailable = false;
       bridgeIdentityError = error?.reason || 'identity-missing';
       dispatchBridgeChange();
@@ -1743,6 +1771,7 @@ function markBridgeTimeout(startedAt) {
     bridgeHandoffAckReady = false;
     bridgeStationIdentityVerified = false;
     bridgeRuntimeCommandReady = false;
+    bridgeRuntimePlaybackReady = false;
     bridgeInitialConfigAvailable = false;
     bridgeAuthorityLifecycle = -1;
     bridgeIdentityError = 'bridge-timeout';
@@ -1842,7 +1871,10 @@ export function sendCardBridgeRequest(type, payload = {}, {
       if (normalizeCardHost(bridgeHost) !== resolvedHost) {
         throw bridgeError('The verified card belongs to an older bridge host.', 'stale-host');
       }
-      if (PRIVILEGED_BRIDGE_TYPES.has(type) && !bridgeRuntimeCommandReady) {
+      const runtimeReadyForType = PLAYBACK_BRIDGE_TYPES.has(type)
+        ? bridgeRuntimePlaybackReady
+        : bridgeRuntimeCommandReady;
+      if (PRIVILEGED_BRIDGE_TYPES.has(type) && !runtimeReadyForType) {
         const exactInitialConfig = type === 'config'
           && bridgeInitialConfigAvailable
           && !bridgeInitialConfigAttempted

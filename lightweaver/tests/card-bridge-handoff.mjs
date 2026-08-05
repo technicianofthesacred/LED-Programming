@@ -2103,6 +2103,53 @@ assert.equal(getCardBridgeState().runtimeCommandReady, true);
 assert.equal(handoffHarness.storageValues.get('lw_chip_card_host'), stationHost,
   'preferred host persists only after exact final station verification');
 await sendCardBridgeRequest('control', {}, { host: stationHost, timeoutMs: 100 });
+
+// ── WiFi transition: playback stays admitted, mutations do not ──────────────
+// The card reports playbackReady separately from commandReady because playback
+// runs entirely on-card. The bridge has to honour that split or a reassociating
+// card refuses its own patterns.
+stationStatus = {
+  ...stationStatus,
+  runtimePhase: 'recovering',
+  commandReady: false,
+  playbackReady: true,
+};
+await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().runtimeCommandReady, false,
+  'a WiFi transition shuts the bridge command gate');
+assert.equal(getCardBridgeState().runtimePlaybackReady, true,
+  'the same transition leaves playback admitted');
+await sendCardBridgeRequest('control', {}, { host: stationHost, timeoutMs: 100 });
+for (const mutation of ['config', 'reboot', 'wiring-candidate', 'wiring-activate']) {
+  await assert.rejects(
+    sendCardBridgeRequest(mutation, {}, { host: stationHost, timeoutMs: 25 }),
+    error => error?.reason === 'runtime-not-ready',
+    mutation + ' still waits for a settled command gate',
+  );
+}
+
+// Firmware from before the split omits the field entirely. Its absence must
+// read as "no separate claim" and fall back to the command gate, never as ready.
+stationStatus = { ...stationStatus };
+delete stationStatus.playbackReady;
+await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().runtimePlaybackReady, false,
+  'firmware without playbackReady falls back to the command gate');
+await assert.rejects(
+  sendCardBridgeRequest('control', {}, { host: stationHost, timeoutMs: 25 }),
+  error => error?.reason === 'runtime-not-ready',
+  'playback is not admitted on pre-split firmware while the command gate is shut',
+);
+
+stationStatus = {
+  ...stationStatus,
+  runtimePhase: 'ready', knownGoodProject: true,
+  commandReady: true,
+};
+await sendCardBridgeRequest('status', {}, { host: stationHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().runtimeCommandReady, true,
+  'a settled card restores full command authority');
+
 const messagesBeforeTimeout = handoffMessages.length;
 suppressStationStatus = true;
 await assert.rejects(

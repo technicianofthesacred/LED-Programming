@@ -217,6 +217,9 @@ export function inspectFinalStationHandoff({ status, correlation } = {}) {
     verified: true,
     commandReady: status.commandReady === true,
     runtimeReady: readiness.connected === true,
+    // Reported alongside runtimeReady, never folded into it: the card keeps
+    // admitting playback while a WiFi transition holds the command gate shut.
+    playbackReady: readiness.playbackAccess === 'ready',
     blank: readiness.blank === true,
     readinessState: readiness.state,
   });

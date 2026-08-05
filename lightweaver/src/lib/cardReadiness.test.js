@@ -302,3 +302,84 @@ test('exact expected firmware and build are part of live readiness', () => {
     expectedCard: { id: status.cardId, firmwareVersion: status.firmwareVersion, buildId: 'old-build' },
   }).reason, 'unexpected-firmware-build');
 });
+
+// ── playbackReady (firmware reports playback admission separately) ───────────
+// main.cpp folds the WiFi transition into commandReady AND runtimePhase, but
+// not into playbackReady, because patterns/brightness/scenes run entirely
+// on-card. Studio has to honour that split or the firmware fix is invisible.
+
+function wifiTransitionEnvelope(overrides = {}) {
+  return readyEnvelope({
+    // Exactly what a healthy, lit card reports while its radio reassociates.
+    runtimePhase: 'recovering',
+    commandReady: false,
+    playbackReady: true,
+    ...overrides,
+  });
+}
+
+test('playback stays admitted while a WiFi transition holds the command gate shut', () => {
+  const result = classifyCardReadiness(wifiTransitionEnvelope(), { expectedCardId: CARD_ID });
+
+  assert.equal(result.playbackAccess, 'ready');
+  // The command gate is untouched: no config, wiring, or credential write.
+  assert.equal(result.patternAccess, 'recovery');
+  assert.equal(result.connected, false);
+  assert.equal(result.state, 'not-ready');
+});
+
+test('firmware without playbackReady falls back to the command gate exactly as before', () => {
+  const legacy = readyEnvelope({ runtimePhase: 'recovering', commandReady: false });
+  assert.equal(Object.hasOwn(legacy, 'playbackReady'), false);
+
+  const result = classifyCardReadiness(legacy, { expectedCardId: CARD_ID });
+  assert.equal(normalizeCardReadiness(legacy).playbackReady, null);
+  assert.equal(result.playbackAccess, result.patternAccess);
+  assert.equal(result.playbackAccess, 'recovery');
+
+  const legacyReady = classifyCardReadiness(readyEnvelope(), { expectedCardId: CARD_ID });
+  assert.equal(legacyReady.playbackAccess, 'ready');
+  assert.equal(legacyReady.patternAccess, 'ready');
+});
+
+test('playbackReady never widens access past an identity or contract failure', () => {
+  const cases = [
+    ['unsupported contract', { provisioningContractVersion: 2 }, {}],
+    ['invalid identity', { app: 'NotLightweaver' }, {}],
+    ['incomplete evidence', { knownGoodProject: undefined }, {}],
+    ['wrong card', {}, { expectedCardId: 'lw-ffffffffffff' }],
+    ['wrong firmware', {}, { expectedCard: { id: CARD_ID, firmwareVersion: '9.9.9' } }],
+    ['restarted card', {}, { expectedCardId: CARD_ID, previousBootId: 'boot-0' }],
+  ];
+
+  for (const [label, override, options] of cases) {
+    const result = classifyCardReadiness(wifiTransitionEnvelope(override), options);
+    assert.notEqual(result.playbackAccess, 'ready', label);
+  }
+});
+
+test('an explicit playback refusal still stops playback with the command gate open', () => {
+  const result = classifyCardReadiness(readyEnvelope({ playbackReady: false }), {
+    expectedCardId: CARD_ID,
+  });
+
+  assert.equal(result.connected, true);
+  assert.equal(result.patternAccess, 'ready');
+  assert.equal(result.playbackAccess, 'recovery');
+});
+
+test('a blank factory card is refused for playback as well as for commands', () => {
+  const result = classifyCardReadiness({
+    ...readyEnvelope({
+      runtimePhase: 'factory',
+      mode: 'factory-flash',
+      knownGoodProject: false,
+      commandReady: false,
+      playbackReady: true,
+    }),
+  }, { expectedCardId: CARD_ID });
+
+  assert.equal(result.state, 'blank');
+  assert.equal(result.patternAccess, 'blank');
+  assert.equal(result.playbackAccess, 'blank');
+});

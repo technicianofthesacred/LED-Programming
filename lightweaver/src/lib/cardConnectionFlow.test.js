@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   CARD_CONNECTION_ACTION_IDS,
   isCardLinkConnected,
+  isCardLinkPlaybackReady,
   nextCardConnectionAction,
 } from './cardConnectionFlow.js';
 
@@ -376,4 +377,56 @@ test('all action copy is physical-action oriented and avoids implementation jarg
     assert.equal(typeof action.primaryLabel, 'string', action.id);
     assert.doesNotMatch(`${action.title} ${action.explanation} ${action.primaryLabel}`, forbidden, action.id);
   }
+});
+
+// ── playback link readiness ─────────────────────────────────────────────────
+// isCardLinkConnected is the command gate. Patterns/brightness/scenes run
+// entirely on-card and must survive a WiFi transition, so they read this
+// sibling instead.
+
+test('a card reassociating keeps playback readiness while the command gate closes', () => {
+  const reassociating = readyLink({
+    readiness: readyEnvelope({
+      runtimePhase: 'recovering',
+      commandReady: false,
+      playbackReady: true,
+    }),
+  });
+
+  assert.equal(isCardLinkConnected(reassociating), false);
+  assert.equal(isCardLinkPlaybackReady(reassociating), true);
+});
+
+test('playback readiness still demands the transport, the contract, and the exact card', () => {
+  const reassociatingEnvelope = readyEnvelope({
+    runtimePhase: 'recovering',
+    commandReady: false,
+    playbackReady: true,
+  });
+
+  assert.equal(isCardLinkPlaybackReady({
+    state: 'revalidating',
+    card: { id: CARD_ID },
+    readiness: reassociatingEnvelope,
+  }), false, 'no transport');
+  assert.equal(isCardLinkPlaybackReady(readyLink({
+    readiness: { ...reassociatingEnvelope, cardId: 'lw-other' },
+  })), false, 'wrong card');
+  assert.equal(isCardLinkPlaybackReady(readyLink({
+    readiness: { ...reassociatingEnvelope, provisioningContractVersion: 2 },
+  })), false, 'unsupported contract');
+  assert.equal(isCardLinkPlaybackReady({}), false);
+  assert.equal(isCardLinkPlaybackReady(null), false);
+});
+
+test('on firmware without playbackReady the playback and command gates are identical', () => {
+  const legacyReady = readyLink();
+  const legacyBusy = readyLink({
+    readiness: readyEnvelope({ runtimePhase: 'recovering', commandReady: false }),
+  });
+
+  assert.equal(isCardLinkPlaybackReady(legacyReady), isCardLinkConnected(legacyReady));
+  assert.equal(isCardLinkPlaybackReady(legacyReady), true);
+  assert.equal(isCardLinkPlaybackReady(legacyBusy), isCardLinkConnected(legacyBusy));
+  assert.equal(isCardLinkPlaybackReady(legacyBusy), false);
 });
