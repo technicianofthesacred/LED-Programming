@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  CARD_HARDWARE_CAPABILITIES,
   CARD_KALEIDOSCOPE_REFLECTION_POINTS_VERSION,
   CARD_RUNTIME_MODES,
   DEFAULT_CARD_LED,
@@ -852,6 +853,53 @@ assert.throws(
     }),
   ], 1200),
   /aggregate.*1024/i,
+);
+
+// ── widened hardware limits ───────────────────────────────────────────────
+// maxPixels is now a pure validation bound: the card sizes its buffers from
+// the config's own totalPixels at boot, so a big number costs no RAM. What
+// still has to hold is that the bound is enforced and that it stops at the
+// uint16_t pixel-index ceiling the firmware types impose.
+const contractPins = CARD_HARDWARE_CAPABILITIES.supportedOutputPins;
+// The widened menu overlaps the DEFAULT control assignment (encoder 4/5/6,
+// previous 7, next 8, blackout 9, status LED 2, encoder press 0).
+const defaultControlPins = [0, 2, 4, 5, 6, 7, 8, 9];
+const freePins = contractPins.filter(pin => !defaultControlPins.includes(pin));
+assert.equal(CARD_HARDWARE_CAPABILITIES.maxPixels, 65535,
+  'maxPixels is the uint16_t totalPixels/OutputConfig.start ceiling');
+assert.doesNotThrow(() => CARD_HARDWARE_CAPABILITIES.assertSupported({
+  led: { pixels: 65535, outputs: [{ id: 'o1', pin: freePins[0], pixels: 65535 }] },
+}), 'a config at the pixel ceiling must be accepted — quantity warns, it never blocks');
+assert.throws(
+  () => CARD_HARDWARE_CAPABILITIES.assertSupported({
+    led: { pixels: 65536, outputs: [{ id: 'o1', pin: freePins[0], pixels: 65536 }] },
+  }),
+  /at most 65535 pixels/,
+  'past the uint16_t ceiling the bound stops being validation and becomes a silent wrap',
+);
+
+// The pin menu widened, but maxOutputs stays 4: the ESP32-S3 has four RMT TX
+// channels. The menu is about WHICH four, not how many.
+assert.equal(CARD_HARDWARE_CAPABILITIES.maxOutputs, 4,
+  'four concurrent outputs is an RMT silicon limit, not a contract preference');
+assert.ok(contractPins.length > CARD_HARDWARE_CAPABILITIES.maxOutputs,
+  'the pin menu should offer more GPIOs than one card can drive at once');
+assert.doesNotThrow(() => CARD_HARDWARE_CAPABILITIES.assertSupported({
+  led: {
+    pixels: 4,
+    outputs: freePins.slice(0, 4).map((pin, index) => ({ id: `o${index}`, pin, pixels: 1 })),
+  },
+}), 'any four GPIOs from the menu the default controls have not claimed must be accepted');
+// Ports are versatile: a pin may carry a strip OR a control, never both. That
+// overlap is why the collision check matters more with a wide menu than a
+// narrow one.
+assert.throws(
+  () => CARD_HARDWARE_CAPABILITIES.assertSupported({
+    led: { pixels: 1, outputs: [{ id: 'o1', pin: 4, pixels: 1 }] },
+    controls: { encoder: { a: 4 } },
+  }),
+  /already owned by an LED output/,
+  'a GPIO cannot be both an LED output and a control',
 );
 
 console.log('card-runtime-contract tests passed');

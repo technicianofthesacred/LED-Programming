@@ -6,6 +6,11 @@ import {
   cardActionStatusLabel,
   classifyCardActionFailure,
   createCardActionState,
+  needsStripDiscovery,
+  stripDiscoveryStep,
+  STRIP_DISCOVERY_BLANK_MESSAGE,
+  STRIP_DISCOVERY_LABEL,
+  STRIP_DISCOVERY_ROUTE,
 } from './cardAction.js';
 
 test('classifies old card software without exposing the thrown message', () => {
@@ -151,4 +156,34 @@ test('preview command failure does not claim knowledge of physical lights', () =
   state = cardActionReducer(state, { type: 'fail', revision: 9 });
   assert.equal(state.error, PHYSICAL_PREVIEW_FAILURE_MESSAGE);
   assert.equal(state.confirmedRevision, null);
+});
+
+test('a card with no strips recorded is routed to discovery, never to Layout', () => {
+  const discovery = {
+    id: 'find-my-strips',
+    label: 'Find my strips',
+    route: 'screen=discovery',
+    message: 'This card has no strips recorded yet. Find its strips first.',
+  };
+  // The connection flow's blank-card verdict.
+  assert.deepEqual({ ...stripDiscoveryStep({ actionId: 'card-needs-project' }) }, discovery);
+  // Readiness said blank, whatever the connection flow decided to show.
+  assert.deepEqual({ ...stripDiscoveryStep({ readinessState: 'blank' }) }, discovery);
+  // The card is Ready, but on Studio's own bench config — still no strips.
+  assert.deepEqual({ ...stripDiscoveryStep({ readinessState: 'connected', benchProject: true }) }, discovery);
+  assert.equal(STRIP_DISCOVERY_ROUTE, discovery.route);
+  assert.equal(STRIP_DISCOVERY_LABEL, discovery.label);
+  assert.equal(STRIP_DISCOVERY_BLANK_MESSAGE, discovery.message);
+});
+
+test('a commissioned card is left alone by the discovery routing', () => {
+  for (const input of [
+    {},
+    { actionId: 'ready-local-card', readinessState: 'connected' },
+    { actionId: 'wrong-card', readinessState: 'identity-mismatch' },
+    { actionId: 'needs-safe-recovery', readinessState: 'not-ready' },
+  ]) {
+    assert.equal(needsStripDiscovery(input), false, JSON.stringify(input));
+    assert.equal(stripDiscoveryStep(input), null);
+  }
 });

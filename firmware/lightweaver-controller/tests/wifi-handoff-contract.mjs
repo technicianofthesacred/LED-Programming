@@ -265,8 +265,14 @@ assert.match(initialAttempt, /issueStationAttempt[\s\S]*recordStationAttempt/,
 assert.doesNotMatch(web, /WiFi\.setAutoReconnect\(true\)/,
   'no firmware lifecycle may silently return retry ownership to the SDK');
 
-assert.match(web, /constexpr int LW_BRIDGE_VERSION\s*=\s*2/,
-  'bridge v2 must advertise station-origin WiFi handoff acknowledgement support');
+// Handoff acknowledgement arrived in bridge v2 and every later revision keeps
+// it, so this gate is a floor rather than an equality — bridge-frame-protocol
+// owns pinning the exact current version.
+const bridgeVersionMatch = web.match(/constexpr int LW_BRIDGE_VERSION\s*=\s*(\d+);/);
+assert.ok(bridgeVersionMatch,
+  'the bridge protocol version must stay a single pinned constant');
+assert.ok(Number(bridgeVersionMatch[1]) >= 2,
+  'bridge v2 or later must advertise station-origin WiFi handoff acknowledgement support');
 const bridgeScript = functionBody(web, /String\s+studioBridgeScript\s*\(/);
 assert.match(bridgeScript, /m\.type==='wifi-handoff-ack'/,
   'the card-page bridge must expose the privileged acknowledgement request');

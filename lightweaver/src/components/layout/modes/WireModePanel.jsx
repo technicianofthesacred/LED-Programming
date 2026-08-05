@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { getCardLinkState, subscribeCardLink } from '../../../lib/cardLink.js';
+import { classifyCardReadiness } from '../../../lib/cardReadiness.js';
 import { useProject } from '../../../state/ProjectContext.jsx';
 import { normalizePatchBoard } from '../../../lib/patchBoard.js';
 import { CARD_HARDWARE_CAPABILITIES } from '../../../lib/cardRuntimeContract.js';
@@ -12,7 +14,8 @@ import { WireDiscovery } from '../wire/WireDiscovery.jsx';
 import { WiringPlanSummary } from '../wire/WiringPlanSummary.jsx';
 import { planAdjacentStripBoundary, planOutputPixelCountAdjustment } from '../../../lib/wiringChase.js';
 import { activeBoardGpios, BOARD_CONTROL_FIELDS, planBoardGpioAssignment } from '../../../lib/gpioAssignments.js';
-import { evaluateCardInstallGate, readCardCommissioningVerification } from '../../../lib/cardInstallGate.js';
+import { evaluateCardInstallGate, readCardAccessLevel, readCardCommissioningVerification } from '../../../lib/cardInstallGate.js';
+import { STRIP_DISCOVERY_BLANK_MESSAGE, STRIP_DISCOVERY_LABEL, STRIP_DISCOVERY_ROUTE, needsStripDiscovery } from '../../../lib/cardAction.js';
 import { estimatePowerBudget } from '../../../lib/controllerProfiles.js';
 import { readPowerSupplySettings, withPowerSupplySettings } from '../../../lib/powerSupplySettings.js';
 import '../../../styles/lw-wire.css';
@@ -284,11 +287,26 @@ export function WireModePanel({ state, connected, cardHost }) {
   const physicallyVerified = commissioning.physicallyVerified;
   const physicalStripCount = mappedStripIds.size;
   const commissioningVerified = commissioning.verified;
+  // What the card itself reports it is holding. LayoutScreen passes only
+  // `connected`/`cardHost`, so the readiness evidence is read from the shared
+  // card link here rather than threaded through a file this panel does not own.
+  const cardLink = useSyncExternalStore(subscribeCardLink, getCardLinkState, getCardLinkState);
+  const cardReadinessState = cardLink.readiness
+    ? classifyCardReadiness(cardLink.readiness, { expectedCard: cardLink.expectedCard }).state
+    : (cardLink.cardBlank === true ? 'blank' : '');
+  const cardAccess = readCardAccessLevel(
+    cardReadinessState === 'blank' ? 'blank' : 'ready',
+    cardLink.card,
+    cardLink.readiness,
+  );
   // This push always sends allowLayoutChange, so it is the wiring-affecting
   // case the gate exists for. It deliberately does not require a live ambient
   // link: pushConfigToCard runs its own discovery and can fall back to the
-  // bounded installer handoff for the exact paired card.
+  // bounded installer handoff for the exact paired card. cardAccess is still
+  // stated at its single source, so this screen cannot drift from the ones that
+  // do check the link.
   const installGate = evaluateCardInstallGate({
+    cardAccess,
     wiringAffecting: true,
     wiringSendReady: compiledWiring.sendReady,
     commissioningVerified,
@@ -323,6 +341,18 @@ export function WireModePanel({ state, connected, cardHost }) {
     ...next,
   }));
   const stripWord = physicalStripCount === 1 ? 'strip' : 'strips';
+  // The LED check below lights real LEDs, which means 'frame' messages, which
+  // the bridge refuses while the card reports playbackReady=false. A card with
+  // no project always reports exactly that — so offering the check here is
+  // offering a button that cannot work, and the install it gates cannot be
+  // reached any other way. Send those cards to discovery instead.
+  //
+  // A bench card is NOT sent there. It is Ready, it lights LEDs, and the whole
+  // point of the bench config is to be replaced: this branch owns the install
+  // CTA, so routing a bench card back to discovery would close the only exit
+  // discovery has and loop the owner between the two screens forever.
+  const cardNeedsStripDiscovery = needsStripDiscovery({ readinessState: cardReadinessState });
+  const openStripDiscovery = () => { window.location.hash = STRIP_DISCOVERY_ROUTE; };
   const editInWire = () => {
     setDrawMode(false);
     setGhostPt(null);
@@ -343,7 +373,20 @@ export function WireModePanel({ state, connected, cardHost }) {
       )}
 
       <section className="lww-flow" data-testid="commissioning-step">
-        {patchBoard?.dataWireCountNeedsReview || !mappingReady ? (
+        {cardNeedsStripDiscovery ? (
+          <>
+            <h3 className="lww-flow-title">Find this card&rsquo;s strips first</h3>
+            <p className="lww-flow-message" data-testid="wire-blank-card-message">{STRIP_DISCOVERY_BLANK_MESSAGE}</p>
+            <button
+              type="button"
+              className="btn primary lww-cta"
+              data-testid="wire-find-strips"
+              title="Open strip discovery, which sets the card up once and then counts each strip with its own LEDs."
+              data-tooltip="Open strip discovery, which sets the card up once and then counts each strip with its own LEDs."
+              onClick={openStripDiscovery}
+            >{STRIP_DISCOVERY_LABEL}</button>
+          </>
+        ) : patchBoard?.dataWireCountNeedsReview || !mappingReady ? (
           <>
             <h3 className="lww-flow-title">Finish the setup in Wire</h3>
             <p className="lww-flow-message">

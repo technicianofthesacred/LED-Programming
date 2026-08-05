@@ -9,7 +9,10 @@
 #include <FastLED.h>
 #include <WebSocketsServer.h>
 
-extern CRGB leds[];
+// Boot-allocated in main.cpp (see allocatePixelBuffers) — a POINTER, not an
+// array. The declaration must match or this translation unit reads the
+// pointer value itself as pixel data.
+extern CRGB* leds;
 extern uint16_t totalPixels;
 extern RuntimeConfig runtimeConfig;
 extern uint8_t lookCount;

@@ -1,4 +1,4 @@
-// Locks the versioned card page bridge (currently v2; frame shipped in v1):
+// Locks the versioned card page bridge (currently v3; frame shipped in v1):
 //
 // 1. VERSIONING — the card→Studio 'ready' postMessages and every relay reply
 //    carry `version:N` spliced from the single C++ constant LW_BRIDGE_VERSION
@@ -8,8 +8,8 @@
 //    against older cards instead of failing silently.
 //
 // 2. FRAME RELAY — Studio posts {type:'frame', payload:{pixels:['RRGGBB',...],
-//    seg?}} and the card page forwards it into ONE persistent same-origin
-//    WebSocket ws://<own-host>:81/ws as {seg:[{i:pixels}]} — the firmware's
+//    seg?, start?}} and the card page forwards it into ONE persistent
+//    same-origin WebSocket ws://<own-host>:81/ws as {seg:[{i,id?,start?}]} — the firmware's
 //    WLED JSON frame path (TEXT frames; binary WS is ignored by the firmware,
 //    which is why the earlier binary push attempt was a silent no-op — see
 //    led-art-mapper/app/src/main.js "C2: WLED live push"). The relay must be
@@ -29,6 +29,13 @@
 //    {cancelStream:true}. No bespoke stop/cancel message type may appear.
 //    cancelStream ALSO drops any undelivered pending frame and cancels the
 //    scheduled reconnect, so a stale frame can't land after stop.
+//
+// 5. CHUNKING (v3) — the card drops any WebSocket payload over 4096 bytes
+//    SILENTLY, which caps a single message at roughly 450 hex pixels. v3
+//    forwards the payload's `start` write offset so Studio can split one
+//    logical frame into card-sized chunks. `start` is omitted when absent or
+//    zero, so a single-chunk frame stays byte-identical to a v2 payload and
+//    nothing changes for cards below the cap.
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -41,8 +48,8 @@ const web = readFileSync(resolve(here, '../src/LightweaverWeb.cpp'), 'utf8');
 // ── versioning ────────────────────────────────────────────────────────────
 assert.match(
   web,
-  /constexpr int LW_BRIDGE_VERSION = 2;/,
-  'LightweaverWeb.cpp should pin the bridge protocol version constant at 2',
+  /constexpr int LW_BRIDGE_VERSION = 3;/,
+  'LightweaverWeb.cpp should pin the bridge protocol version constant at 3',
 );
 
 // The version in every JS script string is spliced from the C++ constant —
@@ -115,6 +122,25 @@ assert.match(
   script,
   /\{i:p\.pixels\}/,
   'the segment carries the raw pixels array as seg.i',
+);
+
+// ── chunking: `start` passthrough (bridge v3) ─────────────────────────────
+assert.match(
+  script,
+  /if\(Number\.isInteger\(p\.start\)&&p\.start>0\)s\.start=p\.start;/,
+  'the relay forwards a positive integer start offset so Studio can chunk a frame past the 4096-byte card cap',
+);
+// Omitted when absent or 0: a single-chunk frame must serialize exactly as it
+// did on v2, so nothing changes for the cards and pieces already below the cap.
+assert.doesNotMatch(
+  script,
+  /s\.start=p\.start\|\|0/,
+  'start must be omitted when absent or zero, not written as an explicit 0',
+);
+assert.match(
+  script,
+  /const lwFrameSend=p=>\{if\(!p\|\|!Array\.isArray\(p\.pixels\)\)throw lwBridgeError\('invalid-payload'/,
+  'the payload contract is still {pixels:[...]} — start is optional and never required to relay',
 );
 
 // latest-frame-wins: exactly one pending slot, replaced on every send —

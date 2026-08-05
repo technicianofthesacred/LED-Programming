@@ -69,8 +69,17 @@ const STUDIO_SCREENS = [
   { id: 'show', label: 'Show', Component: ShowScreen },
   { id: 'card', label: 'Hardware', Component: CardScreen },
 ];
-const SCREEN_KEYS = STUDIO_SCREENS.map(screen => screen.id);
-const SCREEN_BY_ID = Object.fromEntries(STUDIO_SCREENS.map(screen => [screen.id, screen.Component]));
+// Routable, but deliberately not in the rail: strip discovery is where a blank
+// card is SENT, not a place the owner browses to. Its two entrances are the
+// connection center and Test & Install — the exact two moments the question
+// "which strips does this card even have?" comes up.
+const StripDiscoveryScreen = lazy(() => import('../components/card/StripDiscoveryPanel.jsx').then(module => ({ default: module.StripDiscoveryPanel })));
+const OFF_RAIL_SCREENS = { discovery: StripDiscoveryScreen };
+const SCREEN_KEYS = [...STUDIO_SCREENS.map(screen => screen.id), ...Object.keys(OFF_RAIL_SCREENS)];
+const SCREEN_BY_ID = {
+  ...Object.fromEntries(STUDIO_SCREENS.map(screen => [screen.id, screen.Component])),
+  ...OFF_RAIL_SCREENS,
+};
 const LEGACY_CARD_SCREENS = new Set(['flash', 'settings', 'installer', 'production']);
 const PROTECTED_COMMISSIONING_STAGES = new Set(['install-safely', 'set-up-card', 'check-lights']);
 const SCREEN_RECOVERY_KEY = 'lw_screen_recovery_v1';

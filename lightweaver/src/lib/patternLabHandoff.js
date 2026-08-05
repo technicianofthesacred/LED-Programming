@@ -1,3 +1,4 @@
+import { CARD_HARDWARE_CONTRACT } from './cardHardwareContract.js';
 import { hexToCardColor, normalizeCardVisualLook } from './cardVisualLook.js';
 import {
   MAX_PATTERN_LAB_LWSEQ_BYTES,
@@ -188,6 +189,12 @@ function normalizeManifest(value) {
   };
 }
 
+// Two different ceilings meet here and they are not the same thing. An output's
+// pixel count is a statement about the card's wiring, so it tracks the hardware
+// contract. The manifest's `pixelCount` (normalizeManifest) stays a literal
+// because it bounds a baked .lwseq FILE — pixelCount x frameCount x 3 bytes on
+// microSD — not how many LEDs the card can drive. Raising the wiring ceiling
+// must not quietly raise the storage budget with it.
 function normalizeAssetOutputs(value, expectedPixels) {
   if (!Array.isArray(value)
     || value.length < 1
@@ -200,7 +207,7 @@ function normalizeAssetOutputs(value, expectedPixels) {
       || output.name.length < 1
       || output.name.length > MAX_LABEL_LENGTH
       || !Number.isSafeInteger(output.pin)
-      || !validPositiveInteger(output.pixels, 1024))) return null;
+      || !validPositiveInteger(output.pixels, CARD_HARDWARE_CONTRACT.maxPixels))) return null;
   const outputs = normalizeStandaloneOutputs(value).map(output => ({
     id: slug(output.id, 'output'),
     name: boundedString(output.name, MAX_LABEL_LENGTH),

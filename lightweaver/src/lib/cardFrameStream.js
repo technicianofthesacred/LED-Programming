@@ -16,8 +16,24 @@
 // reverts the canvas after 2s, so an idle stream re-sends its last frame.
 // Stopping releases the canvas through the EXISTING control path
 // ({cancelStream:true}), not a new message type.
+//
+// Chunking contract: the card drops any WS payload over 4096 bytes in silence,
+// which capped a frame at ~450 pixels (see frameChunking.js). A frame is now
+// split into FRAME_CHUNK_MAX_PIXELS-sized chunks carrying the per-segment
+// 'start' write offset the firmware already parses. Frames at or under one
+// chunk serialize exactly as before, so nothing changes for small strips.
+//
+// Latest-frame-wins is defined at FRAME granularity, not chunk granularity.
+// The pump holds one latest frame; once a frame's chunk sequence starts it
+// runs to completion or failure, and a newer frame produced mid-send waits for
+// the next tick. A failed chunk makes the WHOLE frame undelivered, so the next
+// tick (≤1/18s) resends the NEWEST frame from chunk 0, and the keepalive
+// always resends the last frame IN FULL — a half-written frame therefore
+// persists at most ~FRAME_KEEPALIVE_MS, with the card's 2s watchdog as the
+// last resort behind that.
 
-import { sendCardBridgeRequest } from './cardBridge.js';
+import { sendCardBridgeRequest, getCardBridgeVersion } from './cardBridge.js';
+import { chunkFramePixels, frameChunkPayload } from './frameChunking.js';
 import { guardDirectCardMutation } from './cardIdentity.js';
 import {
   canPushDirectlyToCard,
@@ -40,6 +56,19 @@ export const FRAME_KEEPALIVE_MS = 850;
 // let the next one carry the (newer) frame instead of queueing stale ones.
 const WS_CONGESTION_BYTES = 8192;
 export const FRAME_OWNERSHIP_CHANNEL = 'lightweaver-card-frame-owner-v1';
+// Bridge protocol version whose relay forwards the per-segment 'start' offset.
+// v≤2 relays build {i, id} only and keep ONE pending frame slot, so a second
+// chunk would both land at pixel 0 and clobber the first — those cards get the
+// first chunk plus an honest truncation signal instead.
+const FRAME_CHUNK_BRIDGE_VERSION = 3;
+// A truncated frame is a persistent condition (every frame stays truncated
+// until the card is reflashed), and health fires once per pump. Re-arm the
+// one-shot notice flag at most this often so a UI can toast/log on it without
+// firing 18 times a second; the boolean itself stays true in every report.
+export const FRAME_TRUNCATION_NOTICE_MS = 5000;
+// Re-exported so consumers can name the cap in copy ("more than 416 pixels
+// live") without reaching into the chunking module themselves.
+export { FRAME_CHUNK_MAX_PIXELS } from './frameChunking.js';
 
 export function clampFrameFps(fps) {
   const value = Number(fps);
@@ -47,10 +76,15 @@ export function clampFrameFps(fps) {
   return Math.min(MAX_FRAME_FPS, Math.max(MIN_FRAME_FPS, value));
 }
 
-function segPayload(pixels, seg) {
-  const segment = { i: pixels };
-  if (Number.isInteger(seg)) segment.id = seg;
-  return { seg: [segment] };
+// A relay reply that means the frame did NOT reach the LEDs. Mirrors the
+// pump's own classification so a chunk failure ends the frame at the transport
+// instead of letting later chunks write over a card that never got chunk 0.
+function bridgeReplyFailed(reply) {
+  if (!reply) return false;
+  return reply.ok === false
+    || reply.relayed === false
+    || reply.delivered === false
+    || reply.wsOpen === false;
 }
 
 // Bridge transport — every send is a postMessage to the card page, which owns
@@ -59,11 +93,58 @@ function segPayload(pixels, seg) {
 export function createBridgeFrameTransport(host = '') {
   return {
     kind: 'bridge',
-    sendFrame(pixels, seg) {
-      return sendCardBridgeRequest('frame', {
-        pixels,
-        ...(Number.isInteger(seg) ? { seg } : {}),
-      }, { host, timeoutMs: 1500, retryOnTimeout: false });
+    async sendFrame(pixels, seg) {
+      const chunks = chunkFramePixels(pixels);
+      if (!chunks.length) return { ok: true };
+      const segField = Number.isInteger(seg) ? { seg } : {};
+
+      if (chunks.length > 1 && getCardBridgeVersion() < FRAME_CHUNK_BRIDGE_VERSION) {
+        // Shipped firmware (relay v≤2) drops 'start', so only the head of the
+        // strip can be driven. Send that head — the owner still sees living
+        // light — and report the truncation. Never silently drop the tail,
+        // never claim a delivery that did not happen.
+        const reply = await sendCardBridgeRequest('frame', {
+          pixels: chunks[0].pixels,
+          ...segField,
+        }, { host, timeoutMs: 1500, retryOnTimeout: false });
+        if (bridgeReplyFailed(reply)) return reply;
+        return {
+          ...(reply || {}),
+          ok: true,
+          truncated: true,
+          reason: 'bridge-frame-cap',
+          sentPixels: chunks[0].pixels.length,
+          framePixels: pixels.length,
+        };
+      }
+
+      let lastReply = null;
+      for (const chunk of chunks) {
+        // Sequential and AWAITED. The relay holds a single pending-frame slot
+        // and only replies relayed:true after WebSocket.send returns, so
+        // waiting for each ack is what guarantees the slot is empty before the
+        // next chunk is posted — no relay queue change needed.
+        // Accepted residual: if the bridge disconnects mid-frame, a chunk left
+        // pending in the relay may flush late and transiently overwrite part
+        // of a newer frame for ≤1 frame period. That is the same kind of
+        // staleness the whole-frame path has always had; the keepalive's full
+        // resend corrects it within ~850ms. Do not engineer around it.
+        const reply = await sendCardBridgeRequest('frame', {
+          pixels: chunk.pixels,
+          ...(chunk.start > 0 ? { start: chunk.start } : {}),
+          ...segField,
+        }, { host, timeoutMs: 1500, retryOnTimeout: false });
+        if (bridgeReplyFailed(reply)) {
+          // Frame-atomic: stop here and report the WHOLE frame undelivered.
+          return {
+            ...reply,
+            ok: false,
+            reason: reply.reason || (reply.wsOpen === false ? 'relay-socket-closed' : 'relay-send-failed'),
+          };
+        }
+        lastReply = reply;
+      }
+      return lastReply || { ok: true };
     },
     sendCancel() {
       return sendCardBridgeRequest('control', { cancelStream: true }, { host, timeoutMs: 2500 });
@@ -149,11 +230,19 @@ export function createDirectFrameTransport(host = '', { WebSocketImpl, fetchImpl
     kind: 'direct',
     async sendFrame(pixels, seg) {
       const socket = await openSocket();
+      // Congestion is judged ONCE per frame, before chunk 0 — never between
+      // chunks. A frame that has begun must finish, or the card would render
+      // the head of one frame spliced onto the tail of another.
       if (socket.bufferedAmount > WS_CONGESTION_BYTES) {
         // Congested: drop this frame; the throttle sends a newer one next tick.
         return { ok: true, dropped: true };
       }
-      socket.send(JSON.stringify(segPayload(pixels, seg)));
+      // Every card in the field already parses the per-segment 'start' write
+      // offset (LightweaverWledWebSocket.cpp:76), so direct chunking needs no
+      // firmware update.
+      for (const chunk of chunkFramePixels(pixels)) {
+        socket.send(JSON.stringify(frameChunkPayload(chunk, seg)));
+      }
       return { ok: true };
     },
     async sendCancel() {
@@ -303,7 +392,11 @@ export async function reclaimCardFrameStreams(host = '', {
 // the card was not open, the frame was NOT delivered) counts as a failure;
 // a reply without a wsOpen field (older firmware) is unknown → assumed
 // delivered. Failures feed getStats() and the optional onHealth callback so
-// the UI can warn and auto-stop instead of streaming into the void.
+// the UI can warn and auto-stop instead of streaming into the void. A frame
+// the transport could only partially deliver (a pre-v3 relay that cannot carry
+// chunk offsets) is reported separately as truncated: delivered stays true for
+// the part that IS lit, and the truncation reason rides the same health path
+// so the UI can ask for a firmware update.
 export function createCardFrameStream({
   host = '',
   fps = DEFAULT_FRAME_FPS,
@@ -339,6 +432,11 @@ export function createCardFrameStream({
   let consecutiveFailures = 0;
   let failingSince = 0;
   let lastError = null;
+  let truncatedFrames = 0;
+  let truncatedReason = null;
+  let truncatedSince = 0;
+  let truncationNotice = false;
+  let truncationNoticeAt = 0;
 
   function closeTransport() {
     if (transportClosed) return;
@@ -356,6 +454,24 @@ export function createCardFrameStream({
     latestDirty = true;
   }
 
+  // A partially delivered frame is NOT a failure — what was sent is genuinely
+  // lit — but it must never read as full delivery either. The condition is
+  // sticky while it lasts and clears the moment a whole frame lands.
+  function noteTruncation(result) {
+    if (result?.truncated !== true) {
+      truncatedReason = null;
+      truncatedSince = 0;
+      truncationNotice = false;
+      truncationNoticeAt = 0;
+      return;
+    }
+    truncatedFrames += 1;
+    truncatedReason = result.reason || 'frame-truncated';
+    if (!truncatedSince) truncatedSince = now();
+    truncationNotice = truncationNoticeAt === 0 || (now() - truncationNoticeAt) >= FRAME_TRUNCATION_NOTICE_MS;
+    if (truncationNotice) truncationNoticeAt = now();
+  }
+
   function emitHealth() {
     if (typeof onHealth !== 'function') return;
     try {
@@ -366,7 +482,14 @@ export function createCardFrameStream({
         failingForMs: failingSince ? now() - failingSince : 0,
         lastDeliveredAt,
         lastError,
-        reason: lastError?.reason || null,
+        // Existing consumers all gate on delivered/consecutiveFailures before
+        // reading reason, so surfacing the truncation cause here reaches the
+        // UI without changing any failure path.
+        reason: lastError?.reason || truncatedReason || null,
+        truncated: Boolean(truncatedReason),
+        truncatedReason,
+        truncationNotice,
+        truncatedForMs: truncatedSince ? now() - truncatedSince : 0,
       });
     } catch { /* a health listener must never break the pump */ }
   }
@@ -426,6 +549,7 @@ export function createCardFrameStream({
         lastError = null;
         consecutiveFailures = 0;
         failingSince = 0;
+        noteTruncation(result);
       }
     } catch (error) {
       noteFailure(error);
@@ -504,6 +628,9 @@ export function createCardFrameStream({
         sentFrames,
         droppedFrames,
         undeliveredFrames,
+        truncatedFrames,
+        truncated: Boolean(truncatedReason),
+        truncatedReason,
         consecutiveFailures,
         failingForMs: failingSince ? now() - failingSince : 0,
         lastSentAt,

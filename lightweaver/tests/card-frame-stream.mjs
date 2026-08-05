@@ -10,6 +10,11 @@
 //  - direct transport backs off between failed WS opens (250ms → 4s cap)
 //  - stop releases the canvas through the EXISTING control path
 //    ({cancelStream:true}) — no bespoke stop message
+//  - chunking: a frame past the card's 4096-byte WS payload cap is split into
+//    'start'-offset chunks instead of being silently dropped; frames are
+//    atomic (a failed chunk fails the whole frame) and the keepalive resends
+//    every chunk; pre-v3 bridge relays get the first chunk plus an honest
+//    truncation signal, never a silent partial
 // Plus the Studio bridge side of frame streaming: 'frame' is a privileged
 // bridge type (local-origin gated) and the card's reported bridge version
 // gates v1 features with a "needs a firmware update" gap.
@@ -26,8 +31,11 @@ import {
   DIRECT_BACKOFF_MAX_MS,
   DIRECT_BACKOFF_MIN_MS,
   MAX_FRAME_FPS,
+  FRAME_CHUNK_MAX_PIXELS,
   FRAME_KEEPALIVE_MS,
+  FRAME_TRUNCATION_NOTICE_MS,
 } from '../src/lib/cardFrameStream.js';
+import { CARD_WS_MAX_PAYLOAD_BYTES } from '../src/lib/frameChunking.js';
 
 // ── deterministic clock: drives the streamer's interval + now() ──────────
 function makeClock() {
@@ -572,21 +580,250 @@ assert.equal(clampFrameFps('nope'), 18, 'garbage fps falls back to the default')
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+//  Chunking: a frame bigger than the card's 4096-byte WS payload cap used to
+//  be dropped in silence. Direct sockets chunk on every card in the field.
+// ══════════════════════════════════════════════════════════════════════════
+
+// A fake card socket that records every JSON payload it is handed.
+function makeChunkingWs() {
+  const sockets = [];
+  class ChunkingWS {
+    constructor() {
+      this.readyState = 0;
+      this.bufferedAmount = 0;
+      this.sent = [];
+      sockets.push(this);
+      queueMicrotask(() => { this.readyState = 1; this.onopen?.(); });
+    }
+    send(payload) { this.sent.push(payload); }
+    close() { this.readyState = 3; this.onclose?.({}); }
+  }
+  return { sockets, ChunkingWS };
+}
+
+function withCardIdentityWindow(run) {
+  const values = new Map([['lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-expected' })]]);
+  globalThis.window = {
+    localStorage: {
+      getItem: key => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value),
+      removeItem: key => values.delete(key),
+    },
+  };
+  return Promise.resolve(run()).finally(() => { delete globalThis.window; });
+}
+
+const LONG_FRAME = Array.from({ length: 1000 }, (_, i) => i.toString(16).padStart(6, '0'));
+
+function reassembleChunks(payloads, seg) {
+  const frame = [];
+  let expectedStart = 0;
+  for (const raw of payloads) {
+    assert.ok(raw.length <= CARD_WS_MAX_PAYLOAD_BYTES,
+      `chunk payload is ${raw.length} bytes, over the card's ${CARD_WS_MAX_PAYLOAD_BYTES}-byte cap`);
+    const segment = JSON.parse(raw).seg[0];
+    assert.equal(segment.start ?? 0, expectedStart, 'chunk write offsets are contiguous and ascending');
+    assert.equal(Object.hasOwn(segment, 'start'), expectedStart > 0, 'start is omitted only at offset 0');
+    if (seg !== undefined) assert.equal(segment.id, seg, 'the segment id rides every chunk');
+    frame.push(...segment.i);
+    expectedStart += segment.i.length;
+  }
+  return frame;
+}
+
+// Direct transport: a long frame becomes contiguous 'start'-offset chunks.
+await withCardIdentityWindow(async () => {
+  const { sockets, ChunkingWS } = makeChunkingWs();
+  const transport = createDirectFrameTransport('192.168.18.70', {
+    WebSocketImpl: ChunkingWS,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ cardId: 'lw-expected' }) }),
+  });
+  const result = await transport.sendFrame(LONG_FRAME, 2);
+  assert.equal(result.ok, true);
+  assert.notEqual(result.truncated, true, 'a direct socket delivers the whole frame');
+  const socket = sockets[0];
+  assert.equal(socket.sent.length, Math.ceil(LONG_FRAME.length / FRAME_CHUNK_MAX_PIXELS),
+    `1000 pixels split into ${Math.ceil(LONG_FRAME.length / FRAME_CHUNK_MAX_PIXELS)} chunks`);
+  assert.deepEqual(reassembleChunks(socket.sent, 2), LONG_FRAME,
+    'the chunks reassemble into the exact frame the producer pushed');
+  transport.close();
+});
+
+// A frame that already fits is still ONE message with no start key — the
+// pre-chunking bytes, unchanged, for every small strip in the field.
+await withCardIdentityWindow(async () => {
+  const { sockets, ChunkingWS } = makeChunkingWs();
+  const transport = createDirectFrameTransport('192.168.18.70', {
+    WebSocketImpl: ChunkingWS,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ cardId: 'lw-expected' }) }),
+  });
+  await transport.sendFrame(['FF8800', '331100'], 1);
+  assert.equal(sockets[0].sent.length, 1);
+  assert.equal(sockets[0].sent[0], JSON.stringify({ seg: [{ i: ['FF8800', '331100'], id: 1 }] }),
+    'short frames serialize byte-identically to the pre-chunking payload');
+  transport.close();
+});
+
+// Congestion is judged ONCE per frame, before chunk 0 — a started frame always
+// finishes, so the card never renders two frames spliced together.
+await withCardIdentityWindow(async () => {
+  const { sockets, ChunkingWS } = makeChunkingWs();
+  const transport = createDirectFrameTransport('192.168.18.70', {
+    WebSocketImpl: ChunkingWS,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ cardId: 'lw-expected' }) }),
+  });
+  await transport.sendFrame(['FF0000']); // opens the socket
+  const socket = sockets[0];
+  socket.sent.length = 0;
+  // Backpressure appearing mid-frame must not abandon the frame half-written.
+  const realSend = socket.send.bind(socket);
+  socket.send = (payload) => { socket.bufferedAmount = 1_000_000; realSend(payload); };
+  const result = await transport.sendFrame(LONG_FRAME);
+  assert.equal(result.dropped, undefined, 'a frame that passed the gate is never half-sent');
+  assert.equal(socket.sent.length, 3, 'every chunk of the started frame goes out');
+
+  socket.sent.length = 0;
+  const congested = await transport.sendFrame(LONG_FRAME);
+  assert.deepEqual(congested, { ok: true, dropped: true }, 'the NEXT frame is the one that gets dropped');
+  assert.equal(socket.sent.length, 0, 'a congestion drop sends no partial frame');
+  transport.close();
+});
+
+// Keepalive resends the last frame IN FULL — all chunks, every time — so a
+// half-written card state can never outlive one keepalive window.
+await withCardIdentityWindow(async () => {
+  const clock = makeClock();
+  const { sockets, ChunkingWS } = makeChunkingWs();
+  const transport = createDirectFrameTransport('192.168.18.70', {
+    WebSocketImpl: ChunkingWS,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ cardId: 'lw-expected' }) }),
+  });
+  const stream = createCardFrameStream({
+    transport,
+    setIntervalImpl: clock.setIntervalImpl,
+    clearIntervalImpl: clock.clearIntervalImpl,
+    now: clock.now,
+  });
+  stream.start();
+  stream.push(LONG_FRAME);
+  await clock.advance(60);
+  await clock.advance(6000); // six idle seconds of keepalives
+  const socket = sockets[0];
+  assert.equal(socket.sent.length % 3, 0, `keepalives send whole frames only (${socket.sent.length} chunks)`);
+  const resends = socket.sent.length / 3;
+  assert.ok(resends >= 4, `idle stream keeps resending the frame (${resends} full frames)`);
+  for (let i = 0; i < resends; i++) {
+    assert.deepEqual(reassembleChunks(socket.sent.slice(i * 3, i * 3 + 3)), LONG_FRAME,
+      `keepalive resend ${i + 1} carries every chunk`);
+  }
+  await stream.stop();
+});
+
+// Frame atomicity at the pump: a transport that fails mid-frame makes the
+// WHOLE frame undelivered, and the next tick resends the NEWEST frame.
+{
+  const clock = makeClock();
+  const sends = [];
+  let failing = true;
+  const transport = {
+    kind: 'fake',
+    async sendFrame(pixels) {
+      sends.push(pixels);
+      if (failing) return { ok: false, reason: 'relay-send-failed' };
+      return { ok: true };
+    },
+    async sendCancel() {},
+    close() {},
+  };
+  const stream = createCardFrameStream({
+    transport,
+    setIntervalImpl: clock.setIntervalImpl,
+    clearIntervalImpl: clock.clearIntervalImpl,
+    now: clock.now,
+  });
+  stream.start();
+  stream.push(FRAME(1));
+  await clock.advance(60);
+  assert.equal(stream.getStats().undeliveredFrames, 1, 'a mid-frame failure counts the whole frame undelivered');
+  assert.equal(stream.getStats().sentFrames, 0, 'a partially sent frame is never counted as delivered');
+  stream.push(FRAME(2)); // a newer frame arrives before the retry tick
+  failing = false;
+  await clock.advance(60);
+  assert.deepEqual(sends.at(-1), FRAME(2), 'the retry resends the NEWEST frame from chunk 0, not the failed one');
+  assert.equal(stream.getStats().sentFrames, 1);
+  await stream.stop();
+}
+
+// A truncated frame is delivered-but-incomplete: it never reads as a failure
+// and never reads as full delivery either.
+{
+  const clock = makeClock();
+  const healthReports = [];
+  let reply = { ok: true, truncated: true, reason: 'bridge-frame-cap', sentPixels: 416, framePixels: 1000 };
+  const transport = {
+    kind: 'fake',
+    async sendFrame() { return reply; },
+    async sendCancel() {},
+    close() {},
+  };
+  const stream = createCardFrameStream({
+    transport,
+    onHealth: health => healthReports.push({ ...health }),
+    setIntervalImpl: clock.setIntervalImpl,
+    clearIntervalImpl: clock.clearIntervalImpl,
+    now: clock.now,
+  });
+  stream.start();
+  stream.push(LONG_FRAME);
+  await clock.advance(1000);
+  let stats = stream.getStats();
+  assert.equal(stats.truncated, true, 'the truncation is visible in stats');
+  assert.equal(stats.truncatedReason, 'bridge-frame-cap');
+  assert.ok(stats.truncatedFrames >= 2, `truncated frames are counted (${stats.truncatedFrames})`);
+  assert.equal(stats.undeliveredFrames, 0, 'a truncated frame is not a delivery failure');
+  assert.ok(stats.sentFrames >= 2, 'the part that IS lit counts as delivered');
+  const truncatedReports = healthReports.filter(h => h.truncated);
+  assert.ok(truncatedReports.length >= 2, 'the truncation persists across reports, it is not a one-off');
+  assert.ok(truncatedReports.every(h => h.delivered === true && h.reason === 'bridge-frame-cap'),
+    'health names the truncation reason without claiming a failure');
+  const notices = healthReports.filter(h => h.truncationNotice).length;
+  assert.equal(notices, 1, `the notice is throttled to one per ${FRAME_TRUNCATION_NOTICE_MS}ms (fired ${notices}×)`);
+
+  reply = { ok: true }; // firmware updated: whole frames land again
+  stream.push(FRAME(1));
+  await clock.advance(120);
+  stats = stream.getStats();
+  assert.equal(stats.truncated, false, 'a full delivery clears the truncation');
+  assert.equal(healthReports.at(-1).reason, null, 'and the health reason clears with it');
+  await stream.stop();
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 //  Studio bridge side: 'frame' rides the privileged postMessage channel and
 //  the reported bridge version gates it.
 // ══════════════════════════════════════════════════════════════════════════
 const listeners = new Map();
 const posted = [];
+// The relay protocol version the fake card reports, and whether it relays a
+// frame — both mutable so the v2-fallback and chunk-failure paths can be
+// driven. `relayTrace` records post/reply ordering so the sequential-ack rule
+// (the relay's single pending slot is only safe if each chunk is awaited) can
+// be proven rather than assumed.
+let relayVersion = 1;
+let relayFrame = () => ({ ok: true, relayed: true });
+const relayTrace = [];
 const parentBridge = {
   postMessage(message, targetOrigin) {
     posted.push({ message, targetOrigin });
+    if (message.type === 'frame') relayTrace.push(`post:${message.payload?.start ?? 0}`);
     setTimeout(() => {
+      if (message.type === 'frame') relayTrace.push(`reply:${message.payload?.start ?? 0}`);
       listeners.get('message')?.({
         origin: 'http://192.168.18.70',
         source: parentBridge,
         data: {
           app: 'LightweaverCardBridge',
-          version: 1,
+          version: relayVersion,
           id: message.id,
           type: message.type,
           ok: true,
@@ -599,7 +836,9 @@ const parentBridge = {
                 bootId: 'frame-test-boot', runtimePhase: 'ready', knownGoodProject: true,
                 commandReady: true, outputReady: true,
               }
-              : { ok: true, relayed: message.type === 'frame' },
+              : message.type === 'frame'
+                ? relayFrame(message.payload)
+                : { ok: true },
         },
       });
     }, 0);
@@ -683,6 +922,82 @@ await assert.rejects(
   assert.equal(cancelMessage.type, 'control', 'stop rides the EXISTING control type');
   assert.deepEqual(cancelMessage.payload, { cancelStream: true });
   assert.ok(posted.length === before + 2, 'exactly two bridge messages');
+}
+
+// ── bridge v≤2: the shipped relay drops 'start', so long frames truncate ───
+// The v2 relay both discards the write offset and holds a single pending-frame
+// slot, so posting chunk 1 would land at pixel 0 and clobber chunk 0. Send the
+// head only and SAY SO.
+{
+  relayVersion = 2;
+  await sendCardBridgeRequest('status', {}, { host: '192.168.18.70' });
+  assert.equal(getCardBridgeVersion(), 2, 'the fake card now reports relay v2');
+  const transport = createBridgeFrameTransport('192.168.18.70');
+
+  // A frame that fits is untouched by the version gate — byte-identical to the
+  // message every card in the field already receives.
+  let before = posted.length;
+  await transport.sendFrame(['FF8800', '331100'], 1);
+  assert.equal(posted.length, before + 1, 'a short frame is still exactly one bridge message');
+  assert.deepEqual(posted.at(-1).message.payload, { pixels: ['FF8800', '331100'], seg: 1 },
+    'and it carries no start key on a v2 relay');
+
+  before = posted.length;
+  const result = await transport.sendFrame(LONG_FRAME, 1);
+  assert.equal(posted.length, before + 1, 'a v2 relay is sent the first chunk ONLY');
+  assert.equal(posted.at(-1).message.payload.start, undefined, 'no start key a v2 relay would silently drop');
+  assert.equal(posted.at(-1).message.payload.pixels.length, FRAME_CHUNK_MAX_PIXELS);
+  assert.deepEqual(posted.at(-1).message.payload.pixels, LONG_FRAME.slice(0, FRAME_CHUNK_MAX_PIXELS),
+    'the head of the strip stays live');
+  assert.equal(result.ok, true, 'what was sent really is lit — this is not a failure');
+  assert.equal(result.truncated, true, 'but it is never reported as a full delivery');
+  assert.equal(result.reason, 'bridge-frame-cap');
+  assert.equal(result.sentPixels, FRAME_CHUNK_MAX_PIXELS);
+  assert.equal(result.framePixels, LONG_FRAME.length);
+}
+
+// ── bridge v3: chunks go out sequentially, each awaiting its ack ───────────
+{
+  relayVersion = 3;
+  await sendCardBridgeRequest('status', {}, { host: '192.168.18.70' });
+  assert.equal(getCardBridgeVersion(), 3, 'the fake card now reports relay v3');
+  const transport = createBridgeFrameTransport('192.168.18.70');
+  const before = posted.length;
+  relayTrace.length = 0;
+  const result = await transport.sendFrame(LONG_FRAME, 1);
+  const chunkCount = Math.ceil(LONG_FRAME.length / FRAME_CHUNK_MAX_PIXELS);
+  assert.equal(posted.length, before + chunkCount, `a v3 relay receives all ${chunkCount} chunks`);
+  assert.notEqual(result.truncated, true, 'a v3 relay delivers the whole frame');
+
+  const chunkPayloads = posted.slice(before).map(entry => entry.message.payload);
+  const rebuilt = [];
+  let expectedStart = 0;
+  for (const payload of chunkPayloads) {
+    assert.equal(payload.seg, 1, 'the segment id rides every chunk');
+    assert.equal(payload.start ?? 0, expectedStart, 'chunk offsets are contiguous and ascending');
+    assert.equal(Object.hasOwn(payload, 'start'), expectedStart > 0, 'start is omitted only at offset 0');
+    expectedStart += payload.pixels.length;
+    rebuilt.push(...payload.pixels);
+  }
+  assert.deepEqual(rebuilt, LONG_FRAME, 'the chunks reassemble into the exact frame');
+  // Strict post→reply→post alternation: proof that the relay's single pending
+  // slot is empty before the next chunk is posted.
+  assert.deepEqual(relayTrace, ['post:0', 'reply:0', 'post:416', 'reply:416', 'post:832', 'reply:832'],
+    'each chunk waits for its ack before the next is posted');
+}
+
+// ── bridge v3: a failed chunk fails the WHOLE frame ───────────────────────
+{
+  const transport = createBridgeFrameTransport('192.168.18.70');
+  relayFrame = (payload) => (payload?.start === 416
+    ? { ok: true, relayed: false, wsOpen: false }
+    : { ok: true, relayed: true });
+  const before = posted.length;
+  const result = await transport.sendFrame(LONG_FRAME, 1);
+  assert.equal(posted.length, before + 2, 'the frame stops at the failed chunk — no third chunk is posted');
+  assert.equal(result.ok, false, 'the pump is told the whole frame is undelivered');
+  assert.equal(result.reason, 'relay-socket-closed', 'and why');
+  relayFrame = () => ({ ok: true, relayed: true });
 }
 
 console.log('card-frame-stream tests passed');

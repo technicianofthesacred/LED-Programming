@@ -1,3 +1,4 @@
+import { isBenchProjectEvidence } from './benchConfig.js';
 import { normalizeUsbLedColorOrder } from './usbLedColorOrder.js';
 
 // One rule for every "Install on card" button.
@@ -43,6 +44,23 @@ export function readCardCommissioningVerification({ wiring, standaloneController
   });
 }
 
+// The one producer of cardAccess:'bench'. Screens compute their own access
+// verdict from the link, then run it through here so "the card is holding
+// Studio's own discovery config" is decided from the CARD'S report in exactly
+// one place.
+//
+// 'project' is deliberately upgradeable. That verdict means "this may not be
+// the Studio project you think is installed", and it exists to stop an install
+// clobbering somebody's artwork — but the bench config IS Studio's own
+// scaffolding, and overwriting it with the owner's real project is the only way
+// out of discovery. Link-state verdicts ('blank', 'recovery') are never
+// upgraded: they describe whether the card is reachable and paired, which no
+// amount of project evidence can prove.
+export function readCardAccessLevel(cardAccess, ...projectEvidence) {
+  if (cardAccess !== 'ready' && cardAccess !== 'project') return cardAccess;
+  return projectEvidence.some(isBenchProjectEvidence) ? 'bench' : cardAccess;
+}
+
 function blocked(reason) {
   return Object.freeze({
     allowed: false,
@@ -57,7 +75,10 @@ const ALLOWED = Object.freeze({ allowed: true, reason: '', message: '' });
  * @param {object} input
  * @param {string} input.hardwareIssue   Non-empty when the runtime package cannot be built.
  * @param {boolean} input.busy           An install/sync/recovery is already in flight.
- * @param {'ready'|'blank'|'project'|'recovery'|string} input.cardAccess
+ * @param {'ready'|'bench'|'blank'|'project'|'recovery'|string} input.cardAccess
+ *   'bench' means the card is holding the synthesized discovery bench config
+ *   (see benchConfig.js). Callers derive it with readCardAccessLevel above,
+ *   from the card's own project evidence.
  * @param {boolean} input.requiresLiveLink
  *   False only for the Layout push, which runs its own discovery and falls back
  *   to a bounded copy-paste/installer handoff for the exact paired card, so it
@@ -84,7 +105,12 @@ export function evaluateCardInstallGate({
   if (requiresLiveLink) {
     if (cardAccess === 'blank') return blocked('blank');
     if (cardAccess === 'project') return blocked('project-mismatch');
-    if (cardAccess !== 'ready') return blocked('disconnected');
+    // A bench card is Ready, but the project on it is Studio's own synthesized
+    // discovery config — not an owner's artwork. Installing the real project
+    // over it is the intended way OUT of discovery, so it is never refused as a
+    // mismatch. 'project-mismatch' stays for genuinely foreign projects, where
+    // the warning is about clobbering somebody's work.
+    if (!['ready', 'bench'].includes(cardAccess)) return blocked('disconnected');
   }
   return ALLOWED;
 }

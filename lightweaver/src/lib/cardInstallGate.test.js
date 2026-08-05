@@ -4,8 +4,10 @@ import assert from 'node:assert/strict';
 import {
   CARD_INSTALL_BLOCK_MESSAGES,
   evaluateCardInstallGate,
+  readCardAccessLevel,
   readCardCommissioningVerification,
 } from './cardInstallGate.js';
+import { BENCH_PROJECT_ID } from './benchConfig.js';
 
 // The three "Install on card" buttons (Layout -> Test & Install, Playlist,
 // Patterns) all end at pushConfigToCard -> POST /api/config. These fact sets
@@ -104,6 +106,39 @@ test('link-state reasons are distinct, and only the Layout push may run without 
     // disconnected must not disable the Layout button.
     assert.equal(evaluateCardInstallGate(layoutFacts({ cardAccess: access })).allowed, true);
   }
+});
+
+test('cardAccess:bench is derived from the card\'s own project report, never assumed', () => {
+  const benchEvidence = { projectId: BENCH_PROJECT_ID, projectRevision: 1 };
+  const ownerEvidence = { projectId: 'owner-mandala-01', projectRevision: 7 };
+  assert.equal(readCardAccessLevel('ready', benchEvidence), 'bench');
+  assert.equal(readCardAccessLevel('ready', null, benchEvidence), 'bench',
+    'evidence can arrive on either the paired card or the readiness envelope');
+  assert.equal(readCardAccessLevel('ready', ownerEvidence), 'ready');
+  assert.equal(readCardAccessLevel('ready'), 'ready');
+  // The mismatch warning protects somebody's artwork. The bench config is
+  // Studio's own, so overwriting it is the intended exit from discovery.
+  assert.equal(readCardAccessLevel('project', benchEvidence), 'bench');
+  assert.equal(readCardAccessLevel('project', ownerEvidence), 'project');
+  // Link-state verdicts describe reachability and pairing. No project evidence
+  // can upgrade those, or a card that never proved itself would install.
+  assert.equal(readCardAccessLevel('recovery', benchEvidence), 'recovery');
+  assert.equal(readCardAccessLevel('blank', benchEvidence), 'blank');
+});
+
+test('a bench card installs like a ready one, because discovery exits by installing the real project', () => {
+  // The card is Ready, but the project on it is Studio's own discovery bench
+  // config. Overwriting that is the intended exit from discovery.
+  assert.equal(evaluateCardInstallGate(playlistFacts({ cardAccess: 'bench' })).allowed, true);
+  assert.equal(evaluateCardInstallGate(patternsFacts({ cardAccess: 'bench' })).allowed, true);
+  assert.equal(evaluateCardInstallGate(layoutFacts({ cardAccess: 'bench', requiresLiveLink: true })).allowed, true);
+  // A genuinely foreign project still gets the mismatch warning — that reason
+  // exists to protect somebody else's work, which a bench config is not.
+  assert.equal(evaluateCardInstallGate(playlistFacts({ cardAccess: 'project' })).reason, 'project-mismatch');
+  // 'bench' widens nothing else: it is still refused without the bench proof.
+  assert.equal(evaluateCardInstallGate(playlistFacts({
+    cardAccess: 'bench', wiringAffecting: true, commissioningVerified: false,
+  })).reason, 'not-commissioned');
 });
 
 test('the wiring proof is reported ahead of a transient link blip', () => {

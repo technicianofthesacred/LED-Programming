@@ -411,7 +411,11 @@ function assertPackageShape(job, { source = false } = {}) {
     output.segments.forEach(segment => {
       exactKeys(segment, RUNTIME_SEGMENT_KEYS, 'configured LED output segment');
       requiredText(segment.id, 'Configured LED output segment ID', 64);
-      if (!Number.isSafeInteger(segment.count) || segment.count < 1 || segment.count > 1024) throw new Error('Configured LED output segment count is invalid');
+      // Segment length tracks the hardware contract, never a literal: a job the
+      // card would happily run must not be rejected here just because Studio
+      // was pinned to an older pixel ceiling. Same source as the whole-config
+      // check below, so the two can never disagree.
+      if (!Number.isSafeInteger(segment.count) || segment.count < 1 || segment.count > CARD_HARDWARE_CAPABILITIES.maxPixels) throw new Error('Configured LED output segment count is invalid');
       if (!['forward', 'reverse'].includes(segment.direction)) throw new Error('Configured LED output segment direction is invalid');
     });
     if (output.segments.reduce((sum, segment) => sum + segment.count, 0) !== output.pixels) throw new Error('Configured LED output segments must sum to output pixels');

@@ -13,6 +13,7 @@ import {
   productionDiagnosticCurrentEstimate,
   productionPhysicalReducer,
 } from './productionPhysicalTest.js';
+import { CARD_HARDWARE_CONTRACT } from './cardHardwareContract.js';
 
 test('final pass assertion requires exact known-good identity and one-to-one physical wiring truth', () => {
   const wiringDigest = 'b'.repeat(64);
@@ -72,6 +73,39 @@ test('1024-pixel bounded diagnostic channel ceiling cannot bypass the aggregate 
   assert.equal(estimate.cappedMilliamps, 1500);
   assert.equal(estimate.maxMilliamps, 1500);
   assert.throws(() => productionDiagnosticCurrentEstimate(frame, 0), /current limit/i);
+});
+
+test('the physical bench refuses no strip length the card itself accepts', () => {
+  // These bounds were pinned to a literal 1024 after the hardware contract had
+  // already moved on, so a job the card runs happily could not be physically
+  // verified — Studio blocked the bench, not the card. The bound that actually
+  // protects the bench is the aggregate current limit, which is indifferent to
+  // how long a strip is.
+  const pixels = CARD_HARDWARE_CONTRACT.maxPixels;
+  const output = { id: 'outer', label: 'Outer', pin: 16, pixels, direction: 'forward', colorOrder: 'GRB' };
+  const frame = buildProductionDiagnosticFrame({ outputs: [output], outputId: 'outer' });
+  assert.equal(frame.length, pixels);
+  assert.equal(frame[0], '000020');
+  assert.equal(frame[pixels - 1], '200000');
+  assert.throws(
+    () => buildProductionDiagnosticFrame({ outputs: [{ ...output, pixels: pixels + 1 }], outputId: 'outer' }),
+    /bounded pixels/,
+  );
+
+  // A plus-or-minus-one correction on a long run is the same story: the ceiling
+  // is the card's, not a literal.
+  const long = 2_000;
+  const snapshot = {
+    config: {
+      led: { pixels: long, colorOrder: 'GRB', outputs: [{ id: 'one', name: 'One', pin: 16, pixels: long, direction: 'forward', segments: [{ id: 'long-run', count: long, direction: 'forward' }] }] },
+      zones: [],
+    },
+    boundaries: [{ id: 'long-run', outputId: 'one', outputLabel: 'One', start: 0, count: long, direction: 'forward', pin: 16, colorOrder: 'GRB' }],
+    testableIds: ['long-run'],
+  };
+  const grown = buildProductionBoundaryCandidate(snapshot, 'long-run', { kind: 'pixel-count', delta: 1 });
+  assert.equal(grown.config.led.outputs[0].segments[0].count, long + 1);
+  assert.equal(grown.config.led.pixels, long + 1);
 });
 
 test('reverse diagnostic swaps physical start and end markers without activating another output', () => {

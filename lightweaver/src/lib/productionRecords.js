@@ -1,3 +1,4 @@
+import { CARD_HARDWARE_CONTRACT } from './cardHardwareContract.js';
 import { MAX_PRODUCTION_PHYSICAL_BOUNDARIES } from './productionLimits.js';
 
 export const PRODUCTION_RECORDS_PRIMARY_KEY = 'lw_production_records_v1_primary';
@@ -67,7 +68,11 @@ export function validateProductionRecord(record) {
     if (typeof value.boundaryId !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(value.boundaryId) || boundaryIds.has(value.boundaryId)) return true;
     boundaryIds.add(value.boundaryId);
     return value.result !== 'correct'
-      || !Number.isSafeInteger(value.count) || value.count < 2 || value.count > 1024
+      // A pass record is a statement about a boundary the card actually ran, so
+      // its length ceiling is the card's, read from the hardware contract. A
+      // literal here would make previously written records unreadable the day
+      // the contract moves.
+      || !Number.isSafeInteger(value.count) || value.count < 2 || value.count > CARD_HARDWARE_CONTRACT.maxPixels
       || !Number.isSafeInteger(value.pin) || value.pin < 0 || value.pin > 48
       || !['forward', 'reverse'].includes(value.direction)
       || !COLOR_ORDERS.has(value.colorOrder)

@@ -17,7 +17,7 @@ const pipelineSource = path.join(firmwareDir, 'LightweaverColorPipeline.cpp');
 
 assert.match(
   mainSource,
-  /CRGB physicalLeds\[LW_MAX_PIXELS\]/,
+  /CRGB\* physicalLeds = nullptr;/,
   'firmware should keep a separate physical output buffer for live color-order mapping',
 );
 assert.match(

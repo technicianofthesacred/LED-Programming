@@ -11,7 +11,10 @@
 
 // Externs from main.cpp — needed for the pretend-info shape and the
 // raw-pixel render path the designer's live preview depends on.
-extern CRGB leds[];
+// Boot-allocated in main.cpp (see allocatePixelBuffers) — a POINTER, not an
+// array. The declaration must match or this translation unit reads the
+// pointer value itself as pixel data.
+extern CRGB* leds;
 extern uint16_t totalPixels;
 extern RuntimeConfig runtimeConfig;
 extern float manualBrightness;

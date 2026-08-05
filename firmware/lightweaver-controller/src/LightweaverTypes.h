@@ -11,17 +11,34 @@
 #include "LightweaverConnectivityPolicy.h"
 #include "LightweaverKaleidoscope.h"
 
+// Pure VALIDATION bound, not an allocation size. Every pixel-scaled buffer is
+// heap-allocated once at boot from the saved config's own totalPixels (see
+// allocatePixelBuffers() in main.cpp), so a large bound costs no RAM. 65535 is
+// the hard ceiling of `uint16_t totalPixels` / `OutputConfig.start`; going past
+// it is a firmware type change, not a contract edit.
 #ifndef LW_MAX_PIXELS
-#define LW_MAX_PIXELS 1024
+#define LW_MAX_PIXELS 65535
 #endif
 
 constexpr uint8_t LW_MAX_OUTPUTS = 4;
 constexpr uint8_t LW_MAX_OUTPUT_SEGMENTS = 32;
 constexpr uint8_t LW_MAX_LOOKS = 32;
 constexpr uint8_t LW_MAX_PATTERN_IDS = 32;
-constexpr uint8_t LW_MAX_ZONES = 10;
-constexpr uint8_t LW_MAX_RANGES_PER_ZONE = 4;
-constexpr uint16_t LW_MAX_KALEIDOSCOPE_OFFSETS = LW_MAX_PIXELS;
+constexpr uint8_t LW_MAX_ZONES = 12;
+constexpr uint8_t LW_MAX_RANGES_PER_ZONE = 6;
+// Deliberately DECOUPLED from LW_MAX_PIXELS and fixed at 1024. Three reasons,
+// all of which survive the buffers going dynamic:
+//   1. These two arrays live INSIDE RuntimeConfig (below), so they multiply per
+//      config copy — parse-into-a-temporary, known-good, candidate. Tracking
+//      LW_MAX_PIXELS would add ~256 KB per copy of permanently resident RAM.
+//   2. Offsets serialize per point into the config JSON (serializeKaleidoscope-
+//      Mappings, main.cpp), which is capped at LW_CARD_HARDWARE_CONFIG_CAPACITY_
+//      BYTES. 1024 offsets already exceed that budget on their own, so the
+//      constant can never be the binding limit — the byte budget is.
+//   3. Studio pins the same number in CARD_KALEIDOSCOPE_MAX_AGGREGATE_OFFSETS
+//      (lightweaver/src/lib/cardKaleidoscope.js). The two sides agree only while
+//      both stay 1024.
+constexpr uint16_t LW_MAX_KALEIDOSCOPE_OFFSETS = 1024;
 static_assert(LW_MAX_PIXELS == LW_CARD_HARDWARE_MAX_PIXELS,
               "pixel capacity must match the generated hardware contract");
 static_assert(LW_MAX_OUTPUTS == LW_CARD_HARDWARE_MAX_OUTPUTS,
@@ -58,7 +75,7 @@ constexpr uint32_t lightweaverLimitedMilliamps(uint16_t pixels, uint32_t maxMill
 
 static_assert(lightweaverLimitedMilliamps(LW_MAX_PIXELS, LW_DEFAULT_MAX_MILLIAMPS) ==
               LW_DEFAULT_MAX_MILLIAMPS,
-              "1024-pixel full-white estimate must be clamped to the default current cap");
+              "a full-capacity full-white estimate must be clamped to the default current cap");
 
 // One Art-Net universe → contiguous pixel range mapping. A single Madrix
 // patch typically streams several universes back-to-back; the card decodes
@@ -278,6 +295,13 @@ struct RuntimeConfig {
   // automatic power limiter. Production configs must explicitly provide a
   // value; legacy/non-production configs retain this conservative fallback.
   uint32_t maxMilliamps = LW_DEFAULT_MAX_MILLIAMPS;
+  // False when the loaded config carried no led.maxMilliamps and the value
+  // above is the fallback. The fallback is a SILENT throttle — FastLED scales
+  // brightness down to hold 1500 mA whatever the installer actually wired — so
+  // the card has to be able to say "this number is mine, not yours". Surfaced
+  // on /api/status and /api/firmware-info as maxMilliampsSource. It never
+  // blocks a config; warn, never block, on power.
+  bool maxMilliampsExplicit = false;
   OutputConfig outputs[LW_MAX_OUTPUTS];
   uint8_t outputCount = 0;
   LookConfig looks[LW_MAX_LOOKS];
