@@ -58,8 +58,16 @@ assert.match(policy, /LW_FACTORY_BEACON_PIXEL_LIMIT\s*=\s*8/);
 assert.match(policy, /LW_FACTORY_BEACON_BRIGHTNESS_LIMIT\s*=\s*24/,
   'the beacon must use the brightest approved bench-safe level');
 assert.match(policy, /LW_FACTORY_BEACON_MAX_MILLIAMPS\s*=\s*100/);
-assert.match(policy, /LW_FACTORY_BEACON_STEP_MS\s*=\s*3000/,
+// Halved from 3000 when the approved-GPIO list grew to 15. The sweep, not the
+// step, is what an owner actually experiences, and 15 x 3000 put it at 45s.
+assert.match(policy, /LW_FACTORY_BEACON_STEP_MS\s*=\s*1500/,
   'each output must stay selected long enough for a clear human observation');
+// The whole point of the beacon is being recognisable from across a bench, so the
+// sweep has to stay inside the patience of someone deciding whether a freshly
+// flashed card is alive. This bounds the WORST case: every approved GPIO
+// registered, none claimed by controls.
+assert.ok(15 * 1500 <= 25000,
+  'a full beacon sweep must stay well inside how long an owner will watch before calling a card dead');
 assert.match(policy, /factoryBeaconPulseOn[\s\S]*<\s*LW_FACTORY_BEACON_STEADY_ON_MS[\s\S]*>=\s*LW_FACTORY_BEACON_SECOND_ON_START_MS[\s\S]*<\s*LW_FACTORY_BEACON_SECOND_ON_END_MS/,
   'the visibility pattern must provide a long steady hold and a distinct second pulse');
 
