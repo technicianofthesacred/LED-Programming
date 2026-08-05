@@ -21,6 +21,7 @@ import {
   readCardCommissioning,
   readCardRestorationAttempt,
   returnCardProjectToSetupAfterLightCheck,
+  returnCardToSetupNetworkPath,
   resumeInstalledCardAfterInterruption,
   writeCardCommissioning,
   claimCardRestoration,
@@ -875,4 +876,123 @@ test('active claimed and mutating restores cannot be evicted at registry capacit
   const registry = JSON.parse(storage.getItem(CARD_COMMISSIONING_STORAGE_KEY));
   assert.equal(Object.keys(registry.flows).length, 12);
   for (const { ready } of active) assert.ok(registry.flows[ready.flowId]);
+});
+
+// --- post-flash network detection ------------------------------------------
+// Flashing over USB does not necessarily clear NVS. A card whose saved Wi-Fi
+// survives boots straight onto the LAN and never raises a setup hotspot, so
+// Studio may not assert "join Lightweaver-XXXX / open 192.168.4.1" any more.
+
+function freshInstall(flowId, now = 10) {
+  return beginCardCommissioning({
+    source: 'web-serial', operation: installed.operation, strategy: 'clean-recovery',
+    projectRecord, projectRevision: 7, flowId, now,
+  });
+}
+
+test('a card observed rejoining the LAN skips the setup-hotspot state entirely', () => {
+  const next = completeCardInstall(freshInstall('flow-postflash-station-1'), {
+    ...installed,
+    postFlashNetwork: { state: 'station', stationIp: '192.168.18.70' },
+  }, { now: 20 });
+  assert.equal(next.stage, 'set-up-card');
+  assert.equal(next.networkState, 'station-detected');
+  assert.equal(next.postFlashDetection, 'station');
+  assert.equal(next.stationHost, '192.168.18.70');
+});
+
+test('a card observed starting only its setup hotspot keeps the unchanged AP flow', () => {
+  const next = completeCardInstall(freshInstall('flow-postflash-blank-1'), {
+    ...installed,
+    postFlashNetwork: { state: 'setup-ap', stationIp: '' },
+  }, { now: 20 });
+  assert.equal(next.networkState, 'setup-required');
+  assert.equal(next.postFlashDetection, 'setup-ap');
+  assert.equal(next.stationHost, '');
+  assert.equal(confirmCardSetupNetworkJoined(next, { now: 30 }).networkState, 'setup-joined');
+});
+
+test('an inconclusive observation degrades to the AP flow and says so, instead of guessing', () => {
+  const next = completeCardInstall(freshInstall('flow-postflash-unknown-1'), {
+    ...installed,
+    postFlashNetwork: { state: 'inconclusive', stationIp: '' },
+  }, { now: 20 });
+  assert.equal(next.networkState, 'setup-required');
+  assert.equal(next.postFlashDetection, 'inconclusive');
+  assert.equal(next.stationHost, '');
+});
+
+test('a station claim without a usable LAN address degrades to inconclusive', () => {
+  const unusable = ['192.168.4.1', '0.0.0.0', '8.8.8.8', '', 'nonsense'];
+  for (const [index, stationIp] of unusable.entries()) {
+    const next = completeCardInstall(freshInstall(`flow-postflash-bad-${index}-1234567`), {
+      ...installed, postFlashNetwork: { state: 'station', stationIp },
+    }, { now: 20 });
+    assert.equal(next.networkState, 'setup-required', stationIp);
+    assert.equal(next.postFlashDetection, 'inconclusive', stationIp);
+    assert.equal(next.stationHost, '');
+  }
+});
+
+test('an install with no observation at all keeps the exact previous behaviour', () => {
+  const next = completeCardInstall(freshInstall('flow-postflash-absent-1'), installed, { now: 20 });
+  assert.equal(next.networkState, 'setup-required');
+  assert.equal(next.postFlashDetection, '');
+  assert.equal(next.stationHost, '');
+});
+
+test('the owner can overrule a station detection when they can see the setup hotspot', () => {
+  const detected = completeCardInstall(freshInstall('flow-postflash-overrule-1'), {
+    ...installed, postFlashNetwork: { state: 'station', stationIp: '10.0.0.42' },
+  }, { now: 20 });
+  const corrected = returnCardToSetupNetworkPath(detected, { now: 30 });
+  assert.equal(corrected.networkState, 'setup-required');
+  assert.equal(corrected.postFlashDetection, 'inconclusive');
+  assert.equal(corrected.stationHost, '');
+  assert.equal(confirmCardSetupNetworkJoined(corrected, { now: 40 }).networkState, 'setup-joined');
+  assert.throws(() => returnCardToSetupNetworkPath(corrected), /home-network address/i);
+});
+
+test('the station-detected state cannot exist without both the proof and the address', async () => {
+  const storage = memoryStorage();
+  const detected = completeCardInstall(freshInstall('flow-postflash-invariant-1'), {
+    ...installed, postFlashNetwork: { state: 'station', stationIp: '10.0.0.42' },
+  }, { now: 20 });
+  await assert.rejects(
+    writeCardCommissioning({ ...detected, stationHost: '' }, { storage, locks: null }),
+    /network detection/i,
+  );
+  await assert.rejects(
+    writeCardCommissioning({ ...detected, postFlashDetection: 'setup-ap' }, { storage, locks: null }),
+    /network detection/i,
+  );
+  await assert.rejects(
+    writeCardCommissioning({ ...detected, stationHost: '8.8.8.8' }, { storage, locks: null }),
+    /network address/i,
+  );
+  await assert.rejects(
+    writeCardCommissioning({ ...detected, postFlashDetection: 'made-up' }, { storage, locks: null }),
+    /network detection/i,
+  );
+});
+
+test('a station-detected flow survives a persist/reload round trip', async () => {
+  const storage = memoryStorage();
+  const detected = completeCardInstall(freshInstall('flow-postflash-persist-1'), {
+    ...installed, postFlashNetwork: { state: 'station', stationIp: '192.168.18.70' },
+  }, { now: 20 });
+  await writeCardCommissioning(detected, { storage, locks: null });
+  const reloaded = readCardCommissioning({ storage, sessionStorage: null, flowId: detected.flowId });
+  assert.equal(reloaded.networkState, 'station-detected');
+  assert.equal(reloaded.stationHost, '192.168.18.70');
+});
+
+test('a preserve-in-place install still reports preserved and never a station address', () => {
+  const next = completeCardInstall(beginCardCommissioning({
+    source: 'web-serial', operation: 'install-current-release', strategy: 'preserve-in-place',
+    compatibilityVerified: true, routineUpdate: true,
+    projectRecord, projectRevision: 7, flowId: 'flow-postflash-preserve-1', now: 10,
+  }), { ...installed, postFlashNetwork: { state: 'station', stationIp: '10.0.0.42' } }, { now: 20 });
+  assert.equal(next.networkState, 'preserved');
+  assert.equal(next.stationHost, '');
 });

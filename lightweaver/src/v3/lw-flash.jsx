@@ -31,6 +31,7 @@ import {
   readCardCommissioning,
   writeCardCommissioning,
 } from '../lib/cardCommissioningFlow.js';
+import { observePostFlashNetwork } from '../lib/cardPostFlashNetwork.js';
 import { openInChrome } from '../lib/openInChrome.js';
 
   const STEPS = [
@@ -493,7 +494,9 @@ import { openInChrome } from '../lib/openInChrome.js';
     }, []);
 
     useEffect(() => {
-      if (installState !== 'installing') return undefined;
+      // 'observing' still holds the card's USB port open to read its boot log,
+      // so it is as unsafe to navigate away from as the write itself.
+      if (installState !== 'installing' && installState !== 'observing') return undefined;
       const preventUnload = (event) => {
         event.preventDefault();
         event.returnValue = '';
@@ -579,6 +582,10 @@ import { openInChrome } from '../lib/openInChrome.js';
         });
         await writeCardCommissioning(started);
         setCommissioning(started);
+        // Keep the granted Web Serial port: flashFirmwareAndRelease closes the
+        // esptool transport, but the permission survives, so the same port can
+        // be reopened at 115200 to watch the card narrate its own boot.
+        const serialPort = transportRef.current?.device || null;
         await flashFirmwareAndRelease({
           loader: loaderRef.current,
           transport: transportRef.current,
@@ -592,11 +599,21 @@ import { openInChrome } from '../lib/openInChrome.js';
         transportRef.current = null;
         installingRef.current = false;
         setProgress(1);
+        // Flashing does not always clear NVS. A card whose saved Wi-Fi survives
+        // boots onto the LAN and never raises a setup hotspot, so Studio has to
+        // observe what actually happened instead of asserting AP mode. This
+        // never throws: an unusable port degrades to 'inconclusive'.
+        setInstallState('observing');
+        const observe = typeof window.__LW_OBSERVE_POST_FLASH_NETWORK_FOR_TEST__ === 'function'
+          ? window.__LW_OBSERVE_POST_FLASH_NETWORK_FOR_TEST__
+          : observePostFlashNetwork;
+        const postFlashNetwork = await observe({ port: serialPort });
         const completed = completeCardInstall(started, {
           operation: 'install-current-release',
           cardId: cardState.hardware.cardId,
           firmwareVersion: releaseState.release.manifest.firmwareVersion,
           buildId: releaseState.release.manifest.buildId,
+          postFlashNetwork,
         });
         await writeCardCommissioning(completed);
         setCommissioning(completed);
@@ -612,7 +629,7 @@ import { openInChrome } from '../lib/openInChrome.js';
 
     const hasResumableCommissioning = commissioning
       && (commissioning.stage === 'set-up-card' || commissioning.stage === 'check-lights');
-    if (installState === 'complete' || hasResumableCommissioning || (commissioning?.source === 'web-serial' && commissioning.stage === 'install-safely' && installState !== 'installing')) {
+    if (installState === 'complete' || hasResumableCommissioning || (commissioning?.source === 'web-serial' && commissioning.stage === 'install-safely' && installState !== 'installing' && installState !== 'observing')) {
       return (
         <div className={`install-flow${embedded ? ' embedded' : ''}`} aria-live="polite">
           <CardCommissioningPanel
@@ -630,7 +647,7 @@ import { openInChrome } from '../lib/openInChrome.js';
     const releaseReady = releaseState.state === 'ready';
     return (
       <div className={`install-flow${embedded ? ' embedded' : ''}`} aria-live="polite">
-        <CardCommissioningSteps stage={cardState.state === 'ready' || installState === 'installing' ? 'install-safely' : 'connect-card'} />
+        <CardCommissioningSteps stage={cardState.state === 'ready' || installState === 'installing' || installState === 'observing' ? 'install-safely' : 'connect-card'} />
         <div>
           <div className="eyebrow">Safe automatic installer</div>
           <InstallHeading>Install Lightweaver</InstallHeading>
@@ -651,7 +668,7 @@ import { openInChrome } from '../lib/openInChrome.js';
             <h2>1. Find your connected card</h2>
             <p>Studio will ask which USB device to use, then confirm it is the correct ESP32-S3 card with 16 MB of flash.</p>
           </div>
-          <button className="btn-lg" type="button" onClick={findCard} disabled={!releaseReady || cardState.state === 'finding' || installState === 'installing'}>
+          <button className="btn-lg" type="button" onClick={findCard} disabled={!releaseReady || cardState.state === 'finding' || installState === 'installing' || installState === 'observing'}>
             {cardState.state === 'finding' ? 'Checking card…' : cardState.state === 'ready' ? 'Change connected card' : 'Find connected card'}
           </button>
           {cardState.state === 'ready' && (
@@ -668,9 +685,19 @@ import { openInChrome } from '../lib/openInChrome.js';
               <input type="checkbox" checked={eraseConfirmed} onChange={(event) => setEraseConfirmed(event.target.checked)} />
               <span>I understand this will erase everything currently stored on this card.</span>
             </label>
-            <button className="btn-lg" type="button" onClick={install} disabled={!eraseConfirmed || installState === 'installing'}>
-              {installState === 'installing' ? `Installing… ${Math.round(progress * 100)}%` : 'Erase card and install Lightweaver'}
+            <button className="btn-lg" type="button" onClick={install} disabled={!eraseConfirmed || installState === 'installing' || installState === 'observing'}>
+              {installState === 'installing'
+                ? `Installing… ${Math.round(progress * 100)}%`
+                : installState === 'observing'
+                  ? 'Checking how the card restarted…'
+                  : 'Erase card and install Lightweaver'}
             </button>
+          </div>
+        )}
+
+        {installState === 'observing' && (
+          <div className="install-release ready" role="status">
+            Installed. Watching this card restart over USB so Studio knows whether it starts its setup hotspot or rejoins a Wi-Fi network it already had. Keep the USB cable connected.
           </div>
         )}
 

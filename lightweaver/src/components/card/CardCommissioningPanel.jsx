@@ -28,6 +28,7 @@ import {
   sendCardBridgeRequest,
 } from '../../lib/cardBridge.js';
 import { acceptWifiHandoff } from '../../lib/cardWifiHandoff.js';
+import { setupNetworkLabelForCardId, setupNetworkSsidForCardId } from '../../lib/cardIdentity.js';
 import { canPushDirectlyToCard, discoverCardStatus } from '../../lib/cardConnection.js';
 import { compileWiring } from '../../lib/wiringCompiler.js';
 import { createWiringChaseSession } from '../../lib/wiringChase.js';
@@ -57,9 +58,21 @@ import {
   verifyCardRestorationMutation,
   verifyCardLightCheckMutation,
   resumeInstalledCardAfterInterruption,
+  returnCardToSetupNetworkPath,
   stageCardProjectForPhysicalCheck,
   writeCardCommissioning,
 } from '../../lib/cardCommissioningFlow.js';
+
+// The card's soft-AP address. Only reachable while this device is joined to the
+// card's own setup hotspot.
+const SETUP_CARD_HOST = '192.168.4.1';
+// How long the opened setup tab gets to prove the card actually answered before
+// Studio names the likely causes. Long enough for a phone to finish associating
+// with the hotspot and for the bridge handshake to land, short enough that the
+// owner is not left staring at a spinning tab.
+const SETUP_CARD_REACH_TIMEOUT_MS = 20_000;
+const SETUP_CARD_REACH_INTERVAL_MS = 2500;
+const SETUP_CARD_REACH_REQUEST_TIMEOUT_MS = 3000;
 
 const STAGE_LABELS = {
   'connect-card': 'Connect card',
@@ -221,6 +234,7 @@ export function CardCommissioningPanel({
   const [lightCheckState, setLightCheckState] = useState('idle');
   const [lightCheckNotice, setLightCheckNotice] = useState('');
   const [bridgeHandoffStatus, setBridgeHandoffStatus] = useState(null);
+  const [setupReach, setSetupReach] = useState({ state: 'idle' });
   const markerSessionRef = useRef(null);
   const markerTimeoutRef = useRef(null);
   const acknowledgementPersistenceRef = useRef('');
@@ -282,6 +296,60 @@ export function CardCommissioningPanel({
       previous?.flowId && previous.flowId !== flow?.flowId ? null : previous
     ));
   }, [flow?.flowId]);
+
+  // Opening the setup tab used to be fire-and-forget: the only failure Studio
+  // could report was a blocked popup. If the tab opened but the card never
+  // answered — wrong network joined, hotspot already gone — the owner just
+  // watched an untitled tab spin while Studio said nothing. This bounded watch
+  // proves reachability over whichever channel this page is actually allowed to
+  // use, then names the likely causes. It never touches the opened tab.
+  useEffect(() => {
+    if (setupReach.state !== 'checking') return undefined;
+    if (setupReach.flowId !== flow?.flowId) {
+      setSetupReach({ state: 'idle' });
+      return undefined;
+    }
+    let active = true;
+    let timer = null;
+    const budget = Number(window.__LW_SETUP_REACH_TIMEOUT_MS_FOR_TEST__) > 0
+      ? Number(window.__LW_SETUP_REACH_TIMEOUT_MS_FOR_TEST__)
+      : SETUP_CARD_REACH_TIMEOUT_MS;
+    const deadline = setupReach.startedAt + budget;
+    const watchedHost = setupReach.host || SETUP_CARD_HOST;
+    const probe = async () => {
+      if (!active) return;
+      let reached = false;
+      try {
+        // readCardStatusEnvelope picks the only channel this page is allowed to
+        // use: a direct GET on http/file pages, and the opened bridge tab's
+        // postMessage handshake on HTTPS, where fetching http://192.168.4.1
+        // would be blocked as mixed content.
+        const status = await readCardStatusEnvelope({
+          host: watchedHost,
+          timeoutMs: Math.min(SETUP_CARD_REACH_REQUEST_TIMEOUT_MS, budget),
+        });
+        reached = Boolean(status);
+      } catch { reached = false; }
+      if (!active) return;
+      if (reached) { setSetupReach({ state: 'reached' }); return; }
+      if (Date.now() >= deadline) { setSetupReach({ state: 'unreachable' }); return; }
+      timer = window.setTimeout(probe, Math.min(SETUP_CARD_REACH_INTERVAL_MS, budget));
+    };
+    void probe();
+    return () => { active = false; if (timer != null) window.clearTimeout(timer); };
+  }, [flow?.flowId, setupReach]);
+
+  // Any independent proof the card answered settles the watch, so the parallel
+  // handoff poll or a card that has already moved to the gallery network never
+  // leaves a stale "could not reach" alert on screen.
+  useEffect(() => {
+    if (setupReach.state === 'idle' || setupReach.state === 'reached') return;
+    if (bridgeHandoffStatus?.status
+      || flow?.cardAcknowledgedAt
+      || ['found', 'return-to-gallery'].includes(detection.state)) {
+      setSetupReach({ state: 'reached' });
+    }
+  }, [bridgeHandoffStatus, detection.state, flow?.cardAcknowledgedAt, setupReach.state]);
 
   useEffect(() => {
     if (result?.status !== 'awaiting-card-acknowledgement') return;
@@ -678,12 +746,52 @@ export function CardCommissioningPanel({
     }
   };
 
-  const reconnectHost = link?.handoffCorrelation?.host || link?.host || 'lightweaver.local';
+  // The firmware builds its hotspot name from the same eFuse MAC as the card id
+  // Studio recorded at install, so this is the card's REAL network name, not a
+  // placeholder. When the id does not have the firmware's shape (older saved
+  // flow, fixture data) the copy describes the network instead of naming one.
+  const setupSsid = setupNetworkSsidForCardId(flow.expectedCard?.id);
+  const setupNetworkLabel = setupNetworkLabelForCardId(flow.expectedCard?.id);
+
+  // What the USB serial port said the card did after the flash. `station-detected`
+  // means the card's saved Wi-Fi survived the install: it went straight onto the
+  // LAN and never raised a setup hotspot, so the 192.168.4.1 instructions would
+  // point at an address that can never answer.
+  const stationDetected = flow.stage === 'set-up-card'
+    && flow.networkState === 'station-detected'
+    && Boolean(flow.stationHost);
+  // Detection was attempted and could not settle the question. Studio shows both
+  // routes rather than guessing which one the owner is looking at.
+  const postFlashInconclusive = flow.stage === 'set-up-card'
+    && flow.postFlashDetection === 'inconclusive'
+    && ['setup-required', 'setup-joined'].includes(flow.networkState);
+
+  const reconnectHost = link?.handoffCorrelation?.host
+    || (stationDetected && !flow.cardAcknowledgedAt ? flow.stationHost : '')
+    || link?.host || 'lightweaver.local';
   const reconnectInstalledCard = () => onReconnect?.(reconnectHost);
-  const openSetupNetworkCard = () => {
+  const openCardPageAt = host => {
     setFailure('');
-    const opened = openSetupCard('192.168.4.1');
-    if (!opened) setFailure('The browser blocked the tracked card page. Allow popups, then try opening Wi-Fi setup again.');
+    const opened = openSetupCard(host);
+    if (!opened) {
+      setSetupReach({ state: 'idle' });
+      setFailure('The browser blocked the tracked card page. Allow popups, then try opening the card page again.');
+      return;
+    }
+    setSetupReach({ state: 'checking', flowId: flow.flowId, startedAt: Date.now(), host });
+  };
+  const openSetupNetworkCard = () => openCardPageAt(SETUP_CARD_HOST);
+  const openStationCard = () => openCardPageAt(flow.stationHost);
+  const useSetupNetworkPathInstead = async () => {
+    setFailure('');
+    setSetupReach({ state: 'idle' });
+    try {
+      const next = returnCardToSetupNetworkPath(flow);
+      await writeCardCommissioning(next);
+      setFlow(next);
+    } catch (error) {
+      setFailure(error?.message || 'Studio could not switch back to the setup-hotspot instructions.');
+    }
   };
   const retryStationRetarget = () => {
     const correlation = detection.correlation || getCardBridgeState().handoffCorrelation;
@@ -912,17 +1020,43 @@ export function CardCommissioningPanel({
               <p aria-live="polite"><strong>Card is back on your network — continuing…</strong></p>
             </div>
           )}
+          {!flow.cardAcknowledgedAt && !['found', 'return-to-gallery'].includes(detection.state) && stationDetected && (
+            <div className="card-commissioning-network" data-post-flash="station">
+              <p><strong>No hotspot to join — the card kept its Wi-Fi.</strong> Studio watched this card boot over USB and saw it join your network at <strong>{flow.stationHost}</strong>. It never started a {setupNetworkLabel}, so there is nothing to join and the 192.168.4.1 setup address will never answer.</p>
+              <button type="button" className="btn primary" onClick={openStationCard}>Open the card at {flow.stationHost}</button>
+              {setupReach.state === 'checking' && <p role="status">Checking whether the card answers at {flow.stationHost}…</p>}
+              {setupReach.state === 'unreachable' && (
+                <p className="card-connection-failure" role="alert">
+                  {`The card page opened, but nothing answered at ${flow.stationHost}. Its address may have changed since the install. Check that this device is on the same Wi-Fi, then use “Reconnect installed card” below.`}
+                </p>
+              )}
+              <p role="status">{detection.state === 'searching' ? `Verifying ${flow.expectedCard.id} on your network…` : 'Studio continues automatically once this exact card answers.'}</p>
+              <button type="button" className="btn" onClick={useSetupNetworkPathInstead}>{setupSsid ? `No — the card is showing ${setupSsid}` : 'No — the card is showing its setup hotspot'}</button>
+            </div>
+          )}
+          {!flow.cardAcknowledgedAt && !['found', 'return-to-gallery'].includes(detection.state) && postFlashInconclusive && (
+            <div className="card-commissioning-network" data-post-flash="inconclusive">
+              <p role="status"><strong>Studio could not confirm how this card came back up.</strong> If the install kept the Wi-Fi it was already using, the card is on your network right now and never started {setupNetworkLabel} — the setup address would spin forever. Follow whichever of these you can actually see.</p>
+              <button type="button" className="btn" onClick={reconnectInstalledCard} disabled={reconnecting}>{reconnecting ? 'Reconnecting…' : 'The card is already on my Wi-Fi'}</button>
+            </div>
+          )}
           {!flow.cardAcknowledgedAt && !['found', 'return-to-gallery'].includes(detection.state) && flow.networkState === 'setup-required' && (
             <div className="card-commissioning-network">
-              <p>The clean installation reset Wi-Fi. First open this device’s Wi-Fi settings and join <strong>Lightweaver-XXXX</strong>. The setup address only works while that network is joined.</p>
-              <button type="button" className="btn primary" onClick={confirmSetupNetwork}>I’ve joined Lightweaver-XXXX</button>
+              <p>The clean installation reset Wi-Fi. First open this device’s Wi-Fi settings and join <strong>{setupNetworkLabel}</strong>. The setup address only works while that network is joined.</p>
+              <button type="button" className="btn primary" onClick={confirmSetupNetwork}>{setupSsid ? `I’ve joined ${setupSsid}` : 'I’ve joined the setup network'}</button>
               {detection.state === 'searching' && <p role="status">Looking for {flow.expectedCard.id} on your network…</p>}
             </div>
           )}
           {!flow.cardAcknowledgedAt && !['found', 'return-to-gallery'].includes(detection.state) && flow.networkState === 'setup-joined' && (
             <div className="card-commissioning-network">
-              <p><strong>Lightweaver-XXXX joined.</strong> If the card is still on its setup network, open it at 192.168.4.1, choose its permanent Wi-Fi, and return here. Once it rejoins your network Studio continues automatically. This progress stays saved while networks change.</p>
+              <p><strong>{setupSsid ? `${setupSsid} joined.` : 'Setup network joined.'}</strong> If the card is still on its setup network, open it at 192.168.4.1, choose its permanent Wi-Fi, and return here. Once it rejoins your network Studio continues automatically. This progress stays saved while networks change.</p>
               <button type="button" className="btn" onClick={openSetupNetworkCard}>Open 192.168.4.1 Wi-Fi setup</button>
+              {setupReach.state === 'checking' && <p role="status">Checking whether the card answers at 192.168.4.1…</p>}
+              {setupReach.state === 'unreachable' && (
+                <p className="card-connection-failure" role="alert">
+                  {`The setup page opened, but the card never answered at 192.168.4.1, so that tab will keep loading forever. Usually this device is not on ${setupNetworkLabel}, it silently switched back to a different network, or the card already rejoined your home Wi-Fi and its setup hotspot is gone. Check this device’s Wi-Fi and open Wi-Fi setup again — or if the card is already back on your network, use “Reconnect installed card” below.`}
+                </p>
+              )}
               <p role="status">{detection.state === 'searching' ? `Waiting for the card to rejoin your network — looking for ${flow.expectedCard.id}…` : 'Waiting for the card to rejoin your network…'}</p>
             </div>
           )}

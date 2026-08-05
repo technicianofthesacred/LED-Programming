@@ -379,7 +379,6 @@ String studioBridgeScript() {
 void handleAdvancedRoot();
 
 void handleRoot() {
-  sendCors();
   RuntimeConfig& cfg = *runtimeConfigPtr;
   bool stationActive = cfg.activeTransport == WIFI_TRANSPORT_STATION;
   bool wifiConfigured = cfg.wifi.ssid.length() > 0;
@@ -389,10 +388,20 @@ void handleRoot() {
   // Pattern controls are truthful only for a valid known-good project. The
   // advanced page distinguishes a missing WiFi connection from a blank card
   // that is already reachable on gallery WiFi.
+  //
+  // This delegation MUST stay above sendCors(). WebServer::sendHeader appends
+  // to _responseHeaders and only clears it inside _prepareHeader on send(), so
+  // emitting CORS here and again in handleAdvancedRoot() would put two
+  // Access-Control-Allow-Origin values on one setup-page response and every
+  // Studio fetch() against "/" would fail with an opaque CORS error.
+  // tests/private-network-cors.mjs enforces the single-emit rule for every
+  // handler that delegates.
   if (!projectReady || needsWifiSetup) {
     handleAdvancedRoot();
     return;
   }
+
+  sendCors();
 
   String page;
   page.reserve(8192);

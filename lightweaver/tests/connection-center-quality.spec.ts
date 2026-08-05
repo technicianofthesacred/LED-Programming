@@ -375,7 +375,7 @@ test('Bridge return does not call a successful POST independent restoration proo
   }
   await page.waitForTimeout(4100);
   await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
-  await page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true }).click();
+  await page.getByRole('button', { name: 'I’ve joined Lightweaver-FEB0', exact: true }).click();
 
   await dispatchCardLinkEvent(page, {
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
@@ -494,7 +494,7 @@ test('a staged GPIO restoration stops at the Check lights handoff without legacy
   await page.getByRole('button', { name: 'Blank or not responding' }).click();
   await page.getByRole('button', { name: 'Open Lightweaver Bridge' }).click();
   await deliverBridgeResult(page);
-  await page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true }).click();
+  await page.getByRole('button', { name: 'I’ve joined Lightweaver-FEB0', exact: true }).click();
   await dispatchCardLinkEvent(page, {
     type: 'card-verified', via: 'direct', host: 'lightweaver.local',
     card: { id: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40) },
@@ -626,7 +626,8 @@ test('the observed eight-pixel double flash bypasses stale LAN addresses for cus
 
   const action = actionRegion(page);
   await expect(action).toContainText('Join the Lightweaver setup network');
-  await expect(action).toContainText('Lightweaver-XXXX');
+  await expect(action).not.toContainText('Lightweaver-XXXX');
+  await expect(action).toContainText('name starts with');
   expect(await page.evaluate(() => (window as any).__openedWindows)).toHaveLength(0);
 
   await page.getByRole('button', { name: 'Continue' }).click();
@@ -726,7 +727,8 @@ test('working setup card restores AP steps and continues through 192.168.4.1', a
   await page.getByRole('button', { name: 'My card already lights up' }).click();
 
   await expect(actionRegion(page)).toHaveAttribute('data-action-id', 'recoverable-failure');
-  await expect(actionRegion(page)).toContainText('Lightweaver-XXXX');
+  await expect(actionRegion(page)).not.toContainText('Lightweaver-XXXX');
+  await expect(actionRegion(page)).toContainText('name starts with');
   await expect.poll(() => page.evaluate(() => (window as any).__openedUrls.length)).toBe(0);
   await page.getByRole('button', { name: 'Continue' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__openedUrls[0] || '')).toContain('192.168.4.1');

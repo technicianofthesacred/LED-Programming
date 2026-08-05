@@ -1,4 +1,5 @@
 import { classifyCardReadiness } from './cardReadiness.js';
+import { setupNetworkLabelForCardId } from './cardIdentity.js';
 
 export const CARD_CONNECTION_ACTION_IDS = Object.freeze([
   'ready-browser-usb',
@@ -275,7 +276,10 @@ export function nextCardConnectionAction(input = {}) {
     return action('recoverable-failure', {
       route: 'setup-network',
       title: 'Join the Lightweaver setup network',
-      explanation: 'Join Lightweaver-XXXX to finish setting up this card, then return to Studio.',
+      // No card identity is known on the factory-beacon path, so the exact
+      // hotspot suffix cannot be derived. Describe the network instead of
+      // naming one that does not exist.
+      explanation: `Join ${setupNetworkLabelForCardId(input.expectedCard?.id || input.rememberedCard?.id || '')} to finish setting up this card, then return to Studio.`,
       primaryLabel: 'Continue',
     });
   }

@@ -144,6 +144,36 @@ function maximumMappedPixel(value) {
   ), 0);
 }
 
+// Setup-hotspot name. The firmware derives both identities from the SAME eFuse
+// MAC, so the exact SSID is a pure function of the card id Studio already holds
+// — no extra firmware field is required:
+//
+//   apSsid()        (LightweaverWeb.cpp)  "Lightweaver-" + %04X of (mac & 0xffff)
+//   runtimeCardId() (main.cpp)            "lw-"          + %012llx of (mac & 0xffffffffffff)
+//
+// The low 16 bits are the last four hex characters of the 12-digit card id, so
+// uppercasing that suffix reproduces the SSID byte for byte. Only derive it
+// from a card id that actually has the firmware's shape; anything else (a
+// remembered nickname, a test fixture, a truncated id) returns '' so callers
+// fall back to honest copy instead of naming a network that does not exist.
+export const SETUP_NETWORK_SSID_PREFIX = 'Lightweaver-';
+const FIRMWARE_CARD_ID_PATTERN = /^lw-([0-9a-f]{12})$/i;
+
+export function setupNetworkSsidForCardId(cardId = '') {
+  const source = typeof cardId === 'string' ? cardId : cleanText(cardId?.id || cardId?.cardId, 64);
+  const match = FIRMWARE_CARD_ID_PATTERN.exec(cleanText(source, 64));
+  if (!match) return '';
+  return `${SETUP_NETWORK_SSID_PREFIX}${match[1].slice(-4).toUpperCase()}`;
+}
+
+// Copy helper: the exact SSID when Studio can prove it, otherwise a truthful
+// description of what the owner is looking for. Never invents a suffix.
+export const GENERIC_SETUP_NETWORK_LABEL = `the card’s own Wi-Fi network (its name starts with “${SETUP_NETWORK_SSID_PREFIX}”)`;
+
+export function setupNetworkLabelForCardId(cardId = '') {
+  return setupNetworkSsidForCardId(cardId) || GENERIC_SETUP_NETWORK_LABEL;
+}
+
 export function compareCardIdentity(expected = {}, actual = {}) {
   const expectedId = cleanText(expected?.id || expected?.cardId, 64);
   const actualId = cleanText(actual?.id || actual?.cardId, 64);
