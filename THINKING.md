@@ -169,3 +169,50 @@ thresholds — read that entry too before proposing).
 (clear site data is the only reliable path), which twice made Adrian believe
 deployed work wasn't deployed. The build-stamp TODO exists so version
 questions become observable instead of argued.
+
+---
+
+## 2026-08-05 — Build numbers replace commit hashes; two things that look like bugs but aren't
+
+**Topic:** Adrian: "The number where it says studio current is unrelatable. How
+about you actually have a number and I can compare each build each push." The
+Studio footer showed `Studio current fe1948d0aea2`. Answering "am I on the
+latest?" from a phone meant comparing two opaque hashes — the concrete cost
+named in the 2026-07-26 entry. Both Studio and firmware now publish a
+first-parent Git depth build number (411 → 412 → 413, one per merge to main).
+
+**Two deliberate choices that a future reader will mistake for defects:**
+
+**1. `buildNumber` is optional when READING a firmware manifest, required when
+BUILDING one.** `MANIFEST_KEYS` does not contain it; `OPTIONAL_MANIFEST_KEYS`
+does. This is not laziness. The signing key lives only in the protected CI
+secret, so the manifest committed at the time of this change could not be
+re-signed locally. Making the field required would have made the already-signed
+release fail validation the moment the change merged — and the signer only runs
+*after* a green Tests gate, so Tests would have gone red and blocked the very
+job that fixes it. Deadlock. The builder emits it unconditionally and
+`assertFirmwareManifestBuildNumber` refuses to produce a manifest without one,
+so every release from here forward has it. Future Claude: the TODO item
+"Require `buildNumber` in the firmware manifest" is the unlock — do it only
+after confirming the live signed manifest actually carries the field.
+
+**2. The Studio number and the firmware number can differ by one. That is
+correct.** On a firmware-sensitive merge, the signer compiles the binary from
+revision N, then commits the signed artifacts *on top* of N and deploys the
+site from N+1. Both numbers honestly describe the source each artifact was
+built from. Do not "fix" this by forcing them equal — that would mean one of
+them lying about its provenance. The comparison that actually matters to the
+owner is card-number vs signed-manifest-number, and those two are built in the
+same job from the same revision, so they always agree exactly.
+
+**Rejected: deriving the number from a date (`2026.08.05-1`).** Readable, but
+it breaks determinism — the release marker has to be byte-identical across
+rebuilds of the same revision or the live freshness proof (which SHA-256s the
+marker against the deployed build graph) fails. First-parent depth is a pure
+function of the revision. Commit-count without `--first-parent` was also
+rejected: merging a 10-commit PR would jump the number by 11 instead of 1.
+
+**Also pinned:** CI checkouts that build or test a numbered artifact now use
+`fetch-depth: 0`. A shallow clone makes `git rev-list --count` return 1, which
+would have silently published "build 1" — a wrong number is worse than no
+number, because it reads as authoritative.
