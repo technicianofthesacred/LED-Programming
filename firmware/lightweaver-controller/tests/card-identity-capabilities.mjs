@@ -9,6 +9,7 @@ const storage = fs.readFileSync(path.join(root, 'src/LightweaverStorage.cpp'), '
 const runtimeApi = fs.readFileSync(path.join(root, 'src/LightweaverRuntimeApi.h'), 'utf8');
 const firmwareInfo = main.match(/String runtimeFirmwareInfo\(\)\s*\{[\s\S]*?\n\}/)?.[0] || '';
 const runtimeStatus = storage.match(/String runtimeStatusJson\([^)]*\)\s*\{[\s\S]*?\n\}/)?.[0] || '';
+const injector = fs.readFileSync(path.join(root, 'scripts/inject-build-identity.py'), 'utf8');
 
 for (const flag of [
   'LW_FIRMWARE_VERSION',
@@ -22,6 +23,15 @@ assert.match(
   /extra_scripts\s*=\s*[\s\S]*pre:scripts\/inject-build-identity\.py/,
   'LW_BUILD_ID must be injected from the exact release source revision',
 );
+// The card must be able to answer "which build am I on?" with a comparable
+// number, not only a 40-character hash.
+assert.match(injector, /LW_BUILD_NUMBER/, 'the build injector must define LW_BUILD_NUMBER');
+assert.match(injector, /raise ValueError\("LW_BUILD_NUMBER must be injected alongside a release LW_BUILD_ID"\)/,
+  'a release build must never ship the 0 bench build number');
+for (const source of [main, storage]) {
+  assert.match(source, /#ifndef LW_BUILD_NUMBER\n#define LW_BUILD_NUMBER 0\n#endif/,
+    'unofficial bench builds must report build number 0 rather than fail to compile');
+}
 
 assert.match(main, /ESP\.getEfuseMac\(\)/, 'card identity must derive from the ESP32-S3 eFuse chip id');
 assert.match(main, /lw-%012llx/, 'card identity must be a bounded lw- plus fixed-width hex id');
@@ -31,7 +41,7 @@ assert.match(runtimeApi, /bool\s+runtimeCanSelectPatternByIdZ\(/, 'firmware must
 
 for (const [source, payload] of [[firmwareInfo, '/api/firmware-info'], [runtimeStatus, '/api/status']]) {
   for (const field of [
-    'cardId', 'firmwareVersion', 'buildId', 'configSchemaVersion',
+    'cardId', 'firmwareVersion', 'buildId', 'buildNumber', 'configSchemaVersion',
     'capabilitiesVersion', 'outputs', 'limits', 'runtimeSource',
     'resetReason', 'wiringProbation',
   ]) {

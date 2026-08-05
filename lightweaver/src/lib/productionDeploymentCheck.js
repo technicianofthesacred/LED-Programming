@@ -170,11 +170,13 @@ export async function verifyStudioRelease(fetchImpl, releaseUrl, expectedInput) 
     throw new Error(`Production Studio release marker must use Cache-Control: no-store at\n  ${parsedReleaseUrl.href}`);
   }
   const actual = parseStudioRelease(await response.text());
-  if (actual.sourceRevision !== expected.sourceRevision || actual.buildId !== expected.buildId) {
+  if (actual.sourceRevision !== expected.sourceRevision
+    || actual.buildId !== expected.buildId
+    || actual.buildNumber !== expected.buildNumber) {
     throw new Error(
       `Production Studio release marker does not match this checkout at\n  ${parsedReleaseUrl.href}\n` +
-      `  expected ${expected.sourceRevision} (${expected.buildId})\n` +
-      `  actual   ${actual.sourceRevision} (${actual.buildId})`,
+      `  expected build ${expected.buildNumber} — ${expected.sourceRevision} (${expected.buildId})\n` +
+      `  actual   build ${actual.buildNumber} — ${actual.sourceRevision} (${actual.buildId})`,
     );
   }
   return actual;
@@ -207,6 +209,7 @@ export async function assertReleaseProvenance(response, manifest, url) {
   const expected = {
     sourceRevision: manifest?.provenance?.sourceRevision,
     buildId: manifest?.buildId,
+    buildNumber: manifest?.buildNumber,
     firmwareVersion: manifest?.firmwareVersion,
     target: manifest?.target,
     image: manifest?.image,
@@ -215,6 +218,7 @@ export async function assertReleaseProvenance(response, manifest, url) {
   const actual = {
     sourceRevision: provenance?.sourceRevision,
     buildId: provenance?.buildId,
+    buildNumber: provenance?.buildNumber,
     firmwareVersion: provenance?.firmwareVersion,
     target: provenance?.target,
     image: provenance?.image,

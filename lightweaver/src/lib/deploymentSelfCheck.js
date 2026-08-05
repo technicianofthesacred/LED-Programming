@@ -54,10 +54,14 @@ export async function runDeploymentSelfCheck({
     summary = {
       firmwareVersion: manifest.firmwareVersion || 'unknown',
       buildId: manifest.buildId || 'unknown',
+      buildNumber: Number.isSafeInteger(manifest.buildNumber) && manifest.buildNumber > 0 ? manifest.buildNumber : 0,
       sourceRevision: manifest.provenance?.sourceRevision || 'unknown',
       jobCount: releaseSet.jobIndex?.jobs?.length ?? 0,
     };
-    results.push({ id: 'release-set', ok: true, detail: `v${summary.firmwareVersion} · build ${String(summary.buildId).slice(0, 12)} · ${summary.jobCount} signed job${summary.jobCount === 1 ? '' : 's'}` });
+    const buildLabel = summary.buildNumber > 0
+      ? `Build ${summary.buildNumber}`
+      : `build ${String(summary.buildId).slice(0, 12)}`;
+    results.push({ id: 'release-set', ok: true, detail: `v${summary.firmwareVersion} · ${buildLabel} · ${summary.jobCount} signed job${summary.jobCount === 1 ? '' : 's'}` });
   } catch (error) {
     results.push({ id: 'release-set', ok: false, detail: failure(error) });
   }

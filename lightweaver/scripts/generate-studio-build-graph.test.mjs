@@ -18,7 +18,7 @@ test('generator writes deterministic hashes for index and every Vite JS/CSS asse
   await writeFile(join(root, 'assets', 'studio.css'), 'body{color:#fff}');
   await writeFile(join(root, 'assets', 'ignored.png'), 'not part of Studio code graph');
   await writeFile(join(root, 'assets', 'studio.js.map'), 'not deployed integrity surface');
-  await writeFile(join(root, 'studio-release.json'), '{"schemaVersion":1,"sourceRevision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","buildId":"aaaaaaaaaaaa"}\n');
+  await writeFile(join(root, 'studio-release.json'), '{"schemaVersion":1,"sourceRevision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","buildId":"aaaaaaaaaaaa","buildNumber":1}\n');
 
   const first = await generateStudioBuildGraph(root);
   const firstBytes = await readFile(join(root, 'studio-build-graph.json'));
@@ -48,7 +48,7 @@ test('generator refuses an incomplete staged Studio', async t => {
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, 'assets'), { recursive: true });
   await writeFile(join(root, 'index.html'), '<div id="root"></div>');
-  await writeFile(join(root, 'studio-release.json'), '{"schemaVersion":1,"sourceRevision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","buildId":"aaaaaaaaaaaa"}\n');
+  await writeFile(join(root, 'studio-release.json'), '{"schemaVersion":1,"sourceRevision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","buildId":"aaaaaaaaaaaa","buildNumber":1}\n');
   await assert.rejects(generateStudioBuildGraph(root), /at least one JavaScript asset/);
 });
 

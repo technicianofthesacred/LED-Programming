@@ -255,7 +255,7 @@ if (nativeAuthReady) {
 console.log(
   `check-prod-freshness OK — production serves the signed committed factory binary\n  sha256 ${localHash}  (${local.length} bytes)\n  ${new URL(release.manifest.image.url, productionOrigin)}\n  legacy alias: ${legacyAliasUrl}`,
   `\n  Studio build graph: ${studioBuildFileCount} verified files\n  ${studioBuildGraphUrl}`,
-  `\n  Studio release: ${liveStudioRelease.sourceRevision} (${liveStudioRelease.buildId})\n  ${studioReleaseUrl}`,
+  `\n  Studio release: build ${liveStudioRelease.buildNumber} — ${liveStudioRelease.sourceRevision} (${liveStudioRelease.buildId})\n  ${studioReleaseUrl}`,
   `\n  Production Setup: ${productionSetupUrl}\n  verified production jobs: ${productionJobCount}\n  job index: ${productionJobIndexUrl}`,
   `\n  Private library: unauthenticated HTTP ${libraryResponse.status}, Cache-Control ${libraryCacheControl}\n  ${librarySessionUrl}`,
   nativeAuthReady

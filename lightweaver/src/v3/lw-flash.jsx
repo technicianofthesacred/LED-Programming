@@ -16,7 +16,7 @@ import {
   validateProductionInstallRelease,
   replaceInstallConnection,
 } from '../lib/flashPlan.js';
-import { loadProductionFirmwareRelease } from '../lib/firmwareRelease.js';
+import { formatFirmwareBuildLabel, loadProductionFirmwareRelease } from '../lib/firmwareRelease.js';
 import { SECURE_INSTALLER_URL, detectPlatformCapabilities } from '../lib/platformCapabilities.js';
 import { nextCardConnectionAction } from '../lib/cardConnectionFlow.js';
 import { createBridgeResultChannel, launchBridgeOperation, resumeBridgeReturnCode } from '../lib/bridgeLaunch.js';
@@ -639,7 +639,7 @@ import { openInChrome } from '../lib/openInChrome.js';
 
         <div className={`install-release ${releaseState.state}`} role="status">
           {releaseState.state === 'loading' && 'Verifying the official Lightweaver release…'}
-          {releaseState.state === 'ready' && `Official Lightweaver ${releaseState.release.manifest.firmwareVersion} verified and ready.`}
+          {releaseState.state === 'ready' && `Official Lightweaver ${releaseState.release.manifest.firmwareVersion} · ${formatFirmwareBuildLabel(releaseState.release.manifest)} verified and ready.`}
           {releaseState.state === 'error' && `Official firmware could not be verified. Nothing can be installed. ${releaseState.error}`}
         </div>
         {releaseState.state === 'error' && (

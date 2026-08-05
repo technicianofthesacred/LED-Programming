@@ -491,6 +491,9 @@ if (process.argv.includes('--artifact')) {
   const stagedGraph = parseStudioBuildGraph(readFileSync(stagedGraphPath, 'utf8'));
   const stagedRelease = parseStudioRelease(readFileSync(stagedReleasePath, 'utf8'));
   assert.equal(stagedRelease.buildId, stagedRelease.sourceRevision.slice(0, 12));
+  // The human-facing build number must be published alongside the revision, or
+  // the footer beacon has nothing comparable to show.
+  assert.ok(Number.isSafeInteger(stagedRelease.buildNumber) && stagedRelease.buildNumber >= 1);
   const stagedCodePaths = readdirSync(resolve(stagedRoot, 'assets'), { recursive: true })
     .map(path => `assets/${String(path).split(sep).join('/')}`)
     .filter(path => /\.(?:js|css)$/.test(path))
