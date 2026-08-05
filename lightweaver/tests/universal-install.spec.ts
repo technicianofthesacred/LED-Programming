@@ -102,7 +102,7 @@ test('a blocked card-page popup on the install-to-card handoff shows visible pop
     // Simulate a popup blocker refusing the named card-page window.
     window.open = () => null;
     // A stored setup-network host routes the working-card flow to the
-    // card-page handoff (join Lightweaver-XXXX, then Continue opens the card
+    // card-page handoff (join the card's setup network, then Continue opens the card
     // page bridge window).
     window.localStorage.setItem('lw_chip_card_host', '192.168.4.1');
   });
@@ -110,7 +110,7 @@ test('a blocked card-page popup on the install-to-card handoff shows visible pop
 
   await page.getByTestId('card-link-status').click();
   await page.getByRole('button', { name: /My card already lights up/ }).click();
-  await expect(page.getByText(/Join the .*Lightweaver-XXXX.* Wi-Fi network/)).toBeVisible();
+  await expect(page.getByText(/Join the card’s own Wi-Fi network \(its name starts with “Lightweaver-”\)/)).toBeVisible();
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('The browser could not open the card page. Allow popups, then try again.');
 });

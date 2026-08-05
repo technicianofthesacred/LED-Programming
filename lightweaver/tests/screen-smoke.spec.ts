@@ -254,7 +254,8 @@ test('an unreachable paired card without a remembered address opens setup-networ
 
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
-  await expect(dialog).toContainText('Lightweaver-XXXX');
+  await expect(dialog).not.toContainText('Lightweaver-XXXX');
+  await expect(dialog).toContainText('name starts with');
   await expect(dialog.getByRole('button', { name: 'Continue after joining' })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Try local network again' })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
@@ -364,7 +365,8 @@ test('working setup card shows AP steps before continuing through the setup host
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await page.getByRole('button', { name: 'My card already lights up' }).click();
   const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
-  await expect(dialog).toContainText('Lightweaver-XXXX');
+  await expect(dialog).not.toContainText('Lightweaver-XXXX');
+  await expect(dialog).toContainText('name starts with');
   await expect(dialog).toContainText(/finish setup/i);
   await expect.poll(() => page.evaluate(() => (window as any).__cardPopupCalls.length)).toBe(0);
   await dialog.getByRole('button', { name: 'Continue' }).click();

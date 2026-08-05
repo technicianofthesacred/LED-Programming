@@ -215,8 +215,14 @@ async function renderProjectSwitchCardHarness(page, mode: 'offline' | 'duplicate
   return region;
 }
 
-async function seedCommissioningFlow(page, progress: 'wifi' | 'load-project' | 'test' | 'test-installed' | 'test-legacy') {
-  await page.evaluate(async requestedProgress => {
+async function seedCommissioningFlow(
+  page,
+  progress: 'wifi' | 'load-project' | 'test' | 'test-installed' | 'test-legacy',
+  // What Studio observed on the USB serial port as the card rebooted after the
+  // flash. Omitted = no observation recorded (the pre-detection behaviour).
+  postFlashNetwork: { state: string; stationIp?: string } | null = null,
+) {
+  await page.evaluate(async ([requestedProgress, observedNetwork]: any) => {
     const api = await import('/src/lib/cardCommissioningFlow.js');
     const startedAt = Date.now();
     const projectRecord = {
@@ -244,7 +250,7 @@ async function seedCommissioningFlow(page, progress: 'wifi' | 'load-project' | '
       projectRevision: 7,
       flowId: `flow-card-${requestedProgress}-123456789`,
       now: startedAt,
-    }), installed, { now: startedAt + 1 });
+    }), observedNetwork ? { ...installed, postFlashNetwork: observedNetwork } : installed, { now: startedAt + 1 });
     if (requestedProgress === 'load-project' || requestedProgress === 'test' || requestedProgress === 'test-installed' || requestedProgress === 'test-legacy') {
       flow = api.acknowledgeCommissionedCard(flow, {
         id: installed.cardId,
@@ -281,7 +287,7 @@ async function seedCommissioningFlow(page, progress: 'wifi' | 'load-project' | '
       delete saved.project.pendingWiring;
       localStorage.setItem(api.CARD_COMMISSIONING_STORAGE_KEY, JSON.stringify(registry));
     }
-  }, progress);
+  }, [progress, postFlashNetwork] as any);
 }
 
 async function connectCommissioningCard(page) {
@@ -375,9 +381,9 @@ test('Card overview persists WiFi progress, gates the setup address, and resumes
 
   await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
   await expect(page).toHaveURL(/#screen=card&section=install$/);
-  await expect(page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'I’ve joined Lightweaver-EEFF', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toHaveCount(0);
-  await page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true }).click();
+  await page.getByRole('button', { name: 'I’ve joined Lightweaver-EEFF', exact: true }).click();
   const setupButton = page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i });
   await expect(setupButton).toBeVisible();
   await setupButton.click();
@@ -387,6 +393,104 @@ test('Card overview persists WiFi progress, gates the setup address, and resumes
   expect(await page.evaluate(() => (window as any).__commissioningOpens.at(-1)?.features || '')).not.toContain('noopener');
 
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
+});
+
+test('WiFi setup names the card’s real hotspot instead of a placeholder suffix', async ({ page }) => {
+  await page.goto('/#screen=card&section=install', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'wifi');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  // The seeded card id is lw-aabbccddeeff. The firmware builds its AP SSID from
+  // the low 16 bits of the same eFuse MAC, so the real network is
+  // Lightweaver-EEFF — never the literal "Lightweaver-XXXX".
+  const commissioning = page.locator('.card-commissioning');
+  await expect(commissioning).toContainText('Lightweaver-EEFF');
+  await expect(commissioning).not.toContainText('Lightweaver-XXXX');
+
+  await page.getByRole('button', { name: 'I’ve joined Lightweaver-EEFF', exact: true }).click();
+  await expect(commissioning).toContainText('Lightweaver-EEFF joined.');
+  await expect(commissioning).not.toContainText('Lightweaver-XXXX');
+});
+
+test('a card that kept its WiFi through the flash never shows the hotspot step', async ({ page }) => {
+  // The reported bug: flashing over USB does not always clear NVS, so the card's
+  // saved credentials survive, it boots straight onto the LAN, and it never
+  // raises a setup hotspot. Studio used to assert AP mode anyway and send the
+  // owner to 192.168.4.1, which can never answer.
+  await page.goto('/#screen=card&section=install', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'wifi', { state: 'station', stationIp: '192.168.18.70' });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  const commissioning = page.locator('.card-commissioning');
+  await expect(commissioning.locator('[data-post-flash="station"]')).toBeVisible();
+  await expect(commissioning).toContainText('192.168.18.70');
+  await expect(page.getByRole('button', { name: /Open the card at 192\.168\.18\.70/ })).toBeVisible();
+
+  // None of the hotspot instructions may appear: there is no hotspot.
+  await expect(page.getByRole('button', { name: /I.ve joined Lightweaver-EEFF/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toHaveCount(0);
+  await expect(commissioning).not.toContainText('The clean installation reset Wi-Fi');
+
+  // The owner keeps an escape if their eyes disagree with the serial evidence.
+  await page.getByRole('button', { name: /No . the card is showing Lightweaver-EEFF/ }).click();
+  await expect(page.getByRole('button', { name: 'I\u2019ve joined Lightweaver-EEFF', exact: true })).toBeVisible();
+});
+
+test('a genuinely factory-blank card still gets the unchanged hotspot step', async ({ page }) => {
+  await page.goto('/#screen=card&section=install', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'wifi', { state: 'setup-ap' });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  const commissioning = page.locator('.card-commissioning');
+  await expect(commissioning).toContainText('The clean installation reset Wi-Fi');
+  await expect(page.getByRole('button', { name: 'I\u2019ve joined Lightweaver-EEFF', exact: true })).toBeVisible();
+  // No station claim and no "we could not tell" hedging on a card Studio watched
+  // come up as a hotspot.
+  await expect(commissioning.locator('[data-post-flash="station"]')).toHaveCount(0);
+  await expect(commissioning.locator('[data-post-flash="inconclusive"]')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'I\u2019ve joined Lightweaver-EEFF', exact: true }).click();
+  await expect(page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
+});
+
+test('an inconclusive post-flash observation offers both routes instead of asserting one', async ({ page }) => {
+  await page.goto('/#screen=card&section=install', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'wifi', { state: 'inconclusive' });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  const commissioning = page.locator('.card-commissioning');
+  await expect(commissioning.locator('[data-post-flash="inconclusive"]')).toBeVisible();
+  await expect(commissioning).toContainText('could not confirm how this card came back up');
+  // Both paths, side by side, with no claim about which one is true.
+  await expect(page.getByRole('button', { name: 'The card is already on my Wi-Fi', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'I\u2019ve joined Lightweaver-EEFF', exact: true })).toBeVisible();
+  await expect(commissioning.locator('[data-post-flash="station"]')).toHaveCount(0);
+});
+
+test('an opened setup tab that never reaches the card explains why instead of spinning silently', async ({ page }) => {
+  await page.addInitScript(() => {
+    // Keep the bounded reachability watch inside the Playwright test budget.
+    (window as any).__LW_SETUP_REACH_TIMEOUT_MS_FOR_TEST__ = 1200;
+    window.open = ((url?: string | URL, target?: string) => (
+      { closed: false, postMessage() {}, focus() {}, location: { href: String(url || '') } } as unknown as Window
+    )) as typeof window.open;
+  });
+  // The card never answers: this is the reported symptom — the tab opens, the
+  // owner is on the wrong network, and 192.168.4.1 stays unreachable forever.
+  await page.route('**://192.168.4.1/**', route => route.abort());
+  await page.goto('/#screen=card&section=install', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'wifi');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'I’ve joined Lightweaver-EEFF', exact: true }).click();
+  await page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i }).click();
+
+  const alert = page.locator('.card-commissioning [role="alert"]').first();
+  await expect(alert).toContainText('never answered at 192.168.4.1', { timeout: 15000 });
+  await expect(alert).toContainText('Lightweaver-EEFF');
+  await expect(alert).toContainText('Reconnect installed card');
+  // The tab the owner opened is theirs; Studio must not close or navigate it.
   await expect(page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
 });
 
@@ -439,7 +543,7 @@ test('reality-driven detection replaces the dead 192.168.4.1 link with the resto
   await page.reload({ waitUntil: 'domcontentloaded' });
 
   await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
-  await page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true }).click();
+  await page.getByRole('button', { name: 'I’ve joined Lightweaver-EEFF', exact: true }).click();
 
   // While the card is still on its setup AP (unreachable on the LAN — the
   // beforeEach aborts every card host) the dead-AP fallback link is the only
@@ -476,7 +580,7 @@ test('a wrong card answering on the LAN never auto-advances setup past the ident
   await page.reload({ waitUntil: 'domcontentloaded' });
 
   await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
-  await page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true }).click();
+  await page.getByRole('button', { name: 'I’ve joined Lightweaver-EEFF', exact: true }).click();
 
   // A different card (mismatched identity) answers /api/status in station
   // transport. The safety gate must reject it: the detection poll keeps waiting
@@ -517,7 +621,7 @@ test('retained pre-install card identity cannot bypass the explicit WiFi handoff
   await seedCommissioningFlow(page, 'wifi');
 
   await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
-  await page.getByRole('button', { name: 'I’ve joined Lightweaver-XXXX', exact: true }).click();
+  await page.getByRole('button', { name: 'I’ve joined Lightweaver-EEFF', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Reconnect installed card', exact: true })).toBeVisible();
 

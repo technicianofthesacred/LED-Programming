@@ -15,7 +15,7 @@ import {
   writeStoredCardHost,
 } from '../../lib/cardConnection.js';
 import { nextCardConnectionAction } from '../../lib/cardConnectionFlow.js';
-import { cardBuildLabel, readPersistedCardIdentity } from '../../lib/cardIdentity.js';
+import { cardBuildLabel, readPersistedCardIdentity, setupNetworkLabelForCardId } from '../../lib/cardIdentity.js';
 import { adoptDiscoveredDirectCard, connectCardLink } from '../../lib/cardLink.js';
 import {
   SECURE_INSTALLER_URL,
@@ -71,8 +71,18 @@ export function CardConnectionCenter({
   const rememberedCard = readPersistedCardIdentity();
   const hasKnownCard = Boolean(link.card?.id || link.expectedCard?.id || rememberedCard?.id);
   const hasSetupHost = [host, link.host, setupEvidence.host].includes(SETUP_HOST);
+  // The card's real hotspot name is derivable from its card id (same eFuse MAC
+  // as the firmware's apSsid()). Nothing here is guaranteed to know the card
+  // yet — a blank or unreachable card has no id — so this falls back to a
+  // description of the network rather than naming one that may not exist.
+  const setupNetworkLabel = setupNetworkLabelForCardId(
+    link.card?.id || link.expectedCard?.id || link.discoveredCard?.id || rememberedCard?.id || '',
+  );
   const flowEvidence = {
-    setupNetwork: hasSetupHost ? { available: true, ssid: 'Lightweaver-XXXX' } : setupEvidence.setupNetwork,
+    // Evidence only: a stored setup-host proves the setup network is in play.
+    // It carries no SSID because Studio has not observed one — the copy below
+    // derives the real name from card identity when it has it.
+    setupNetwork: hasSetupHost ? { available: true } : setupEvidence.setupNetwork,
     setupMode: setupEvidence.mode,
   };
   const actionLink = intent === 'blank-card' && link.reason !== 'wrong-card'
@@ -409,7 +419,7 @@ export function CardConnectionCenter({
       ) : (
         <div className="card-connection-action" data-action-id={effectiveActionId} aria-live="polite" aria-busy={(action.busy || bridgeBusy) || undefined}>
           <h3>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Waiting for Lightweaver Bridge' : bridgeLifecycleState === 'return-pending' ? 'Return pending' : bridgeLifecycleState === 'installer-unavailable' ? 'Signed Bridge installer unavailable' : setupRecovery ? 'Join the Lightweaver setup network' : action.title}</h3>
-          <p>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Studio sent the launch request but cannot confirm whether Bridge opened. Keep this tab available for the result, or paste the return code below.' : bridgeLifecycleState === 'return-pending' ? 'Studio is validating the one-time return. Bridge will clear its saved result only after this tab accepts it.' : setupRecovery ? 'If the card is pulsing amber, join its Lightweaver-XXXX Wi-Fi network, then continue.' : action.explanation}</p>
+          <p>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Studio sent the launch request but cannot confirm whether Bridge opened. Keep this tab available for the result, or paste the return code below.' : bridgeLifecycleState === 'return-pending' ? 'Studio is validating the one-time return. Bridge will clear its saved result only after this tab accepts it.' : setupRecovery ? `If the card is pulsing amber, join ${setupNetworkLabel}, then continue.` : action.explanation}</p>
           {action.id === 'escape-insecure-card-frame' && (
             <p>Your browser only allows USB install from a separate secure top-level tab, so the installer opens in the Lightweaver Studio tab.</p>
           )}
@@ -434,7 +444,7 @@ export function CardConnectionCenter({
           {showSetupSteps && (
             <ol className="card-connection-setup-steps">
               <li>Power the Lightweaver card.</li>
-              <li>Join the <strong>Lightweaver-XXXX</strong> Wi-Fi network.</li>
+              <li>Join <strong>{setupNetworkLabel}</strong>.</li>
               <li>{setupRecovery ? 'Return to Studio, then press Continue after joining.' : 'Finish setup, return to Studio, then press Continue.'}</li>
             </ol>
           )}

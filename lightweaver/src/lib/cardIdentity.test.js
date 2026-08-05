@@ -10,6 +10,9 @@ import {
   cardBuildLabel,
   persistCardIdentity,
   readPersistedCardIdentity,
+  GENERIC_SETUP_NETWORK_LABEL,
+  setupNetworkLabelForCardId,
+  setupNetworkSsidForCardId,
 } from './cardIdentity.js';
 
 const firmwareInfo = {
@@ -183,4 +186,31 @@ test('explicit adoption and forgetting re-pairs without silent replacement', () 
   assert.equal(readPersistedCardIdentity({ storage }), null);
   assert.equal(adoptExpectedCardIdentity({ id: 'lw-second', name: 'Second' }, { storage }), true);
   assert.equal(readPersistedCardIdentity({ storage }).id, 'lw-second');
+});
+
+test('the setup hotspot SSID is derived from the firmware card id, not invented', () => {
+  // Firmware: apSsid() = "Lightweaver-" + %04X of (mac & 0xffff);
+  // runtimeCardId() = "lw-" + %012llx of (mac & 0xffffffffffff). The low 16
+  // bits are the last four hex characters of the card id.
+  assert.equal(setupNetworkSsidForCardId('lw-aabbccddeeff'), 'Lightweaver-EEFF');
+  assert.equal(setupNetworkSsidForCardId('lw-001122aabbcc'), 'Lightweaver-BBCC');
+  assert.equal(setupNetworkSsidForCardId('lw-00000000000f'), 'Lightweaver-000F');
+  // Uppercase input still yields the firmware's uppercase suffix.
+  assert.equal(setupNetworkSsidForCardId('LW-AABBCCDDEEFF'), 'Lightweaver-EEFF');
+  // Object form, as held on link.card / flow.expectedCard.
+  assert.equal(setupNetworkSsidForCardId({ id: 'lw-aabbccddeeff' }), 'Lightweaver-EEFF');
+});
+
+test('a card id without the firmware shape never fabricates an SSID', () => {
+  for (const value of ['', null, undefined, 'lw-gallery-card', 'lw-remembered-card', 'lw-aabbccddeef', 'lw-aabbccddeeffa', 'aabbccddeeff', 'Lightweaver-EEFF']) {
+    assert.equal(setupNetworkSsidForCardId(value), '', `expected no SSID for ${String(value)}`);
+  }
+});
+
+test('the copy label falls back to a description instead of a fake network name', () => {
+  assert.equal(setupNetworkLabelForCardId('lw-aabbccddeeff'), 'Lightweaver-EEFF');
+  assert.equal(setupNetworkLabelForCardId('lw-gallery-card'), GENERIC_SETUP_NETWORK_LABEL);
+  assert.equal(setupNetworkLabelForCardId(''), GENERIC_SETUP_NETWORK_LABEL);
+  assert.match(GENERIC_SETUP_NETWORK_LABEL, /starts with/);
+  assert.doesNotMatch(GENERIC_SETUP_NETWORK_LABEL, /XXXX/);
 });

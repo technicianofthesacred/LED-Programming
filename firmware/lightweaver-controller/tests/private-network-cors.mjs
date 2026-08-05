@@ -88,6 +88,133 @@ for (const [name, source] of [
   );
 }
 
+// WebServer::sendHeader appends to _responseHeaders with no dedupe, and that
+// vector is only cleared inside _prepareHeader once send() runs. So a handler
+// that calls sendCors() and then delegates to another sendCors()-emitting
+// handler puts TWO Access-Control-Allow-Origin values on one response, which
+// browsers reject outright — every Studio fetch() against that route dies with
+// an opaque CORS error. handleRoot() -> handleAdvancedRoot() shipped exactly
+// that bug. This walks every handler and fails if any path can stage a second
+// CORS block before the first send() flushes the first one.
+// Blank out comments, string literals and char literals (keeping newlines and
+// length so line structure survives) so the scan below sees code only — the
+// embedded card-page HTML/JS is full of braces and prose that would otherwise
+// confuse both the brace matcher and the call detection.
+function codeOnly(source) {
+  let out = '';
+  let i = 0;
+  const blank = text => text.replace(/[^\n]/g, ' ');
+  while (i < source.length) {
+    const two = source.slice(i, i + 2);
+    if (two === '//') {
+      const end = source.indexOf('\n', i);
+      const stop = end === -1 ? source.length : end;
+      out += blank(source.slice(i, stop));
+      i = stop;
+    } else if (two === '/*') {
+      const end = source.indexOf('*/', i + 2);
+      const stop = end === -1 ? source.length : end + 2;
+      out += blank(source.slice(i, stop));
+      i = stop;
+    } else if (source[i] === '"' || source[i] === "'") {
+      const quote = source[i];
+      let j = i + 1;
+      while (j < source.length && source[j] !== quote) j += source[j] === '\\' ? 2 : 1;
+      const stop = Math.min(j + 1, source.length);
+      out += quote + blank(source.slice(i + 1, stop - 1)) + quote;
+      i = stop;
+    } else {
+      out += source[i];
+      i += 1;
+    }
+  }
+  return out;
+}
+
+function topLevelFunctions(source) {
+  const signature = /^(?:static\s+)?(?:void|bool|String|int|size_t|uint\d+_t)\s+(\w+)\s*\([^;{)]*\)\s*\{\s*$/gm;
+  const found = new Map();
+  let match;
+  while ((match = signature.exec(source)) !== null) {
+    const open = source.indexOf('{', match.index);
+    let depth = 0;
+    let end = open;
+    for (let i = open; i < source.length; i++) {
+      if (source[i] === '{') depth += 1;
+      else if (source[i] === '}') {
+        depth -= 1;
+        if (depth === 0) { end = i; break; }
+      }
+    }
+    found.set(match[1], source.slice(open + 1, end));
+  }
+  return found;
+}
+
+for (const [name, source] of [
+  ['LightweaverWeb.cpp', web],
+  ['LightweaverWledJsonApi.cpp', wled],
+]) {
+  const functions = topLevelFunctions(codeOnly(source));
+  assert.ok(functions.size > 0, `${name} should expose parsable top-level functions`);
+
+  // Handlers that stage CORS headers before their first send() — calling one of
+  // these is equivalent to calling sendCors() yourself.
+  const emitters = new Set();
+  for (const [fnName, body] of functions) {
+    if (fnName === 'sendCors') continue;
+    const cors = body.search(/\bsendCors\s*\(\s*\)/);
+    if (cors === -1) continue;
+    const sent = body.search(/(?:server\.|serverPtr->)send\s*\(/);
+    if (sent === -1 || cors < sent) emitters.add(fnName);
+  }
+  assert.ok(emitters.size > 0, `${name} should contain at least one CORS-emitting handler`);
+  // Guard against the scan silently going vacuous if the parser stops matching.
+  for (const required of name === 'LightweaverWeb.cpp'
+    ? ['handleRoot', 'handleAdvancedRoot', 'handleOptions', 'handleStatus']
+    : ['handleOptions', 'handleInfo', 'handleState']) {
+    assert.ok(emitters.has(required), `${name}: ${required}() should be seen staging CORS headers`);
+  }
+
+  const delegates = [...emitters].join('|');
+  const token = new RegExp(
+    `\\bsendCors\\s*\\(\\s*\\)|(?:server\\.|serverPtr->)send\\s*\\(|\\breturn\\b|\\b(${delegates})\\s*\\(`,
+    'g',
+  );
+  for (const [fnName, body] of functions) {
+    if (fnName === 'sendCors') continue;
+    let staged = 0;
+    let match;
+    token.lastIndex = 0;
+    while ((match = token.exec(body)) !== null) {
+      const text = match[0];
+      if (/^sendCors/.test(text)) {
+        staged += 1;
+      } else if (match[1] && match[1] !== fnName) {
+        // The delegate stages its own CORS block, then flushes it with send().
+        assert.equal(
+          staged, 0,
+          `${name}: ${fnName}() stages CORS headers and then delegates to ` +
+          `${match[1]}(), which stages them again before either one calls ` +
+          'send(). That emits duplicate Access-Control-Allow-Origin headers ' +
+          'and browsers reject the response. Move the sendCors() call below ' +
+          'the delegation (or flush before delegating).',
+        );
+        staged = 0;
+      } else if (/^return/.test(text)) {
+        staged = 0;
+      } else {
+        // A send() flushes _responseHeaders, so anything staged is now on the wire.
+        assert.ok(
+          staged <= 1,
+          `${name}: ${fnName}() stages ${staged} CORS blocks before a single send()`,
+        );
+        staged = 0;
+      }
+    }
+  }
+}
+
 for (const route of ['/api/status', '/api/firmware-info', '/api/patterns', '/api/zones']) {
   assert.ok(
     web.includes(`server.on("${route}", HTTP_OPTIONS, handleOptions)`),

@@ -254,7 +254,21 @@ test('routes the factory eight-pixel double-flash observation straight to setup'
   assert.equal(result.id, 'recoverable-failure');
   assert.equal(result.route, 'setup-network');
   assert.equal(result.primaryLabel, 'Continue');
-  assert.match(result.explanation, /Lightweaver-XXXX/);
+  // No card identity is known on this path, so the copy must describe the
+  // network rather than name a suffix Studio cannot derive.
+  assert.doesNotMatch(result.explanation, /Lightweaver-XXXX/);
+  assert.match(result.explanation, /starts with “Lightweaver-”/);
+});
+
+test('names the real setup hotspot once the card identity is known', () => {
+  const result = nextCardConnectionAction({
+    intent: 'factory-beacon',
+    link: { state: 'disconnected', reason: 'card-unreachable' },
+    expectedCard: { id: 'lw-aabbccddeeff' },
+  });
+
+  assert.equal(result.route, 'setup-network');
+  assert.match(result.explanation, /Join Lightweaver-EEFF to finish setting up this card/);
 });
 
 test('requires safe recovery when a write or recovery result is uncertain', () => {

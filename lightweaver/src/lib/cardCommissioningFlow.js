@@ -1,5 +1,6 @@
 import { isCardWiringCandidateReadback } from './cardWiringSafety.js';
 import { classifyCardReadiness } from './cardReadiness.js';
+import { usableCardStationIp } from './cardPostFlashNetwork.js';
 
 export const CARD_COMMISSIONING_STAGES = Object.freeze([
   'connect-card',
@@ -16,6 +17,7 @@ export const CARD_COMMISSIONING_CHANGED_EVENT = 'lightweaver-card-commissioning-
 const VERSION = 1;
 const SOURCES = new Set(['web-serial', 'native-bridge']);
 const OPERATIONS = new Set(['inspect-card', 'install-current-release', 'recover-current-release', 'release-usb', 'restart-card']);
+export const POST_FLASH_DETECTIONS = Object.freeze(['', 'station', 'setup-ap', 'inconclusive']);
 const CARD_RESTORATION_READBACKS = new WeakSet();
 const CARD_WIRING_ACTIVATION_EVIDENCE = new WeakSet();
 const REGISTRY_VERSION = 2;
@@ -216,6 +218,8 @@ export function beginCardCommissioning({
     acceptedResultId: '',
     cardAcknowledgedAt: null,
     lastConnectionIssue: '',
+    postFlashDetection: '',
+    stationHost: '',
     project: {
       recordId: text(projectRecord.id, 128),
       recordUpdatedAt: Number(projectRecord.updatedAt) || Number(now),
@@ -273,14 +277,55 @@ export function completeCardInstall(flow, result = {}, { now = Date.now() } = {}
   if (result.expectedCardId && text(result.expectedCardId, 64) !== expectedCard.id) {
     throw new Error('The Bridge result does not match the expected card');
   }
+  // What the card ACTUALLY did after the flash, observed on the USB serial port
+  // Studio just used (see cardPostFlashNetwork.js). Without it Studio asserted
+  // "the card is a blank hotspot" and sent owners to 192.168.4.1 even when the
+  // card's saved credentials had survived and it was already on the LAN.
+  const detection = normalizePostFlashNetwork(result.postFlashNetwork);
+  const preserved = flow.strategy === 'preserve-in-place';
   return {
     ...clone(flow),
     stage: 'set-up-card',
     updatedAt: Math.max(Number(now), Number(flow.updatedAt)),
-    networkState: flow.strategy === 'preserve-in-place' ? 'preserved' : 'setup-required',
+    networkState: preserved
+      ? 'preserved'
+      : detection.state === 'station' ? 'station-detected' : 'setup-required',
+    postFlashDetection: detection.state,
+    stationHost: preserved ? '' : detection.stationIp,
     expectedCard,
     acceptedResultId: flow.source === 'native-bridge' ? text(result.acceptedResultId, 96) : '',
     cardAcknowledgedAt: null,
+  };
+}
+
+// A `station` classification is only load-bearing when it carries a usable LAN
+// address; without one Studio has nowhere to send the owner, so it degrades to
+// the honest "could not tell" state rather than hiding the hotspot path.
+function normalizePostFlashNetwork(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { state: '', stationIp: '' };
+  }
+  const state = text(value.state, 24);
+  if (!POST_FLASH_DETECTIONS.includes(state) || state === '') return { state: '', stationIp: '' };
+  if (state !== 'station') return { state, stationIp: '' };
+  const stationIp = usableCardStationIp(value.stationIp);
+  return stationIp ? { state: 'station', stationIp } : { state: 'inconclusive', stationIp: '' };
+}
+
+// The serial evidence said "already on the LAN", but the owner is looking at a
+// setup hotspot. Their eyes win: drop back to the hotspot path and record the
+// detection as inconclusive so Studio stops asserting either story.
+export function returnCardToSetupNetworkPath(flow, { now = Date.now() } = {}) {
+  requireFlow(flow);
+  if (flow.stage !== 'set-up-card' || flow.networkState !== 'station-detected') {
+    throw new Error('The card is not on a detected home-network address');
+  }
+  return {
+    ...clone(flow),
+    updatedAt: Math.max(Number(now), Number(flow.updatedAt)),
+    networkState: 'setup-required',
+    postFlashDetection: 'inconclusive',
+    stationHost: '',
   };
 }
 
@@ -528,13 +573,22 @@ function requireFlow(flow) {
     || !['clean-recovery', 'preserve-in-place'].includes(flow.strategy)
     || !Number.isSafeInteger(flow.createdAt) || !Number.isSafeInteger(flow.updatedAt)
     || flow.createdAt < 0 || flow.updatedAt < flow.createdAt
-    || !['unknown', 'preserved', 'setup-required', 'setup-joined', 'connected'].includes(flow.networkState)
+    || !['unknown', 'preserved', 'setup-required', 'setup-joined', 'station-detected', 'connected'].includes(flow.networkState)
     || (flow.acceptedResultId !== undefined && flow.acceptedResultId !== '' && !/^[A-Za-z0-9_-]{16,96}$/.test(flow.acceptedResultId))
     || !flow.project || !text(flow.project.recordId, 128)
     || !Number.isSafeInteger(flow.project.revision) || flow.project.revision < 0
     || !Number.isSafeInteger(flow.project.generation) || flow.project.generation < 0
     || !/^[a-f0-9]{16}$/.test(flow.project.fingerprint || '')) {
     throw new Error('Invalid card commissioning progress');
+  }
+  const postFlashDetection = flow.postFlashDetection ?? '';
+  const stationHost = flow.stationHost ?? '';
+  if (!POST_FLASH_DETECTIONS.includes(postFlashDetection)) throw new Error('Invalid card commissioning network detection');
+  if (stationHost !== '' && usableCardStationIp(stationHost) !== stationHost) throw new Error('Invalid card commissioning network address');
+  // 'station-detected' is what suppresses the hotspot instructions entirely, so
+  // it may never exist without both the serial proof and a reachable address.
+  if (flow.networkState === 'station-detected' && (postFlashDetection !== 'station' || !stationHost)) {
+    throw new Error('Invalid card commissioning network detection');
   }
   if (flow.project.productionJobDigest !== undefined && flow.project.productionJobDigest !== ''
     && !/^[a-f0-9]{64}$/.test(flow.project.productionJobDigest)) throw new Error('Invalid card commissioning production job');
