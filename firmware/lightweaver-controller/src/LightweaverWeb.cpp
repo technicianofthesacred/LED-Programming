@@ -77,6 +77,11 @@ bool apTeardownScheduled = false;
 bool apRadioStarted = false;
 // Channel the setup AP is currently broadcasting on (0 = SDK default).
 uint8_t apChannel = 0;
+// Rate limit for restarting a station scan that failed or has no results.
+// Slow enough not to thrash the shared radio, fast enough that the setup
+// page fills in within a poll or two once the radio is free.
+constexpr uint32_t LW_WIFI_SCAN_RETRY_MS = 3000;
+uint32_t lastScanStartMs = 0;
 uint32_t apTeardownGeneration = 0;
 uint32_t apTeardownDeadlineMs = 0;
 String apTeardownStationIp;
@@ -1059,7 +1064,7 @@ void handleAdvancedRoot() {
               "const renderNets=nets=>{const sel=$('ssid');sel.innerHTML='';nets.forEach(n=>{const o=document.createElement('option');o.value=n.ssid;o.textContent=n.ssid+(n.rssi?' ('+n.rssi+'dBm)':'');sel.appendChild(o)});if(!nets.length){setScanPlaceholder('No networks found — rescan or type the name below');$('setup-more').open=true}};"
               "let scanPolls=0,scanTimer=null;"
               "let scanRefresh=false;"
-              "const pollScan=async()=>{scanTimer=null;try{const d=await get('/api/wifi/scan'+(scanRefresh?'?refresh=1':''));scanRefresh=false;if(d.scanning){if(scanPolls++<20){scanTimer=setTimeout(pollScan,1500)}else{renderNets([])}return}renderNets(d.networks||[])}catch(_){scanRefresh=false;if(scanPolls++<20){scanTimer=setTimeout(pollScan,1500)}else{renderNets([])}}};"
+              "const pollScan=async()=>{scanTimer=null;try{const d=await get('/api/wifi/scan'+(scanRefresh?'?refresh=1':''));scanRefresh=false;if(d.scanning){if(scanPolls++<30){scanTimer=setTimeout(pollScan,1500)}else{renderNets([])}return}renderNets(d.networks||[])}catch(_){scanRefresh=false;if(scanPolls++<30){scanTimer=setTimeout(pollScan,1500)}else{renderNets([])}}};"
               "const startScan=(refresh)=>{scanPolls=0;scanRefresh=!!refresh;if(scanTimer){clearTimeout(scanTimer);scanTimer=null}setScanPlaceholder('Scanning…');pollScan()};"
               "$('rescan').onclick=()=>startScan(true);"
               "startScan(false);"
@@ -1456,9 +1461,12 @@ void handleWifiHandoffAck() {
 
 // A station scan parks the shared radio off the AP's channel for seconds at a
 // time, during which the setup hotspot stops beaconing and associated phones
-// time out. So scans are strictly on demand: one per request that finds no
-// results, never re-armed after a successful read, and never started while a
-// join is already in flight (the radio is busiest exactly then).
+// time out. So scans are on demand only and never re-armed after a successful
+// read. They are NOT refused while a join is in flight: a card that already has
+// credentials sits in Joining almost continuously, and refusing there left the
+// setup page with a permanently empty network list — the one thing that page
+// exists to show. A scan started mid-association can fail; the rate limit lets
+// it retry until the radio is free instead of hammering it every poll.
 void handleWifiScan() {
   sendCors();
   int16_t found = WiFi.scanComplete();
@@ -1466,6 +1474,7 @@ void handleWifiScan() {
   // action rather than something every poll triggers.
   if (found >= 0 && server.arg("refresh") == "1") {
     WiFi.scanDelete();
+    lastScanStartMs = 0;
     found = WIFI_SCAN_FAILED;
   }
   if (found == WIFI_SCAN_RUNNING) {
@@ -1473,15 +1482,12 @@ void handleWifiScan() {
     return;
   }
   if (found == WIFI_SCAN_FAILED || found == -2) {
-    bool joining = runtimeConfigPtr &&
-        lightweaver::connectivityPhaseIsPending(
-            runtimeConfigPtr->wifiRuntime.connectivity.phase);
-    if (joining) {
-      server.send(200, "application/json",
-                  "{\"scanning\":false,\"joining\":true,\"networks\":[]}");
-      return;
+    uint32_t now = millis();
+    if (lastScanStartMs == 0 ||
+        uint32_t(now - lastScanStartMs) >= LW_WIFI_SCAN_RETRY_MS) {
+      lastScanStartMs = now == 0 ? 1 : now;
+      WiFi.scanNetworks(true, false);
     }
-    WiFi.scanNetworks(true, false);
     server.send(200, "application/json", "{\"scanning\":true,\"networks\":[]}");
     return;
   }
