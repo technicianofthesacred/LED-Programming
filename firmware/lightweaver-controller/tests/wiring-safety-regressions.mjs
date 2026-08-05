@@ -142,7 +142,10 @@ test('factory reset acknowledges pending verification before radio erase and reb
 
 test('identify is locked out before it can suppress the factory beacon', () => {
   const identify = body(web, 'void handleIdentify()', 'void handleZones()');
-  const gateAt = identify.indexOf('provisioningControlAdmitted(runtimeCommandReady())');
+  // The playback gate still requires phase Ready + a known-good project, so a
+  // factory card is refused exactly as before; it only stops treating an
+  // in-flight WiFi transition as a reason to withhold light output.
+  const gateAt = identify.indexOf('provisioningControlAdmitted(runtimePlaybackReady())');
   const triggerAt = identify.indexOf('runtimeTriggerIdentify()');
   assert.ok(gateAt >= 0 && gateAt < triggerAt,
     'identify readiness gate must run before output ownership changes');

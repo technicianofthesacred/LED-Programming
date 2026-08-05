@@ -75,6 +75,8 @@ bool wifiRequestBodyRejected = false;
 constexpr uint32_t LW_HANDOFF_RESPONSE_SETTLE_MS = 400;
 bool apTeardownScheduled = false;
 bool apRadioStarted = false;
+// Channel the setup AP is currently broadcasting on (0 = SDK default).
+uint8_t apChannel = 0;
 uint32_t apTeardownGeneration = 0;
 uint32_t apTeardownDeadlineMs = 0;
 String apTeardownStationIp;
@@ -1056,10 +1058,11 @@ void handleAdvancedRoot() {
     page += F("const setScanPlaceholder=text=>{const sel=$('ssid');sel.innerHTML='';const o=document.createElement('option');o.value='';o.textContent=text;sel.appendChild(o)};"
               "const renderNets=nets=>{const sel=$('ssid');sel.innerHTML='';nets.forEach(n=>{const o=document.createElement('option');o.value=n.ssid;o.textContent=n.ssid+(n.rssi?' ('+n.rssi+'dBm)':'');sel.appendChild(o)});if(!nets.length){setScanPlaceholder('No networks found — rescan or type the name below');$('setup-more').open=true}};"
               "let scanPolls=0,scanTimer=null;"
-              "const pollScan=async()=>{scanTimer=null;try{const d=await get('/api/wifi/scan');if(d.scanning){if(scanPolls++<20){scanTimer=setTimeout(pollScan,1500)}else{renderNets([])}return}renderNets(d.networks||[])}catch(_){if(scanPolls++<20){scanTimer=setTimeout(pollScan,1500)}else{renderNets([])}}};"
-              "const startScan=()=>{scanPolls=0;if(scanTimer){clearTimeout(scanTimer);scanTimer=null}setScanPlaceholder('Scanning…');pollScan()};"
-              "$('rescan').onclick=startScan;"
-              "startScan();"
+              "let scanRefresh=false;"
+              "const pollScan=async()=>{scanTimer=null;try{const d=await get('/api/wifi/scan'+(scanRefresh?'?refresh=1':''));scanRefresh=false;if(d.scanning){if(scanPolls++<20){scanTimer=setTimeout(pollScan,1500)}else{renderNets([])}return}renderNets(d.networks||[])}catch(_){scanRefresh=false;if(scanPolls++<20){scanTimer=setTimeout(pollScan,1500)}else{renderNets([])}}};"
+              "const startScan=(refresh)=>{scanPolls=0;scanRefresh=!!refresh;if(scanTimer){clearTimeout(scanTimer);scanTimer=null}setScanPlaceholder('Scanning…');pollScan()};"
+              "$('rescan').onclick=()=>startScan(true);"
+              "startScan(false);"
               "let wifiJoinPollToken=0;"
               "const pollWifiJoin=async(expectedGeneration,expectedBootId,pollToken)=>{const btn=$('join'),m=$('msg');let polls=0,readyReads=0;while(polls++<90){"
               "await new Promise(resolve=>setTimeout(resolve,750));if(pollToken!==wifiJoinPollToken)return'cancelled';let s;try{s=await get('/api/status')}catch(_){continue}if(pollToken!==wifiJoinPollToken)return'cancelled';const w=s&&s.wifi||{};"
@@ -1451,15 +1454,34 @@ void handleWifiHandoffAck() {
   scheduleApTeardown(generation);
 }
 
+// A station scan parks the shared radio off the AP's channel for seconds at a
+// time, during which the setup hotspot stops beaconing and associated phones
+// time out. So scans are strictly on demand: one per request that finds no
+// results, never re-armed after a successful read, and never started while a
+// join is already in flight (the radio is busiest exactly then).
 void handleWifiScan() {
   sendCors();
   int16_t found = WiFi.scanComplete();
-  if (found == WIFI_SCAN_FAILED || found == -2) {
-    WiFi.scanNetworks(true, false);
+  // Rescan is the only way to discard a cached list, so it is an explicit user
+  // action rather than something every poll triggers.
+  if (found >= 0 && server.arg("refresh") == "1") {
+    WiFi.scanDelete();
+    found = WIFI_SCAN_FAILED;
+  }
+  if (found == WIFI_SCAN_RUNNING) {
     server.send(200, "application/json", "{\"scanning\":true,\"networks\":[]}");
     return;
   }
-  if (found == WIFI_SCAN_RUNNING) {
+  if (found == WIFI_SCAN_FAILED || found == -2) {
+    bool joining = runtimeConfigPtr &&
+        lightweaver::connectivityPhaseIsPending(
+            runtimeConfigPtr->wifiRuntime.connectivity.phase);
+    if (joining) {
+      server.send(200, "application/json",
+                  "{\"scanning\":false,\"joining\":true,\"networks\":[]}");
+      return;
+    }
+    WiFi.scanNetworks(true, false);
     server.send(200, "application/json", "{\"scanning\":true,\"networks\":[]}");
     return;
   }
@@ -1473,8 +1495,8 @@ void handleWifiScan() {
     net["rssi"] = WiFi.RSSI(i);
     net["secure"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
   }
-  WiFi.scanDelete();
-  WiFi.scanNetworks(true, false);
+  // Results are kept, not deleted-and-rescanned: the channel of the chosen
+  // network is read back from them when the join starts.
   String out;
   serializeJson(doc, out);
   server.send(200, "application/json", out);
@@ -1726,7 +1748,7 @@ class BoundedControlRequestHandler final : public RequestHandler {
 
 void handleControlPost() {
   sendCors();
-  if (!provisioningControlAdmitted(runtimeCommandReady())) {
+  if (!provisioningControlAdmitted(runtimePlaybackReady())) {
     controlRequestBodyReady = false;
     controlRequestBodyLength = 0;
     JsonDocument rejected;
@@ -2045,7 +2067,7 @@ void handleRecoverLights() {
 
 void handleIdentify() {
   sendCors();
-  if (!provisioningControlAdmitted(runtimeCommandReady())) {
+  if (!provisioningControlAdmitted(runtimePlaybackReady())) {
     JsonDocument rejected;
     rejected["ok"] = false;
     rejected["error"] = "runtime is not ready for output commands";
@@ -2241,16 +2263,62 @@ void announceMdns(const String& hostname) {
   }
 }
 
+// Channel the named network was last seen on, from cached scan results.
+// 0 when unknown.
+uint8_t lastScanChannelForSsid(const String& ssid) {
+  if (ssid.length() == 0) return 0;
+  int16_t found = WiFi.scanComplete();
+  if (found <= 0) return 0;
+  for (int i = 0; i < found; i++) {
+    if (WiFi.SSID(i) == ssid) {
+      int32_t channel = WiFi.channel(i);
+      return channel > 0 && channel <= 14 ? uint8_t(channel) : 0;
+    }
+  }
+  return 0;
+}
+
+bool startSetupApOnChannel(uint8_t channel) {
+  String ssid = apSsid();
+  bool started = channel > 0 ? WiFi.softAP(ssid.c_str(), nullptr, channel)
+                             : WiFi.softAP(ssid.c_str());
+  if (started) apChannel = channel;
+  return started;
+}
+
+// The ESP32-S3 has one radio. When the station associates on a channel other
+// than the soft AP's, the SDK drags the AP onto the station's channel and
+// deauthenticates every connected phone. Because a failed join retries roughly
+// every 25 seconds forever, that became a phone getting kicked off the setup
+// hotspot over and over — the "Lightweaver won't stay connected" report.
+// Moving the AP onto the target network's channel once, before associating,
+// removes the migration entirely for this join and every retry after it.
+void alignSetupApChannel(RuntimeConfig& config) {
+  if (!apRadioStarted) return;
+  uint8_t channel = lastScanChannelForSsid(config.wifi.ssid);
+  if (channel == 0 || channel == apChannel) return;
+  if (startSetupApOnChannel(channel) && Serial) {
+    Serial.print("Setup AP moved to channel ");
+    Serial.println(channel);
+  }
+}
+
 void startApMode(RuntimeConfig& config) {
   WiFi.mode(config.wifi.ssid.length() ? WIFI_AP_STA : WIFI_AP);
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(false);
   String ssid = apSsid();
-  if (!apRadioStarted) apRadioStarted = WiFi.softAP(ssid.c_str());
+  if (!apRadioStarted) {
+    apRadioStarted = startSetupApOnChannel(lastScanChannelForSsid(config.wifi.ssid));
+  }
   config.wifiRuntime.connectivity.apActive = apRadioStarted;
   config.activeTransport = WIFI_TRANSPORT_AP;
   config.activeIp = apRadioStarted ? WiFi.softAPIP().toString() : String();
   config.activeHostname = "";
+  // The responder used to start only on station association, so
+  // lightweaver.local could not resolve on the card's own hotspot — the one
+  // place the printed name is most likely to be typed.
+  if (apRadioStarted) announceMdns(sanitizeHostname(config.wifi.hostname));
   if (Serial) {
     Serial.print("Lightweaver AP: ");
     Serial.print(ssid);
@@ -2274,13 +2342,16 @@ void ensureRecoveryAp(RuntimeConfig& config) {
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(false);
   if (!apRadioStarted) {
-    String ssid = apSsid();
-    apRadioStarted = WiFi.softAP(ssid.c_str());
+    apRadioStarted = startSetupApOnChannel(
+        lastScanChannelForSsid(config.wifi.ssid));
   }
   config.wifiRuntime.connectivity.apActive = apRadioStarted;
   config.activeTransport = WIFI_TRANSPORT_AP;
   config.activeIp = apRadioStarted ? WiFi.softAPIP().toString() : String();
   config.activeHostname = "";
+  // Recovery is exactly when someone types the printed lightweaver.local, so
+  // the responder has to be up on the AP interface as well.
+  if (apRadioStarted) announceMdns(sanitizeHostname(config.wifi.hostname));
   dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
   if (apRadioStarted && !dnsServerActive) {
     dnsServerActive = dnsServer.start(53, "*", WiFi.softAPIP());
@@ -2329,6 +2400,9 @@ void startStationAttempt(RuntimeConfig& config, uint32_t now) {
   }
 }
 
+// generation == 0 resumes an already-proven network: association alone finishes
+// the join, because no browser is waiting to acknowledge it. A non-zero
+// generation is a live POST /api/wifi and runs the full witnessed handoff.
 void beginStationJoin(RuntimeConfig& config, uint32_t generation) {
   if (!config.wifiRuntime.connectivity.apActive) startApMode(config);
   apTeardownScheduled = false;
@@ -2341,13 +2415,17 @@ void beginStationJoin(RuntimeConfig& config, uint32_t generation) {
   uint32_t now = millis();
   config.wifiRuntime.connectivity = lightweaver::advanceConnectivity(
       config.wifiRuntime.connectivity,
-      {lightweaver::ConnectivityEvent::CredentialsAccepted, now, generation});
+      {generation == 0
+           ? lightweaver::ConnectivityEvent::CredentialsResumed
+           : lightweaver::ConnectivityEvent::CredentialsAccepted,
+       now, generation});
   config.wifiRuntime.stationIp = "";
   config.wifiRuntime.lastError = "";
   config.wifiRuntime.stationLinkPending = false;
   config.activeTransport = WIFI_TRANSPORT_AP;
   config.activeIp = WiFi.softAPIP().toString();
   config.activeHostname = "";
+  alignSetupApChannel(config);
   syncWifiReadiness(config);
   startStationAttempt(config, now);
 }
@@ -2366,6 +2444,7 @@ void retireSetupAp(RuntimeConfig& config) {
   }
   WiFi.softAPdisconnect(true);
   apRadioStarted = false;
+  apChannel = 0;
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(false);
   config.wifiRuntime.connectivity.apActive = false;
@@ -2514,6 +2593,13 @@ void maintainConnectivity() {
   WebConnectivityHardwareAdapter hardware(cfg, currentStationIp);
   state = lightweaver::runConnectivityOrchestrator(
       state, observed, hardware);
+
+  // Credentials that carried the card all the way to Station are proven. Later
+  // boots resume straight onto that network instead of re-opening a handoff no
+  // browser is present to acknowledge. Cheap: this no-ops once the flag is set.
+  if (state.phase == lightweaver::ConnectivityPhase::Station) {
+    markWifiCredentialsProven(cfg);
+  }
 }
 }
 
@@ -2556,7 +2642,12 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   currentLookIndexPtr = &currentLookIndex;
 
   startApMode(config);
-  if (config.wifi.ssid.length()) beginStationJoin(config, 1);
+  // A proven network resumes with generation 0 (no handoff). Only a card whose
+  // credentials have never reached Station re-opens the first-join handoff on
+  // boot, and that one is genuinely still being commissioned.
+  if (config.wifi.ssid.length()) {
+    beginStationJoin(config, config.wifi.proven ? 0 : 1);
+  }
 
   server.on("/", HTTP_GET, handleRoot);
   server.on("/api/status", HTTP_OPTIONS, handleOptions);
@@ -2619,9 +2710,9 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   server.collectHeaders(kCollectedHeaders, 1);
 
   server.begin();
-  if (config.activeTransport == WIFI_TRANSPORT_AP) {
-    WiFi.scanNetworks(true, false);
-  }
+  // No speculative boot scan: it parked the radio off-channel during the exact
+  // seconds a phone is joining the hotspot. The setup page asks for a scan when
+  // it loads, which is the only moment the list is actually needed.
 }
 
 void handleLightweaverWeb() {

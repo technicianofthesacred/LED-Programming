@@ -1943,8 +1943,11 @@ String runtimeCardId() {
 
 String runtimeBootId() { return bootId; }
 
-bool runtimeTransitionPending() {
-  if (restartTransitionPending || wifiTransitionPending || runtimeSafeMode || safeDiscoveryMode ||
+// Transitions that can genuinely contradict or corrupt what the strip is
+// showing: a pending restart, safe/discovery mode, an unconfirmed wiring
+// change. These block local playback as well as configuration.
+bool runtimeLocalTransitionPending() {
+  if (restartTransitionPending || runtimeSafeMode || safeDiscoveryMode ||
       wiringProbationActive || runtimeRecoveryAfterRestartPending()) {
     return true;
   }
@@ -1952,6 +1955,12 @@ bool runtimeTransitionPending() {
   return safety.discoveryActive ||
          safety.candidateState == WIRING_CANDIDATE_BOOTING ||
          safety.candidateState == WIRING_CANDIDATE_AWAITING_CONFIRMATION;
+}
+
+// Adds the WiFi transport transitions. Configuration, wiring, and credential
+// mutations still require a settled network; playback does not.
+bool runtimeTransitionPending() {
+  return runtimeLocalTransitionPending() || wifiTransitionPending;
 }
 
 ProvisioningPhase runtimeReportedProvisioningPhase() {
@@ -1979,18 +1988,32 @@ void runtimeApplySavedConfig() {
   else if (currentLookIndex >= lookCount) currentLookIndex = findStartupLook();
 }
 
-bool runtimeCommandReady() {
-  bool transitionPending = runtimeTransitionPending() || errorCode != ERROR_NONE;
+bool readinessFor(bool transitionPending) {
+  bool blocking = transitionPending || errorCode != ERROR_NONE;
   ProvisioningReadinessInputs inputs;
-  inputs.phase = transitionPending
+  inputs.phase = blocking
       ? ProvisioningPhase::Recovering
       : runtimeConfig.runtimePhase;
   inputs.configValid = runtimeConfig.configValid;
   inputs.knownGoodProject = runtimeConfig.knownGoodProject;
   inputs.webServing = webRuntimeServing;
   inputs.outputReady = runtimeOutputReady();
-  inputs.transitionPending = transitionPending;
+  inputs.transitionPending = blocking;
   return provisioningCommandReady(inputs);
+}
+
+// Governs configuration, wiring, and credential mutations: those must not land
+// while any transition, including a WiFi one, is still in flight.
+bool runtimeCommandReady() {
+  return readinessFor(runtimeTransitionPending());
+}
+
+// Governs pattern, brightness, and scene control. Playback is entirely on-card,
+// so it stays safe while the radio reassociates or a streaming listener rebinds.
+// Gating it on the WiFi transition is what made a lit, healthy card refuse its
+// own visitor page after a restart or a router blip.
+bool runtimePlaybackReady() {
+  return readinessFor(runtimeLocalTransitionPending());
 }
 
 void runtimeMarkRestartPending() {
@@ -2038,6 +2061,9 @@ String runtimeFirmwareInfo() {
   doc["provisioningContractVersion"] = LW_PROVISIONING_CONTRACT_VERSION;
   doc["runtimePhase"] = runtimeProvisioningPhase();
   doc["commandReady"] = runtimeCommandReady();
+  // Local playback admission, reported separately so a caller can tell
+  // "busy reassociating" apart from "cannot drive the lights".
+  doc["playbackReady"] = runtimePlaybackReady();
   doc["outputReady"] = runtimeOutputReady();
   doc["configValid"] = runtimeConfigValid();
   doc["knownGoodProject"] = runtimeKnownGoodProject();

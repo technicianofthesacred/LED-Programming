@@ -82,7 +82,7 @@ void handleWledRealtime() {
     }
     if (!g_started) return;
   }
-  if (!runtimeCommandReady() || g_leds == nullptr || g_totalPixels == 0) {
+  if (!runtimePlaybackReady() || g_leds == nullptr || g_totalPixels == 0) {
     // Discard queued frames while control is locked. Leaving them buffered
     // would let stale pixels claim output as soon as a candidate or recovery
     // transition becomes ready.
