@@ -25,6 +25,17 @@ function normalizeOutputs(value) {
   })).filter(item => item.gpio !== null || item.count > 0);
 }
 
+// One label for every card surface. A numbered build reads "Build 411"; a card
+// that predates numbered builds falls back to its short revision so the field
+// is never blank.
+export function cardBuildLabel(card = {}) {
+  if (Number.isSafeInteger(Number(card.buildNumber)) && Number(card.buildNumber) > 0) {
+    return `Build ${Number(card.buildNumber)}`;
+  }
+  const buildId = String(card.buildId || '').trim();
+  return buildId ? `Build ${buildId.slice(0, 12)}` : '';
+}
+
 export function normalizeCardIdentity(payload = {}, host = '') {
   const source = payload && typeof payload === 'object' ? payload : {};
   const resolvedHost = normalizeHost(host || source.host || source.wifi?.ip || source.wifi?.hostname || source.piece?.hostname);
@@ -42,6 +53,11 @@ export function normalizeCardIdentity(payload = {}, host = '') {
     name: cleanText(source.cardName || source.name || source.pieceName || source.piece?.name, 128) || 'Lightweaver',
     firmwareVersion: cleanText(source.firmwareVersion, 48),
     buildId: cleanText(source.buildId || source.firmwareBuild || source.build, 96),
+    // The comparable firmware identity the card compiles in as LW_BUILD_NUMBER.
+    // 0 means the card predates the numbered builds or is a bench build, and
+    // callers fall back to the short buildId.
+    buildNumber: Number.isSafeInteger(Number(source.buildNumber)) && Number(source.buildNumber) > 0
+      ? Number(source.buildNumber) : 0,
     bridgeVersion: Math.max(0, Number(source.bridgeVersion) || 0),
     host: resolvedHost,
     hostname,
@@ -179,6 +195,8 @@ export function persistCardIdentity(identity = {}, {
     address: /^\d{1,3}(?:\.\d{1,3}){3}$/.test(cleanText(identity.address, 64)) ? cleanText(identity.address, 64) : '',
     firmwareVersion: cleanText(identity.firmwareVersion, 48),
     buildId: cleanText(identity.buildId, 96),
+    buildNumber: Number.isSafeInteger(Number(identity.buildNumber)) && Number(identity.buildNumber) > 0
+      ? Number(identity.buildNumber) : 0,
     acknowledgedAt: cleanText(acknowledgedAt, 64),
   };
   try {

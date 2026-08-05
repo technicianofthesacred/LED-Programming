@@ -333,9 +333,23 @@ jobs:
             sleep 10
           done
 
+      # The numbers the Studio footer and the card both show. Printed here so
+      # the run page answers "which build did this publish?" without decoding a
+      # commit SHA. The firmware number comes from the signed manifest, so it
+      # names the build a card actually reports after a flash.
+      - name: Resolve the published build numbers
+        id: buildnumber
+        if: always()
+        run: |
+          echo "value=$(git rev-list --count --first-parent "$DEPLOY_REVISION")" >> "$GITHUB_OUTPUT"
+          firmware="$(node -e 'const m=require("./lightweaver/public/firmware/release-manifest.json");process.stdout.write(String(m.buildNumber ?? ""))')"
+          echo "firmware=${firmware:-unnumbered}" >> "$GITHUB_OUTPUT"
+
       - name: Record publish result
         if: always()
         env:
+          BUILD_NUMBER: ${{ steps.buildnumber.outputs.value }}
+          FIRMWARE_BUILD_NUMBER: ${{ steps.buildnumber.outputs.firmware }}
           FRESHNESS_OUTCOME: ${{ steps.freshness.outcome }}
           MIGRATION_OUTCOME: ${{ steps.migrate.outcome }}
           PUBLISH_ENABLED: ${{ steps.creds.outputs.enabled }}
@@ -358,6 +372,9 @@ jobs:
             echo "The Pages upload succeeded, but live freshness outcome was $FRESHNESS_OUTCOME. Do not treat this run as shipped." >> "$GITHUB_STEP_SUMMARY"
             echo "::error::Live freshness proof did not succeed."
           else
-            echo "## Production publish" >> "$GITHUB_STEP_SUMMARY"
+            echo "## Production publish — Build $BUILD_NUMBER" >> "$GITHUB_STEP_SUMMARY"
+            echo "led.mandalacodes.com now serves Studio build **$BUILD_NUMBER** (\`$DEPLOY_REVISION\`)." >> "$GITHUB_STEP_SUMMARY"
+            echo "The Studio footer beacon reads \`Studio current · Build $BUILD_NUMBER\` once your browser has it." >> "$GITHUB_STEP_SUMMARY"
+            echo "Signed firmware in this release is **Build $FIRMWARE_BUILD_NUMBER** — that is the number a card reports after flashing it." >> "$GITHUB_STEP_SUMMARY"
             echo "The migration, Pages upload, and live freshness check all succeeded." >> "$GITHUB_STEP_SUMMARY"
           fi

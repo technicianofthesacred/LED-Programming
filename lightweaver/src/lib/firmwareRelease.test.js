@@ -14,6 +14,8 @@ import {
   MINIMUM_PRODUCTION_FIRMWARE_VERSION,
   canonicalFirmwareManifestBytes,
   loadProductionFirmwareRelease,
+  assertFirmwareManifestBuildNumber,
+  formatFirmwareBuildLabel,
   validateFirmwareManifest,
 } from './firmwareRelease.js';
 import { sourceCoreCommands } from '../../scripts/run-core-source-tests.mjs';
@@ -114,6 +116,27 @@ test('validates the exact supported target, immutable URL, and installer floor',
   };
   assert.equal(MINIMUM_PRODUCTION_FIRMWARE_VERSION, '1.0.0');
   assert.throws(() => validateFirmwareManifest(stale), /older than the minimum trusted release/i);
+});
+
+test('build number is tolerated on read, validated when present, and required of new builds', async () => {
+  const manifest = JSON.parse(await fixture('valid-manifest.json'));
+  // The one already-signed release that predates numbered builds must keep
+  // verifying — cards in the wild flash from it.
+  assert.equal(manifest.buildNumber, undefined);
+  assert.doesNotThrow(() => validateFirmwareManifest(manifest, { installerVersion: '1.4.0' }));
+  assert.doesNotThrow(() => validateFirmwareManifest({ ...manifest, buildNumber: 411 }, { installerVersion: '1.4.0' }));
+  for (const bad of [0, -1, 1.5, '411', null]) {
+    assert.throws(
+      () => validateFirmwareManifest({ ...manifest, buildNumber: bad }, { installerVersion: '1.4.0' }),
+      /buildNumber must be a positive integer/,
+      String(bad),
+    );
+  }
+  // But nothing this repo BUILDS may omit it.
+  assert.throws(() => assertFirmwareManifestBuildNumber(manifest), /must carry a positive integer buildNumber/);
+  assert.equal(assertFirmwareManifestBuildNumber({ ...manifest, buildNumber: 411 }).buildNumber, 411);
+  assert.equal(formatFirmwareBuildLabel({ ...manifest, buildNumber: 411 }), 'Build 411');
+  assert.equal(formatFirmwareBuildLabel(manifest), `Build ${manifest.buildId.slice(0, 12)}`);
 });
 
 test('verifies a fixed signed manifest before fetching and hashing its image', async () => {
@@ -262,6 +285,7 @@ test('manifest builder creates a versioned immutable image and canonical manifes
     '--public-root', publicRoot,
     '--firmware-version', '1.2.3',
     '--build-id', TEST_BUILD_ID,
+    '--build-number', '411',
     '--source-revision', TEST_BUILD_ID,
     '--config-min', '1',
     '--config-max', '2',
@@ -277,6 +301,10 @@ test('manifest builder creates a versioned immutable image and canonical manifes
     `/firmware/releases/1.2.3/${TEST_BUILD_ID}/lightweaver-controller-esp32s3-factory.bin`,
   );
   assert.equal(manifestText, `${new TextDecoder().decode(canonicalFirmwareManifestBytes(manifest))}\n`);
+  // The comparable number must reach the signed manifest, not only the binary.
+  assert.equal(manifest.buildNumber, 411);
+  const provenance = JSON.parse(await readFile(resolve(publicRoot, 'firmware/release-provenance.json'), 'utf8'));
+  assert.equal(provenance.buildNumber, 411);
   assert.deepEqual(
     await readFile(resolve(publicRoot, manifest.image.url.slice(1))),
     await fixture('test-firmware.bin', null),
@@ -289,6 +317,7 @@ test('manifest builder creates a versioned immutable image and canonical manifes
     '--public-root', publicRoot,
     '--firmware-version', '1.2.3',
     '--build-id', TEST_BUILD_ID,
+    '--build-number', '411',
     '--source-revision', TEST_BUILD_ID,
     '--config-min', '1',
     '--config-max', '2',
@@ -377,7 +406,9 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
   assert.match(workflow, /platformio==6\.1\.19/);
   assert.match(workflow, /LW_BUILD_ID:\s*\$\{\{ github\.event\.workflow_run\.head_sha \}\}/);
   assert.ok(workflow.indexOf('  verify:') > workflow.indexOf('jobs:'));
-  assert.match(workflow, /build:\s*\n\s*needs: verify/);
+  assert.match(workflow, /build:\s*\n\s*needs: \[classify, verify\]/);
+  assert.match(workflow, /LW_BUILD_NUMBER:\s*\$\{\{ needs\.classify\.outputs\.build_number \}\}/);
+  assert.match(workflow, /--build-number "\$BUILD_NUMBER"/);
   const verifyJob = workflow.slice(workflow.indexOf('  verify:'), workflow.indexOf('  build:'));
   assert.doesNotMatch(verifyJob, /LIGHTWEAVER_RELEASE_SIGNING_KEY|environment:/);
   assert.match(verifyJob, /permissions:\s*\n\s*contents: read/);

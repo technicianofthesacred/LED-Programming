@@ -29,10 +29,12 @@ including any protected firmware signer cascade. From a clean checkout of that
 terminal revision, run `PROD_CHECK_REQUIRED=1 npm run check:prod` in
 `lightweaver/`. The checker must rebuild and stage deterministically, require
 `https://led.mandalacodes.com/studio-release.json` to be HTTP 200 with
-`Cache-Control: no-store`, match its full source revision and short build ID to
-the running bundle, and verify every file and digest in the staged build graph
-against live production. Record the revision, deploy workflow run, marker, and
-checker result. This independent proof—not the deploy job's own green badge—is
+`Cache-Control: no-store`, match its full source revision, short build ID, and
+build number to the running bundle, and verify every file and digest in the
+staged build graph against live production. Record the build number, revision,
+deploy workflow run, marker, and checker result. The build number is the
+comparable one: it is what the Studio footer shows (`Studio current · Build
+412`) and what a handoff report must quote. This independent proof—not the deploy job's own green badge—is
 the final shipment gate.
 
 ## How a release reaches production

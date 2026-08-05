@@ -15,7 +15,7 @@ import {
   writeStoredCardHost,
 } from '../../lib/cardConnection.js';
 import { nextCardConnectionAction } from '../../lib/cardConnectionFlow.js';
-import { readPersistedCardIdentity } from '../../lib/cardIdentity.js';
+import { cardBuildLabel, readPersistedCardIdentity } from '../../lib/cardIdentity.js';
 import { adoptDiscoveredDirectCard, connectCardLink } from '../../lib/cardLink.js';
 import {
   SECURE_INSTALLER_URL,
@@ -444,7 +444,7 @@ export function CardConnectionCenter({
               {link.card.name && <><dt>Name</dt><dd>{link.card.name}</dd></>}
               {link.card.pixelCount > 0 && <><dt>Pixels</dt><dd>{link.card.pixelCount}</dd></>}
               {link.card.gpioSummary && <><dt>Outputs</dt><dd>{link.card.gpioSummary}</dd></>}
-              {link.card.firmwareVersion && <><dt>Firmware</dt><dd>{link.card.firmwareVersion}{link.card.buildId ? ` · ${link.card.buildId}` : ''}</dd></>}
+              {link.card.firmwareVersion && <><dt>Firmware</dt><dd>{link.card.firmwareVersion}{cardBuildLabel(link.card) ? ` · ${cardBuildLabel(link.card)}` : ''}</dd></>}
             </dl>
           )}
 

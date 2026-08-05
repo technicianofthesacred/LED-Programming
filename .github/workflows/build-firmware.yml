@@ -22,6 +22,7 @@ jobs:
       contents: read
     outputs:
       firmware: ${{ steps.changes.outputs.firmware }}
+      build_number: ${{ steps.buildnumber.outputs.value }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -42,6 +43,14 @@ jobs:
             export CI_GENERATED_RELEASE=true
           fi
           node scripts/ci-changed-lanes.mjs
+      # First-parent depth of the tested revision. The compiled binary and the
+      # signed manifest both take THIS number, so a card and the published
+      # release can never disagree about which build the owner is on.
+      - name: Resolve the release build number
+        id: buildnumber
+        env:
+          CI_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: echo "value=$(git rev-list --count --first-parent "$CI_HEAD_SHA")" >> "$GITHUB_OUTPUT"
 
   # This job has no environment and no secrets. The tested revision must pass
   # the signing-specific contract before GitHub can unlock the protected job.
@@ -78,12 +87,13 @@ jobs:
       - name: Verify pinned firmware compiles with the tested identity
         env:
           LW_BUILD_ID: ${{ github.event.workflow_run.head_sha }}
+          LW_BUILD_NUMBER: ${{ needs.classify.outputs.build_number }}
         run: |
           pio run -d firmware/lightweaver-controller -e esp32-s3-n16r8
           node firmware/lightweaver-controller/tests/card-identity-capabilities.mjs
 
   build:
-    needs: verify
+    needs: [classify, verify]
     runs-on: ubuntu-latest
     environment: firmware-release
     permissions:
@@ -91,6 +101,7 @@ jobs:
       actions: write
     env:
       SOURCE_REVISION: ${{ github.event.workflow_run.head_sha }}
+      BUILD_NUMBER: ${{ needs.classify.outputs.build_number }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -115,6 +126,7 @@ jobs:
       - name: Rebuild tested factory binary
         env:
           LW_BUILD_ID: ${{ env.SOURCE_REVISION }}
+          LW_BUILD_NUMBER: ${{ env.BUILD_NUMBER }}
         run: firmware/lightweaver-controller/scripts/build-factory-bin.sh
       - name: Build and sign immutable release set
         env:
@@ -127,6 +139,7 @@ jobs:
           node scripts/build-firmware-manifest.mjs \
             --firmware-version "$FW_VERSION" \
             --build-id "$SOURCE_REVISION" \
+            --build-number "$BUILD_NUMBER" \
             --source-revision "$SOURCE_REVISION" \
             --config-min "$CONFIG_VERSION" \
             --config-max "$CONFIG_VERSION" \

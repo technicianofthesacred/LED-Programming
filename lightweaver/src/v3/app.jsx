@@ -309,11 +309,16 @@ function Rail({ view, setView, openCard }) {
 /* ---------- Status / Card bar (wired to the card-link state machine) ---------- */
 /* One compact status control opens the shared Connection Center. Transport and
    host diagnostics stay out of routine chrome. */
+/* The beacon shows the build NUMBER, not the commit hash: comparing "build 214"
+   to "build 215" is something a person can do at a glance from a phone, which
+   is the whole question the beacon exists to answer. The exact revision stays
+   in the hover title for anyone who needs to match it to a commit. */
 function freshnessPresentation(freshness) {
-  if (freshness.status === 'current') return { label: 'Studio current', dot: 'on', title: `Studio is current (${freshness.buildId}).` };
-  if (freshness.status === 'update-ready') return { label: 'Update ready', dot: 'warn', title: 'A current Studio build is ready. Refresh waits for the active card operation to finish.' };
-  if (freshness.status === 'unknown') return { label: 'Freshness unknown', dot: 'warn', title: 'Studio could not verify the current production build. It will try again while online.' };
-  return { label: 'Checking', dot: 'off', title: 'Checking the current production Studio build.' };
+  const exact = `Build ${freshness.buildNumber} · revision ${freshness.buildId}.`;
+  if (freshness.status === 'current') return { label: 'Studio current', dot: 'on', title: `Studio is current. ${exact}` };
+  if (freshness.status === 'update-ready') return { label: 'Update ready', dot: 'warn', title: `Build ${freshness.buildNumber} is ready. Refresh waits for the active card operation to finish. Revision ${freshness.buildId}.` };
+  if (freshness.status === 'unknown') return { label: 'Freshness unknown', dot: 'warn', title: `Studio could not verify the current production build. It will try again while online. Running ${exact}` };
+  return { label: 'Checking', dot: 'off', title: `Checking the current production Studio build. Running ${exact}` };
 }
 
 function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, totalLeds, stripCount, density, fps, testStrip, onToggleTestStrip, onTestStripLengthChange, freshness }) {
@@ -374,7 +379,7 @@ function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, totalLe
           >
             <span className={`sb-dot ${presentation.dot}`} aria-hidden="true" />
             <span>{presentation.label}</span>
-            <code>{freshness.buildId}</code>
+            <code>Build {freshness.buildNumber}</code>
           </div>
         );
       })()}
@@ -425,6 +430,7 @@ function Shell() {
   const [freshness, setFreshness] = useState(() => ({
     status: 'checking',
     buildId: runningStudioReleaseRef.current.buildId,
+    buildNumber: runningStudioReleaseRef.current.buildNumber,
     reason: '',
   }));
   const freshnessMonitorRef = useRef(null);

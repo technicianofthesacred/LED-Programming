@@ -1,4 +1,5 @@
 import React from 'react';
+import { cardBuildLabel } from '../../lib/cardIdentity.js';
 import { isCardLinkConnected } from '../../lib/cardLink.js';
 
 const ATTENTION_REASONS = new Set([
@@ -37,7 +38,7 @@ function connectedSummary(card = {}) {
     card.pixelCount > 0 ? `${card.pixelCount} pixels` : '',
     card.gpioSummary,
     card.firmwareVersion ? `firmware ${card.firmwareVersion}` : '',
-    card.buildId ? `build ${card.buildId}` : '',
+    cardBuildLabel(card),
   ].filter(Boolean).join(' · ');
 }
 

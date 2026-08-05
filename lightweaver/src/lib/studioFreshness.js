@@ -6,8 +6,13 @@ export const STUDIO_FRESHNESS_POLL_MS = 30_000;
 export const STUDIO_FRESHNESS_TIMEOUT_MS = 5_000;
 export const STUDIO_REFRESH_ATTEMPT_KEY = 'lw_studio_refresh_attempt_v1';
 
-function immutableState(status, buildId, reason = '') {
-  return Object.freeze({ status, buildId, reason });
+function immutableState(status, release, reason = '') {
+  return Object.freeze({
+    status,
+    buildId: release.buildId,
+    buildNumber: release.buildNumber,
+    reason,
+  });
 }
 
 function boundedError(reason) {
@@ -58,7 +63,7 @@ export function createStudioFreshnessMonitor({
   const releaseUrl = new URL(STUDIO_RELEASE_PATH, locationOrigin).href;
   const buildGraphUrl = new URL(STUDIO_BUILD_GRAPH_PATH, locationOrigin).href;
   const listeners = new Set();
-  let state = immutableState('checking', release.buildId);
+  let state = immutableState('checking', release);
   let started = false;
   let operationActive = false;
   let pendingRelease = null;
@@ -72,7 +77,7 @@ export function createStudioFreshnessMonitor({
     return state;
   };
 
-  const unknown = reason => emit(immutableState('unknown', release.buildId, reason));
+  const unknown = reason => emit(immutableState('unknown', release, reason));
 
   const clearPoll = () => {
     if (pollTimer !== null) timers.clearTimeout(pollTimer);
@@ -133,11 +138,11 @@ export function createStudioFreshnessMonitor({
       pendingRelease = null;
       convergedReleaseRevision = '';
       try { storage.removeItem(STUDIO_REFRESH_ATTEMPT_KEY); } catch { /* matching code needs no reload guard */ }
-      return emit(immutableState('current', release.buildId));
+      return emit(immutableState('current', release));
     }
     if (operationActive) {
       pendingRelease = target;
-      return emit(immutableState('update-ready', target.buildId, 'operation-active'));
+      return emit(immutableState('update-ready', target, 'operation-active'));
     }
     pendingRelease = null;
     refreshTo(target);
