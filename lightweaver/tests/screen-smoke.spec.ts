@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 const SCREENS = ['Patterns', 'Pattern Lab', 'Playlist', 'Layout', 'Show', 'Hardware'];
 const STUDIO_SOURCE_REVISION = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 const STUDIO_BUILD_NUMBER = Number(
-  execFileSync('git', ['rev-list', '--count', '--first-parent', 'HEAD'], { encoding: 'utf8' }).trim(),
+  execFileSync('git', ['rev-list', '--count', 'HEAD'], { encoding: 'utf8' }).trim(),
 );
 
 function studioMarker(sourceRevision = STUDIO_SOURCE_REVISION, buildNumber = STUDIO_BUILD_NUMBER) {

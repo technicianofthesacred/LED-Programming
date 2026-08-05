@@ -45,7 +45,7 @@ const buildId = required(args, 'build-id', process.env.LW_BUILD_ID ?? process.en
 // different numbers for the same release.
 const buildNumberInput = String(required(args, 'build-number', process.env.LW_BUILD_NUMBER)).trim();
 if (!/^[1-9][0-9]*$/.test(buildNumberInput)) {
-  throw new Error('--build-number must be a positive integer (first-parent Git depth of the build ID)');
+  throw new Error('--build-number must be a positive integer (commit count of the build ID)');
 }
 const buildNumber = Number(buildNumberInput);
 const configMin = Number(required(args, 'config-min', process.env.LW_CONFIG_SCHEMA_MIN ?? '1'));

@@ -341,7 +341,7 @@ jobs:
         id: buildnumber
         if: always()
         run: |
-          echo "value=$(git rev-list --count --first-parent "$DEPLOY_REVISION")" >> "$GITHUB_OUTPUT"
+          echo "value=$(git rev-list --count "$DEPLOY_REVISION")" >> "$GITHUB_OUTPUT"
           firmware="$(node -e 'const m=require("./lightweaver/public/firmware/release-manifest.json");process.stdout.write(String(m.buildNumber ?? ""))')"
           echo "firmware=${firmware:-unnumbered}" >> "$GITHUB_OUTPUT"
 
