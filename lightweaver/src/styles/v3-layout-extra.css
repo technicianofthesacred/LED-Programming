@@ -516,6 +516,13 @@
   color: var(--text-faint); font-size: 10px; line-height: 1.3;
 }
 
+/* Chipset is one value for the whole card, so it reads as a row of the piece's
+   physical setup rather than a per-strip field. */
+.la-led-chipset { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.la-led-chipset > .k { color: var(--text-mid); font-size: 11px; flex-shrink: 0; }
+.la-led-chipset .la-strip-density .btn { min-width: 62px; }
+.la-led-chipset-row { padding: 6px 6px 2px; }
+
 /* Draw strip controls form one instrument panel, not a stack of loose black
    controls. The GPIO group owns the surface; its rows are simply sections. */
 .la-gpio-group {

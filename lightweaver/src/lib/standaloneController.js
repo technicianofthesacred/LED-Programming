@@ -1,3 +1,5 @@
+import { normalizeCardLedType } from './cardHardwareContract.js';
+
 export const LWSEQ_HEADER_BYTES = 64;
 
 export const DEFAULT_STANDALONE_OUTPUTS = [
@@ -37,6 +39,7 @@ export function normalizeStandaloneLed(led = {}) {
   return {
     ...DEFAULT_STANDALONE_LED,
     ...source,
+    type: normalizeCardLedType(source.type, DEFAULT_STANDALONE_LED.type),
     brightnessLimit: clamp01(source.brightnessLimit ?? DEFAULT_STANDALONE_LED.brightnessLimit),
     outputGammaEnabled: source.outputGammaEnabled === true,
     outputGammaValue: clampOutputNumber(source.outputGammaValue, DEFAULT_STANDALONE_LED.outputGammaValue, 1, 3),
