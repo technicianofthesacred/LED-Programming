@@ -31,6 +31,12 @@ const MANIFEST_KEYS = [
   'schemaVersion',
   'target',
 ];
+// The human-comparable release identity: the commit count of buildId — the same
+// number GitHub prints as "N Commits" — compiled into the binary as
+// LW_BUILD_NUMBER so a card, this manifest, and GitHub all agree. Optional only so the one already-signed
+// release that predates it still verifies; the builder always emits it, and
+// `assertFirmwareManifestBuildNumber` enforces that for anything it produces.
+const OPTIONAL_MANIFEST_KEYS = ['buildNumber'];
 
 function sortForCanonicalJson(value) {
   if (Array.isArray(value)) return value.map(sortForCanonicalJson);
@@ -46,13 +52,14 @@ export function canonicalFirmwareManifestBytes(manifest) {
   return encoder.encode(JSON.stringify(sortForCanonicalJson(manifest)));
 }
 
-function assertExactKeys(value, expected, label) {
+function assertExactKeys(value, expected, label, optional = []) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`${label} must be an object`);
   }
   const actual = Object.keys(value).sort();
   const wanted = [...expected].sort();
-  if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
+  const required = actual.filter((key) => !optional.includes(key));
+  if (required.length !== wanted.length || required.some((key, index) => key !== wanted[index])) {
     throw new Error(`${label} contains unsupported fields`);
   }
 }
@@ -81,7 +88,7 @@ export function validateFirmwareManifest(
     minimumFirmwareVersion = MINIMUM_PRODUCTION_FIRMWARE_VERSION,
   } = {},
 ) {
-  assertExactKeys(manifest, MANIFEST_KEYS, 'firmware manifest');
+  assertExactKeys(manifest, MANIFEST_KEYS, 'firmware manifest', OPTIONAL_MANIFEST_KEYS);
   assertExactKeys(manifest.image, ['sha256', 'size', 'url'], 'firmware image');
   assertExactKeys(manifest.configSchema, ['max', 'min'], 'config schema range');
 
@@ -94,6 +101,9 @@ export function validateFirmwareManifest(
   }
   if (!/^[a-f0-9]{40}$/.test(manifest.buildId)) {
     throw new Error('buildId must be the immutable source revision');
+  }
+  if (manifest.buildNumber !== undefined && !isPositiveSafeInteger(manifest.buildNumber)) {
+    throw new Error('buildNumber must be a positive integer');
   }
   parseSemver(manifest.minimumInstallerVersion, 'minimumInstallerVersion');
   const currentInstaller = parseSemver(installerVersion, 'installerVersion');
@@ -140,6 +150,21 @@ export function validateFirmwareManifest(
     }
   }
   return manifest;
+}
+
+// Every manifest this repository BUILDS must carry the comparable number, even
+// though verification tolerates the one legacy signed release without it.
+export function assertFirmwareManifestBuildNumber(manifest) {
+  if (!isPositiveSafeInteger(manifest?.buildNumber)) {
+    throw new Error('A newly built firmware manifest must carry a positive integer buildNumber');
+  }
+  return manifest;
+}
+
+export function formatFirmwareBuildLabel(manifest) {
+  return isPositiveSafeInteger(manifest?.buildNumber)
+    ? `Build ${manifest.buildNumber}`
+    : `Build ${String(manifest?.buildId || '').slice(0, 12) || 'unknown'}`;
 }
 
 function pemToDer(pem) {

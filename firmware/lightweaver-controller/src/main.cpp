@@ -51,6 +51,11 @@
 #ifndef LW_BUILD_ID
 #define LW_BUILD_ID "dev"
 #endif
+// The comparable build identity an owner reads off the card. 0 means an
+// unofficial bench build; CI injects the commit count of LW_BUILD_ID.
+#ifndef LW_BUILD_NUMBER
+#define LW_BUILD_NUMBER 0
+#endif
 #ifndef LW_CONFIG_SCHEMA_VERSION
 #define LW_CONFIG_SCHEMA_VERSION 1
 #endif
@@ -2056,6 +2061,7 @@ String runtimeFirmwareInfo() {
   doc["cardId"] = runtimeCardId();
   doc["firmwareVersion"] = LW_FIRMWARE_VERSION;
   doc["buildId"] = LW_BUILD_ID;
+  doc["buildNumber"] = LW_BUILD_NUMBER;
   doc["bootId"] = runtimeBootId();
   doc["uptimeMs"] = millis();
   doc["provisioningContractVersion"] = LW_PROVISIONING_CONTRACT_VERSION;
@@ -2452,6 +2458,7 @@ String runtimeWiringSafetyStatus() {
   doc["cardId"] = runtimeCardId();
   doc["firmwareVersion"] = LW_FIRMWARE_VERSION;
   doc["buildId"] = LW_BUILD_ID;
+  doc["buildNumber"] = LW_BUILD_NUMBER;
   if (!safety.hasCandidate) {
     doc["projectRevision"] = runtimeConfig.projectRevision;
     doc["projectFingerprint"] = runtimeConfig.projectFingerprint;

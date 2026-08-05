@@ -249,7 +249,9 @@ git commit -m "Fix Lightweaver pattern-to-card workflow"
 - [ ] **Step 3: Verify firmware with the source commit identity**
 
 ```bash
-LW_BUILD_ID="$(git rev-parse HEAD)" pio run -d firmware/lightweaver-controller -e esp32-s3-n16r8
+LW_BUILD_ID="$(git rev-parse HEAD)" \
+  LW_BUILD_NUMBER="$(git rev-list --count HEAD)" \
+  pio run -d firmware/lightweaver-controller -e esp32-s3-n16r8
 node firmware/lightweaver-controller/tests/card-identity-capabilities.mjs
 ```
 

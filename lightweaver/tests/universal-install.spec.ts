@@ -247,6 +247,7 @@ test('post-flash commissioning remains a protected Studio operation during Wi-Fi
     schemaVersion: 1,
     sourceRevision: 'c'.repeat(40),
     buildId: 'c'.repeat(12),
+    buildNumber: 99,
   };
   const marker = `${JSON.stringify(remoteRelease)}\n`;
   const graph = {

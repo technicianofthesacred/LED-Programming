@@ -102,6 +102,10 @@ jobs:
     name: browser smoke
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Full history: the build number is the total commit count, and a
+          # shallow clone would silently publish "build 1".
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
@@ -123,6 +127,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Full history: the build number is the total commit count, and a
+          # shallow clone would silently publish "build 1".
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
@@ -143,6 +151,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Full history: the build number is the total commit count, and a
+          # shallow clone would silently publish "build 1".
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
@@ -185,9 +197,13 @@ jobs:
           npm ci --prefix lightweaver
       - run: npm run ci:firmware-sensitive
         working-directory: lightweaver
+      - name: Resolve the release build number
+        id: buildnumber
+        run: echo "value=$(git rev-list --count "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
       - name: Compile pinned firmware with exact source identity
         env:
           LW_BUILD_ID: ${{ github.sha }}
+          LW_BUILD_NUMBER: ${{ steps.buildnumber.outputs.value }}
         run: |
           pio run -d firmware/lightweaver-controller -e esp32-s3-n16r8
           node firmware/lightweaver-controller/tests/card-identity-capabilities.mjs

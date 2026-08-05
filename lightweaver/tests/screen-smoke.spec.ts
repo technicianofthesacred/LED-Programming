@@ -5,12 +5,16 @@ import { execFileSync } from 'node:child_process';
 // Every primary Studio destination must retain the shared shell controls.
 const SCREENS = ['Patterns', 'Pattern Lab', 'Playlist', 'Layout', 'Show', 'Hardware'];
 const STUDIO_SOURCE_REVISION = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+const STUDIO_BUILD_NUMBER = Number(
+  execFileSync('git', ['rev-list', '--count', 'HEAD'], { encoding: 'utf8' }).trim(),
+);
 
-function studioMarker(sourceRevision = STUDIO_SOURCE_REVISION) {
+function studioMarker(sourceRevision = STUDIO_SOURCE_REVISION, buildNumber = STUDIO_BUILD_NUMBER) {
   return {
     schemaVersion: 1,
     sourceRevision,
     buildId: sourceRevision.slice(0, 12),
+    buildNumber,
   };
 }
 
@@ -149,7 +153,8 @@ test('footer shows the current Studio build at the far right on desktop and phon
   await expect.poll(() => markerRequests).toBe(1);
 
   const beacon = page.getByTestId('studio-freshness');
-  await expect(beacon).toHaveText(`Studio current${STUDIO_SOURCE_REVISION.slice(0, 12)}`);
+  await expect(beacon).toHaveText(`Studio currentBuild ${STUDIO_BUILD_NUMBER}`);
+  await expect(beacon).toHaveAttribute('title', new RegExp(`revision ${STUDIO_SOURCE_REVISION.slice(0, 12)}`));
   await expect(page.locator('.status-bar > :last-child')).toHaveAttribute('data-testid', 'studio-freshness');
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -190,9 +195,11 @@ test('new production waits for installer and destructive card operations, flushe
     window.dispatchEvent(new CustomEvent('lw-hardware-operation-active', { detail: { active: true, operation: 'install-project' } }));
   });
 
-  marker = studioMarker('b'.repeat(40));
+  // A newer production build advertises the NEXT build number, so the waiting
+  // beacon names the build the refresh will land on.
+  marker = studioMarker('b'.repeat(40), STUDIO_BUILD_NUMBER + 1);
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect(page.getByTestId('studio-freshness')).toHaveText(`Update ready${'b'.repeat(12)}`);
+  await expect(page.getByTestId('studio-freshness')).toHaveText(`Update readyBuild ${STUDIO_BUILD_NUMBER + 1}`);
   expect(await page.evaluate(() => (window as any).__lwFreshnessReloads.length)).toBe(0);
 
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('lw-install-active', { detail: { active: false } })));
@@ -216,7 +223,7 @@ test('invalid or cacheable Studio markers show bounded unknown state without rel
     (window as any).__LW_STUDIO_RELOAD_FOR_TEST__ = () => { (window as any).__lwFreshnessReloads += 1; };
   });
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByTestId('studio-freshness')).toHaveText(`Freshness unknown${STUDIO_SOURCE_REVISION.slice(0, 12)}`);
+  await expect(page.getByTestId('studio-freshness')).toHaveText(`Freshness unknownBuild ${STUDIO_BUILD_NUMBER}`);
   expect(await page.evaluate(() => (window as any).__lwFreshnessReloads)).toBe(0);
 });
 

@@ -13,6 +13,7 @@ const release = character => Object.freeze({
   schemaVersion: 1,
   sourceRevision: character.repeat(40),
   buildId: character.repeat(12),
+  buildNumber: character.charCodeAt(0),
 });
 
 function responseFor(value, options = {}) {
@@ -128,6 +129,7 @@ test('freshness checks at startup and every 30 seconds only while visible', asyn
   assert.deepEqual(harness.monitor.getState(), {
     status: 'current',
     buildId: harness.running.buildId,
+    buildNumber: harness.running.buildNumber,
     reason: '',
   });
   assert.equal(harness.calls.filter(call => call.url).length, 1);
@@ -163,6 +165,7 @@ test('freshness reports bounded unknown state offline and retries immediately on
   assert.deepEqual(harness.monitor.getState(), {
     status: 'unknown',
     buildId: harness.running.buildId,
+    buildNumber: harness.running.buildNumber,
     reason: 'offline',
   });
   assert.equal(harness.calls.filter(call => call.url).length, 0);
@@ -197,7 +200,7 @@ test('freshness coalesces requests and rejects timeout, invalid, redirected, or 
     const failing = monitorHarness({ fetchImpl: async () => responseValue });
     await failing.monitor.checkNow();
     assert.deepEqual(failing.monitor.getState(), {
-      status: 'unknown', buildId: failing.running.buildId, reason,
+      status: 'unknown', buildId: failing.running.buildId, buildNumber: failing.running.buildNumber, reason,
     });
   }
 
@@ -301,7 +304,7 @@ test('freshness defers one target until all protected hardware operations clear'
   harness.monitor.setOperationActive(true);
   await harness.monitor.checkNow();
   assert.deepEqual(harness.monitor.getState(), {
-    status: 'update-ready', buildId: remote.buildId, reason: 'operation-active',
+    status: 'update-ready', buildId: remote.buildId, buildNumber: remote.buildNumber, reason: 'operation-active',
   });
   assert.equal(reloads, 0);
   await harness.monitor.setOperationActive(false);

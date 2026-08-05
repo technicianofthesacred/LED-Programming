@@ -17,6 +17,12 @@ assert.match(workflow, /SOURCE_REVISION:\s*\$\{\{ github\.event\.workflow_run\.h
 assert.match(workflow, /LW_BUILD_ID:\s*\$\{\{ env\.SOURCE_REVISION \}\}/);
 assert.match(workflow, /--build-id "\$SOURCE_REVISION"/);
 assert.match(workflow, /--source-revision "\$SOURCE_REVISION"/);
+// Both the compiled binary and the signed manifest take their build number
+// from the same source revision, so a card and the published release always
+// agree on the number the owner compares.
+assert.match(workflow, /LW_BUILD_NUMBER:\s*\$\{\{ needs\.classify\.outputs\.build_number \}\}/);
+assert.match(workflow, /LW_BUILD_NUMBER:\s*\$\{\{ env\.BUILD_NUMBER \}\}/);
+assert.match(workflow, /--build-number "\$BUILD_NUMBER"/);
 assert.match(
   workflow,
   /'firmware\/lightweaver-controller\/scripts\/\*\*'/,

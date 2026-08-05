@@ -1,9 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
-const port = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
+import { testPort as port, testBaseURL } from './tests/testPort.mjs';
 export default defineConfig({
   testDir: './tests',
   use: {
-    baseURL: `http://localhost:${port}`,
+    baseURL: testBaseURL,
     // Keep same-origin API fixtures authoritative even if a developer has a
     // previously installed Studio service worker in a reused browser profile.
     serviceWorkers: 'block',
@@ -11,6 +11,8 @@ export default defineConfig({
   webServer: {
     command: `npx vite --port ${port} --strictPort`,
     port,
+    // Safe to reuse: the port is derived from this checkout's path, so any
+    // server already on it belongs to this workspace. See tests/testPort.mjs.
     reuseExistingServer: !process.env.CI,
     timeout: 30000,
   },

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  resolveStudioBuildNumber,
   resolveStudioReleaseIdentity,
   resolveStudioSourceRevision,
 } from './studio-release-identity.mjs';
@@ -31,13 +32,43 @@ test('Studio source revision uses explicit build input, then GitHub SHA, then ch
 });
 
 test('Studio release identity is deterministic for one source revision', () => {
-  const options = { env: { LIGHTWEAVER_SOURCE_REVISION: EXPLICIT } };
+  const options = {
+    env: { LIGHTWEAVER_SOURCE_REVISION: EXPLICIT },
+    readGitBuildNumber: () => '214\n',
+  };
   assert.deepEqual(resolveStudioReleaseIdentity(options), resolveStudioReleaseIdentity(options));
   assert.deepEqual(resolveStudioReleaseIdentity(options), {
     schemaVersion: 1,
     sourceRevision: EXPLICIT,
     buildId: EXPLICIT.slice(0, 12),
+    buildNumber: 214,
   });
+});
+
+test('Studio build number prefers the explicit input, then the GitHub commit count', () => {
+  let counted = null;
+  const readGitBuildNumber = (cwd, sourceRevision) => {
+    counted = sourceRevision;
+    return '214';
+  };
+
+  assert.equal(resolveStudioBuildNumber({
+    env: { LIGHTWEAVER_BUILD_NUMBER: '5000' },
+    readGitBuildNumber,
+    sourceRevision: EXPLICIT,
+  }), 5000);
+  assert.equal(counted, null);
+
+  assert.equal(resolveStudioBuildNumber({ env: {}, readGitBuildNumber, sourceRevision: EXPLICIT }), 214);
+  assert.equal(counted, EXPLICIT);
+
+  for (const raw of ['0', '-3', '2.5', 'v214', '']) {
+    assert.throws(
+      () => resolveStudioBuildNumber({ env: {}, readGitBuildNumber: () => raw, sourceRevision: EXPLICIT }),
+      /positive integer/,
+      raw,
+    );
+  }
 });
 
 test('Studio source revision rejects malformed explicit and Git values', () => {

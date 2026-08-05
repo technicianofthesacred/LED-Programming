@@ -51,7 +51,9 @@ export function DeploymentCheckPanel() {
           </p>
           {outcome.summary && (
             <p className="deploy-check-summary">
-              Firmware v{outcome.summary.firmwareVersion} · build {String(outcome.summary.buildId).slice(0, 12)} ·
+              Firmware v{outcome.summary.firmwareVersion} · {outcome.summary.buildNumber > 0
+                ? `Build ${outcome.summary.buildNumber}`
+                : `build ${String(outcome.summary.buildId).slice(0, 12)}`} ·
               source {String(outcome.summary.sourceRevision).slice(0, 12)} · {outcome.summary.jobCount} signed
               production job{outcome.summary.jobCount === 1 ? '' : 's'}
             </p>

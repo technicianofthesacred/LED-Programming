@@ -50,6 +50,27 @@ Use these words precisely in every Lightweaver handoff:
 - **Deployed**: the production workflow used real production credentials, published the exact integrated revision, and succeeded. A credential-skipped green workflow is not deployed.
 - **Shipped**: the work was tested, merged into `origin/main`, deployed successfully, and then independently proven live at `https://led.mandalacodes.com` by its strict no-store `/studio-release.json` revision and the exact deployed files in the staged build graph.
 
+Every **Deployed** and **Shipped** report must name the **build numbers** —
+the repository's commit count, which is exactly the number GitHub prints as
+"N Commits" at the top of the file list. The owner checks GitHub, checks the
+screen, and knows whether he is running the newest code. Never switch this to a
+prettier counter that steps by one per change — neat increments are worthless if
+they match nothing he can see. The same number is used for both surfaces:
+
+- **Studio build** — `buildNumber` in `/studio-release.json`, shown in the
+  Studio footer beacon.
+- **Firmware build** — `buildNumber` in the signed
+  `/firmware/release-manifest.json`, compiled into the binary as
+  `LW_BUILD_NUMBER` and reported by the card on `/api/firmware-info` and
+  `/api/status`. A card and the release it was flashed from always report the
+  same number.
+
+Say "Shipped — Studio build 412, firmware build 411", not just a commit SHA.
+Those numbers are how the owner confirms a browser and a card are current
+without decoding a hash. The two can differ by one on a firmware release,
+because the signer commits the signed artifacts on top of the revision the
+binary was compiled from; that is expected, not drift.
+
 “Ship it to main” is standing authorization to complete that entire sequence,
 including the integration PR, merge, production workflow, and final live proof.
 A commit, push, PR, merge, or green CI result alone never satisfies it. If any

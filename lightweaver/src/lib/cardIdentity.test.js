@@ -7,6 +7,7 @@ import {
   forgetExpectedCardIdentity,
   normalizeCardIdentity,
   normalizeCardProjectEvidence,
+  cardBuildLabel,
   persistCardIdentity,
   readPersistedCardIdentity,
   GENERIC_SETUP_NETWORK_LABEL,
@@ -20,6 +21,7 @@ const firmwareInfo = {
   piece: { id: 'front-mandala', name: 'Front Mandala' },
   firmwareVersion: '1.4.0',
   buildId: 'abc123',
+  buildNumber: 411,
   bridgeVersion: 1,
   outputs: [
     { id: 'left', gpio: 16, count: 44 },
@@ -39,6 +41,7 @@ test('normalizes firmware info into stable card identity and output summary', ()
     name: 'Front Mandala',
     firmwareVersion: '1.4.0',
     buildId: 'abc123',
+    buildNumber: 411,
     bridgeVersion: 1,
     host: '192.168.18.70',
     hostname: 'lightweaver-aabbcc',
@@ -153,8 +156,16 @@ test('persists only stable nonsecret identity and connection hints under a versi
     address: '192.168.18.70',
     firmwareVersion: '1.4.0',
     buildId: 'abc123',
+    buildNumber: 411,
     acknowledgedAt,
   });
+});
+
+test('card build label prefers the comparable number and falls back to the revision', () => {
+  assert.equal(cardBuildLabel({ buildNumber: 411, buildId: 'a'.repeat(40) }), 'Build 411');
+  assert.equal(cardBuildLabel({ buildNumber: 0, buildId: 'a'.repeat(40) }), `Build ${'a'.repeat(12)}`);
+  assert.equal(cardBuildLabel({ buildNumber: -3, buildId: 'abc123' }), 'Build abc123');
+  assert.equal(cardBuildLabel({}), '');
 });
 
 test('storage helpers are safe without a browser', () => {

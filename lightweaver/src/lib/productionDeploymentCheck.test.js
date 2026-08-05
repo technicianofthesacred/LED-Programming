@@ -86,6 +86,7 @@ test('live Studio release requires exact identity and no-store delivery', async 
     schemaVersion: 1,
     sourceRevision: 'a'.repeat(40),
     buildId: 'a'.repeat(12),
+    buildNumber: 214,
   };
   const requests = [];
   const fetchImpl = async (input, init) => {
@@ -110,6 +111,7 @@ test('live Studio release refuses redirects, cacheable markers, malformed marker
     schemaVersion: 1,
     sourceRevision: 'a'.repeat(40),
     buildId: 'a'.repeat(12),
+    buildNumber: 214,
   };
   const verify = responseValue => verifyStudioRelease(
     async () => responseValue,
@@ -121,6 +123,8 @@ test('live Studio release refuses redirects, cacheable markers, malformed marker
   await assert.rejects(verify(new Response('{broken', { status: 200, headers: { 'cache-control': 'no-store' } })), /valid JSON/);
   const stale = { ...expected, sourceRevision: 'b'.repeat(40), buildId: 'b'.repeat(12) };
   await assert.rejects(verify(new Response(JSON.stringify(stale), { status: 200, headers: { 'cache-control': 'no-store' } })), /does not match/);
+  const renumbered = { ...expected, buildNumber: 215 };
+  await assert.rejects(verify(new Response(JSON.stringify(renumbered), { status: 200, headers: { 'cache-control': 'no-store' } })), /does not match/);
 });
 
 test('Studio build graph rejects malformed structure and unsafe paths', () => {

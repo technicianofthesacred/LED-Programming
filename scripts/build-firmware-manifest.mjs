@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import {
   EXPECTED_FIRMWARE_TARGET,
   FIRMWARE_INSTALLER_VERSION,
+  assertFirmwareManifestBuildNumber,
   canonicalFirmwareManifestBytes,
   validateFirmwareManifest,
 } from '../lightweaver/src/lib/firmwareRelease.js';
@@ -39,6 +40,14 @@ const imagePath = resolve(required(
 const publicRoot = resolve(required(args, 'public-root', resolve(repoRoot, 'lightweaver/public')));
 const firmwareVersion = required(args, 'firmware-version', process.env.LW_FIRMWARE_VERSION);
 const buildId = required(args, 'build-id', process.env.LW_BUILD_ID ?? process.env.GITHUB_SHA);
+// The comparable release identity. It must be the SAME value that was compiled
+// into the binary as LW_BUILD_NUMBER, or a card and this manifest would report
+// different numbers for the same release.
+const buildNumberInput = String(required(args, 'build-number', process.env.LW_BUILD_NUMBER)).trim();
+if (!/^[1-9][0-9]*$/.test(buildNumberInput)) {
+  throw new Error('--build-number must be a positive integer (commit count of the build ID)');
+}
+const buildNumber = Number(buildNumberInput);
 const configMin = Number(required(args, 'config-min', process.env.LW_CONFIG_SCHEMA_MIN ?? '1'));
 const configMax = Number(required(args, 'config-max', process.env.LW_CONFIG_SCHEMA_MAX ?? String(configMin)));
 const minimumInstallerVersion = required(
@@ -59,6 +68,7 @@ const manifest = {
   target: EXPECTED_FIRMWARE_TARGET,
   firmwareVersion,
   buildId,
+  buildNumber,
   image: {
     url: imageUrl,
     size: imageBytes.byteLength,
@@ -80,6 +90,7 @@ const manifest = {
 };
 
 validateFirmwareManifest(manifest, { installerVersion: FIRMWARE_INSTALLER_VERSION });
+assertFirmwareManifestBuildNumber(manifest);
 await mkdir(releaseDirectory, { recursive: true });
 let existingImage = null;
 try {
@@ -106,6 +117,7 @@ await writeFile(provenancePath, `${JSON.stringify({
   target: EXPECTED_FIRMWARE_TARGET,
   firmwareVersion,
   buildId,
+  buildNumber,
   image: manifest.image,
   toolchain: manifest.provenance,
 }, null, 2)}\n`);

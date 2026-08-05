@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { buildProductionJob, canonicalProductionJobBytes } from '../src/lib/productionJobPackage.js';
 import { fingerprintCommissioningProject } from '../src/lib/cardCommissioningFlow.js';
 import { buildCardRuntimePackageFromProject } from '../src/lib/cardRuntimeProject.js';
+import { testPort } from './testPort.mjs';
 
 const signedRelease = JSON.parse(await readFile(new URL('../public/firmware/release-manifest.json', import.meta.url), 'utf8'));
 
@@ -341,7 +342,6 @@ test('production fixture tracks the exact currently signed firmware release', as
 
 test('HTTPS production transport performs exact blank config then runtime frame through one card-page bridge', async ({ page }) => {
   const job = await productionJob();
-  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   await page.route('https://led.mandalacodes.com/**', async route => {
     const requested = new URL(route.request().url());
     if (requested.pathname === '/production-bridge-harness') {
@@ -480,7 +480,6 @@ test('HTTPS production transport performs exact blank config then runtime frame 
 });
 
 test('a delayed hotspot status cannot retarget or resurrect recovery after the production run is replaced', async ({ page }) => {
-  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   await page.route('https://led.mandalacodes.com/**', async route => {
     const requested = new URL(route.request().url());
     const upstream = await page.request.fetch(`http://localhost:${testPort}${requested.pathname}${requested.search}`);
@@ -550,7 +549,6 @@ test('a delayed hotspot status cannot retarget or resurrect recovery after the p
 });
 
 test('an erased card retries once after WiFi returns and lets a slow ESP station page finish', async ({ page }) => {
-  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   await page.route('https://led.mandalacodes.com/**', async route => {
     const requested = new URL(route.request().url());
     const upstream = await page.request.fetch(`http://localhost:${testPort}${requested.pathname}${requested.search}`);
@@ -686,7 +684,6 @@ test('an erased card retries once after WiFi returns and lets a slow ESP station
 });
 
 test('HTTPS ProductionScreen commissions a blank card through bridge, human light checks, final reads, and pass', async ({ page }) => {
-  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   await page.route('https://led.mandalacodes.com/**', async route => {
     const requested = new URL(route.request().url());
     const upstream = await page.request.fetch(`http://localhost:${testPort}${requested.pathname}${requested.search}`);
@@ -1660,7 +1657,6 @@ test('firmware preflight restarts the inspected ESP into its application before 
 });
 
 test('an exact card already verified on station LAN reaches firmware evidence without re-entering WiFi handoff', async ({ page }) => {
-  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   await page.route('https://led.mandalacodes.com/**', async route => {
     const requested = new URL(route.request().url());
     const upstream = await page.request.fetch(`http://localhost:${testPort}${requested.pathname}${requested.search}`);
@@ -1680,7 +1676,6 @@ test('an exact card already verified on station LAN reaches firmware evidence wi
 });
 
 test('read-only firmware preflight reuses one named card tab to escape a stale saved AP host', async ({ page }) => {
-  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   await page.route('https://led.mandalacodes.com/**', async route => {
     const requested = new URL(route.request().url());
     const upstream = await page.request.fetch(`http://localhost:${testPort}${requested.pathname}${requested.search}`);
@@ -1771,7 +1766,6 @@ test('read-only firmware preflight reuses one named card tab to escape a stale s
 });
 
 test('an AP-host bridge with handoff-ready station metadata is not final station authority', async ({ page }) => {
-  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   await page.route('https://led.mandalacodes.com/**', async route => {
     const requested = new URL(route.request().url());
     const upstream = await page.request.fetch(`http://localhost:${testPort}${requested.pathname}${requested.search}`);
@@ -1790,7 +1784,6 @@ test('an AP-host bridge with handoff-ready station metadata is not final station
 });
 
 test('fresh exact station evidence arriving after the card page opens completes preflight', async ({ page }) => {
-  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   await page.route('https://led.mandalacodes.com/**', async route => {
     const requested = new URL(route.request().url());
     const upstream = await page.request.fetch(`http://localhost:${testPort}${requested.pathname}${requested.search}`);
@@ -1828,7 +1821,6 @@ test('an interrupted restart response still releases USB and verifies the exact 
 });
 
 test('an unreachable card page ends the post-release busy state with exact-card recovery actions', async ({ page }) => {
-  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   await page.route('https://led.mandalacodes.com/**', async route => {
     const requested = new URL(route.request().url());
     const upstream = await page.request.fetch(`http://localhost:${testPort}${requested.pathname}${requested.search}`);
