@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { STARTER_PRIMITIVES } from '../../../lib/layoutPrimitives.js';
 import { DENSITY_OPTIONS, clampLedCount } from '../../../lib/layoutGeometry.js';
+import { LedChipsetHint, LedChipsetSelect } from '../shared/LedChipsetSelect.jsx';
 
 function PrimitiveIcon({ type }) {
   if (type === 'circle') return <circle cx="24" cy="14" r="9"/>;
@@ -11,7 +12,7 @@ function PrimitiveIcon({ type }) {
 
 const formatMetres = value => (Number(value) >= 10 ? Number(value).toFixed(1) : Number(value).toFixed(2));
 
-export function PrimitiveStarter({ currentPixelCount, defaultDensity, onCreate, onFreeDraw, onImport, onPreviewChange }) {
+export function PrimitiveStarter({ currentPixelCount, defaultDensity, ledType, onLedTypeChange, onCreate, onFreeDraw, onImport, onPreviewChange }) {
   const [selected, setSelected] = useState('line');
   const [ledCount, setLedCount] = useState(currentPixelCount);
   const [density, setDensity] = useState(defaultDensity);
@@ -109,6 +110,13 @@ export function PrimitiveStarter({ currentPixelCount, defaultDensity, onCreate, 
                     onClick={() => setLinkedDensity(option)}>{option}/m</button>
           ))}
         </div>
+        {onLedTypeChange && (
+          <>
+            <LedChipsetSelect value={ledType} onChange={onLedTypeChange}
+                              groupLabel="Starting strip LED chipset"/>
+            <LedChipsetHint/>
+          </>
+        )}
       </div>
       <div className="la-primitive-action">
         <span>{freeDraw ? 'Place points directly on the canvas.' : `${density} LEDs/m`}</span>

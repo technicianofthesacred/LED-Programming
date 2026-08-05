@@ -14,6 +14,7 @@ import { normalizeCardPlaylist } from './cardPlaylist.js';
 import { MAX_PRODUCTION_PHYSICAL_BOUNDARIES } from './productionLimits.js';
 import { assignProductionWiringIdentity, productionWiringDigest } from './productionWiringIdentity.js';
 import { validateKaleidoscope } from './kaleidoscope.js';
+import { CARD_LED_TYPES, isCardLedType } from './cardHardwareContract.js';
 
 export const PRODUCTION_JOB_SCHEMA_VERSION = 1;
 export const PRODUCTION_JOB_FORMAT = 'lightweaver-production-job';
@@ -397,8 +398,8 @@ function assertPackageShape(job, { source = false } = {}) {
     || !/^[a-f0-9]{64}$/.test(config.wiringDigest || '')) throw new Error('Production wiring revision and digest are invalid');
 
   exactRequiredAndOptionalKeys(config.led, LED_KEYS, RUNTIME_LED_OPTIONAL_KEYS, 'LED configuration');
-  if (config.led.type !== undefined && !['WS2812B', 'WS2815'].includes(config.led.type)) {
-    throw new Error('LED configuration type must be WS2812B or WS2815');
+  if (config.led.type !== undefined && !isCardLedType(config.led.type)) {
+    throw new Error(`LED configuration type must be ${CARD_LED_TYPES.join(' or ')}`);
   }
   validateOutputColorSettings(config.led, 'LED configuration');
   if (!Number.isSafeInteger(config.led.maxMilliamps) || config.led.maxMilliamps < MIN_PRODUCTION_MAX_MILLIAMPS

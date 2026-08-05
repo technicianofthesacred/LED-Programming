@@ -1,4 +1,5 @@
 import { isCardWiringCandidateReadback } from './cardWiringSafety.js';
+import { isCardLedType } from './cardHardwareContract.js';
 import { classifyCardReadiness } from './cardReadiness.js';
 import { usableCardStationIp } from './cardPostFlashNetwork.js';
 
@@ -84,7 +85,7 @@ function candidateWiringIdentity(readback = {}) {
   const maxMilliamps = Number(readback.maxMilliamps);
   if (!Number.isSafeInteger(wiringRevision) || wiringRevision < 1
     || !/^[a-f0-9]{64}$/.test(wiringDigest)
-    || !/^(WS2812B|WS2815)$/.test(ledType)
+    || !isCardLedType(ledType)
     || !/^(RGB|RBG|GRB|GBR|BRG|BGR)$/.test(colorOrder)
     || !Number.isSafeInteger(maxMilliamps) || maxMilliamps < 100 || maxMilliamps > 20000) {
     throw new Error('The wiring candidate is missing its exact wiring, color, or current-limit identity');

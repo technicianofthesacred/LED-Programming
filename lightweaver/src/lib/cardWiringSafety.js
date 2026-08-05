@@ -5,6 +5,7 @@ import {
   readStoredCardHost,
 } from './cardConnection.js';
 import { sendCardBridgeRequest } from './cardBridge.js';
+import { isCardLedType } from './cardHardwareContract.js';
 import { guardDirectCardMutation } from './cardIdentity.js';
 
 export const CARD_WIRING_STATES = Object.freeze([
@@ -233,7 +234,7 @@ export async function readCardWiringCandidateEvidence(activationId, options = {}
     || !Number.isSafeInteger(status.maxMilliamps) || status.maxMilliamps < 100 || status.maxMilliamps > 20000) {
     throw wiringError('invalid-response', 'Card candidate status is missing exact wiring and current-limit evidence.', { response: status.raw });
   }
-  if (!['WS2812B', 'WS2815'].includes(status.ledType)) {
+  if (!isCardLedType(status.ledType)) {
     throw wiringError('invalid-response', 'Card candidate status is missing its exact supported LED protocol.', { response: status.raw });
   }
   if (status.projectRevision < 0 || status.projectRevision > 0xffffffff ||

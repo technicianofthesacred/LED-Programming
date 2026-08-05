@@ -17,6 +17,7 @@ import {
   DEFAULT_STANDALONE_OUTPUTS,
   STANDALONE_RUNTIME_MODES,
 } from './standaloneController.js';
+import { normalizeCardLedType } from './cardHardwareContract.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { normalizePatternLabSequenceAssets } from './patternLabHandoff.js';
 import { normalizeSavedLooks } from './sectionLookModel.js';
@@ -115,6 +116,11 @@ export function defaultStandaloneController(overrides = {}) {
     led: {
       ...DEFAULT_STANDALONE_LED,
       ...(overrides.led || {}),
+      // `led.type` already round-trips through this spread, so no schema
+      // migration is needed — projects saved before the chipset picker simply
+      // keep the type they were saved with. Normalising here stops an edited
+      // or corrupt file persisting a chipset the card would reject.
+      type: normalizeCardLedType(overrides.led?.type, DEFAULT_STANDALONE_LED.type),
     },
     defaultLook,
     activeLookId: String(overrides.activeLookId || ''),

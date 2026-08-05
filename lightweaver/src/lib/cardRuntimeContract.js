@@ -1,5 +1,5 @@
 import { CARD_PATTERN_BANK } from './cardPatternBank.js';
-import { CARD_HARDWARE_CONTRACT } from './cardHardwareContract.js';
+import { CARD_HARDWARE_CONTRACT, normalizeCardLedType } from './cardHardwareContract.js';
 import { chainPixelOffsets, chainRowIds } from './patchBoard.js';
 import { normalizeBreatheSettings } from './breatheEnvelope.js';
 import {
@@ -501,7 +501,9 @@ function normalizeLed(led = {}) {
     CARD_HARDWARE_CAPABILITIES.maxPixels,
   );
   return {
-    type: led.type === 'WS2815' ? 'WS2815' : DEFAULT_CARD_LED.type,
+    // Anything the firmware validator would reject collapses to the safe
+    // default instead of travelling to /api/config and failing the install.
+    type: normalizeCardLedType(led.type, DEFAULT_CARD_LED.type),
     pixels,
     outputs: normalizedOutputs,
     colorOrder: normalizeColorOrder(led.colorOrder),

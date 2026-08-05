@@ -9,7 +9,7 @@ import {
   EmitCompass,
   InlineRename,
 } from '../shared/InspectorPrimitives.jsx';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useProject } from '../../../state/ProjectContext.jsx';
 import {
   STRIP_COLORS,
@@ -27,7 +27,10 @@ import {
   sliderValueToLedCount,
 } from '../../../lib/controlScale.js';
 import { PrimitiveStarter } from './PrimitiveStarter.jsx';
+import { LedChipsetHint, LedChipsetSelect } from '../shared/LedChipsetSelect.jsx';
 import { CARD_HARDWARE_CAPABILITIES } from '../../../lib/cardRuntimeContract.js';
+import { normalizeCardLedType } from '../../../lib/cardHardwareContract.js';
+import { DEFAULT_STANDALONE_LED } from '../../../lib/standaloneController.js';
 import { activeBoardGpios } from '../../../lib/gpioAssignments.js';
 import { createDefaultKaleidoscope, deriveReflectionPointIndices } from '../../../lib/kaleidoscope.js';
 import '../../../styles/lw-draw.css';
@@ -139,7 +142,19 @@ export function DrawModePanel({
     kaleidoscopeResetNotices,
     projectWarnings,
   } = state;
-  const { wiring, updateWiring, standaloneController, patchBoard, setPatchBoard } = useProject();
+  const { wiring, updateWiring, standaloneController, setStandaloneController, patchBoard, setPatchBoard } = useProject();
+
+  // The card runs one chipset for every output, so this is a project-level
+  // setting kept on standaloneController.led.type — the same field the card
+  // runtime package forwards to /api/config.
+  const ledType = normalizeCardLedType(standaloneController?.led?.type, DEFAULT_STANDALONE_LED.type);
+  const setLedType = useCallback(nextType => {
+    const type = normalizeCardLedType(nextType, DEFAULT_STANDALONE_LED.type);
+    setStandaloneController(current => ({
+      ...current,
+      led: { ...(current?.led || {}), type },
+    }));
+  }, [setStandaloneController]);
 
   // "+ Add strip" shape chooser — icon tiles (Line / Circle / Square / Free
   // draw / Import vector) plus one LEDs input. The count is the strip the
@@ -442,6 +457,8 @@ export function DrawModePanel({
           <PrimitiveStarter
             currentPixelCount={totalLeds || 37}
             defaultDensity={density}
+            ledType={ledType}
+            onLedTypeChange={setLedType}
             onImport={() => fileRef.current?.click()}
             onCreate={createStarterPrimitive}
             onPreviewChange={onStarterPreviewChange}
@@ -1100,6 +1117,12 @@ export function DrawModePanel({
                 {selectedStrips.length > 1 ? `${selectedStrips.length} sel · ` : ''}
                 {strips.length} · {totalLeds.toLocaleString()} LEDs · wiring order
               </span>
+            </div>
+            {/* Project-wide, next to the LED total: the card drives every
+                output from one chipset, so this is not a per-strip choice. */}
+            <div className="la-led-chipset-row" data-testid="project-led-chipset">
+              <LedChipsetSelect value={ledType} onChange={setLedType}/>
+              <LedChipsetHint/>
             </div>
             {patchBoard?.dataWireCountNeedsReview && (
               <div className="lw-legacy-confirm" role="alert" data-testid="legacy-gpio-confirm">
