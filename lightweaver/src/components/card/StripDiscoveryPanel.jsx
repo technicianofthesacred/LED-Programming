@@ -13,6 +13,7 @@ import {
 } from '../../lib/cardConnection.js';
 import { CARD_HARDWARE_CONTRACT } from '../../lib/cardHardwareContract.js';
 import { FRAME_CHUNK_MAX_PIXELS, createCardFrameStream } from '../../lib/cardFrameStream.js';
+import { normalizeCardReadiness } from '../../lib/cardReadiness.js';
 import { DEFAULT_PRODUCTION_MAX_MILLIAMPS } from '../../lib/cardRuntimeContract.js';
 import {
   PORT_ROLE_CONTROL,
@@ -103,6 +104,20 @@ function sameStreamHealth(a, b) {
 // Plain language for the transport's own reason codes. "Nothing is happening"
 // has to read differently from "the strip is dark because it ends here" — that
 // distinction is the entire point of a discovery walk.
+// What Studio asked the card to hold, next to the ceiling it was measured
+// against. Every way a bench install can be refused for size arrives here as
+// one flat sentence ("The card refused the discovery setup."), which leaves the
+// owner with nothing to change. These two numbers are the difference between a
+// dead end and "pick fewer ports".
+function benchSizeSentence(built, reportedMaxPixels) {
+  const asked = `Studio asked this card to hold ${built.totalPixels} LEDs across `
+    + `${built.layout.length} port(s)`;
+  return reportedMaxPixels
+    ? `${asked}, and the card reports it can hold ${reportedMaxPixels}.`
+    : `${asked}. This card did not report a pixel ceiling of its own, so Studio worked to its own `
+      + `${built.budget}-LED limit — an older card can hold far fewer. Try fewer ports.`;
+}
+
 function streamFailureText(reason) {
   switch (reason) {
     case 'relay-socket-closed':
@@ -134,11 +149,20 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
   const [session, setSession] = useState(null);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState('');
+  const [failureDetail, setFailureDetail] = useState('');
+  const [benchNotice, setBenchNotice] = useState('');
   const [recorded, setRecorded] = useState(false);
   const [streamHealth, setStreamHealth] = useState(null);
   const streamRef = useRef(null);
 
-  const cardMaxPixels = cardLink?.card?.maxPixels || cardLink?.readiness?.maxPixels;
+  // The ceiling the CARD reported, not Studio's. The firmware publishes it as
+  // `limits.pixels` in every status envelope and normalizeCardReadiness is what
+  // turns that into a number; null means this card never said, and
+  // buildBenchConfig then falls back to the Studio contract bound. A card still
+  // on pre-upgrade firmware answers 1024, and a bench config built past that is
+  // refused outright — which is why this is read from the card rather than
+  // assumed.
+  const cardMaxPixels = normalizeCardReadiness(cardLink?.readiness || {}).maxPixels;
   // Added by the firmware workstream; older cards simply do not report it, and
   // its absence must never be read as "the limit is fine".
   const maxMilliampsSource = cardLink?.readiness?.maxMilliampsSource
@@ -238,6 +262,8 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
   const startDiscovery = async () => {
     setBusy(true);
     setFailure('');
+    setFailureDetail('');
+    setBenchNotice('');
     setStreamHealth(null);
     const next = createStripDiscoverySession({ portRoles, benchLayout: bench.layout });
     setSession(next);
@@ -250,8 +276,10 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
       await installBenchConfig({ host, config: bench.config, flowId: flowIdRef.current, initial: true });
       setSession(current => advance(current, { type: 'bench-installed' }));
     } catch (error) {
-      setFailure(error?.message || 'Studio could not set this card up for discovery.');
-      setSession(current => advance(current, { type: 'bench-failed', error: error?.message }));
+      const message = error?.message || 'Studio could not set this card up for discovery.';
+      setFailure(message);
+      setFailureDetail(benchSizeSentence(bench, cardMaxPixels));
+      setSession(current => advance(current, { type: 'bench-failed', error: message }));
     } finally {
       setBusy(false);
     }
@@ -262,18 +290,30 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
     // write — no one-shot authority involved.
     setBusy(true);
     setFailure('');
+    setFailureDetail('');
+    setBenchNotice('');
+    let larger = null;
     try {
       const pixelsPerPort = Object.fromEntries(session.ports
         .filter(port => port.role !== PORT_ROLE_CONTROL)
         .map(port => [port.pin, Math.max(port.provisioned * 2, DISCOVERY_BENCH_HEADROOM)]));
-      const larger = buildBenchConfig(portRoles, { pixelsPerPort, maxPixels: cardMaxPixels });
+      larger = buildBenchConfig(portRoles, { pixelsPerPort, maxPixels: cardMaxPixels });
       // The card restarts to pick up the bigger pixel buffers, so the stream's
       // failure counters from the gap are stale the moment it returns.
       await installBenchConfig({ host, config: larger.config, flowId: flowIdRef.current });
       setStreamHealth(null);
+      // Doubling stops at the card's own ceiling, and pressing Extend again
+      // after that changes nothing. Saying so is the difference between a real
+      // answer and a button the owner presses forever.
+      if (larger.totalPixels >= larger.budget) {
+        setBenchNotice(`The card is now set up for ${larger.budget} LEDs, which is everything it can hold. `
+          + 'If the strip still runs past the lit part, it is longer than this card can drive by itself — '
+          + 'record what you can see and split the run across ports or a second card.');
+      }
       dispatch({ type: 'bench-resized', benchLayout: larger.layout });
     } catch (error) {
       setFailure(error?.message || 'Studio could not extend the card setup.');
+      if (larger) setFailureDetail(benchSizeSentence(larger, cardMaxPixels));
     } finally {
       setBusy(false);
     }
@@ -443,6 +483,11 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
             Studio lit the first <strong data-testid="discovery-lit-count">{activePort.litCount}</strong> LEDs
             on this port. Look at the strip.
           </p>
+          {benchNotice && (
+            <p className="lw-card-banner is-inline" role="status" data-testid="discovery-bench-maxed">
+              {benchNotice}
+            </p>
+          )}
           {activePort.needsLargerBench ? (
             <>
               <p className="lw-card-banner is-inline" role="status" data-testid="discovery-bench-ceiling">
@@ -562,7 +607,14 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
         </p>
       )}
 
-      {failure && <p className="card-connection-failure" role="alert" data-testid="discovery-failure">{failure}</p>}
+      {failure && (
+        <div className="card-connection-failure" role="alert" data-testid="discovery-failure">
+          <p>{failure}</p>
+          {/* Size is never the reason discovery stops for good, so the numbers
+              sit under the card's own words rather than replacing them. */}
+          {failureDetail && <p data-testid="discovery-failure-size">{failureDetail}</p>}
+        </div>
+      )}
     </div>
   );
 }

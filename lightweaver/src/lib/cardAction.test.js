@@ -169,8 +169,6 @@ test('a card with no strips recorded is routed to discovery, never to Layout', (
   assert.deepEqual({ ...stripDiscoveryStep({ actionId: 'card-needs-project' }) }, discovery);
   // Readiness said blank, whatever the connection flow decided to show.
   assert.deepEqual({ ...stripDiscoveryStep({ readinessState: 'blank' }) }, discovery);
-  // The card is Ready, but on Studio's own bench config — still no strips.
-  assert.deepEqual({ ...stripDiscoveryStep({ readinessState: 'connected', benchProject: true }) }, discovery);
   assert.equal(STRIP_DISCOVERY_ROUTE, discovery.route);
   assert.equal(STRIP_DISCOVERY_LABEL, discovery.label);
   assert.equal(STRIP_DISCOVERY_BLANK_MESSAGE, discovery.message);
@@ -186,4 +184,16 @@ test('a commissioned card is left alone by the discovery routing', () => {
     assert.equal(needsStripDiscovery(input), false, JSON.stringify(input));
     assert.equal(stripDiscoveryStep(input), null);
   }
+});
+
+test('the bench card discovery just installed is never routed back into discovery', () => {
+  // Discovery's exit is installing the owner's real project over the bench
+  // config (cardAccess:'bench', src/lib/cardInstallGate.js). A card that reads
+  // Ready because discovery wrote that config must therefore be left alone —
+  // sending it back to "Find my strips" would close the only way out.
+  assert.equal(needsStripDiscovery({ readinessState: 'connected', benchProject: true }), false);
+  assert.equal(stripDiscoveryStep({ readinessState: 'connected', benchProject: true }), null);
+  // The route opens on the card's own report of having no project, and on
+  // nothing else — an unrecognised fact must never widen it.
+  assert.equal(needsStripDiscovery({ readinessState: 'connected', anythingElse: true }), false);
 });

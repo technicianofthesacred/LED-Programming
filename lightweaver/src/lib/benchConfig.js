@@ -110,15 +110,19 @@ export function isBenchProjectEvidence(evidence) {
 // raw persisted data).
 // opts.pixelsPerPort: { [pin]: count } — how much headroom to provision per
 //   port, e.g. discovery's current probe ceiling.
-// opts.maxPixels: the pixel ceiling the CARD reported. A blank card in the
-//   field may still be running firmware capped at 1024 total.
+// opts.maxPixels: the pixel ceiling the CARD reported — normalizeCardReadiness
+//   reads it from the firmware's `limits.pixels`. A blank card in the field may
+//   still be running firmware capped at 1024 total. Null/absent means the card
+//   never said, and the Studio contract bound is used instead.
 //
-// -> { config, layout, skipped } where config is the exact object POSTed to
-//    /api/config (same builder + compaction the real install path uses),
-//    layout is [{ pin, start, count }] in ascending-start order — which is what
-//    callers need to address pixels in a frame — and skipped is
+// -> { config, layout, skipped, totalPixels, budget } where config is the exact
+//    object POSTed to /api/config (same builder + compaction the real install
+//    path uses), layout is [{ pin, start, count }] in ascending-start order —
+//    which is what callers need to address pixels in a frame — skipped is
 //    [{ pin, reason }] for every requested port that could not be provisioned,
-//    so consumers can WARN instead of silently losing a port.
+//    so consumers can WARN instead of silently losing a port, and totalPixels /
+//    budget are what was asked for against the ceiling it was measured on, so a
+//    refusal can be explained in the two numbers that caused it.
 //
 // config is NULL when no requested port could be provisioned. There is no
 // substitute port and no empty config: see the note above `ports` below.
@@ -191,7 +195,7 @@ export function buildBenchConfig(portRoles, {
   if (!outputs.length) {
     // outputCount == 0 is rejected outright by the card (LightweaverStorage.cpp:473),
     // so there is genuinely nothing installable here — never an empty config.
-    return { config: null, layout: [], skipped };
+    return { config: null, layout: [], skipped, totalPixels: 0, budget };
   }
   const snapshot = buildBenchProjectSnapshot({ ledType, colorOrder, outputs });
   const runtimePackage = makeCardRuntimePackage({
@@ -208,10 +212,12 @@ export function buildBenchConfig(portRoles, {
       maxMilliamps: BENCH_MAX_MILLIAMPS,
       outputs,
     },
-    // Pin the cycle to the single bench look so the card does not fall back to
-    // the whole default pattern bank, which would both change what plays and
-    // spend the 3968-byte config budget on ids nothing here uses.
-    controls: { encoder: { patternCycleIds: [BENCH_LOOK_ID] } },
+    // Deliberately NO controls.encoder.patternCycleIds. There is no such field
+    // on the card: the firmware cycles config.looks[] directly, and
+    // compactCardStorageConfig strips patternCycleIds out of every payload
+    // before it is POSTed anyway. The one bench look below IS the whole cycle,
+    // and startupPatternId names it explicitly, so nothing here depends on a
+    // Studio-side cycle list that never crosses the wire.
     patterns: [{ id: BENCH_PATTERN_ID, label: BENCH_PATTERN_LABEL, mode: 'preset' }],
     looks: [{
       id: BENCH_LOOK_ID,
@@ -240,7 +246,7 @@ export function buildBenchConfig(portRoles, {
   // Same preparation as every real install (cardPushClient.js), so the bench
   // config is validated against the card's storage limit before it is offered.
   const { config } = prepareCardStoragePayload(runtimePackage);
-  return { config, layout, skipped };
+  return { config, layout, skipped, totalPixels, budget };
 }
 
 // Mirrors the shape cardCommissioningFlow's cardRestoreSnapshot() produces, so

@@ -2335,6 +2335,9 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["outputReady"] = runtimeOutputReady();
   doc["configValid"] = config.configValid;
   doc["knownGoodProject"] = config.knownGoodProject;
+  // Same claim and same spelling as /api/firmware-info: a card that booted safe
+  // defaults over a project it still holds must not read as factory-empty.
+  doc["safeMode"] = runtimeSafeModeActive();
   doc["configSchemaVersion"] = LW_CONFIG_SCHEMA_VERSION;
   doc["capabilitiesVersion"] = LW_CAPABILITIES_VERSION;
   doc["capabilities"]["kaleidoscopeReflectionPoints"] =

@@ -99,15 +99,17 @@ export function cardActionReducer(state, action) {
 // which writes the one config a blank card will accept and then works entirely
 // in frames.
 //
-// A bench card (Ready, but holding Studio's synthesized discovery config) lands
-// here too: it has a config, but still no recorded strips, so "find my strips"
-// is the honest next step rather than "install your project".
+// A bench card — Ready, but holding the synthesized config discovery itself
+// installed — deliberately does NOT land here. Discovery is what put that
+// config on the card, so routing it back would close discovery's own exit and
+// leave the owner circling. Its next step is installing the real project, which
+// the install gate permits as cardAccess:'bench' (src/lib/cardInstallGate.js).
+// Only the card's own report of having no project opens this route.
 export const STRIP_DISCOVERY_ROUTE = 'screen=discovery';
 export const STRIP_DISCOVERY_LABEL = 'Find my strips';
 export const STRIP_DISCOVERY_BLANK_MESSAGE = 'This card has no strips recorded yet. Find its strips first.';
 
-export function needsStripDiscovery({ actionId = '', readinessState = '', benchProject = false } = {}) {
-  if (benchProject === true) return true;
+export function needsStripDiscovery({ actionId = '', readinessState = '' } = {}) {
   if (readinessState === 'blank') return true;
   // The connection flow's own name for "reachable card, no project on it".
   return actionId === 'card-needs-project';

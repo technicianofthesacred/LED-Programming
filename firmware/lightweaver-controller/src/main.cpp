@@ -101,6 +101,19 @@ static_assert(LW_APPROVED_OUTPUT_GPIO_COUNT * LW_FACTORY_BEACON_PIXEL_LIMIT <=
                   LW_MIN_ALLOCATED_PIXELS,
               "the blank-card beacon writes one slice per approved GPIO; the allocation "
               "floor must cover every slice or a card with no project scribbles off the buffer");
+// The owner watching a freshly flashed card has one strip in one port, so the
+// full sweep IS the worst-case "is this thing alive?" wait before they decide
+// the card is dead and pull power. Capping the sweep to the first few GPIOs was
+// rejected: a port dropped from the sweep stays dark forever, which is the same
+// misdiagnosis with a longer fuse. If the pin menu grows past this, shorten
+// LW_FACTORY_BEACON_STEP_MS rather than silently make the owner wait longer.
+// (The default control assignment claims 4/5/6/7, so a stock card actually
+// sweeps 11 ports / 33s; 45s is the ceiling if every control is moved away.)
+constexpr uint32_t LW_FACTORY_BEACON_MAX_SWEEP_MS = 45000;
+static_assert(LW_APPROVED_OUTPUT_GPIO_COUNT * LW_FACTORY_BEACON_STEP_MS <=
+                  LW_FACTORY_BEACON_MAX_SWEEP_MS,
+              "widening the output pin menu must not push the blank-card beacon sweep past "
+              "the longest wait an owner will give a card before calling it dead");
 // Above this many bytes the request goes to PSRAM instead of internal RAM.
 // Small installations stay entirely on-chip (no PSRAM dependency, no octal-bus
 // latency on the render loop); only genuinely large pieces pay for SPIRAM.
@@ -151,6 +164,15 @@ uint32_t wiringProbationDeadlineMs = 0;
 bool safeDiscoveryMode = false;
 uint8_t safeDiscoveryBatchIndex = 0;
 bool factoryBeaconMode = false;
+// The beacon's step list, as approved-GPIO indices. Only pins that actually
+// received a FastLED controller this boot appear here — setupFactoryBeaconOutputs
+// appends an entry in the same statement that registers the controller, so the
+// sweep cannot address a pin nothing drives. It used to walk the whole approved
+// list, which since the pin menu widened meant steps 0-3 landed on the DEFAULT
+// control pins (4/5/6/7); those are skipped at registration, so a blank card
+// sat dark for the first 12 seconds of every sweep and read as dead.
+uint8_t factoryBeaconSteps[LW_APPROVED_OUTPUT_GPIO_COUNT] = {};
+uint8_t factoryBeaconStepCount = 0;
 uint32_t safeDiscoveryStartedAtMs = 0;
 bool runtimeSafeMode = false;
 bool webRuntimeServing = false;
@@ -907,6 +929,7 @@ bool setupLedOutputs() {
 
 bool setupFactoryBeaconOutputs() {
   ledOutputsReady = false;
+  factoryBeaconStepCount = 0;
   if (!pixelBuffersReady()) return false;
   FastLED.setDither(false);
   FastLED.setCorrection(TypicalLEDStrip);
@@ -918,7 +941,14 @@ bool setupFactoryBeaconOutputs() {
                        LW_FACTORY_BEACON_PIXEL_LIMIT)) {
       return false;
     }
+    // Admitting the beacon step and registering the controller are deliberately
+    // the same act. Two separately-derived lists is exactly how the sweep came
+    // to pulse pins FastLED was never given.
+    factoryBeaconSteps[factoryBeaconStepCount++] = i;
   }
+  // Every approved GPIO is claimed by a control pin: there is no port left to
+  // pulse, and reporting ready would leave the beacon silently showing nothing.
+  if (factoryBeaconStepCount == 0) return false;
   FastLED.clear(false);
   ledOutputsReady = true;
   clearPhysicalLeds();
@@ -973,10 +1003,17 @@ void showFactoryBeaconFrame() {
   }
   blackHeld = false;
 
-  uint8_t step = uint8_t((now / LW_FACTORY_BEACON_STEP_MS) % LW_APPROVED_OUTPUT_GPIO_COUNT);
+  // Sweep the REGISTERED outputs, not the whole approved menu: a step whose pin
+  // has no FastLED controller transmits nothing, so it reads to the owner as a
+  // dead card rather than as "not this port".
+  if (factoryBeaconStepCount == 0) return;
+  uint8_t step = uint8_t((now / LW_FACTORY_BEACON_STEP_MS) % factoryBeaconStepCount);
   uint32_t elapsedInStep = now % LW_FACTORY_BEACON_STEP_MS;
   bool pulseOn = factoryBeaconPulseOn(elapsedInStep);
-  uint8_t activePin = factoryBeaconPinForStep(step);
+  // Buffer slices stay keyed to the approved-GPIO index, because that is the
+  // offset setupFactoryBeaconOutputs handed each controller.
+  uint8_t slot = factoryBeaconSteps[step];
+  uint8_t activePin = LW_APPROVED_OUTPUT_GPIOS[slot];
   (void)activePin;
   if (step != lastStep) {
     // FastLED cannot unregister controllers. Electrically retire the previous
@@ -990,7 +1027,7 @@ void showFactoryBeaconFrame() {
   fill_solid(physicalLeds, LW_APPROVED_OUTPUT_GPIO_COUNT * LW_FACTORY_BEACON_PIXEL_LIMIT,
              CRGB::Black);
   if (pulseOn) {
-    uint16_t bufferStart = uint16_t(step) * LW_FACTORY_BEACON_PIXEL_LIMIT;
+    uint16_t bufferStart = uint16_t(slot) * LW_FACTORY_BEACON_PIXEL_LIMIT;
     fill_solid(physicalLeds + bufferStart, LW_FACTORY_BEACON_PIXEL_LIMIT,
                CRGB(255, 96, 24));
   }
@@ -2266,6 +2303,10 @@ bool runtimeOutputReady() {
 }
 bool runtimeConfigValid() { return runtimeConfig.configValid; }
 bool runtimeKnownGoodProject() { return runtimeConfig.knownGoodProject; }
+// Mirrors the flag /api/wiring/status already reports as the 'safe-mode' state,
+// so the two can never disagree about whether a project is still sitting unread
+// in NVS. See the contract note in LightweaverRuntimeApi.h.
+bool runtimeSafeModeActive() { return runtimeSafeMode; }
 
 void runtimeApplySavedConfig() {
   // handleConfigPost and loop run on the same Arduino task, so the complete
@@ -2355,6 +2396,9 @@ String runtimeFirmwareInfo() {
   doc["outputReady"] = runtimeOutputReady();
   doc["configValid"] = runtimeConfigValid();
   doc["knownGoodProject"] = runtimeKnownGoodProject();
+  // Tells a blank-looking card that is merely UNREAD apart from one that is
+  // genuinely empty. Studio gates the discovery config write on that difference.
+  doc["safeMode"] = runtimeSafeModeActive();
   doc["configSchemaVersion"] = LW_CONFIG_SCHEMA_VERSION;
   doc["capabilitiesVersion"] = LW_CAPABILITIES_VERSION;
   doc["capabilities"]["kaleidoscopeReflectionPoints"] =

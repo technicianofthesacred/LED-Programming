@@ -159,6 +159,11 @@ let bridgeDiscoveryAuthority = null;
 // for presence rather than for a match diverted a WiFi handoff's config write
 // around its fail-closed persistence record. Nothing may be left behind that
 // answers "yes" to a presence check.
+//
+// The rule that keeps that true, enforced by card-bridge-handoff.mjs: every
+// function that RE-OPENS the one-shot — anything assigning
+// bridgeInitialConfigAttempted something other than `true` — calls this. That
+// is the complete set of moments a leftover grant could be spent again.
 function clearBlankDiscoveryAuthority() {
   bridgeBlankEvidence = null;
   bridgeDiscoveryAuthority = null;
@@ -1137,6 +1142,12 @@ export function retargetCardBridge(rawHost = '', rawCorrelation = {}, { flowId: 
     bridgeHandoffCorrelation = correlation;
     bridgeHandoffFlowId = flowId;
     bridgeInitialConfigAttempted = false;
+    // Re-opening the one-shot is what makes a leftover grant dangerous, so the
+    // clear belongs beside the re-open and not only inside the revoke above.
+    // That revoke has already dropped it today; restating it here means a later
+    // edit which moves or removes the revoke cannot silently hand a discovery
+    // grant this freshly re-armed handoff write.
+    clearBlankDiscoveryAuthority();
     bridgeRestoredHandoff = false;
     bridgeRestoredFinalEnvelopeCount = 0;
     writeWifiHandoffRecovery({ correlation, flowId, ackAttempted: false });
@@ -1356,6 +1367,10 @@ export function restoreCardBridgeHandoff(rawFlowId = '') {
   bridgeHandoffCorrelation = correlation;
   bridgeHandoffFlowId = flowId;
   bridgeInitialConfigAttempted = recovery.configAttempted;
+  // Same reason as the retarget path: a restored handoff may re-open the
+  // one-shot (recovery.configAttempted is false whenever the reload happened
+  // before the config went out), so no discovery grant may survive into it.
+  clearBlankDiscoveryAuthority();
   bridgeRestoredHandoff = recovery.ackAttempted;
   bridgeRestoredFinalEnvelopeCount = 0;
 

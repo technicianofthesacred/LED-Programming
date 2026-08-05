@@ -8,6 +8,10 @@ function explicitBoolean(value) {
   return typeof value === 'boolean' ? value : null;
 }
 
+function positiveInteger(value) {
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
 function hasBoundedText(value, maxLength) {
   if (typeof value !== 'string') return false;
   const text = value.trim();
@@ -30,6 +34,12 @@ export function normalizeCardReadiness(raw = {}) {
     ? source.provisioningContractVersion
     : null;
   const contractSupported = contractVersion === CARD_READINESS_CONTRACT_VERSION;
+  const limits = source.limits && typeof source.limits === 'object' ? source.limits : {};
+  // The firmware publishes this as `safeMode` on both /api/status and
+  // /api/firmware-info (runtimeSafeModeActive, LightweaverRuntimeApi.h). Cards
+  // flashed before that omit it entirely, and their silence must keep
+  // classifying exactly as it did — see the note on `safeMode` below.
+  const safeModeClaim = source.safeMode;
   const rawCardId = source.cardId ?? source.id;
   const identityValid = app === 'Lightweaver'
     && hasBoundedText(rawCardId, 64)
@@ -60,6 +70,23 @@ export function normalizeCardReadiness(raw = {}) {
     // null and means "no separate claim" — never "not ready".
     playbackReady: explicitBoolean(source.playbackReady),
     outputReady: explicitBoolean(source.outputReady),
+    // The card's OWN pixel ceiling, from the `limits` block both /api/status
+    // (LightweaverStorage.cpp) and /api/firmware-info (main.cpp) publish. It is
+    // not a constant across the field: a card flashed before LW_MAX_PIXELS was
+    // raised still answers 1024, and a config built past what it answers comes
+    // back refused. Null when the card did not say, so a caller falls back to
+    // its own contract bound instead of quietly adopting this Studio build's
+    // ceiling as if the card had claimed it.
+    maxPixels: positiveInteger(limits.pixels),
+    // True only when the card explicitly says it booted safe defaults because
+    // it could not READ a project it still holds (RuntimeLoadResult.safeMode,
+    // LightweaverStorage.h — the same state /api/wiring/status already reports
+    // as 'safe-mode'). Such a card publishes exactly the absence a freshly
+    // erased one does, so this flag is the only thing that tells "nothing to
+    // lose" apart from "the owner's artwork is still in NVS, just unread".
+    // Absence is not damage: every card in the field today omits the field, and
+    // its silence has to keep classifying exactly as it did before.
+    safeMode: safeModeClaim === true,
   });
 }
 
@@ -114,6 +141,24 @@ export function classifyCardReadiness(raw = {}, {
   const expectedBuildId = cleanText(expectedCard?.buildId, 96);
   if (expectedBuildId && normalized.buildId !== expectedBuildId) {
     return classifiedResult('identity-mismatch', normalized, 'unexpected-firmware-build');
+  }
+  // A safe-mode card still HOLDS the owner's project — the read failed, the
+  // stored config did not vanish — but it reports the same absence an erased
+  // card does (knownGoodProject false, defaults source, no project identity),
+  // so the blank branch below would match it. Blank is the one classification
+  // that unlocks strip discovery's one-shot config write, which the firmware
+  // exempts from wiring staging precisely because a blank card has no layout to
+  // protect. Letting a damaged card through would overwrite stored artwork with
+  // the bench sentinel, with no probation and no warning. Recovery is the only
+  // honest destination until somebody has looked at it.
+  if (normalized.safeMode) {
+    return classifiedResult('not-ready', normalized, 'safe-mode', {
+      blank: false,
+      // Playback is not a write. A card sitting on safe defaults can still be
+      // lit, and refusing that would report a card as dead when it is only
+      // unread.
+      ...(normalized.playbackReady === true ? { playbackAccess: 'ready' } : {}),
+    });
   }
   if (
     normalized.knownGoodProject === false

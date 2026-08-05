@@ -1,3 +1,4 @@
+import { CARD_HARDWARE_CONTRACT } from './cardHardwareContract.js';
 import {
   assertPatternLabJsonSafe,
   normalizePatternLabRecipe,
@@ -23,11 +24,31 @@ export const PATTERN_LAB_EXPERIMENTAL_LOWERING_TARGETS = Object.freeze([
 ]);
 
 const MAX_RECIPE_BYTES = 256 * 1024;
-const MAX_LWSEQ_PIXELS = 1024;
 const MAX_LWSEQ_FPS = 24;
 const MAX_LWSEQ_FRAMES = 24 * 60 * 15;
 const LWSEQ_HEADER_BYTES = 64;
-const MAX_LWSEQ_BYTES = LWSEQ_HEADER_BYTES + MAX_LWSEQ_PIXELS * 3 * MAX_LWSEQ_FRAMES;
+
+// The .lwseq sidecar manifest (patternLabHandoff.js normalizeManifest) will not
+// describe a recording wider than this, and a recording no sidecar can describe
+// can never be handed to a card. It is a file budget, not a hardware number.
+const LWSEQ_SIDECAR_MAX_PIXELS = 4096;
+
+// Studio's card profile advertises the card's real pixel ceiling
+// (patternLabCompatibility.js limits.pixelCount), and the firmware's
+// readSequenceMetadata() now bounds on the allocated frame buffer instead of a
+// fixed 1024-pixel static — so a 2000-pixel piece really can play back what it
+// records. Take the contract, narrowed only by what the sidecar can describe;
+// a bare literal here is what made Studio advertise 65535 and then refuse 1025.
+const MAX_LWSEQ_PIXELS = Math.min(CARD_HARDWARE_CONTRACT.maxPixels, LWSEQ_SIDECAR_MAX_PIXELS);
+
+// Widening the strip must not silently widen the FILE. This is the largest
+// .lwseq the pipeline has ever accepted — a full-length capture at the old
+// 1024-pixel ceiling, and the same number lwseqBake.js enforces as
+// MAX_PATTERN_LAB_LWSEQ_BYTES — and it bounds a real in-memory copy in
+// validateProducedLwseq(). So it stays put while the pixel ceiling moves: a
+// wider piece records a shorter sequence, not a bigger file.
+const LWSEQ_BYTE_BUDGET_PIXELS = 1024;
+const MAX_LWSEQ_BYTES = LWSEQ_HEADER_BYTES + LWSEQ_BYTE_BUDGET_PIXELS * 3 * MAX_LWSEQ_FRAMES;
 
 export const PATTERN_LAB_CARD_RECORD_HARDWARE_GATES = deepFreeze([
   {
@@ -358,6 +379,17 @@ export function createPatternLabStudioRecordingDescriptor(descriptor, input) {
     1,
     Math.min(MAX_LWSEQ_FRAMES, fps * 900),
   );
+  // Pixels and frames used to imply the byte budget: the ceiling was exactly
+  // one full-length 1024-pixel capture. Now that the pixel ceiling is the card
+  // contract's, the widest legal recording no longer fits the narrowest legal
+  // file, so say so here rather than letting the owner capture the whole thing
+  // and only then fail validateProducedLwseq().
+  const expectedByteLength = LWSEQ_HEADER_BYTES + pixelCount * 3 * frameCount;
+  if (expectedByteLength > MAX_LWSEQ_BYTES) {
+    throw new RangeError(
+      `Studio recording of ${expectedByteLength} bytes exceeds the ${MAX_LWSEQ_BYTES} byte LWSEQ budget; record fewer pixels or a shorter sequence`,
+    );
+  }
   return deepFreeze({
     version: PATTERN_LAB_EXPERIMENTAL_VERSION,
     kind: 'studio-known-frame-recording',

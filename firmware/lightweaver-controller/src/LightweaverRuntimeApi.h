@@ -97,6 +97,16 @@ bool runtimePlaybackReady();
 bool runtimeOutputReady();
 bool runtimeConfigValid();
 bool runtimeKnownGoodProject();
+// True when this boot fell back to safe defaults because a project that is
+// STILL PRESENT in NVS could not be read. Such a card publishes exactly the
+// absence a factory-erased one does — no project identity, knownGoodProject
+// false, source defaults — so without this flag a caller cannot tell "nothing
+// to lose" from "the owner's artwork is still here, just unread". Strip
+// discovery writes its bench config straight over a blank card, so that
+// distinction is the difference between rescuing a card and overwriting a
+// piece. Already surfaced as the 'safe-mode' state on /api/wiring/status; this
+// exposes the same truth on the status and firmware-info envelopes.
+bool runtimeSafeModeActive();
 void runtimeApplySavedConfig();
 void runtimeMarkRestartPending();
 void runtimeSetWifiTransitionPending(bool pending);

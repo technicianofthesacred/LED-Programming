@@ -100,7 +100,21 @@ assert.match(factoryFrame, /LW_FACTORY_BEACON_SAFETY_POLL_MS/,
   'the factory animation must not read NVS on every 10ms frame');
 assert.match(factoryFrame, /clearPhysicalLeds\(\)/,
   'every factory beacon step must first submit black to every registered output');
-assert.match(factoryFrame, /factoryBeaconPinForStep/);
+// The frame used to re-derive its pin with factoryBeaconPinForStep(step), walking
+// the whole approved list independently of what setupFactoryBeaconOutputs had
+// actually registered. Once the pin menu widened past the four default control
+// GPIOs those two lists disagreed: registration skipped 4/5/6/7 as control pins
+// while the sweep kept pulsing them, so a blank card sat dark for the first 12
+// seconds of every cycle and read as dead — on the exact state the beacon exists
+// to make legible. The step list is now built by registration itself, so the
+// sweep can only address a slot FastLED was actually given. Re-deriving the pin
+// here would reintroduce the second list; that is what this guards.
+assert.match(factoryFrame, /factoryBeaconSteps\[/,
+  'the beacon frame must address only slots registration recorded, never a re-derived pin list');
+assert.doesNotMatch(factoryFrame, /factoryBeaconPinForStep/,
+  'the beacon frame must not re-derive its pin independently of what was registered');
+assert.match(factoryFrame, /factoryBeaconStepCount/,
+  'the sweep length must come from the registered-output count, not the approved-GPIO count');
 assert.match(factoryFrame, /LW_FACTORY_BEACON_PIXEL_LIMIT/);
 assert.match(factoryFrame, /transmitPhysicalLeds\(LW_FACTORY_BEACON_BRIGHTNESS_LIMIT/);
 assert.equal((factoryFrame.match(/fill_solid\(physicalLeds \+ bufferStart/g) || []).length, 1,

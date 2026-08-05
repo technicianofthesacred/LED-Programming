@@ -368,6 +368,103 @@ test('an explicit playback refusal still stops playback with the command gate op
   assert.equal(result.playbackAccess, 'recovery');
 });
 
+// ── limits.pixels (the ceiling the CARD reports, not the one Studio assumes) ──
+
+test('the card-reported pixel ceiling is normalized from the firmware limits block', () => {
+  // Exactly where the firmware puts it: doc["limits"]["pixels"] = LW_MAX_PIXELS
+  // in runtimeStatusJson (LightweaverStorage.cpp) and runtimeFirmwareInfo
+  // (main.cpp). A pre-upgrade card in the field still answers 1024.
+  assert.equal(normalizeCardReadiness(readyEnvelope({ limits: { pixels: 1024 } })).maxPixels, 1024);
+
+  // Never invented, and never widened by a nonsense claim: null means "the card
+  // did not say", which is a different fact from any number.
+  for (const limits of [undefined, null, {}, 'lots', { pixels: 0 }, { pixels: -5 }, { pixels: '1024' }]) {
+    const normalized = normalizeCardReadiness(readyEnvelope({ limits }));
+    assert.equal(normalized.maxPixels, null, JSON.stringify(limits));
+  }
+});
+
+// ── safeMode (a damaged card must never be mistaken for an erased one) ───────
+// The firmware boots safe defaults when it cannot READ a project it still
+// holds. That card publishes the same absence a freshly flashed one does, and
+// 'blank' is what unlocks strip discovery's one-shot config write.
+
+test('a card that booted safe defaults is kept out of the blank classification', () => {
+  const erased = {
+    runtimePhase: 'factory',
+    knownGoodProject: false,
+    commandReady: false,
+    outputReady: false,
+    mode: 'factory-flash',
+    source: 'defaults',
+  };
+
+  // Same envelope, one flag apart.
+  const blank = classifyCardReadiness(readyEnvelope(erased), { expectedCardId: CARD_ID });
+  assert.equal(blank.state, 'blank');
+  assert.equal(blank.blank, true);
+
+  const damaged = classifyCardReadiness(readyEnvelope({ ...erased, safeMode: true }), {
+    expectedCardId: CARD_ID,
+  });
+  assert.equal(damaged.state, 'not-ready');
+  assert.equal(damaged.blank, false, 'safe mode must never read as "nothing to overwrite"');
+  assert.equal(damaged.reason, 'safe-mode');
+  assert.equal(damaged.patternAccess, 'recovery');
+  assert.equal(damaged.connected, false);
+});
+
+test('firmware that omits the safe-mode flag classifies exactly as it did before', () => {
+  // Every card in the field today. Absence is not evidence of damage, so each
+  // of these has to land on the same state it landed on before the flag
+  // existed — most of all the blank one, which is the whole rescue path.
+  const cases = [
+    ['blank', { runtimePhase: 'factory', knownGoodProject: false, commandReady: false, outputReady: false, mode: 'factory-flash', source: 'defaults' }, 'blank'],
+    ['ready', {}, 'connected'],
+    ['recovering', { runtimePhase: 'recovering', commandReady: false }, 'not-ready'],
+  ];
+
+  for (const [label, override, expected] of cases) {
+    const envelope = readyEnvelope(override);
+    assert.equal(Object.hasOwn(envelope, 'safeMode'), false, label);
+    assert.equal(normalizeCardReadiness(envelope).safeMode, false, label);
+    assert.equal(classifyCardReadiness(envelope, { expectedCardId: CARD_ID }).state, expected, label);
+  }
+
+  // A non-boolean claim is not a claim. Only an explicit true diverts a card.
+  for (const claim of ['true', 1, {}, null]) {
+    const result = classifyCardReadiness(readyEnvelope({
+      runtimePhase: 'factory',
+      knownGoodProject: false,
+      commandReady: false,
+      outputReady: false,
+      mode: 'factory-flash',
+      source: 'defaults',
+      safeMode: claim,
+    }), { expectedCardId: CARD_ID });
+    assert.equal(result.state, 'blank', JSON.stringify(claim));
+  }
+});
+
+test('safe mode still lets a lit card be played, it just refuses the writes', () => {
+  // Warn, never block: safe defaults are running, so the strip can be driven.
+  // What must not happen is a config write landing on top of an unread project.
+  const result = classifyCardReadiness(readyEnvelope({
+    runtimePhase: 'recovering',
+    knownGoodProject: false,
+    commandReady: false,
+    playbackReady: true,
+    outputReady: false,
+    source: 'defaults',
+    safeMode: true,
+  }), { expectedCardId: CARD_ID });
+
+  assert.equal(result.reason, 'safe-mode');
+  assert.equal(result.blank, false);
+  assert.equal(result.patternAccess, 'recovery');
+  assert.equal(result.playbackAccess, 'ready');
+});
+
 test('a blank factory card is refused for playback as well as for commands', () => {
   const result = classifyCardReadiness({
     ...readyEnvelope({

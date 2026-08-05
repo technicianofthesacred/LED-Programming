@@ -529,6 +529,12 @@ function realPatternShape(patternId) {
     const baseInstallFacts = {
       hardwareIssue: hardwareConfigurationIssue,
       busy: playlistSyncing || recoveryPending,
+      // Deliberately NOT run through readCardAccessLevel. That upgrade exists to
+      // undo a 'project' verdict on a card holding Studio's own discovery bench
+      // config, and this screen never produces 'project' — a connected card is
+      // always 'ready' here. Plumbing card project evidence in to reach an
+      // upgrade that can never apply would be dead weight. If this verdict ever
+      // grows a 'project' branch it needs the upgrade too (see lw-pattern.jsx).
       cardAccess: connected ? 'ready' : 'recovery',
     };
     const installGate = evaluateCardInstallGate(baseInstallFacts);
