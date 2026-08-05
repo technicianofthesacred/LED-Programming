@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { testPort as port } from './testPort.mjs';
 
 const TEST_CARD_ID = 'lw-layout-tests';
 const TEST_BUILD_ID = 'a'.repeat(40);
@@ -167,7 +168,6 @@ async function gotoWire(page: any, { verified = false, transformProject = null a
 }
 
 async function proxyStudioOverHttps(page: any) {
-  const port = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   await page.route('https://led.mandalacodes.com/**', async (route: any) => {
     const requested = new URL(route.request().url());
     const localUrl = `http://localhost:${port}${requested.pathname}${requested.search}`;

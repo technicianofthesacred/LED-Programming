@@ -3,14 +3,16 @@ import { mkdirSync } from 'fs';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
+import { testPort } from './testPort.mjs';
 
 mkdirSync('test-results', { recursive: true });
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
 
-// Start a fresh Vite dev server on port 9997 using the current source files
-const vite = spawn('npx', ['vite', '--port', '9997', '--strictPort'], {
+// Start a fresh Vite dev server on this workspace's own port (see
+// tests/testPort.mjs) using the current source files
+const vite = spawn('npx', ['vite', '--port', String(testPort), '--strictPort'], {
   cwd: root,
   stdio: ['ignore', 'pipe', 'pipe'],
   shell: true,
@@ -20,7 +22,7 @@ let viteReady = false;
 const viteReady$ = new Promise((resolve, reject) => {
   vite.stdout.on('data', d => {
     process.stdout.write('[vite] ' + d);
-    if (d.toString().includes('9997')) { viteReady = true; resolve(); }
+    if (d.toString().includes(String(testPort))) { viteReady = true; resolve(); }
   });
   vite.stderr.on('data', d => process.stderr.write('[vite err] ' + d));
   vite.on('exit', code => { if (!viteReady) reject(new Error(`Vite exited ${code}`)); });
@@ -29,7 +31,7 @@ const viteReady$ = new Promise((resolve, reject) => {
 
 try {
   await viteReady$;
-  console.log('Vite ready on port 9997');
+  console.log(`Vite ready on port ${testPort}`);
 } catch (e) {
   console.error('Failed to start Vite:', e.message);
   vite.kill();
@@ -43,7 +45,7 @@ const errors = [];
 page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
 page.on('pageerror', e => errors.push(e.message));
 
-await page.goto('http://localhost:9997/', { waitUntil: 'domcontentloaded' });
+await page.goto(`http://localhost:${testPort}/`, { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(1500);
 
 // Click Pattern in the left navigation rail
