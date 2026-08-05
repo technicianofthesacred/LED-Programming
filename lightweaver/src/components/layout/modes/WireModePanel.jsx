@@ -12,7 +12,7 @@ import { WireDiscovery } from '../wire/WireDiscovery.jsx';
 import { WiringPlanSummary } from '../wire/WiringPlanSummary.jsx';
 import { planAdjacentStripBoundary, planOutputPixelCountAdjustment } from '../../../lib/wiringChase.js';
 import { activeBoardGpios, BOARD_CONTROL_FIELDS, planBoardGpioAssignment } from '../../../lib/gpioAssignments.js';
-import { normalizeUsbLedColorOrder } from '../../../lib/usbLedColorOrder.js';
+import { evaluateCardInstallGate, readCardCommissioningVerification } from '../../../lib/cardInstallGate.js';
 import { estimatePowerBudget } from '../../../lib/controllerProfiles.js';
 import { readPowerSupplySettings, withPowerSupplySettings } from '../../../lib/powerSupplySettings.js';
 import '../../../styles/lw-wire.css';
@@ -278,14 +278,22 @@ export function WireModePanel({ state, connected, cardHost }) {
   const mappingCoversEveryStrip = mappedStripIds.size === stripIds.size
     && !wiring.runs.some(run => run.type === 'strip' && !stripIds.has(run.source.stripId));
   const mappingReady = compiledWiring.ok && mappingCoversEveryStrip;
-  const physicallyVerified = Boolean(wiring.verified && wiring.runs.every(run => run.verified));
+  // Shared with the Playlist install gate so the two screens can never
+  // disagree about what counts as a commissioned card (src/lib/cardInstallGate.js).
+  const commissioning = readCardCommissioningVerification({ wiring, standaloneController });
+  const physicallyVerified = commissioning.physicallyVerified;
   const physicalStripCount = mappedStripIds.size;
-  const colorOrder = normalizeUsbLedColorOrder(standaloneController?.led?.colorOrder || 'RGB');
-  const colorConfirmed = Boolean(
-    standaloneController?.led?.colorOrderConfirmed
-    && normalizeUsbLedColorOrder(standaloneController?.led?.confirmedColorOrder || '') === colorOrder
-  );
-  const commissioningVerified = physicallyVerified && colorConfirmed;
+  const commissioningVerified = commissioning.verified;
+  // This push always sends allowLayoutChange, so it is the wiring-affecting
+  // case the gate exists for. It deliberately does not require a live ambient
+  // link: pushConfigToCard runs its own discovery and can fall back to the
+  // bounded installer handoff for the exact paired card.
+  const installGate = evaluateCardInstallGate({
+    wiringAffecting: true,
+    wiringSendReady: compiledWiring.sendReady,
+    commissioningVerified,
+    requiresLiveLink: false,
+  });
   useEffect(() => {
     // Verification auto-locks the wiring. Safe from looping: changeKind null
     // plus an unchanged wiring fingerprint (locked is excluded from it) means
@@ -397,7 +405,7 @@ export function WireModePanel({ state, connected, cardHost }) {
                 projectId={projectId}
                 projectName={projectName}
                 standaloneController={installController}
-                disabled={!compiledWiring.sendReady || !commissioningVerified}
+                disabled={!installGate.allowed}
               />
             </section>
           </>

@@ -138,10 +138,14 @@ async function gotoPairedReadinessPatterns(page, {
   knownGoodProject,
   commandReady,
   outputReady = true,
+  // Omitted entirely by firmware that predates the command/playback split, so
+  // the fixture must be able to leave the field out rather than send null.
+  playbackReady = undefined,
+  authorize: authorizeOverride = null,
 }) {
   const buildId = `${cardId}-build`;
   const project = createDefaultProject();
-  const authorize = runtimePhase === 'ready' && knownGoodProject === true && commandReady === true && outputReady === true;
+  const authorize = authorizeOverride ?? (runtimePhase === 'ready' && knownGoodProject === true && commandReady === true && outputReady === true);
   const fixture = authorize
     ? registerPatternAuthorizationFixture(page, { project, cardId, buildId })
     : null;
@@ -173,6 +177,7 @@ async function gotoPairedReadinessPatterns(page, {
     app: 'Lightweaver', ok: true, provisioningContractVersion: 1,
     cardId, firmwareVersion: '1.0.0', buildId, bootId: `${cardId}-boot`,
     runtimePhase, knownGoodProject, commandReady, outputReady,
+    ...(playbackReady === undefined ? {} : { playbackReady }),
     ...(fixture ? { piece: { id: project.id }, projectFingerprint: fixture.projectFingerprint } : {}),
     ...(runtimePhase === 'factory' ? { mode: 'factory-flash', source: 'defaults' } : {}),
   } }));
@@ -1858,4 +1863,45 @@ test('the mirror geometry control switches the active geometry', async ({ page }
   await page.locator('.geo-seg').getByRole('button', { name: 'Mirror' }).click();
 
   await expect(page.locator('.geo-seg button.on')).toHaveText(/Mirror/);
+});
+
+// ── WiFi transition: playback survives, commands do not ─────────────────────
+// The firmware reports playbackReady separately from commandReady precisely so
+// a lit, healthy card does not refuse its own patterns while the radio
+// reassociates. These two lock in that Studio honours the split — and that
+// firmware which never reports the field keeps the old, stricter behaviour.
+
+test('a reassociating card keeps taking patterns while its command gate is shut', async ({ page }) => {
+  const { controlRequests } = await gotoPairedReadinessPatterns(page, {
+    cardId: 'lw-wifi-transition-playback',
+    // Exactly what main.cpp reports mid-handoff: the WiFi transition folds into
+    // runtimePhase and commandReady, but never into playbackReady.
+    runtimePhase: 'recovering',
+    knownGoodProject: true,
+    commandReady: false,
+    playbackReady: true,
+    authorize: true,
+  });
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+
+  await expect(page.getByTestId('pattern-preview-meta')).toContainText('Ocean');
+  await expect.poll(() => controlRequests.some(request => request.patternId === 'ocean')).toBe(true);
+});
+
+test('firmware without playbackReady still blocks patterns while recovering', async ({ page }) => {
+  const { controlRequests } = await gotoPairedReadinessPatterns(page, {
+    cardId: 'lw-legacy-no-playback-field',
+    runtimePhase: 'recovering',
+    knownGoodProject: true,
+    commandReady: false,
+    // playbackReady deliberately absent — the pre-split firmware payload.
+    authorize: true,
+  });
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+  await page.waitForTimeout(400);
+
+  expect(controlRequests).toHaveLength(0);
+  await expect(page.getByRole('button', { name: 'Recover and verify card' })).toBeVisible();
 });

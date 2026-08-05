@@ -14,6 +14,7 @@ import { cardStorageJson, readCardProjectEvidence } from '../lib/cardPushClient.
 import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
 import { prepareCardDeployment, waitForCardDeploymentVerification } from '../lib/cardDeployment.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
+import { evaluateCardInstallGate, readCardCommissioningVerification } from '../lib/cardInstallGate.js';
 import { normalizeSavedLooks } from '../lib/sectionLookModel.js';
 import { normalizeCardVisualLook } from '../lib/cardVisualLook.js';
 import {
@@ -102,6 +103,7 @@ function realPatternShape(patternId) {
       projectName,
       strips,
       patchBoard,
+      wiring,
       compiledWiring,
       standaloneController,
       setStandaloneController,
@@ -517,6 +519,26 @@ function realPatternShape(patternId) {
         setPlaylistStatus(makePlaylistPushErrorState(error, { host, runtimePackage }));
       }
     };
+    // Shared install precondition (src/lib/cardInstallGate.js). The plain
+    // install never sets allowLayoutChange, so the card refuses a wiring change
+    // on its own and this button only needs the ordinary preconditions. The
+    // escalation button below explicitly permits a layout change, which makes
+    // it the same dangerous case as the Layout install and therefore subject to
+    // the same bench-test + colour-order proof.
+    const commissioningVerified = readCardCommissioningVerification({ wiring, standaloneController }).verified;
+    const baseInstallFacts = {
+      hardwareIssue: hardwareConfigurationIssue,
+      busy: playlistSyncing || recoveryPending,
+      cardAccess: connected ? 'ready' : 'recovery',
+    };
+    const installGate = evaluateCardInstallGate(baseInstallFacts);
+    const layoutChangeInstallGate = evaluateCardInstallGate({
+      ...baseInstallFacts,
+      wiringAffecting: true,
+      wiringSendReady: compiledWiring.sendReady,
+      commissioningVerified,
+    });
+
     const openCard = () => openLocalCardPage(host);
     const openCardInstaller = () => {
       if (!handoffUrl) return;
@@ -526,11 +548,13 @@ function realPatternShape(patternId) {
         reason: 'card-installer',
       });
     };
-    // "Adjust" on the wiring-mismatch banner: jump straight to Layout → Size,
-    // where the per-strip LED counts live, so the user can change the number
-    // instead of accepting the card's current wiring. Deep-linked via the hash
-    // the layout screen already parses (#screen=layout&mode=size).
-    const adjustLedCounts = () => { window.location.hash = 'screen=layout&mode=size'; };
+    // "Adjust" on the wiring-mismatch banner: jump straight to the Layout
+    // panel that owns the per-strip LED counts, so the user can change the
+    // number instead of accepting the card's current wiring. That panel is the
+    // internal 'draw' mode, labelled "Wire" in the UI (see ModeSwitch.jsx);
+    // the old 'size' mode this used to point at no longer exists, so the link
+    // silently fell back to the default mode.
+    const adjustLedCounts = () => { window.location.hash = 'screen=layout&mode=draw'; };
 
     const persistHost = (value) => {
       if (recoveryPendingRef.current) return;
@@ -643,8 +667,8 @@ function realPatternShape(patternId) {
                 <button className="btn" disabled={recoveryPending} onClick={resetLiveOutput}>{I.refresh}Reset live</button>
                 <button
                   className="btn primary"
-                  disabled={!connected || playlistSyncing || recoveryPending || Boolean(hardwareConfigurationIssue)}
-                  title={!connected ? 'Connect the card to install this playlist' : undefined}
+                  disabled={!installGate.allowed}
+                  title={installGate.allowed ? undefined : installGate.message}
                   onClick={() => loadPlaylistToCard()}
                 >
                   {I.bolt}{playlistSyncing ? 'Sending…' : 'Install playlist on card'}
@@ -684,7 +708,15 @@ function realPatternShape(patternId) {
                   {playlistStatus.action &&
                     <button
                       className="btn primary"
-                      disabled={playlistSyncing || recoveryPending}
+                      // Only the allow-layout-change escalation can rewrite the
+                      // physical output layout, so only it carries the shared
+                      // wiring-install proof. The other kinds send no layout
+                      // change and keep their existing precondition.
+                      disabled={playlistSyncing || recoveryPending
+                        || (playlistStatus.action.kind === 'allow-layout-change' && !layoutChangeInstallGate.allowed)}
+                      title={playlistStatus.action.kind === 'allow-layout-change' && !layoutChangeInstallGate.allowed
+                        ? layoutChangeInstallGate.message
+                        : undefined}
                       onClick={() => loadPlaylistToCard({
                         allowLayoutChange: playlistStatus.action.kind === 'allow-layout-change',
                         allowProjectChange: playlistStatus.action.kind === 'allow-project-change',

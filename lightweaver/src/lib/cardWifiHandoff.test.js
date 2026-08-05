@@ -203,6 +203,9 @@ test('final station correlation requires exact fresh status on the correlated st
     verified: true,
     commandReady: false,
     runtimeReady: false,
+    // A blank factory card is not admitted for playback either: playbackAccess
+    // is 'blank', not 'ready'.
+    playbackReady: false,
     blank: true,
     readinessState: 'blank',
   });

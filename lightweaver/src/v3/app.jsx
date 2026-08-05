@@ -631,8 +631,9 @@ function Shell() {
   }, [flushProjectAutosave, openCardSection]);
 
   // navigation <-> URL hash. Preserve the layout screen's `mode` deep-link
-  // (e.g. #screen=layout&mode=size) so jumps like the Playlist "Adjust LED
-  // count" button land on the right Layout mode; other screens carry no mode.
+  // (#screen=layout&mode=draw | &mode=wire -- the only two modes, see
+  // ModeSwitch.jsx) so jumps like the Playlist "Adjust LED count" button land
+  // on the right Layout mode; other screens carry no mode.
   useEffect(() => {
     if (bridgeBooting) return;
     const params = new URLSearchParams(window.location.hash.slice(1));

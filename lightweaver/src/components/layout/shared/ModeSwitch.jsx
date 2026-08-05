@@ -3,6 +3,15 @@
 // Layout inspector. Internal `draw` / `wire` keys are intentionally preserved;
 // deep-linked mode state + hash sync live in
 // useLayoutCanvasInteraction.js; this component is pure JSX.
+//
+// HEADS UP: the keys read inverted against the labels. `draw` is the panel
+// labelled "Wire" (strip drawing, per-strip LED counts, GPIO assignment) and
+// `wire` is the panel labelled "Test & Install" (bench test, colour-order
+// check, Install on card). These two are the ONLY valid modes; there is no
+// `size` mode, and `parseModeFromHash` silently falls back to `draw` for
+// anything else, so a wrong deep link goes nowhere visible. Renaming the keys
+// was deliberately rejected — too much blast radius across hooks, hash
+// deep-links, and test selectors.
 const MODES = [
   { key: 'draw', label: 'Wire' },
   { key: 'wire', label: 'Test & Install' },

@@ -1,4 +1,19 @@
-export const CARD_EDIT_AUTHORIZATION_TTL_MS = 120_000;
+// This window is a bounded-staleness backstop, not a design timer.
+//
+// The safety property lives entirely in the exact identity binding below
+// (CORE_FIELDS): card, firmware, build, boot, the project installed on the
+// card, the project open in Studio, and its generation. `readCurrent` refuses
+// the authorization the instant any of those diverge, so a Studio project that
+// no longer matches what is installed can never push — with or without a clock.
+//
+// What the window bounds is how long Studio may keep trusting evidence it has
+// stopped re-observing. So it is *renewed* (see `renewCardEditAuthorization`)
+// every time the card re-confirms the bound facts — each readiness poll while
+// the link is live, and each pre-send read of `/api/firmware-info`. A design
+// session sitting on the Patterns screen with a connected, matching card is
+// continuously re-proving the claim, and must not be cut off mid-edit; a card
+// that has gone quiet stops renewing and lapses.
+export const CARD_EDIT_AUTHORIZATION_TTL_MS = 30 * 60_000;
 
 const CORE_FIELDS = Object.freeze([
   'cardId',
@@ -117,6 +132,20 @@ export function consumeCardEditAuthorization(binding, options) {
     || activeAuthorization.intent !== normalized.intent
     || activeAuthorization.intentConsumed) return false;
   activeAuthorization = Object.freeze({ ...activeAuthorization, intentConsumed: true });
+  return true;
+}
+
+// Extends the staleness window off fresh proof that the bound facts still
+// hold. This can only ever renew — never issue and never resurrect. It routes
+// through `readCurrent`, so an authorization that already lapsed, or whose
+// binding no longer matches the card/project exactly, is cleared and refused
+// here exactly as it would be at a send.
+export function renewCardEditAuthorization(binding, options) {
+  if (!readCurrent(binding, options)) return false;
+  activeAuthorization = Object.freeze({
+    ...activeAuthorization,
+    expiresAt: timestamp(options) + CARD_EDIT_AUTHORIZATION_TTL_MS,
+  });
   return true;
 }
 
