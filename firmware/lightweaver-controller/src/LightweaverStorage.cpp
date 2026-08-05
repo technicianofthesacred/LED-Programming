@@ -3,6 +3,7 @@
 #include "LightweaverOutputColorParser.h"
 #include "LightweaverRecipe.h"
 #include "LightweaverLookModePolicy.h"
+#include "LightweaverWifiChannelPolicy.h"
 #include <cstring>
 #include <new>
 #include <esp_system.h>
@@ -184,6 +185,9 @@ void synchronizeNativeRecipes(const RuntimeConfig& config) {
 void resetWifi(WifiConfig& wifi) {
   wifi.ssid = "";
   wifi.password = "";
+  // The remembered channel belongs to the network being cleared, so it would be
+  // a lie about whatever network is configured next.
+  wifi.channel = 0;
   char hostname[20] = {};
   snprintf(hostname, sizeof(hostname), "lightweaver-%04llx",
            static_cast<unsigned long long>(ESP.getEfuseMac() & 0xFFFFULL));
@@ -1404,6 +1408,10 @@ void overlayNvsWifi(RuntimeConfig& config) {
   // Absent on cards saved by older firmware: those run the original handoff
   // once more, prove themselves, and resume directly from then on.
   config.wifi.proven = doc["proven"] | false;
+  // Likewise absent on older cards, and stale if the router has since moved.
+  // Either way the worst case is the pre-existing one — the SDK migrates the AP
+  // during the join — and the next association writes the correct channel back.
+  config.wifi.channel = lightweaver::normalizeWifiChannel(doc["channel"] | 0);
 }
 
 
@@ -1426,8 +1434,21 @@ void setRuntimeLoadTruth(RuntimeConfig& config,
 // Records that the currently saved credentials reached a station association,
 // so a later boot resumes straight onto the network instead of re-running the
 // first-join handoff that no browser is present to acknowledge.
-bool markWifiCredentialsProven(RuntimeConfig& config) {
-  if (config.wifi.proven || config.wifi.ssid.length() == 0) return false;
+//
+// The channel the association landed on is recorded with them. It is free at
+// this moment — the radio is sitting on it — and it is the only way the next
+// boot can raise the setup hotspot on the right channel without scanning for
+// it, which is exactly what parks the radio off-channel and knocks phones off.
+// A zero channel means "unknown, leave whatever is stored alone"; the caller
+// passes it when the association channel is not a plain 2.4GHz one.
+//
+// Called from the connectivity poll, so when to write is a decision, not an
+// unconditional one — see planWifiProvenRecord for the reasoning.
+bool markWifiCredentialsProven(RuntimeConfig& config, uint8_t channel) {
+  lightweaver::WifiProvenRecord record = lightweaver::planWifiProvenRecord(
+      config.wifi.ssid.length() > 0, config.wifi.proven, config.wifi.channel,
+      channel);
+  if (!record.persist) return false;
   Preferences prefs;
   if (!prefs.begin(NVS_NAMESPACE, false)) return false;
   JsonDocument out;
@@ -1435,11 +1456,15 @@ bool markWifiCredentialsProven(RuntimeConfig& config) {
   out["password"] = config.wifi.password;
   out["hostname"] = config.wifi.hostname;
   out["proven"] = true;
+  out["channel"] = record.channel;
   String serialized;
   serializeJson(out, serialized);
   bool ok = prefs.putString(NVS_WIFI_KEY, serialized) == serialized.length();
   prefs.end();
-  if (ok) config.wifi.proven = true;
+  if (ok) {
+    config.wifi.proven = true;
+    config.wifi.channel = record.channel;
+  }
   return ok;
 }
 
@@ -2251,8 +2276,13 @@ bool saveWifiConfigJson(const String& json, RuntimeConfig& config, String& messa
   out["password"] = candidate.password;
   out["hostname"] = candidate.hostname;
   // Freshly submitted credentials are unproven until they reach a station
-  // association, so this join runs the full acknowledged handoff.
+  // association, so this join runs the full acknowledged handoff. The stored
+  // channel goes with them: it described the previous network and would aim the
+  // setup hotspot at the wrong channel for this one. This join has the setup
+  // page's own scan results to work from instead, and writes the real channel
+  // back once it associates.
   out["proven"] = false;
+  out["channel"] = 0;
   String serialized;
   serializeJson(out, serialized);
   bool ok = prefs.putString(NVS_WIFI_KEY, serialized) == serialized.length();

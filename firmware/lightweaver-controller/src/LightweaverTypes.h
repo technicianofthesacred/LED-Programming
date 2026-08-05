@@ -190,6 +190,13 @@ struct WifiConfig {
   // the next boot instead of re-running the first-join handoff, which no
   // browser is present to acknowledge after an autonomous restart.
   bool proven = false;
+  // 2.4GHz channel the last successful association to these credentials landed
+  // on, or 0 when the card has never reached this network. The one radio means
+  // the soft AP has to sit on the station's channel or the SDK drags it there
+  // mid-join and deauthenticates every connected phone, so this is what lets a
+  // later boot raise the hotspot on the right channel with no scan at all.
+  // Always 1..14 or 0 — validated on both the read and the write.
+  uint8_t channel = 0;
 };
 
 // Live network truth is intentionally separate from WifiConfig: credentials
