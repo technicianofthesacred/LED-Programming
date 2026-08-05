@@ -250,7 +250,7 @@ git commit -m "Fix Lightweaver pattern-to-card workflow"
 
 ```bash
 LW_BUILD_ID="$(git rev-parse HEAD)" \
-  LW_BUILD_NUMBER="$(git rev-list --count --first-parent HEAD)" \
+  LW_BUILD_NUMBER="$(git rev-list --count HEAD)" \
   pio run -d firmware/lightweaver-controller -e esp32-s3-n16r8
 node firmware/lightweaver-controller/tests/card-identity-capabilities.mjs
 ```

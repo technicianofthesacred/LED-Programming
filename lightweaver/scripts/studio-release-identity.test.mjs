@@ -45,7 +45,7 @@ test('Studio release identity is deterministic for one source revision', () => {
   });
 });
 
-test('Studio build number prefers the explicit input, then first-parent Git depth', () => {
+test('Studio build number prefers the explicit input, then the GitHub commit count', () => {
   let counted = null;
   const readGitBuildNumber = (cwd, sourceRevision) => {
     counted = sourceRevision;

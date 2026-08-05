@@ -51,7 +51,11 @@ Use these words precisely in every Lightweaver handoff:
 - **Shipped**: the work was tested, merged into `origin/main`, deployed successfully, and then independently proven live at `https://led.mandalacodes.com` by its strict no-store `/studio-release.json` revision and the exact deployed files in the staged build graph.
 
 Every **Deployed** and **Shipped** report must name the **build numbers** —
-first-parent Git depth, the same counter for both surfaces:
+the repository's commit count, which is exactly the number GitHub prints as
+"N Commits" at the top of the file list. The owner checks GitHub, checks the
+screen, and knows whether he is running the newest code. Never switch this to a
+prettier counter that steps by one per change — neat increments are worthless if
+they match nothing he can see. The same number is used for both surfaces:
 
 - **Studio build** — `buildNumber` in `/studio-release.json`, shown in the
   Studio footer beacon.

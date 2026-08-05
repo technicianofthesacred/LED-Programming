@@ -10,11 +10,14 @@ function defaultReadGitHead(cwd) {
   }).trim();
 }
 
-// First-parent depth, so one merge to main advances the number by exactly one
-// regardless of how many commits the branch carried. That is what makes the
-// footer beacon readable as "build 214, then 215, then 216".
+// Total commit count, which is EXACTLY the number GitHub prints as "N Commits"
+// at the top of the repository's file list. The owner's question is "is the
+// site running what is on GitHub?", and that only works if the number on screen
+// and the number on GitHub are the same number. Do not switch this to
+// --first-parent for prettier increments: neat +1 steps are worthless if they
+// match nothing the owner can see.
 function defaultReadGitBuildNumber(cwd, sourceRevision) {
-  return execFileSync('git', ['rev-list', '--count', '--first-parent', sourceRevision], {
+  return execFileSync('git', ['rev-list', '--count', sourceRevision], {
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],

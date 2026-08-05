@@ -43,14 +43,15 @@ jobs:
             export CI_GENERATED_RELEASE=true
           fi
           node scripts/ci-changed-lanes.mjs
-      # First-parent depth of the tested revision. The compiled binary and the
-      # signed manifest both take THIS number, so a card and the published
-      # release can never disagree about which build the owner is on.
+      # Commit count of the tested revision — the same number GitHub prints as
+      # "N Commits". The compiled binary and the signed manifest both take THIS
+      # number, so a card and the published release can never disagree about
+      # which build the owner is on.
       - name: Resolve the release build number
         id: buildnumber
         env:
           CI_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: echo "value=$(git rev-list --count --first-parent "$CI_HEAD_SHA")" >> "$GITHUB_OUTPUT"
+        run: echo "value=$(git rev-list --count "$CI_HEAD_SHA")" >> "$GITHUB_OUTPUT"
 
   # This job has no environment and no secrets. The tested revision must pass
   # the signing-specific contract before GitHub can unlock the protected job.

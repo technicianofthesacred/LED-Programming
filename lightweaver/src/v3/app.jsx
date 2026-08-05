@@ -309,8 +309,10 @@ function Rail({ view, setView, openCard }) {
 /* ---------- Status / Card bar (wired to the card-link state machine) ---------- */
 /* One compact status control opens the shared Connection Center. Transport and
    host diagnostics stay out of routine chrome. */
-/* The beacon shows the build NUMBER, not the commit hash: comparing "build 214"
-   to "build 215" is something a person can do at a glance from a phone, which
+/* The beacon shows the build NUMBER, not the commit hash. The number is the
+   repository's commit count, which is the same number GitHub prints as
+   "N Commits" — so the owner can read GitHub, read this, and know whether the
+   site is running the newest code without decoding anything. That comparison
    is the whole question the beacon exists to answer. The exact revision stays
    in the hover title for anyone who needs to match it to a commit. */
 function freshnessPresentation(freshness) {

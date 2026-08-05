@@ -31,9 +31,9 @@ const MANIFEST_KEYS = [
   'schemaVersion',
   'target',
 ];
-// The human-comparable release identity: first-parent Git depth of buildId,
-// compiled into the binary as LW_BUILD_NUMBER so a card and this manifest
-// always report the same number. Optional only so the one already-signed
+// The human-comparable release identity: the commit count of buildId — the same
+// number GitHub prints as "N Commits" — compiled into the binary as
+// LW_BUILD_NUMBER so a card, this manifest, and GitHub all agree. Optional only so the one already-signed
 // release that predates it still verifies; the builder always emits it, and
 // `assertFirmwareManifestBuildNumber` enforces that for anything it produces.
 const OPTIONAL_MANIFEST_KEYS = ['buildNumber'];

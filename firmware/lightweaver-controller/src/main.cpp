@@ -52,7 +52,7 @@
 #define LW_BUILD_ID "dev"
 #endif
 // The comparable build identity an owner reads off the card. 0 means an
-// unofficial bench build; CI injects first-parent Git depth of LW_BUILD_ID.
+// unofficial bench build; CI injects the commit count of LW_BUILD_ID.
 #ifndef LW_BUILD_NUMBER
 #define LW_BUILD_NUMBER 0
 #endif
