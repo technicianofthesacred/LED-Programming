@@ -35,5 +35,5 @@ bool clearRuntimeRecoveryAfterRestart(String& message);
 WiringSafetyStatus getRuntimeWiringSafetyStatus();
 String runtimeWiringSafetyStatusJson();
 bool saveWifiConfigJson(const String& json, RuntimeConfig& config, String& message);
-bool markWifiCredentialsProven(RuntimeConfig& config);
+bool markWifiCredentialsProven(RuntimeConfig& config, uint8_t channel = 0);
 String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint16_t totalPixels, uint8_t currentLookIndex);

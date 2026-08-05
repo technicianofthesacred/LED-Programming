@@ -10,6 +10,7 @@
 #include "LightweaverRecipe.h"
 #include "LightweaverConnectivityOrchestrator.h"
 #include "LightweaverHardwareContract.h"
+#include "LightweaverWifiChannelPolicy.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
@@ -2286,11 +2287,32 @@ uint8_t lastScanChannelForSsid(const String& ssid) {
   if (found <= 0) return 0;
   for (int i = 0; i < found; i++) {
     if (WiFi.SSID(i) == ssid) {
-      int32_t channel = WiFi.channel(i);
-      return channel > 0 && channel <= 14 ? uint8_t(channel) : 0;
+      return lightweaver::normalizeWifiChannel(WiFi.channel(i));
     }
   }
-  return 0;
+  return lightweaver::kWifiChannelUnknown;
+}
+
+// Channel to raise the setup AP on so the station association that follows does
+// not have to move it, from whichever source knows: cached scan results during
+// commissioning, the channel persisted with the credentials on every later
+// boot. See LightweaverWifiChannelPolicy.h for which wins and why.
+//
+// The persisted fallback is what makes this work at boot at all. Removing the
+// speculative boot scan (it re-armed continuously and parked the radio
+// off-channel) left the scan cache empty on every boot, so reading the cache
+// alone silently returned "unknown" and the AP went up on the SDK default — the
+// alignment that was supposed to prevent the migration never ran on the one
+// path it was written for. Reading a remembered channel needs no scan at all.
+uint8_t setupApChannelFor(const RuntimeConfig& config) {
+  return lightweaver::setupApChannel(lastScanChannelForSsid(config.wifi.ssid),
+                                     config.wifi.channel);
+}
+
+// The channel the current station association is sitting on, or unknown when it
+// is not one the soft AP could have followed anyway.
+uint8_t associatedStationChannel() {
+  return lightweaver::normalizeWifiChannel(WiFi.channel());
 }
 
 bool startSetupApOnChannel(uint8_t channel) {
@@ -2308,10 +2330,13 @@ bool startSetupApOnChannel(uint8_t channel) {
 // hotspot over and over — the "Lightweaver won't stay connected" report.
 // Moving the AP onto the target network's channel once, before associating,
 // removes the migration entirely for this join and every retry after it.
+// Usually a no-op now: startApMode already raised the AP on the remembered
+// channel. It still earns its place for the commissioning join, where fresh
+// scan results are better than anything that was persisted.
 void alignSetupApChannel(RuntimeConfig& config) {
   if (!apRadioStarted) return;
-  uint8_t channel = lastScanChannelForSsid(config.wifi.ssid);
-  if (channel == 0 || channel == apChannel) return;
+  uint8_t channel = setupApChannelFor(config);
+  if (channel == lightweaver::kWifiChannelUnknown || channel == apChannel) return;
   if (startSetupApOnChannel(channel) && Serial) {
     Serial.print("Setup AP moved to channel ");
     Serial.println(channel);
@@ -2324,7 +2349,7 @@ void startApMode(RuntimeConfig& config) {
   WiFi.setAutoReconnect(false);
   String ssid = apSsid();
   if (!apRadioStarted) {
-    apRadioStarted = startSetupApOnChannel(lastScanChannelForSsid(config.wifi.ssid));
+    apRadioStarted = startSetupApOnChannel(setupApChannelFor(config));
   }
   config.wifiRuntime.connectivity.apActive = apRadioStarted;
   config.activeTransport = WIFI_TRANSPORT_AP;
@@ -2357,8 +2382,7 @@ void ensureRecoveryAp(RuntimeConfig& config) {
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(false);
   if (!apRadioStarted) {
-    apRadioStarted = startSetupApOnChannel(
-        lastScanChannelForSsid(config.wifi.ssid));
+    apRadioStarted = startSetupApOnChannel(setupApChannelFor(config));
   }
   config.wifiRuntime.connectivity.apActive = apRadioStarted;
   config.activeTransport = WIFI_TRANSPORT_AP;
@@ -2611,9 +2635,14 @@ void maintainConnectivity() {
 
   // Credentials that carried the card all the way to Station are proven. Later
   // boots resume straight onto that network instead of re-opening a handoff no
-  // browser is present to acknowledge. Cheap: this no-ops once the flag is set.
+  // browser is present to acknowledge. The association's channel is recorded
+  // with them so the next boot can raise the setup hotspot there directly and
+  // the SDK never has to drag the AP across channels — the migration that
+  // deauthenticates every phone on it. If the router has moved since, this is
+  // where the new channel gets written back. Cheap: this no-ops once the flag
+  // is set and the channel still matches.
   if (state.phase == lightweaver::ConnectivityPhase::Station) {
-    markWifiCredentialsProven(cfg);
+    markWifiCredentialsProven(cfg, associatedStationChannel());
   }
 }
 }
