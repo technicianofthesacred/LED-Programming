@@ -167,9 +167,12 @@ test('"+ Add strip" offers icon tiles and preserves size during manual LED entry
   await expect(chooser.getByRole('button', { name: 'Free draw', exact: true })).toBeVisible();
   await expect(chooser.getByRole('button', { name: 'Import vector', exact: true })).toBeVisible();
 
-  // Manual count is a fine-tune: it preserves the chosen physical size.
+  // Manual count is a fine-tune: it preserves the chosen physical size, and
+  // says so on the control so the held Size does not read as a bug.
   await chooser.getByLabel('New strip LEDs').fill('120');
   await expect(chooser.getByLabel('New strip size in metres')).toHaveValue('1.00');
+  await expect(chooser.locator('.la-physical-rule-hint'))
+    .toHaveText('Size sets the count. Editing LEDs keeps the size.');
   await chooser.getByRole('button', { name: 'Circle', exact: true }).click();
 
   await expect(page.locator('.la-strip-row')).toHaveCount(2);
@@ -391,6 +394,15 @@ test('size controls recalculate LEDs while manual LED entry preserves size', asy
     const strip = strips?.[0];
     return strip ? [strip.pixelCount, strip.svgLength] : null;
   }).toEqual([linked.pixelCount + 1, linked.svgLength]);
+
+  // The rule is only obvious if it is written next to the control. Without
+  // this, editing LEDs and seeing Size hold reads as a bug.
+  await expect(page.locator('.la-strip-detail .la-physical-rule-hint'))
+    .toHaveText('Size sets the count. Editing LEDs keeps the size.');
+  await expect(page.getByLabel('Strip LED count', { exact: true }))
+    .toHaveAttribute('title', /keeps the size/);
+  await expect(page.getByLabel('Strip length in metres', { exact: true }))
+    .toHaveAttribute('title', /Sets the LED count/);
 
   const actions = page.getByLabel('Strip actions');
   await expect(actions.getByRole('button', { name: 'Flip path direction' })).toBeVisible();

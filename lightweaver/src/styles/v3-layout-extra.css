@@ -508,6 +508,13 @@
 }
 .la-strip-physical-field .la-size-readout { flex: 0 1 auto; gap: 3px; }
 .la-strip-physical-field .la-size-readout input[type=number] { width: 44px; height: 28px; }
+/* The count field is a cut-strip correction, not a resize. Say so where the
+   surprise happens — the tooltips alone are not discoverable enough. Its own
+   row, so it never competes with the controls for horizontal space. */
+.la-physical-rule-hint {
+  display: block; padding: 3px 6px 0;
+  color: var(--text-faint); font-size: 10px; line-height: 1.3;
+}
 
 /* Draw strip controls form one instrument panel, not a stack of loose black
    controls. The GPIO group owns the surface; its rows are simply sections. */
