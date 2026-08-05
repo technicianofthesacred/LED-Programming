@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { testPort } from './testPort.mjs';
 
 test.beforeEach(async ({ page }) => {
   await page.route('http://lightweaver.local/**', route => route.abort());
@@ -1754,7 +1755,6 @@ test('a worker typing the bare domain reaches Batch production from the rail and
 });
 
 test('HTTPS Studio keeps a blank replacement card config-only across an ambiguous WiFi handoff', async ({ page }) => {
-  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   // Serve the real Vite app at its production HTTPS origin. This keeps the
   // browser security boundary realistic while all card traffic remains the
   // postMessage-only local bridge exercised below.
@@ -2069,7 +2069,6 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
 });
 
 test('HTTPS Studio reload proves an ambiguous initial config without replaying either mutation', async ({ page }) => {
-  const testPort = Number(process.env.LIGHTWEAVER_TEST_PORT || 9997);
   await page.addInitScript(() => {
     const stationHost = '192.168.18.92';
     const expectedCard = {
