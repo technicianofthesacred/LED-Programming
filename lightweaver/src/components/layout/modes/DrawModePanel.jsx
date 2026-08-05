@@ -1039,6 +1039,7 @@ export function DrawModePanel({
                       <input type="number" min="1" max={LED_COUNT_MAX} step="1"
                              value={addLedCount}
                              aria-label="New strip LEDs"
+                             title="Cut-strip correction: changes the count and keeps the size. Edit Size to recount from the reel density."
                              inputMode="numeric"
                              onFocus={e => e.target.select()}
                              onChange={e => setLinkedAddCount(e.target.value)}/>
@@ -1055,6 +1056,7 @@ export function DrawModePanel({
                         <input type="number" min="0.001" step="0.001"
                                value={addLengthDraft}
                                aria-label="New strip size in metres"
+                               title="Physical strip length. Sets the LED count from the reel density."
                                inputMode="decimal"
                                onFocus={e => e.target.select()}
                                onChange={e => setAddLengthDraft(e.target.value)}
@@ -1067,6 +1069,9 @@ export function DrawModePanel({
                     </div>
                   </div>
                 </div>
+                <span className="la-physical-rule-hint">
+                  Size sets the count. Editing LEDs keeps the size.
+                </span>
                 <div className="row la-strip-output-row la-add-strip-output-row">
                   <div className="la-gpio-wrap">
                     <select className="la-gpio-select" aria-label="New strip GPIO output"
@@ -1389,6 +1394,7 @@ export function DrawModePanel({
                               <input type="number" min="1" max={LED_COUNT_MAX} step="1"
                                      value={s.pixelCount}
                                      aria-label="Strip LED count"
+                                     title="Cut-strip correction: changes the count and keeps the size. Edit Size to recount from the reel density."
                                      inputMode="numeric"
                                      onFocus={e => e.target.select()}
                                      onClick={e => e.target.select()}
@@ -1414,6 +1420,7 @@ export function DrawModePanel({
                                            : svgPathLength(s.pathData),
                                          pxPerMm))}
                                        aria-label="Strip length in metres"
+                                       title="Physical strip length. Sets the LED count from the reel density."
                                        inputMode="decimal"
                                        onFocus={e => e.target.select()}
                                        onBlur={e => {
@@ -1429,6 +1436,9 @@ export function DrawModePanel({
                             </div>
                           </div>
                         </div>
+                        <span className="la-physical-rule-hint">
+                          Size sets the count. Editing LEDs keeps the size.
+                        </span>
                         <div className="row la-strip-output-row">
                           <div className="la-gpio-wrap">
                             <select className="la-gpio-select" aria-label="GPIO output"
