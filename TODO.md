@@ -163,4 +163,6 @@ The 2026-06-16 audit fixes (firmware C1/H1/H2/M1/M4, Studio C2/H3/M3/M5/M6, Pi/m
 
 - Lightweaver is hosted on Cloudflare Pages project `lightweaver` (NOT `mandalacodes`, NOT `adrian-website`). Custom domain `led.mandalacodes.com` is attached. Fallback URL: `lightweaver-edw.pages.dev`.
 
+- The Arduino/ESP-IDF platform upgrade is intentionally deferred for LED reliability. Before changing the core or related firmware dependencies, follow [the firmware platform upgrade warnings and acceptance gates](docs/firmware-platform-upgrade.md).
+
 - ESP32-S3 firmware + WLED for the hardware side. Reliable write path is the ESP32 AP page at `http://192.168.4.1`, public HTTPS-to-private HTTP may be blocked by browsers.
