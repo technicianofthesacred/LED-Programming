@@ -9,6 +9,7 @@ using lightweaver::ConnectivityInput;
 using lightweaver::ConnectivityPhase;
 using lightweaver::ConnectivityState;
 using lightweaver::advanceConnectivity;
+using lightweaver::connectivityPhaseIsPending;
 using lightweaver::connectivityTransitionPending;
 using lightweaver::kInitialJoinTimeoutMs;
 using lightweaver::kHandoffMaxMs;
@@ -142,24 +143,45 @@ int main() {
   assert(unacknowledged.phase == ConnectivityPhase::HandoffReady);
   assert(unacknowledged.apActive);
   assert(unacknowledged.stationAssociated);
+  // An expired handoff on a card that IS associated is a finished join whose
+  // acknowledgement never arrived, not a broken one. It settles into Station so
+  // local playback stops being refused; leaving it pending stranded working
+  // cards forever whenever the worker never came back to the Studio tab.
   unacknowledged = advanceConnectivity(
       unacknowledged, input(ConnectivityEvent::Tick,
                             1100 + kHandoffMaxMs));
-  assert(unacknowledged.phase == ConnectivityPhase::HandoffAbandoned);
+  assert(unacknowledged.phase == ConnectivityPhase::Station);
   assert(!unacknowledged.apActive);
   assert(unacknowledged.stationAssociated);
-  assert(connectivityTransitionPending(unacknowledged));
+  assert(!connectivityPhaseIsPending(unacknowledged.phase));
+  unacknowledged = recordNetworkBindingAttempt(
+      unacknowledged, 1100 + kHandoffMaxMs, true, true);
+  assert(!connectivityTransitionPending(unacknowledged));
 
+  // A late acknowledgement for the settled join is harmless and idempotent.
   ConnectivityState acknowledged = advanceConnectivity(
-      unacknowledged,
-      input(ConnectivityEvent::StationOriginAck, 1100 + 120001,
-            8));
-  assert(acknowledged.phase == ConnectivityPhase::HandoffAbandoned);
-  acknowledged = advanceConnectivity(
       unacknowledged,
       input(ConnectivityEvent::StationOriginAck, 1100 + 120001, 9));
   assert(acknowledged.phase == ConnectivityPhase::Station);
   assert(!acknowledged.apActive);
+
+  // The handoff window only abandons when the station never came up at all.
+  ConnectivityState strandedHandoff{};
+  strandedHandoff = advanceConnectivity(
+      strandedHandoff, input(ConnectivityEvent::CredentialsAccepted, 1000, 9));
+  strandedHandoff.phase = ConnectivityPhase::HandoffReady;
+  strandedHandoff.stationAssociated = false;
+  strandedHandoff.phaseStartedMs = 1000;
+  strandedHandoff = advanceConnectivity(
+      strandedHandoff, input(ConnectivityEvent::Tick, 1000 + kHandoffMaxMs));
+  assert(strandedHandoff.phase == ConnectivityPhase::HandoffAbandoned);
+  assert(!strandedHandoff.apActive);
+  assert(connectivityTransitionPending(strandedHandoff));
+  // A stale generation still cannot close someone else's lifecycle.
+  ConnectivityState wrongGeneration = advanceConnectivity(
+      strandedHandoff,
+      input(ConnectivityEvent::StationOriginAck, 1000 + kHandoffMaxMs + 1, 8));
+  assert(wrongGeneration.phase == ConnectivityPhase::HandoffAbandoned);
 
   ConnectivityState timedOut{};
   timedOut = advanceConnectivity(
@@ -314,7 +336,10 @@ int main() {
       wrappedHandoff,
       input(ConnectivityEvent::Tick,
             nearWrap + 100 + kHandoffMaxMs));
-  assert(wrappedHandoff.phase == ConnectivityPhase::HandoffAbandoned);
+  // The wraparound arithmetic is what this case guards; the associated card
+  // now settles into Station rather than a permanently pending phase.
+  assert(wrappedHandoff.phase == ConnectivityPhase::Station);
+  assert(!wrappedHandoff.apActive);
   wrappedHandoff = advanceConnectivity(
       wrappedHandoff,
       input(ConnectivityEvent::StationOriginAck,
@@ -337,6 +362,58 @@ int main() {
       input(ConnectivityEvent::Tick,
             nearWrap + 200 + kNetworkBindingRetryMs));
   assert(wrappedBindings.networkBindingsRetryDue);
+
+  // --- Resumed boot join -------------------------------------------------
+  // A card rebooting onto credentials that already reached Station has no
+  // browser waiting to acknowledge anything. Association alone must complete
+  // the join. Previously this re-entered the commissioning handoff and left
+  // the card refusing every command until an unrelated WiFi drop rescued it.
+  ConnectivityState resumed{};
+  resumed = advanceConnectivity(
+      resumed, input(ConnectivityEvent::CredentialsResumed, 100, 0));
+  assert(resumed.phase == ConnectivityPhase::Joining);
+  assert(resumed.apActive);
+  assert(!resumed.handoffRequired);
+  assert(resumed.generation == 0);
+  assert(connectivityTransitionPending(resumed));
+
+  resumed = recordStationAttempt(resumed, 100);
+  resumed = advanceConnectivity(
+      resumed, input(ConnectivityEvent::StationAssociated, 900, 0));
+  assert(resumed.phase == ConnectivityPhase::Station);
+  assert(!resumed.apActive);
+  assert(resumed.stationAssociated);
+  // Listeners still have to bind before the card is fully settled, but the
+  // phase itself no longer parks in a pending handoff.
+  resumed = recordNetworkBindingAttempt(resumed, 900, true, true);
+  assert(!connectivityTransitionPending(resumed));
+
+  // A resumed join mints no generation, so no acknowledgement — stale or
+  // otherwise — can act on it.
+  ConnectivityState resumedAck = advanceConnectivity(
+      resumed, input(ConnectivityEvent::StationOriginAck, 1000, 1));
+  assert(resumedAck.phase == ConnectivityPhase::Station);
+
+  // Losing the network still routes through the normal recovery path.
+  ConnectivityState resumedLost = advanceConnectivity(
+      resumed, input(ConnectivityEvent::StationLost, 2000, 0));
+  assert(resumedLost.phase == ConnectivityPhase::Reconnecting);
+  resumedLost = recordStationAttempt(resumedLost, 2000);
+  resumedLost = advanceConnectivity(
+      resumedLost, input(ConnectivityEvent::Tick, 2000 + kRecoveryApThresholdMs));
+  assert(resumedLost.phase == ConnectivityPhase::RecoveryAp);
+  assert(resumedLost.apActive);
+
+  // A first-time join is untouched: it still owes an acknowledgement and still
+  // holds the setup AP open until it arrives.
+  ConnectivityState firstJoin{};
+  firstJoin = advanceConnectivity(
+      firstJoin, input(ConnectivityEvent::CredentialsAccepted, 100, 3));
+  assert(firstJoin.handoffRequired);
+  firstJoin = advanceConnectivity(
+      firstJoin, input(ConnectivityEvent::StationAssociated, 900, 3));
+  assert(firstJoin.phase == ConnectivityPhase::HandoffReady);
+  assert(firstJoin.apActive);
 
   return 0;
 }

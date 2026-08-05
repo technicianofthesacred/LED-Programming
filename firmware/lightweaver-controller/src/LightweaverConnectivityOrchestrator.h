@@ -125,7 +125,11 @@ inline ConnectivityActionPlan planConnectivityActions(
     plan.initialJoinTimedOut = true;
   }
 
-  if (previousPhase == ConnectivityPhase::HandoffReady &&
+  // Any setup-AP phase that settles onto the station network retires the AP.
+  // This covers the acknowledged handoff, the expired handoff, and the resumed
+  // boot join that skips the handoff entirely — the last of which would
+  // otherwise leave the setup hotspot broadcasting forever.
+  if (phaseUsesSetupAp(previousPhase) &&
       (plan.nextState.phase == ConnectivityPhase::Station ||
        plan.nextState.phase == ConnectivityPhase::HandoffAbandoned) &&
       observed.stationReady) {

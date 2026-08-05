@@ -1433,4 +1433,69 @@ assert.equal(isCardLinkConnected(shared.getState()), false,
 assert.equal(shared.getState().readiness, null,
   'correlated bridge timeout immediately clears stale readiness evidence');
 
+// ── Backgrounding the tab must not disconnect the card ─────────────────────
+// Card setup tells the worker to leave the browser and switch WiFi networks.
+// Browsers freeze timers in hidden tabs, so the keepalive used to fire its
+// probe and its timeout together on wake-up and score misses against a card
+// that never stopped answering — following the instructions broke the link.
+{
+  const fakeDocument = {
+    hidden: false,
+    listeners: new Set(),
+    addEventListener(type, handler) { if (type === 'visibilitychange') this.listeners.add(handler); },
+    removeEventListener(type, handler) { if (type === 'visibilitychange') this.listeners.delete(handler); },
+    setHidden(value) { this.hidden = value; for (const handler of [...this.listeners]) handler(); },
+  };
+
+  let requests = 0;
+  let failRequests = false;
+  const hiddenLink = createCardLink({
+    host: 'lightweaver.local',
+    connectTimeoutMs: 0,
+    pingIntervalMs: 5,
+    pingTimeoutMs: 5,
+    visibilityTarget: fakeDocument,
+    sendRequest: async () => {
+      requests += 1;
+      if (failRequests) throw Object.assign(new Error('timeout'), { reason: 'bridge-timeout' });
+      return readyEnvelope('lw-001122aabbcc');
+    },
+  });
+  hiddenLink.dispatch({
+    type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
+    card: { id: 'lw-001122aabbcc', name: 'Front Mandala' }, bridgeLifecycle: 1,
+    readiness: readyEnvelope('lw-001122aabbcc'),
+  });
+  assert.equal(hiddenLink.getState().state, 'connected-bridge');
+
+  // Go background, and make every probe fail. Nothing may be counted.
+  failRequests = true;
+  fakeDocument.setHidden(true);
+  const requestsWhenHidden = requests;
+  await sleep(60);
+  assert.equal(requests, requestsWhenHidden,
+    'no keepalive probe runs while the page is hidden');
+  assert.equal(hiddenLink.getState().state, 'connected-bridge',
+    'a hidden tab never demotes the card connection');
+
+  // Come back with the card answering again: the link revalidates promptly.
+  failRequests = false;
+  fakeDocument.setHidden(false);
+  await sleep(60);
+  assert.ok(requests > requestsWhenHidden,
+    'returning to the tab immediately re-probes instead of waiting a full interval');
+  assert.equal(hiddenLink.getState().state, 'connected-bridge');
+
+  // A genuine failure while visible still demotes, so the guard has not made
+  // the link blind.
+  failRequests = true;
+  await sleep(120);
+  assert.notEqual(hiddenLink.getState().state, 'connected-bridge',
+    'a visible tab still demotes when the card really stops answering');
+
+  hiddenLink.destroy();
+  assert.equal(fakeDocument.listeners.size, 0,
+    'destroying the link removes its visibility listener');
+}
+
 console.log('card-link-state tests passed');

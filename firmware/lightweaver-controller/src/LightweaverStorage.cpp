@@ -1396,7 +1396,11 @@ void overlayNvsWifi(RuntimeConfig& config) {
   config.wifi.ssid = String(doc["ssid"] | config.wifi.ssid.c_str());
   config.wifi.password = String(doc["password"] | config.wifi.password.c_str());
   config.wifi.hostname = String(doc["hostname"] | config.wifi.hostname.c_str());
+  // Absent on cards saved by older firmware: those run the original handoff
+  // once more, prove themselves, and resume directly from then on.
+  config.wifi.proven = doc["proven"] | false;
 }
+
 
 void setRuntimeLoadTruth(RuntimeConfig& config,
                          RuntimeLoadResult& result,
@@ -1412,6 +1416,26 @@ void setRuntimeLoadTruth(RuntimeConfig& config,
   result.knownGoodProject = knownGoodProject;
   result.runtimePhase = phase;
 }
+}
+
+// Records that the currently saved credentials reached a station association,
+// so a later boot resumes straight onto the network instead of re-running the
+// first-join handoff that no browser is present to acknowledge.
+bool markWifiCredentialsProven(RuntimeConfig& config) {
+  if (config.wifi.proven || config.wifi.ssid.length() == 0) return false;
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, false)) return false;
+  JsonDocument out;
+  out["ssid"] = config.wifi.ssid;
+  out["password"] = config.wifi.password;
+  out["hostname"] = config.wifi.hostname;
+  out["proven"] = true;
+  String serialized;
+  serializeJson(out, serialized);
+  bool ok = prefs.putString(NVS_WIFI_KEY, serialized) == serialized.length();
+  prefs.end();
+  if (ok) config.wifi.proven = true;
+  return ok;
 }
 
 void applyDefaultRuntimeConfig(RuntimeConfig& config) {
@@ -2220,6 +2244,9 @@ bool saveWifiConfigJson(const String& json, RuntimeConfig& config, String& messa
   out["ssid"] = candidate.ssid;
   out["password"] = candidate.password;
   out["hostname"] = candidate.hostname;
+  // Freshly submitted credentials are unproven until they reach a station
+  // association, so this join runs the full acknowledged handoff.
+  out["proven"] = false;
   String serialized;
   serializeJson(out, serialized);
   bool ok = prefs.putString(NVS_WIFI_KEY, serialized) == serialized.length();
@@ -2248,6 +2275,9 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["provisioningContractVersion"] = LW_PROVISIONING_CONTRACT_VERSION;
   doc["runtimePhase"] = runtimeProvisioningPhase();
   doc["commandReady"] = runtimeCommandReady();
+  // Local playback admission, reported separately so a caller can tell
+  // "busy reassociating" apart from "cannot drive the lights".
+  doc["playbackReady"] = runtimePlaybackReady();
   doc["outputReady"] = runtimeOutputReady();
   doc["configValid"] = config.configValid;
   doc["knownGoodProject"] = config.knownGoodProject;

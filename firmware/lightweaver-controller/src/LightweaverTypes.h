@@ -185,6 +185,11 @@ struct WifiConfig {
   String ssid;
   String password;
   String hostname = "lightweaver";
+  // Set once these exact credentials have carried the card all the way to a
+  // station association. A proven network is resumed straight into Station on
+  // the next boot instead of re-running the first-join handoff, which no
+  // browser is present to acknowledge after an autonomous restart.
+  bool proven = false;
 };
 
 // Live network truth is intentionally separate from WifiConfig: credentials

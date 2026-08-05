@@ -206,11 +206,16 @@ int main() {
   assert(preAck.apActive);
   assert((hardware.actions == std::vector<std::string>{"readiness-pending"}));
   hardware.actions.clear();
+  // The handoff window closes unwitnessed, but the card is associated, so it
+  // settles onto the station network and the setup AP retires as before. It no
+  // longer parks in a pending phase that refuses every command.
   preAck = run(hardware, preAck, observation(301000, true, false, true));
-  assert(preAck.phase == ConnectivityPhase::HandoffAbandoned);
+  assert(preAck.phase == ConnectivityPhase::Station);
   assert(!preAck.apActive);
+  // Both listeners were already bound, so the card reports ready rather than
+  // staying pending — this is the state that used to refuse control forever.
   assert((hardware.actions == std::vector<std::string>{
-      "retire-setup-ap", "readiness-pending"}));
+      "retire-setup-ap", "readiness-ready"}));
 
   ConnectivityState preAckLoss{};
   preAckLoss.phase = ConnectivityPhase::HandoffReady;
@@ -275,6 +280,27 @@ int main() {
   assert(joining.apActive);
   assert((hardware.actions == std::vector<std::string>{
       "station-associated", "force-bindings", "readiness-pending"}));
+
+  // --- Resumed boot join --------------------------------------------------
+  // Booting onto an already-proven network skips the handoff: association goes
+  // straight to Station, the setup AP is retired the same way an acknowledged
+  // handoff retires it, and the card reports ready instead of pending.
+  ConnectivityState resumed{};
+  resumed.phase = ConnectivityPhase::Joining;
+  resumed.apActive = true;
+  resumed.handoffRequired = false;
+  resumed.generation = 0;
+  resumed.phaseStartedMs = 200000;
+  resumed.lastAttemptMs = 200000;
+  hardware.actions.clear();
+  hardware.nextWledBind = true;
+  hardware.nextArtnetBind = true;
+  resumed = run(hardware, resumed, observation(200500, true, false, true));
+  assert(resumed.phase == ConnectivityPhase::Station);
+  assert(!resumed.apActive);
+  assert((hardware.actions == std::vector<std::string>{
+      "station-associated", "force-bindings", "retire-setup-ap",
+      "readiness-ready"}));
 
   return 0;
 }

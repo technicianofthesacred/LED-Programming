@@ -22,7 +22,15 @@ enum class ConnectivityPhase {
 
 enum class ConnectivityEvent {
   Tick,
+  // A live POST /api/wifi minted a new handoff generation: the browser that
+  // submitted the credentials must still prove it can reach the card on the
+  // station network before the setup AP is retired.
   CredentialsAccepted,
+  // Boot with credentials that have already reached Station at least once.
+  // There is no browser waiting to acknowledge anything, so association alone
+  // completes the join. Without this, every power cycle re-entered the
+  // commissioning handoff and left the card refusing commands indefinitely.
+  CredentialsResumed,
   StationAssociated,
   StationLost,
   StationOriginAck,
@@ -49,6 +57,9 @@ struct ConnectivityState {
   bool networkBindingsRetryDue = false;
   bool wledListenerReady = false;
   bool artnetListenerReady = false;
+  // True while this join still owes a station-origin acknowledgement before the
+  // setup AP may retire. Resumed joins clear it: nobody is waiting to ack.
+  bool handoffRequired = true;
   std::uint32_t phaseStartedMs = 0;
   std::uint32_t lastAttemptMs = 0;
   std::uint32_t lastBindingAttemptMs = 0;
@@ -108,6 +119,7 @@ inline ConnectivityState advanceConnectivity(
 
   switch (input.event) {
     case ConnectivityEvent::CredentialsAccepted:
+    case ConnectivityEvent::CredentialsResumed:
       next.phase = ConnectivityPhase::Joining;
       next.apActive = true;
       next.stationAssociated = false;
@@ -116,13 +128,23 @@ inline ConnectivityState advanceConnectivity(
       next.wledListenerReady = false;
       next.artnetListenerReady = false;
       next.phaseStartedMs = input.nowMs;
-      next.generation = input.generation;
+      next.handoffRequired =
+          input.event == ConnectivityEvent::CredentialsAccepted;
+      // A resumed join mints no generation: there is no acknowledgement to
+      // correlate, and a non-zero generation would let a stale browser ack
+      // from a previous boot close this lifecycle.
+      next.generation = next.handoffRequired ? input.generation : 0;
       return next;
 
     case ConnectivityEvent::StationAssociated:
       if (current.phase == ConnectivityPhase::Joining) {
-        next.phase = ConnectivityPhase::HandoffReady;
-        next.apActive = true;
+        if (current.handoffRequired) {
+          next.phase = ConnectivityPhase::HandoffReady;
+          next.apActive = true;
+        } else {
+          next.phase = ConnectivityPhase::Station;
+          next.apActive = false;
+        }
       } else if (current.phase == ConnectivityPhase::Reconnecting ||
                  current.phase == ConnectivityPhase::RecoveryAp) {
         next.phase = ConnectivityPhase::Station;
@@ -196,7 +218,14 @@ inline ConnectivityState advanceConnectivity(
 
   if (current.phase == ConnectivityPhase::HandoffReady &&
       elapsed(input.nowMs, current.phaseStartedMs, kHandoffMaxMs)) {
-    next.phase = ConnectivityPhase::HandoffAbandoned;
+    // The acknowledgement never arrived. If the card is nonetheless associated
+    // to the station network, that is a finished join with an unwitnessed
+    // handoff — settle into Station so local playback stops being refused.
+    // Leaving it in a pending phase stranded a fully-working card forever
+    // whenever the worker never returned to the Studio tab.
+    next.phase = current.stationAssociated
+        ? ConnectivityPhase::Station
+        : ConnectivityPhase::HandoffAbandoned;
     next.apActive = false;
     next.phaseStartedMs = input.nowMs;
     return next;

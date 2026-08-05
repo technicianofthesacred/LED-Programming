@@ -746,6 +746,7 @@ export function createCardLink({
   connectTimeoutMs = CARD_LINK_CONNECT_TIMEOUT_MS,
   missLimit = CARD_LINK_PING_MISS_LIMIT,
   host = '',
+  visibilityTarget = typeof globalThis !== 'undefined' ? globalThis.document : null,
 } = {}) {
   let state = initialCardLinkState(host);
   const listeners = new Set();
@@ -755,6 +756,17 @@ export function createCardLink({
   let pinging = false;
   let directPinging = false;
   let destroyed = false;
+
+  // Keepalive is suspended while the page is hidden. Browsers clamp timers in
+  // background tabs, so a backgrounded Studio would fire its ping and its
+  // timeout in the same wake-up burst and score a miss against a card that
+  // never stopped answering. That mattered most in the one place it must not:
+  // card setup asks the user to leave the browser to switch WiFi networks, so
+  // the act of following the instructions dropped the connection.
+  const isHidden = () => visibilityTarget?.hidden === true;
+  // Bumped on every visibility change. A ping that spans one is discarded
+  // rather than counted: its timing proves nothing about the card.
+  let visibilityEpoch = 0;
 
   function emit() {
     for (const listener of [...listeners]) {
@@ -805,7 +817,12 @@ export function createCardLink({
       && state.state !== 'reconnecting-bridge'
       && !(state.state === 'revalidating' && state.transport === 'bridge')
     )) return;
+    if (isHidden()) {
+      schedulePing();
+      return;
+    }
     const pingHost = state.host;
+    const epoch = visibilityEpoch;
     pinging = true;
     try {
       const readiness = await sendRequest('status', { cache: 'no-store', nonce: Date.now() }, {
@@ -813,7 +830,7 @@ export function createCardLink({
         timeoutMs: pingTimeoutMs,
         retryOnTimeout: false,
       });
-      if (state.host === pingHost && (
+      if (epoch === visibilityEpoch && state.host === pingHost && (
         state.state === 'connected-bridge'
         || state.state === 'reconnecting-bridge'
         || (state.state === 'revalidating' && state.transport === 'bridge')
@@ -826,15 +843,20 @@ export function createCardLink({
         });
       }
     } catch (error) {
-      if (state.host !== pingHost || (
-        state.state !== 'connected-bridge'
-        && state.state !== 'reconnecting-bridge'
-        && !(state.state === 'revalidating' && state.transport === 'bridge')
-      )) return;
-      if (error?.reason === 'bridge-missing' || error?.reason === 'bridge-post-failed') {
-        dispatch({ type: 'bridge-lost', reason: 'card-page-closed', host: pingHost });
-      } else {
-        dispatch({ type: 'bridge-ping-missed', reason: 'card-stopped-answering', host: pingHost });
+      // A ping that spanned a visibility change carries no information about
+      // the card — the browser may simply have frozen our timers while the
+      // page was hidden. Reschedule instead of demoting the link.
+      const spannedVisibilityChange = epoch !== visibilityEpoch;
+      if (!spannedVisibilityChange && state.host === pingHost && (
+        state.state === 'connected-bridge'
+        || state.state === 'reconnecting-bridge'
+        || (state.state === 'revalidating' && state.transport === 'bridge')
+      )) {
+        if (error?.reason === 'bridge-missing' || error?.reason === 'bridge-post-failed') {
+          dispatch({ type: 'bridge-lost', reason: 'card-page-closed', host: pingHost });
+        } else {
+          dispatch({ type: 'bridge-ping-missed', reason: 'card-stopped-answering', host: pingHost });
+        }
       }
     } finally {
       pinging = false;
@@ -852,7 +874,12 @@ export function createCardLink({
       && state.state !== 'reconnecting'
       && !(state.state === 'revalidating' && state.transport === 'direct')
     )) return;
+    if (isHidden()) {
+      scheduleDirectPing();
+      return;
+    }
     const pingHost = state.host;
+    const epoch = visibilityEpoch;
     directPinging = true;
     try {
       const fetcher = fetchImpl || (typeof globalThis !== 'undefined' ? globalThis.fetch : null);
@@ -864,7 +891,7 @@ export function createCardLink({
       if (!response?.ok) throw new Error('not ok');
       const readiness = await response.json().catch(() => null);
       if (!readiness) throw new Error('invalid status');
-      if (state.host === pingHost && (
+      if (epoch === visibilityEpoch && state.host === pingHost && (
         state.state === 'connected-direct'
         || state.state === 'reconnecting'
         || (state.state === 'revalidating' && state.transport === 'direct')
@@ -875,13 +902,16 @@ export function createCardLink({
           expectedCard: state.expectedCard || state.card,
         });
       }
-    } catch (error) {
-      if (state.host !== pingHost || (
-        state.state !== 'connected-direct'
-        && state.state !== 'reconnecting'
-        && !(state.state === 'revalidating' && state.transport === 'direct')
-      )) return;
-      dispatch({ type: 'direct-ping-missed', host: pingHost });
+    } catch {
+      // As with the bridge ping: a probe that spanned a visibility change is
+      // not evidence the card went away.
+      if (epoch === visibilityEpoch && state.host === pingHost && (
+        state.state === 'connected-direct'
+        || state.state === 'reconnecting'
+        || (state.state === 'revalidating' && state.transport === 'direct')
+      )) {
+        dispatch({ type: 'direct-ping-missed', host: pingHost });
+      }
     } finally {
       directPinging = false;
     }
@@ -953,6 +983,16 @@ export function createCardLink({
     return state;
   }
 
+  // Coming back to the tab is the moment to re-establish the truth, rather
+  // than acting on misses accumulated while nothing was allowed to run.
+  function handleVisibilityChange() {
+    visibilityEpoch += 1;
+    if (destroyed || isHidden()) return;
+    if (!pinging) schedulePing(0);
+    if (!directPinging) scheduleDirectPing(0);
+  }
+  visibilityTarget?.addEventListener?.('visibilitychange', handleVisibilityChange);
+
   return {
     getState: () => state,
     subscribe(listener) {
@@ -965,6 +1005,7 @@ export function createCardLink({
       stopKeepalive();
       stopDirectKeepalive();
       clearConnectTimer();
+      visibilityTarget?.removeEventListener?.('visibilitychange', handleVisibilityChange);
       listeners.clear();
     },
   };

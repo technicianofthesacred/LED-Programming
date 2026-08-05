@@ -120,7 +120,10 @@ assert.match(factoryBranch, /runtimeRecoveryAfterRestartPending\(\)/);
 assert.match(factoryBranch, /clearRuntimeRecoveryAfterRestart/,
   'a factory boot must complete recovery intent without starting normal project output');
 const identify = functionBody(web, 'void handleIdentify()', 'void handleZones()');
-assert.match(identify, /provisioningControlAdmitted\(runtimeCommandReady\(\)\)/,
+// runtimePlaybackReady still demands phase Ready + configValid + a known-good
+// project, so a factory card is refused; it only stops a WiFi transition from
+// withholding light output on an already-commissioned card.
+assert.match(identify, /provisioningControlAdmitted\(runtimePlaybackReady\(\)\)/,
   'identify must not take output ownership on a factory card');
 
 const loop = functionBody(main, 'void loop()', 'void applyRuntimeConfig(');

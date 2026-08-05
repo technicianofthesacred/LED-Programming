@@ -129,10 +129,29 @@ assert.match(status, /doc\["commandReady"\]\s*=\s*runtimeCommandReady\(\)/,
 assert.match(firmwareInfo, /doc\["commandReady"\]\s*=\s*runtimeCommandReady\(\)/,
   'firmware-info command readiness must come from live runtime truth');
 assert.match(runtimeApi, /bool\s+runtimeCommandReady\s*\(\)/);
+assert.match(runtimeApi, /bool\s+runtimePlaybackReady\s*\(\)/);
 assert.match(runtimeApi, /bool\s+runtimeOutputReady\s*\(\)/);
-const commandReady = functionBody(main, /bool\s+runtimeCommandReady\s*\(/);
-assert.match(commandReady, /inputs\.outputReady\s*=\s*runtimeOutputReady\(\)/,
+const readiness = functionBody(main, /bool\s+readinessFor\s*\(/);
+assert.match(readiness, /inputs\.outputReady\s*=\s*runtimeOutputReady\(\)/,
   'command readiness must consume public project-output readiness, not controller-only state');
+
+// Playback and mutation are gated separately. Local pattern/brightness control
+// stays available while the radio is unsettled; configuration, wiring, and
+// credential writes still require every transition to have finished.
+const commandReady = functionBody(main, /bool\s+runtimeCommandReady\s*\(/);
+const playbackReady = functionBody(main, /bool\s+runtimePlaybackReady\s*\(/);
+assert.match(commandReady, /readinessFor\(runtimeTransitionPending\(\)\)/,
+  'mutation readiness must include the WiFi transition');
+assert.match(playbackReady, /readinessFor\(runtimeLocalTransitionPending\(\)\)/,
+  'playback readiness must exclude the WiFi transition');
+const localPending = functionBody(main, /bool\s+runtimeLocalTransitionPending\s*\(/);
+assert.ok(!/wifiTransitionPending/.test(localPending),
+  'local playback must not be blocked by a WiFi transport transition');
+assert.match(functionBody(main, /bool\s+runtimeTransitionPending\s*\(/),
+  /runtimeLocalTransitionPending\(\)\s*\|\|\s*wifiTransitionPending/,
+  'the strict gate must still be the local gate plus the WiFi transition');
+assert.match(status, /doc\["playbackReady"\]\s*=\s*runtimePlaybackReady\(\)/,
+  '/api/status must report playback readiness separately from command readiness');
 assert.match(main, /ProvisioningReadinessInputs[\s\S]*webRuntimeServing[\s\S]*runtimeOutputReady\(\)[\s\S]*transitionPending/,
   'commandReady must require web serving, initialized output, and no transition');
 
@@ -156,8 +175,10 @@ for (const source of [affectedOutputCount, affectedOutputId]) {
     'affected output evidence must share the exact command-selection helper');
 }
 
+// Control is playback, so it uses the playback gate — a card mid-reassociation
+// still drives its own lights — but it is still admitted before any parsing.
 const control = functionBody(web, /void\s+handleControlPost\s*\(/);
-const commandGate = control.indexOf('provisioningControlAdmitted(runtimeCommandReady())');
+const commandGate = control.indexOf('provisioningControlAdmitted(runtimePlaybackReady())');
 const deserialize = control.indexOf('deserializeJson(');
 assert.ok(commandGate !== -1 && commandGate < deserialize,
   'control admission must reject an unready card before parsing or applying intent');
@@ -184,8 +205,8 @@ for (const handlerName of [
     `${handlerName} must remain available while runtime control is locked`);
 }
 const identifyHandler = functionBody(web, /void\s+handleIdentify\s*\(/);
-assert.match(identifyHandler, /provisioningControlAdmitted\(runtimeCommandReady\(\)\)/,
-  'identify must share the command-readiness gate');
+assert.match(identifyHandler, /provisioningControlAdmitted\(runtimePlaybackReady\(\)\)/,
+  'identify drives pixels, so it shares the playback gate with control');
 assert.ok(identifyHandler.indexOf('provisioningControlAdmitted(runtimeCommandReady())') <
           identifyHandler.indexOf('runtimeTriggerIdentify()'),
   'identify must reject before changing output ownership');
