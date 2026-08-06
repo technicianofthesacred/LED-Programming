@@ -1,4 +1,5 @@
-// Locks the versioned card page bridge (currently v3; frame shipped in v1):
+// Locks the versioned card page bridge (currently v4; frame shipped in v1,
+// chunk `start` in v3, the blank-card port probe in v4):
 //
 // 1. VERSIONING — the card→Studio 'ready' postMessages and every relay reply
 //    carry `version:N` spliced from the single C++ constant LW_BRIDGE_VERSION
@@ -46,11 +47,34 @@ const here = dirname(fileURLToPath(import.meta.url));
 const web = readFileSync(resolve(here, '../src/LightweaverWeb.cpp'), 'utf8');
 
 // ── versioning ────────────────────────────────────────────────────────────
-assert.match(
-  web,
-  /constexpr int LW_BRIDGE_VERSION = 3;/,
-  'LightweaverWeb.cpp should pin the bridge protocol version constant at 3',
-);
+// v3 added the per-segment `start` passthrough that lets Studio chunk a frame
+// past the card's payload cap. v4 added the blank-card port probe relay.
+// Studio feature-detects on this number, so bumping the card without teaching
+// Studio the new floor -- or the reverse -- silently disables the feature rather
+// than failing loudly. Both directions are pinned here.
+const bridgeVersionMatch = web.match(/constexpr int LW_BRIDGE_VERSION = (\d+);/);
+assert.ok(bridgeVersionMatch, 'LightweaverWeb.cpp must pin the bridge protocol version constant');
+const bridgeVersion = Number(bridgeVersionMatch[1]);
+assert.equal(bridgeVersion, 4, 'the bridge protocol version should be 4 (adds the beacon port probe)');
+
+// Every relay type Studio can send must actually exist in the card's router,
+// or the request round-trips into an 'invalid-payload' throw the owner reads as
+// a broken card. This is the seam that a version bump alone does not protect.
+for (const relayType of ['beacon-ports', 'beacon-port']) {
+  assert.match(web, new RegExp(`m\\.type==='${relayType}'`),
+    `the bridge relay must route '${relayType}' or Studio's probe reaches nothing`);
+}
+
+// Studio's own floors, read from source rather than restated, so the two cannot
+// drift apart in a way that only shows up on real hardware.
+const studioDir = resolve(import.meta.dirname, '../../../lightweaver/src/lib');
+const beaconProbe = readFileSync(resolve(studioDir, 'beaconProbe.js'), 'utf8');
+const probeFloors = [...beaconProbe.matchAll(/bridgeVersion\s*<\s*(\d+)/g)].map(m => Number(m[1]));
+assert.ok(probeFloors.length > 0, 'beaconProbe.js must feature-detect on the bridge version');
+for (const floor of probeFloors) {
+  assert.ok(floor <= bridgeVersion,
+    `beaconProbe.js requires bridge v${floor} but the card only speaks v${bridgeVersion}`);
+}
 
 // The version in every JS script string is spliced from the C++ constant —
 // never a hand-synced numeric literal.

@@ -40,7 +40,27 @@ const PRIVILEGED_BRIDGE_TYPES = new Set([
   'wiring-rollback',
   'wiring-discover',
   'wifi-handoff-ack',
+  'beacon-ports',
+  'beacon-port',
 ]);
+
+// The blank-card port probe. Privileged for ORIGIN purposes -- it lights real
+// LEDs, so like any output command it must target a verified local card -- but
+// deliberately exempt from the runtime-readiness gate below.
+//
+// Every other privileged type is refused unless the card reports itself ready.
+// This one exists ONLY for a card that reports the opposite: a freshly flashed
+// card has no config, so commandReady and playbackReady are both false and it
+// runs nothing but the factory beacon. Gating the probe on readiness would make
+// it available exclusively on cards that never need it -- the same closed loop
+// that stranded blank cards before strip discovery existed.
+//
+// Exempting it is safe because it cannot do anything else: the firmware's
+// runtimeBeaconPinPort refuses unless the card is in beacon mode with outputs
+// bound, it lights only the beacon's own bench-safe 8-pixel slices under a
+// 100mA cap, and it writes no config, wiring or credential. A configured card
+// cannot be steered through this path at all.
+const BEACON_PROBE_BRIDGE_TYPES = new Set(['beacon-ports', 'beacon-port']);
 
 // The playback subset of the privileged types. These three drive the lights
 // and nothing else -- they mutate no stored config, wiring, or credential --
@@ -2028,7 +2048,12 @@ export function sendCardBridgeRequest(type, payload = {}, {
       const runtimeReadyForType = PLAYBACK_BRIDGE_TYPES.has(type)
         ? bridgeRuntimePlaybackReady
         : bridgeRuntimeCommandReady;
-      if (PRIVILEGED_BRIDGE_TYPES.has(type) && !runtimeReadyForType) {
+      // The beacon probe keeps the origin restriction above and skips only the
+      // readiness gate, because the card it serves is BY DEFINITION not ready.
+      // See BEACON_PROBE_BRIDGE_TYPES for why that is safe.
+      if (PRIVILEGED_BRIDGE_TYPES.has(type)
+        && !BEACON_PROBE_BRIDGE_TYPES.has(type)
+        && !runtimeReadyForType) {
         const exactInitialConfig = type === 'config'
           && bridgeInitialConfigAvailable
           && !bridgeInitialConfigAttempted

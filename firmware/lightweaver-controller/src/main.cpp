@@ -173,6 +173,23 @@ bool factoryBeaconMode = false;
 // sat dark for the first 12 seconds of every sweep and read as dead.
 uint8_t factoryBeaconSteps[LW_APPROVED_OUTPUT_GPIO_COUNT] = {};
 uint8_t factoryBeaconStepCount = 0;
+// Owner-pinned beacon port. The sweep answers "is this card alive"; it cannot
+// answer "is my strip on port 18", because the owner has to wait for that port
+// to come round and then trust they read the timing right. Pinning lets Studio
+// ask one port directly: light 18, look, answer. UINT8_MAX means "not pinned,
+// keep sweeping".
+//
+// No reboot and no config are needed for this: setupFactoryBeaconOutputs has
+// already given EVERY available approved GPIO its own controller and buffer
+// slice, and handleLightweaverWeb() runs before the beacon's early return in
+// loop(), so the HTTP API is live on a card with nothing on it. Pinning only
+// changes which already-bound slice the frame fills.
+uint8_t factoryBeaconPinnedStep = UINT8_MAX;
+// A pin is a held request, not a mode. If Studio closes, crashes, or the owner
+// walks away, the card must go back to advertising itself rather than sitting
+// on one port forever looking like a fault. Studio re-asserts while its grid is
+// open; silence past this window resumes the sweep.
+uint32_t factoryBeaconPinExpiresAtMs = 0;
 uint32_t safeDiscoveryStartedAtMs = 0;
 bool runtimeSafeMode = false;
 bool webRuntimeServing = false;
@@ -1007,7 +1024,16 @@ void showFactoryBeaconFrame() {
   // has no FastLED controller transmits nothing, so it reads to the owner as a
   // dead card rather than as "not this port".
   if (factoryBeaconStepCount == 0) return;
-  uint8_t step = uint8_t((now / LW_FACTORY_BEACON_STEP_MS) % factoryBeaconStepCount);
+  // A pinned port holds one step; an expired or absent pin falls back to the
+  // sweep. The pulse rhythm is deliberately shared: a pinned port blinks the
+  // same flash-twice signature, so the owner is reading one familiar signal
+  // rather than learning a second one.
+  bool pinned = factoryBeaconPinnedStep < factoryBeaconStepCount &&
+                int32_t(factoryBeaconPinExpiresAtMs - now) > 0;
+  if (!pinned && factoryBeaconPinnedStep != UINT8_MAX) factoryBeaconPinnedStep = UINT8_MAX;
+  uint8_t step = pinned
+      ? factoryBeaconPinnedStep
+      : uint8_t((now / LW_FACTORY_BEACON_STEP_MS) % factoryBeaconStepCount);
   uint32_t elapsedInStep = now % LW_FACTORY_BEACON_STEP_MS;
   bool pulseOn = factoryBeaconPulseOn(elapsedInStep);
   // Buffer slices stay keyed to the approved-GPIO index, because that is the
@@ -2307,6 +2333,45 @@ bool runtimeKnownGoodProject() { return runtimeConfig.knownGoodProject; }
 // so the two can never disagree about whether a project is still sitting unread
 // in NVS. See the contract note in LightweaverRuntimeApi.h.
 bool runtimeSafeModeActive() { return runtimeSafeMode; }
+
+// Point the blank-card beacon at ONE port so the owner can ask "is my strip on
+// 18?" instead of waiting for 18 to come round in the sweep. Returns false for a
+// GPIO this card cannot drive or that a control has claimed, so Studio can grey
+// that port out rather than showing a button that silently does nothing.
+//
+// Only meaningful in beacon mode. A configured card drives its real outputs at
+// full length through the ordinary frame path and does not need this.
+bool runtimeBeaconPinPort(uint8_t gpio, uint16_t& litPixels) {
+  litPixels = 0;
+  if (!factoryBeaconMode || !ledOutputsReady) return false;
+  for (uint8_t step = 0; step < factoryBeaconStepCount; step++) {
+    if (LW_APPROVED_OUTPUT_GPIOS[factoryBeaconSteps[step]] != gpio) continue;
+    factoryBeaconPinnedStep = step;
+    factoryBeaconPinExpiresAtMs = millis() + LW_FACTORY_BEACON_PIN_HOLD_MS;
+    litPixels = LW_FACTORY_BEACON_PIXEL_LIMIT;
+    return true;
+  }
+  return false;
+}
+
+// Hand the card back to the sweep the moment the grid closes, rather than
+// leaving it pinned for the rest of the hold window.
+void runtimeBeaconReleasePort() {
+  factoryBeaconPinnedStep = UINT8_MAX;
+  factoryBeaconPinExpiresAtMs = 0;
+}
+
+// Which ports this card can actually light right now, so Studio renders the
+// real grid instead of guessing from its own contract copy. A control pin
+// claims its GPIO, so the two cards need not agree on the same list.
+bool runtimeBeaconPortsAvailable(uint8_t* gpios, uint8_t capacity, uint8_t& count) {
+  count = 0;
+  if (!factoryBeaconMode || !ledOutputsReady) return false;
+  for (uint8_t step = 0; step < factoryBeaconStepCount && count < capacity; step++) {
+    gpios[count++] = LW_APPROVED_OUTPUT_GPIOS[factoryBeaconSteps[step]];
+  }
+  return true;
+}
 
 void runtimeApplySavedConfig() {
   // handleConfigPost and loop run on the same Arduino task, so the complete
