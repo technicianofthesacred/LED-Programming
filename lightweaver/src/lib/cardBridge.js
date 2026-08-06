@@ -124,6 +124,50 @@ let bridgeRuntimePlaybackReady = false;
 let bridgeInitialConfigAvailable = false;
 let bridgeInitialConfigAttempted = false;
 let bridgeAuthorityLifecycle = -1;
+// STRIP-DISCOVERY DELTA (2026-08) — a second, narrower route to the same
+// one-shot initial-config authority.
+//
+// Why it exists: the authority above is reachable only through a WiFi handoff
+// correlation, which requires the card to be mid-transition from its setup AP
+// to a station address (acceptWifiHandoff demands wifi.transition ===
+// 'handoff-ready' plus an RFC1918 stationIp, and normalizeWifiHandoffHost
+// explicitly rejects 192.168.4.1). A freshly erased card sitting on its own AP
+// can never produce one — so from Layout a blank card is un-writable, which is
+// exactly the deadlock strip discovery exists to break.
+//
+// What the gate protects: overwriting an OWNER'S project on a card without
+// identity proof and flow provenance. A provably blank card has no project to
+// overwrite, so that harm cannot occur here.
+//
+// What is NOT weakened: identity. The normal
+// requireExpectedCardIdentity(bridgeCard, { expected: readPersistedCardIdentity() })
+// check still runs on every send. Only the "how did this flow start" provenance
+// widens, and only for a card that (a) is identity-verified over a ready,
+// connected bridge in THIS page lifecycle, (b) was classified 'blank' by
+// classifyCardReadiness on a verified status envelope (knownGoodProject false,
+// no projectId, no projectFingerprint, factory mode / defaults source), (c) is
+// bound to one commissioning flowId and this exact host, and (d) is still
+// strictly one-shot — it consumes bridgeInitialConfigAttempted exactly like the
+// handoff route does.
+let bridgeBlankEvidence = null;
+let bridgeDiscoveryAuthority = null;
+
+// Every page-lifecycle bump invalidates both discovery facts, so drop them at
+// the same moment the lifecycle moves. blankDiscoveryAuthorityMatches already
+// refuses a grant minted in an older lifecycle, but a merely-stale grant is
+// still a non-null object, and that is what bit: code that tested the variable
+// for presence rather than for a match diverted a WiFi handoff's config write
+// around its fail-closed persistence record. Nothing may be left behind that
+// answers "yes" to a presence check.
+//
+// The rule that keeps that true, enforced by card-bridge-handoff.mjs: every
+// function that RE-OPENS the one-shot — anything assigning
+// bridgeInitialConfigAttempted something other than `true` — calls this. That
+// is the complete set of moments a leftover grant could be spent again.
+function clearBlankDiscoveryAuthority() {
+  bridgeBlankEvidence = null;
+  bridgeDiscoveryAuthority = null;
+}
 let bridgeRestoredHandoff = false;
 let bridgeRestoredFinalEnvelopeCount = 0;
 let bridgeHandoffNavigationRetry = null;
@@ -252,6 +296,7 @@ function clearBridgeTarget({
     bridgeRestoredFinalEnvelopeCount = 0;
   }
   bridgeLifecycle += 1;
+  clearBlankDiscoveryAuthority();
   dispatchBridgeChange();
 }
 
@@ -276,6 +321,7 @@ function revokeBridgeForNavigation({
 } = {}) {
   rejectPendingBridgeRequests(reason, message);
   bridgeLifecycle += 1;
+  clearBlankDiscoveryAuthority();
   bridgeConnected = false;
   bridgeReady = false;
   bridgeVersion = 0;
@@ -534,6 +580,9 @@ function applyAuthoritativeBridgeStatus(status, host = bridgeHost) {
   bridgeRuntimePlaybackReady = false;
   bridgeInitialConfigAvailable = false;
   bridgeAuthorityLifecycle = -1;
+  // Blankness is re-proven from every authoritative envelope, never remembered:
+  // the instant a card stops reporting blank, the discovery route closes.
+  bridgeBlankEvidence = null;
 
   if (bridgeHandoffCorrelation) {
     const authority = inspectFinalStationHandoff({
@@ -609,6 +658,19 @@ function applyAuthoritativeBridgeStatus(status, host = bridgeHost) {
     bridgeAuthorityLifecycle = bridgeLifecycle;
     bridgeRuntimeCommandReady = readiness.connected === true;
     bridgeRuntimePlaybackReady = readiness.playbackAccess === 'ready';
+    // See the STRIP-DISCOVERY DELTA note above. classifyCardReadiness only
+    // returns 'blank' when the card reports knownGoodProject false, no
+    // projectId, no projectFingerprint, and factory-flash mode or a defaults
+    // source — i.e. provably nothing to overwrite. Bound to this page lifecycle
+    // so any navigation, reload, or target change invalidates it.
+    bridgeBlankEvidence = readiness.state === 'blank'
+      ? Object.freeze({
+          cardId: identity.id,
+          bootId: readiness.bootId,
+          host: normalizeCardHost(host),
+          lifecycle: bridgeLifecycle,
+        })
+      : null;
     bridgeIdentityError = bridgeRuntimeCommandReady ? '' : 'runtime-not-ready';
     writeStoredCardHost(host);
     return Object.freeze({
@@ -661,6 +723,7 @@ function setBridgeState({
   );
   if (targetChanged) {
     bridgeLifecycle += 1;
+    clearBlankDiscoveryAuthority();
     bridgeReady = false;
     bridgeCard = null;
     bridgeDiscoveredCard = null;
@@ -736,6 +799,7 @@ function handleBridgeMessage(event) {
     // the prior lifecycle synchronously before exposing transport readiness;
     // fresh firmware identity is the only path back to command authority.
     bridgeLifecycle += 1;
+    clearBlankDiscoveryAuthority();
     bridgeReady = false;
     bridgeCard = null;
     bridgeDiscoveredCard = null;
@@ -1078,6 +1142,12 @@ export function retargetCardBridge(rawHost = '', rawCorrelation = {}, { flowId: 
     bridgeHandoffCorrelation = correlation;
     bridgeHandoffFlowId = flowId;
     bridgeInitialConfigAttempted = false;
+    // Re-opening the one-shot is what makes a leftover grant dangerous, so the
+    // clear belongs beside the re-open and not only inside the revoke above.
+    // That revoke has already dropped it today; restating it here means a later
+    // edit which moves or removes the revoke cannot silently hand a discovery
+    // grant this freshly re-armed handoff write.
+    clearBlankDiscoveryAuthority();
     bridgeRestoredHandoff = false;
     bridgeRestoredFinalEnvelopeCount = 0;
     writeWifiHandoffRecovery({ correlation, flowId, ackAttempted: false });
@@ -1297,6 +1367,10 @@ export function restoreCardBridgeHandoff(rawFlowId = '') {
   bridgeHandoffCorrelation = correlation;
   bridgeHandoffFlowId = flowId;
   bridgeInitialConfigAttempted = recovery.configAttempted;
+  // Same reason as the retarget path: a restored handoff may re-open the
+  // one-shot (recovery.configAttempted is false whenever the reload happened
+  // before the config went out), so no discovery grant may survive into it.
+  clearBlankDiscoveryAuthority();
   bridgeRestoredHandoff = recovery.ackAttempted;
   bridgeRestoredFinalEnvelopeCount = 0;
 
@@ -1405,6 +1479,73 @@ export function getCardBridgeState() {
   };
 }
 
+// STRIP-DISCOVERY DELTA — see the note beside bridgeDiscoveryAuthority.
+//
+// Grant the one-shot initial-config authority to a discovery flow for a card
+// that is provably blank RIGHT NOW on this bridge. Refuses (never throws) with
+// a reason a panel can show. Repeated calls for the same flow are idempotent;
+// the write itself is still one-shot.
+export function authorizeBlankCardDiscoveryConfig({ host = '', flowId: rawFlowId = '' } = {}) {
+  const flowId = normalizeCommissioningFlowId(rawFlowId);
+  const resolvedHost = normalizeCardHost(host || bridgeHost);
+  if (!flowId) return { ok: false, reason: 'invalid-flow' };
+  // A real WiFi-handoff commissioning is in progress: that route owns the
+  // authority and this one must never race it.
+  if (bridgeHandoffCorrelation || bridgeHandoffFlowId) return { ok: false, reason: 'handoff-active' };
+  if (!bridgeConnected || !bridgeReady || !bridgeWindow || bridgeTargetClosed()) {
+    return { ok: false, reason: 'bridge-missing' };
+  }
+  if (!bridgeStationIdentityVerified || !bridgeCard?.id) return { ok: false, reason: 'identity-missing' };
+  if (bridgeAuthorityLifecycle !== bridgeLifecycle) return { ok: false, reason: 'stale-host' };
+  if (normalizeCardHost(bridgeHost) !== resolvedHost) return { ok: false, reason: 'stale-host' };
+  if (!bridgeBlankEvidence
+    || bridgeBlankEvidence.lifecycle !== bridgeLifecycle
+    || bridgeBlankEvidence.cardId !== bridgeCard.id
+    || bridgeBlankEvidence.host !== resolvedHost) {
+    return { ok: false, reason: 'card-not-blank' };
+  }
+  if (bridgeInitialConfigAttempted) return { ok: false, reason: 'authority-spent' };
+  bridgeDiscoveryAuthority = Object.freeze({
+    flowId,
+    host: resolvedHost,
+    cardId: bridgeCard.id,
+    bootId: bridgeBlankEvidence.bootId,
+    lifecycle: bridgeLifecycle,
+  });
+  dispatchBridgeChange();
+  return { ok: true, reason: '', cardId: bridgeCard.id, host: resolvedHost };
+}
+
+function blankDiscoveryAuthorityMatches(rawFlowId = '', rawHost = '') {
+  const flowId = normalizeCommissioningFlowId(rawFlowId);
+  const resolvedHost = normalizeCardHost(rawHost || bridgeHost);
+  return Boolean(
+    flowId
+    && bridgeDiscoveryAuthority
+    && bridgeDiscoveryAuthority.flowId === flowId
+    && bridgeDiscoveryAuthority.host === resolvedHost
+    // Every teardown path (clearBridgeTarget, revokeBridgeForNavigation, a
+    // changed setBridgeState target) bumps the lifecycle, so this single
+    // comparison is what makes the grant non-transferable across page
+    // lifecycles, reloads, and card swaps.
+    && bridgeDiscoveryAuthority.lifecycle === bridgeLifecycle
+    && bridgeAuthorityLifecycle === bridgeLifecycle
+    && bridgeConnected
+    && bridgeReady
+    && bridgeStationIdentityVerified
+    && bridgeCard?.id === bridgeDiscoveryAuthority.cardId
+    && normalizeCardHost(bridgeHost) === resolvedHost
+    && !bridgeHandoffCorrelation
+    && !bridgeInitialConfigAttempted
+    && Boolean(bridgeBlankEvidence)
+    && bridgeBlankEvidence.lifecycle === bridgeLifecycle,
+  );
+}
+
+export function hasBlankCardDiscoveryConfigAuthority({ host = '', flowId = '' } = {}) {
+  return blankDiscoveryAuthorityMatches(flowId, host);
+}
+
 export function hasCardBridgeInitialConfigAuthority({ host = '', flowId: rawFlowId = '' } = {}) {
   const flowId = normalizeCommissioningFlowId(rawFlowId);
   const resolvedHost = normalizeCardHost(host || bridgeHost);
@@ -1439,6 +1580,9 @@ export function clearCardBridgeHandoff(rawFlowId = '') {
   bridgeRestoredFinalEnvelopeCount = 0;
   bridgeCard = null;
   bridgeIdentityError = '';
+  // Re-opening the one-shot without a lifecycle bump: any discovery grant made
+  // against the card this teardown just dropped must go with it.
+  clearBlankDiscoveryAuthority();
   clearWifiHandoffRecovery(flowId);
   dispatchBridgeChange();
   return true;
@@ -1475,6 +1619,9 @@ export function adoptCommissionedCardBridgeIdentity(rawFlowId = '') {
   bridgeInitialConfigAttempted = false;
   bridgeRestoredHandoff = false;
   bridgeRestoredFinalEnvelopeCount = 0;
+  // Same reason as clearCardBridgeHandoff: the one-shot re-opens here without a
+  // lifecycle bump, so no discovery grant may survive into it.
+  clearBlankDiscoveryAuthority();
   clearWifiHandoffRecovery(flowId);
   bridgeIdentityError = bridgeRuntimeCommandReady ? '' : 'runtime-not-ready';
   dispatchBridgeChange();
@@ -1833,6 +1980,13 @@ export function sendCardBridgeRequest(type, payload = {}, {
   const targetOrigin = cardHostToUrl(resolvedHost);
   const commissioningFlowId = normalizeCommissioningFlowId(rawCommissioningFlowId);
   let consumeInitialConfigAuthority = false;
+  // Which of the two routes authorized THIS send. The consumption step below
+  // must key off the decision that was actually made here, never off the mere
+  // presence of a discovery grant: a leftover grant would otherwise divert a
+  // WiFi handoff's config write around markWifiHandoffConfigAttempted, and that
+  // durable record is the only thing that stops a Studio reload mid-handoff
+  // from restoring a one-shot that has already been spent.
+  let consumeBlankDiscoveryAuthority = false;
 
   if (PRIVILEGED_BRIDGE_TYPES.has(type) && !isLocalCardHost(resolvedHost)) {
     return Promise.reject(bridgeError(
@@ -1881,13 +2035,24 @@ export function sendCardBridgeRequest(type, payload = {}, {
           && commissioningFlowId
           && commissioningFlowId === bridgeHandoffFlowId
           && Boolean(bridgeHandoffCorrelation);
-        if (!exactInitialConfig) {
+        // STRIP-DISCOVERY DELTA — the same one-shot write, granted from live
+        // blank-card evidence instead of a WiFi handoff correlation. See the
+        // note beside bridgeDiscoveryAuthority for why this is narrower than it
+        // looks and what it deliberately does not weaken.
+        const exactBlankDiscoveryConfig = type === 'config'
+          && blankDiscoveryAuthorityMatches(commissioningFlowId, resolvedHost);
+        if (!exactInitialConfig && !exactBlankDiscoveryConfig) {
           throw bridgeError(
             'The verified card is not runtime-ready for this mutation.',
             'runtime-not-ready',
           );
         }
         consumeInitialConfigAuthority = true;
+        // The handoff route is checked first because it is the one with a
+        // persisted record to mark. The two are mutually exclusive by
+        // construction (a discovery grant requires no handoff correlation),
+        // so this only ever hardens the ordering.
+        consumeBlankDiscoveryAuthority = exactBlankDiscoveryConfig && !exactInitialConfig;
       }
       if (PRIVILEGED_BRIDGE_TYPES.has(type) && bridgeAuthorityLifecycle !== bridgeLifecycle) {
         throw bridgeError(
@@ -1927,7 +2092,15 @@ export function sendCardBridgeRequest(type, payload = {}, {
     bridgeHost = resolvedHost;
   }
 
-  if (consumeInitialConfigAuthority) {
+  if (consumeBlankDiscoveryAuthority) {
+    // The discovery grant has no session-storage recovery record to mark: it is
+    // scoped to this page lifecycle by construction, so consuming it in memory
+    // is the whole one-shot.
+    bridgeDiscoveryAuthority = null;
+    bridgeInitialConfigAttempted = true;
+    bridgeInitialConfigAvailable = false;
+    dispatchBridgeChange();
+  } else if (consumeInitialConfigAuthority) {
     if (!markWifiHandoffConfigAttempted({
       flowId: bridgeHandoffFlowId,
       correlation: bridgeHandoffCorrelation,

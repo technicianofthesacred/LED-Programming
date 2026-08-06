@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createBridgeResultChannel, resumeBridgeReturnCode } from '../../lib/bridgeLaunch.js';
+import { STRIP_DISCOVERY_LABEL, STRIP_DISCOVERY_ROUTE } from '../../lib/cardAction.js';
 import {
   acquireCardBridgeFromGesture,
   adoptDiscoveredCardBridgeIdentity,
@@ -41,6 +42,10 @@ function goToInstall() {
 
 function goToLayout() {
   window.location.hash = 'screen=layout';
+}
+
+function goToStripDiscovery() {
+  window.location.hash = STRIP_DISCOVERY_ROUTE;
 }
 
 const SETUP_HOST = '192.168.4.1';
@@ -156,6 +161,17 @@ export function CardConnectionCenter({
     shouldRestoreFocusRef.current = false;
     onClose();
     goToLayout();
+  };
+
+  // A card with no project on it used to be sent to Layout, which is a dead end:
+  // Layout's install button needs a bench LED check, the check sends 'frame'
+  // messages, and the bridge refuses frames while the card reports
+  // playbackReady=false — which is exactly what a card with no project reports.
+  // Discovery is the only entrance that works from here.
+  const openStripDiscovery = () => {
+    shouldRestoreFocusRef.current = false;
+    onClose();
+    goToStripDiscovery();
   };
 
   const connect = (rawHost = '', { bridge = false } = {}) => {
@@ -313,7 +329,17 @@ export function CardConnectionCenter({
       case 'pair-local-card':
         return <button type="button" className="btn primary" onClick={useDiscoveredCard} disabled={pairingBusy}>{pairingBusy ? 'Connecting…' : 'Connect'}</button>;
       case 'card-needs-project':
-        return <button type="button" className="btn primary" onClick={openLayout}>Start layout</button>;
+        return (
+          <>
+            <button type="button" className="btn primary" data-testid="connection-find-strips" onClick={openStripDiscovery}>
+              {STRIP_DISCOVERY_LABEL}
+            </button>
+            {/* Kept as the secondary path for an owner who already knows the
+                strip counts and only wants to draw. It stays honest about the
+                order: nothing installs until the strips are known. */}
+            <button type="button" className="btn" onClick={openLayout}>Start layout</button>
+          </>
+        );
       case 'ready-browser-usb':
         return <button type="button" className="btn primary" onClick={openInstall}>Start installation</button>;
       case 'escape-insecure-card-frame':

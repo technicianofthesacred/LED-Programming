@@ -113,6 +113,41 @@ async function installShowStubs(page: any) {
       close() { this.readyState = 3; this.onclose?.(); }
     }
     (window as any).WebSocket = FakeWebSocket;
+
+    // __frames logs WS MESSAGES, and one message is one CHUNK, not one frame:
+    // past FRAME_CHUNK_MAX_PIXELS (416) a frame is split into messages
+    // carrying a per-segment 'start' write offset, because the card silently
+    // drops any payload over 4096 bytes (src/lib/frameChunking.js). The raw
+    // log stays as it is — chunk structure is worth being able to inspect —
+    // and these helpers give the assertions back the vocabulary they mean,
+    // regrouped exactly as the firmware and tests/card-frame-stream.mjs do.
+    //
+    // A chunk continues the open frame only when it starts precisely where
+    // that frame ended. Anything else — including a resend from pixel 0 —
+    // opens a NEW frame, so a dropped or misaligned chunk surfaces as an extra
+    // frame instead of being quietly stitched over.
+    (window as any).__streamedFrames = () => {
+      const frames: string[][] = [];
+      for (const message of (window as any).__frames) {
+        const segment = message.seg[0];
+        const start = segment.start ?? 0;
+        const open = frames.at(-1);
+        if (start > 0 && open && open.length === start) open.push(...segment.i);
+        else frames.push([...segment.i]);
+      }
+      return frames;
+    };
+    // An active stream re-sends its latest frame every FRAME_KEEPALIVE_MS
+    // (850ms) so the card's 2s frame-source watchdog never takes the canvas
+    // back mid-show. The frame log therefore keeps growing even while the show
+    // is frozen — measured at one resend per ~896ms, one pump tick past the
+    // threshold. Collapsing consecutive identical frames leaves the quantity a
+    // frozen show must actually hold still: how many DIFFERENT frames reached
+    // the card. "Rendered again" stays covered by data-frame-version and
+    // "analysed again" by __audioReads, so nothing is given up here.
+    (window as any).__distinctFrames = () => (window as any).__streamedFrames()
+      .filter((pixels: string[], index: number, all: string[][]) => index === 0
+        || pixels.join() !== all[index - 1].join());
   });
 }
 
@@ -211,8 +246,8 @@ test('connected preview and frames follow split, reversed, and off physical chai
   await expect(stage).toHaveAttribute('data-sample-positions', '1.000:1.000,-1.000:1.000,0.000:0.000,1.000:-1.000,0.000:-1.000,-1.000:-1.000');
 
   await page.getByRole('button', { name: 'Play on the lights' }).click();
-  await expect.poll(async () => page.evaluate(() => (window as any).__frames.length)).toBeGreaterThan(0);
-  const streamed = await page.evaluate(() => (window as any).__frames.at(-1).seg[0].i);
+  await expect.poll(async () => page.evaluate(() => (window as any).__streamedFrames().length)).toBeGreaterThan(0);
+  const streamed = await page.evaluate(() => (window as any).__streamedFrames().at(-1));
   expect(streamed).toHaveLength(6);
   expect(streamed[2]).toBe('000000');
   expect(streamed.filter((pixel: string) => pixel !== '000000').length).toBeGreaterThan(0);
@@ -290,50 +325,76 @@ test('switching templates while paused renders and streams exactly one new-size 
   await openShow(page);
   await loadSong(page);
   await page.getByRole('button', { name: 'Play on the lights' }).click();
-  await expect.poll(async () => page.evaluate(() => (window as any).__frames.length)).toBeGreaterThan(0);
+  await expect.poll(async () => page.evaluate(() => (window as any).__streamedFrames().length)).toBeGreaterThan(0);
   await page.getByTestId('show-pause').click();
   await page.waitForTimeout(120);
 
   const before = await page.getByTestId('show-stage').evaluate((node: HTMLElement) => ({
     version: Number(node.dataset.frameVersion),
-    frames: (window as any).__frames.length,
+    frames: (window as any).__distinctFrames().length,
     reads: (window as any).__audioReads,
   }));
   await page.getByTestId('show-template-mandala').click();
 
   await expect(page.getByTestId('show-stage')).toHaveAttribute('data-template', 'mandala');
   await expect.poll(async () => page.getByTestId('show-stage').getAttribute('data-frame-version')).toBe(String(before.version + 1));
-  await expect.poll(async () => page.evaluate(() => (window as any).__frames.length)).toBe(before.frames + 1);
-  const latest = await page.evaluate(() => (window as any).__frames.at(-1).seg[0].i);
-  expect(latest).toHaveLength(675);
-  await page.waitForTimeout(200);
-  expect(await page.evaluate(() => (window as any).__frames.length)).toBe(before.frames + 1);
+  await expect.poll(async () => page.evaluate(() => (window as any).__distinctFrames().length)).toBe(before.frames + 1);
+  const latest = await page.evaluate(() => (window as any).__distinctFrames().at(-1));
+  // The WHOLE new-size frame has to reach the card, not just its head: this
+  // reads the reassembled frame, so a dropped or misplaced tail chunk fails
+  // here rather than passing as a 416-pixel "frame".
+  expect(latest, 'the new-size frame reassembles from its chunks').toHaveLength(675);
+
+  // Hold it across more than two keepalive windows. A frozen show must keep
+  // RE-SENDING this one frame — going quiet for 2s hands the canvas back to
+  // the card's frame-source watchdog mid-show — while never rendering again,
+  // never reading the audio again, and never putting a DIFFERENT frame on the
+  // wire. The old 200ms sample could only ever have caught the last of those.
+  const settledFrames = await page.evaluate(() => (window as any).__streamedFrames().length);
+  await page.waitForTimeout(2000);
+  expect(await page.evaluate(() => (window as any).__distinctFrames().length)).toBe(before.frames + 1);
+  await expect(page.getByTestId('show-stage')).toHaveAttribute('data-frame-version', String(before.version + 1));
   expect(await page.evaluate(() => (window as any).__audioReads)).toBe(before.reads);
+
+  // The frozen frame must go out at the KEEPALIVE rhythm and no faster. Those
+  // resends are byte-identical, so the distinct-frame count above cannot see
+  // them at all — this is what catches a pump that re-streams the same frame
+  // every tick, which would flood the card at 18fps for no visible change.
+  // FRAME_KEEPALIVE_MS is 850ms, so a 2s freeze allows 2 resends plus one for
+  // where the window falls, and one more of slack for a loaded machine
+  // overshooting the wait. A starved pump can only ever resend LESS often, and
+  // the 18fps pump this guards against puts ~36 here — the bound has room to
+  // be generous without losing its teeth.
+  const resends = await page.evaluate(() => (window as any).__streamedFrames().length) - settledFrames;
+  expect(resends, 'the keepalive keeps the frozen frame on the wire').toBeGreaterThan(0);
+  expect(resends, 'the frozen frame is re-sent by the keepalive, not re-streamed by the pump').toBeLessThanOrEqual(4);
 });
 
 test('pausing with lights active atomically pushes the displayed frame and freezes it', async ({ page }) => {
   await openShow(page);
   await loadSong(page);
   await page.getByRole('button', { name: 'Play on the lights' }).click();
-  await expect.poll(async () => page.evaluate(() => (window as any).__frames.length)).toBeGreaterThan(0);
-  const beforePauseCount = await page.evaluate(() => (window as any).__frames.length);
+  await expect.poll(async () => page.evaluate(() => (window as any).__streamedFrames().length)).toBeGreaterThan(0);
+  const beforePauseFrames = await page.evaluate(() => (window as any).__distinctFrames().length);
   await page.getByTestId('show-pause').click();
   const frozen = await page.getByTestId('show-stage').getAttribute('data-frame-hash');
-  await expect.poll(async () => page.evaluate(({ beforePauseCount, frozen }) => {
-    if ((window as any).__frames.length <= beforePauseCount) return false;
+  await expect.poll(async () => page.evaluate(({ beforePauseFrames, frozen }) => {
+    const frames = (window as any).__distinctFrames();
+    if (frames.length <= beforePauseFrames) return false;
     let hash = 0x811C9DC5;
-    for (const pixel of (window as any).__frames.at(-1).seg[0].i) {
+    for (const pixel of frames.at(-1)) {
       for (let offset = 0; offset < 6; offset += 2) hash = Math.imul(hash ^ Number.parseInt(pixel.slice(offset, offset + 2), 16), 0x01000193);
     }
     return (hash >>> 0).toString(16).padStart(8, '0') === frozen;
-  }, { beforePauseCount, frozen })).toBe(true);
-  // The stream may already have one copy of the displayed frame in flight
-  // when Pause queues the authoritative frozen copy. Let both identical
-  // deliveries drain before asserting that the stream itself has stopped.
-  await page.waitForTimeout(200);
-  const count = await page.evaluate(() => (window as any).__frames.length);
-  await page.waitForTimeout(200);
-  expect(await page.evaluate(() => (window as any).__frames.length)).toBe(count);
+  }, { beforePauseFrames, frozen })).toBe(true);
+  // Counting DISTINCT frames retires the old drain window: the copy already in
+  // flight when Pause queued the authoritative frozen one, and every keepalive
+  // resend behind it, are byte-identical and collapse into that single frame.
+  // "Frozen" is therefore "never streams a different frame again", and it now
+  // holds across a full keepalive window instead of a 200ms sample.
+  const frozenFrames = await page.evaluate(() => (window as any).__distinctFrames().length);
+  await page.waitForTimeout(1200);
+  expect(await page.evaluate(() => (window as any).__distinctFrames().length)).toBe(frozenFrames);
   expect(await page.getByTestId('show-stage').getAttribute('data-frame-hash')).toBe(frozen);
 });
 

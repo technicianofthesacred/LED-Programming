@@ -21,6 +21,7 @@
 #include <Preferences.h>
 #include <esp_task_wdt.h>
 #include <esp_system.h>
+#include <esp_heap_caps.h>
 #include <mbedtls/sha256.h>
 
 // Task watchdog timeout. Must exceed the longest blocking call in the loop
@@ -66,15 +67,57 @@
 constexpr const char* LW_FACTORY_CONFIG_PATH = "/lightweaver.json";
 constexpr const char* LW_FACTORY_RESET_RECOVERY_PATH = "/lightweaver.reset-recovery.json";
 
-CRGB leds[LW_MAX_PIXELS];
-CRGB physicalLeds[LW_MAX_PIXELS];
-uint8_t frameBuffer[LW_MAX_PIXELS * 3];
-uint8_t preparedSequenceFrameBuffer[LW_MAX_PIXELS * 3];
+// The five pixel-scaled buffers (16 bytes per pixel combined) are allocated
+// ONCE at boot from the loaded config's own totalPixels — see
+// allocatePixelBuffers(). Statics sized at LW_MAX_PIXELS would now cost a
+// megabyte of permanently resident RAM for a capacity almost no piece uses.
+// There is deliberately no runtime resize and no free-and-realloc: every path
+// that changes totalPixels (the wiring staging flow) reboots the card, so boot
+// is the only allocation point and the heap can never fragment underneath
+// FastLED, which holds raw pointers into these buffers for the life of the run.
+CRGB* leds = nullptr;                                        // 3 B/px, logical canvas
+CRGB* physicalLeds = nullptr;                                // 3 B/px, post-color-order
+uint8_t* frameBuffer = nullptr;                              // 3 B/px, active LWSEQ frame
+uint8_t* preparedSequenceFrameBuffer = nullptr;              // 3 B/px, staged LWSEQ frame
+KaleidoscopePixelLookup* kaleidoscopePixelLookup = nullptr;  // 4 B/px, mapping lookup
+// Pixel capacity the buffers above were actually allocated for. Every bound
+// that used to read LW_MAX_PIXELS at runtime must read this instead.
+uint16_t allocatedPixels = 0;
+// Byte length of frameBuffer / preparedSequenceFrameBuffer (allocatedPixels*3),
+// kept explicitly because sizeof() no longer answers the question.
+uint32_t allocatedFrameBufferBytes = 0;
 uint32_t preparedSequenceFrameGeneration = 0;
 
 constexpr uint8_t LW_DISCOVERY_STEP_COUNT = LW_APPROVED_OUTPUT_GPIO_COUNT;
 constexpr uint16_t LW_DISCOVERY_PIXELS_PER_OUTPUT = LW_FACTORY_BEACON_PIXEL_LIMIT;
 constexpr uint8_t LW_DISCOVERY_BRIGHTNESS = LW_FACTORY_BEACON_BRIGHTNESS_LIMIT;
+
+// Floor for the boot allocation. The factory beacon and safe-discovery paths
+// run with NO valid config (totalPixels == 0) and still write
+// LW_APPROVED_OUTPUT_GPIO_COUNT * LW_FACTORY_BEACON_PIXEL_LIMIT pixels into
+// physicalLeds, so the buffers must cover them even on a blank card.
+constexpr uint16_t LW_MIN_ALLOCATED_PIXELS = 512;
+static_assert(LW_APPROVED_OUTPUT_GPIO_COUNT * LW_FACTORY_BEACON_PIXEL_LIMIT <=
+                  LW_MIN_ALLOCATED_PIXELS,
+              "the blank-card beacon writes one slice per approved GPIO; the allocation "
+              "floor must cover every slice or a card with no project scribbles off the buffer");
+// The owner watching a freshly flashed card has one strip in one port, so the
+// full sweep IS the worst-case "is this thing alive?" wait before they decide
+// the card is dead and pull power. Capping the sweep to the first few GPIOs was
+// rejected: a port dropped from the sweep stays dark forever, which is the same
+// misdiagnosis with a longer fuse. If the pin menu grows past this, shorten
+// LW_FACTORY_BEACON_STEP_MS rather than silently make the owner wait longer.
+// (The default control assignment claims 4/5/6/7, so a stock card actually
+// sweeps 11 ports / 33s; 45s is the ceiling if every control is moved away.)
+constexpr uint32_t LW_FACTORY_BEACON_MAX_SWEEP_MS = 45000;
+static_assert(LW_APPROVED_OUTPUT_GPIO_COUNT * LW_FACTORY_BEACON_STEP_MS <=
+                  LW_FACTORY_BEACON_MAX_SWEEP_MS,
+              "widening the output pin menu must not push the blank-card beacon sweep past "
+              "the longest wait an owner will give a card before calling it dead");
+// Above this many bytes the request goes to PSRAM instead of internal RAM.
+// Small installations stay entirely on-chip (no PSRAM dependency, no octal-bus
+// latency on the render loop); only genuinely large pieces pay for SPIRAM.
+constexpr size_t LW_INTERNAL_PIXEL_BUDGET_BYTES = 64u * 1024u;
 
 OutputConfig outputs[LW_MAX_OUTPUTS];
 ControlsConfig controls;
@@ -82,7 +125,6 @@ LookConfig looks[LW_MAX_LOOKS];
 
 RuntimeConfig runtimeConfig;
 LightweaverColorPipeline outputColorPipeline;
-KaleidoscopePixelLookup kaleidoscopePixelLookup[LW_MAX_PIXELS];
 int8_t kaleidoscopeMappingZoneIndex[LW_MAX_KALEIDOSCOPE_MAPPINGS] = {};
 
 String pieceName = "Lightweaver";
@@ -122,6 +164,15 @@ uint32_t wiringProbationDeadlineMs = 0;
 bool safeDiscoveryMode = false;
 uint8_t safeDiscoveryBatchIndex = 0;
 bool factoryBeaconMode = false;
+// The beacon's step list, as approved-GPIO indices. Only pins that actually
+// received a FastLED controller this boot appear here — setupFactoryBeaconOutputs
+// appends an entry in the same statement that registers the controller, so the
+// sweep cannot address a pin nothing drives. It used to walk the whole approved
+// list, which since the pin menu widened meant steps 0-3 landed on the DEFAULT
+// control pins (4/5/6/7); those are skipped at registration, so a blank card
+// sat dark for the first 12 seconds of every sweep and read as dead.
+uint8_t factoryBeaconSteps[LW_APPROVED_OUTPUT_GPIO_COUNT] = {};
+uint8_t factoryBeaconStepCount = 0;
 uint32_t safeDiscoveryStartedAtMs = 0;
 bool runtimeSafeMode = false;
 bool webRuntimeServing = false;
@@ -191,7 +242,13 @@ uint8_t driftHueMin = 0;
 uint8_t driftHueMax = 255;
 
 void applyRuntimeConfig(const RuntimeConfig& config);
+void clampRuntimeOutputsToAllocation();
 void rebuildKaleidoscopePixelLookup(const RuntimeConfig& config);
+uint16_t configTotalPixels(const RuntimeConfig& config);
+bool allocatePixelBuffers(uint16_t requestedPixels);
+void releasePixelBuffers();
+bool pixelBuffersReady();
+void logPsramAvailability();
 bool loadProfile();
 bool setupLedOutputs();
 bool setupFactoryBeaconOutputs();
@@ -286,7 +343,23 @@ void setup() {
     fail(ERROR_CONFIG, loadResult.message.c_str());
     return;
   }
+  logPsramAvailability();
+  // Size the pixel buffers from THIS boot's config, before applyRuntimeConfig()
+  // fills the Kaleidoscope lookup and long before any slice reaches FastLED.
+  // The floor covers the blank-card beacon, which renders with no config at all.
+  if (!allocatePixelBuffers(configTotalPixels(runtimeConfig))) {
+    fail(ERROR_CONFIG, "pixel buffer allocation failed");
+    return;
+  }
   applyRuntimeConfig(runtimeConfig);
+  if (!runtimeConfig.maxMilliampsExplicit && outputCount > 0 && Serial) {
+    // Not a rejection — a config without an explicit ceiling still runs. But
+    // FastLED silently scales brightness down to hold 1500 mA, so an installer
+    // who wired 100 A would otherwise see a dim piece and no explanation.
+    Serial.print("WARNING: power limit defaulted to ");
+    Serial.print(ledMaxMilliamps);
+    Serial.println(" mA — set an explicit led.maxMilliamps in commissioning");
+  }
   WiringSafetyStatus wiringSafety = getRuntimeWiringSafetyStatus();
   safeDiscoveryMode = wiringSafety.discoveryActive;
   safeDiscoveryBatchIndex = wiringSafety.discoveryBatchIndex;
@@ -476,6 +549,45 @@ void loop() {
   }
 }
 
+// Fit the live output geometry inside the buffers THIS boot allocated, and
+// re-derive every output's start offset while doing it (start is a derived
+// quantity, never config data).
+//
+// Clamping totalPixels alone was not a safety net, it only looked like one:
+// copyLogicalToPhysicalLeds bounds its loop on the logical index but writes
+// physicalLeds[start + segment.count - 1 - offset] on a reversed segment, and
+// setupLedOutputs hands FastLED the raw slice physicalLeds + start for
+// output.pixels entries. Both of those indices come from the OUTPUT and
+// SEGMENT lengths, not from totalPixels, so an oversized output or segment ran
+// past the allocation while totalPixels looked safe. Trimming start, pixels
+// and every segment count against the same ceiling establishes
+//     output.start + sum(segment counts) <= output.start + output.pixels
+//                                        <= allocatedPixels
+// for every output, which is precisely what both of those writes need.
+void clampRuntimeOutputsToAllocation() {
+  uint16_t used = 0;
+  for (uint8_t outputIndex = 0; outputIndex < outputCount && outputIndex < LW_MAX_OUTPUTS;
+       outputIndex++) {
+    OutputConfig& output = outputs[outputIndex];
+    output.start = used;
+    const uint16_t roomForOutput =
+        allocatedPixels > used ? uint16_t(allocatedPixels - used) : 0;
+    if (output.pixels > roomForOutput) output.pixels = roomForOutput;
+    uint16_t segmentUsed = 0;
+    for (uint8_t segmentIndex = 0;
+         segmentIndex < output.segmentCount && segmentIndex < LW_MAX_OUTPUT_SEGMENTS;
+         segmentIndex++) {
+      OutputSegmentConfig& segment = output.segments[segmentIndex];
+      const uint16_t roomForSegment =
+          output.pixels > segmentUsed ? uint16_t(output.pixels - segmentUsed) : 0;
+      if (segment.count > roomForSegment) segment.count = roomForSegment;
+      segmentUsed += segment.count;
+    }
+    used += output.pixels;
+  }
+  totalPixels = used;
+}
+
 void applyRuntimeConfig(const RuntimeConfig& config) {
   pieceName = config.pieceName;
   runtimeMode = config.mode;
@@ -486,11 +598,25 @@ void applyRuntimeConfig(const RuntimeConfig& config) {
   brightnessLimit = config.brightnessLimit;
   ledMaxMilliamps = config.maxMilliamps;
   outputCount = config.outputCount;
-  totalPixels = 0;
+  // Accumulate the request in 32 bits: each output may legally reach
+  // LW_MAX_PIXELS on its own, so four summed into a uint16_t would wrap and
+  // under-report what the config actually asked for.
+  uint32_t requestedPixels = 0;
   for (uint8_t i = 0; i < outputCount; i++) {
     outputs[i] = config.outputs[i];
-    outputs[i].start = totalPixels;
-    totalPixels += outputs[i].pixels;
+    requestedPixels += outputs[i].pixels;
+  }
+  // The buffers are sized once at boot, but a config POST applies the accepted
+  // config immediately and only THEN marks the restart pending. A bigger piece
+  // would otherwise index past the buffers for the few ticks before the reboot,
+  // so the live geometry never outgrows what was actually allocated.
+  clampRuntimeOutputsToAllocation();
+  if (requestedPixels != totalPixels && Serial) {
+    Serial.print("Applied config wants ");
+    Serial.print(requestedPixels);
+    Serial.print(" px but this boot allocated ");
+    Serial.print(allocatedPixels);
+    Serial.println(" px — outputs and segments trimmed until the pending restart re-allocates");
   }
   controls = config.controls;
   lookCount = config.lookCount;
@@ -563,6 +689,10 @@ bool loadProfile() {
   }
 
   JsonArray outputArray = doc["outputs"].as<JsonArray>();
+  // Accumulate in 32 bits. Each output alone may legally reach LW_MAX_PIXELS
+  // (65535) now, so four of them summed into the uint16_t total would wrap and
+  // sail past the "too large" check below rather than trip it.
+  uint32_t profilePixels = 0;
   for (JsonVariant outputValue : outputArray) {
     if (outputCount >= LW_MAX_OUTPUTS) break;
     JsonObject output = outputValue.as<JsonObject>();
@@ -574,20 +704,21 @@ bool loadProfile() {
     config.name = String(output["name"] | config.id.c_str());
     config.pin = output["pin"] | 0;
     config.pixels = clampPixels(pixels);
-    config.start = totalPixels;
+    config.start = static_cast<uint16_t>(profilePixels > UINT16_MAX ? UINT16_MAX : profilePixels);
     config.segmentCount = 1;
     config.segments[0].id = config.id + "-full";
     config.segments[0].count = config.pixels;
     config.segments[0].reversed = false;
     config.enabled = true;
-    totalPixels += config.pixels;
+    profilePixels += config.pixels;
     outputCount++;
   }
 
-  if (outputCount == 0 || totalPixels == 0 || totalPixels > LW_MAX_PIXELS) {
+  if (outputCount == 0 || profilePixels == 0 || profilePixels > LW_MAX_PIXELS) {
     fail(ERROR_PIXELS, "profile pixel count is empty or too large");
     return false;
   }
+  totalPixels = static_cast<uint16_t>(profilePixels);
 
   JsonArray lookArray = doc["looks"].as<JsonArray>();
   for (JsonVariant lookValue : lookArray) {
@@ -619,8 +750,133 @@ bool loadProfile() {
   return true;
 }
 
+// The pixel total a config implies, read WITHOUT touching runtime state so the
+// boot allocation can be sized before applyRuntimeConfig() runs. Saturates at
+// the uint16_t ceiling the storage layer already validates against.
+uint16_t configTotalPixels(const RuntimeConfig& config) {
+  uint32_t total = 0;
+  for (uint8_t i = 0; i < config.outputCount && i < LW_MAX_OUTPUTS; i++) {
+    total += config.outputs[i].pixels;
+  }
+  return total > UINT16_MAX ? UINT16_MAX : static_cast<uint16_t>(total);
+}
+
+void logPsramAvailability() {
+  if (!Serial) return;
+  Serial.print("PSRAM: ");
+  if (psramFound()) {
+    Serial.print("found, ");
+    Serial.print(ESP.getPsramSize());
+    Serial.print(" bytes total / ");
+    Serial.print(ESP.getFreePsram());
+    Serial.println(" bytes free");
+  } else {
+    // Not fatal. Small pieces allocate entirely from internal RAM; only a
+    // configuration too large for internal RAM will fail the boot allocation.
+    Serial.println("not found — large pixel counts will fail to allocate");
+  }
+}
+
+bool pixelBuffersReady() {
+  return leds != nullptr && physicalLeds != nullptr && frameBuffer != nullptr &&
+         preparedSequenceFrameBuffer != nullptr && kaleidoscopePixelLookup != nullptr;
+}
+
+void releasePixelBuffers() {
+  // Only ever reached from a FAILED allocation attempt, before FastLED has been
+  // handed any of these pointers. A successful allocation is never freed.
+  heap_caps_free(leds);
+  heap_caps_free(physicalLeds);
+  heap_caps_free(frameBuffer);
+  heap_caps_free(preparedSequenceFrameBuffer);
+  heap_caps_free(kaleidoscopePixelLookup);
+  leds = nullptr;
+  physicalLeds = nullptr;
+  frameBuffer = nullptr;
+  preparedSequenceFrameBuffer = nullptr;
+  kaleidoscopePixelLookup = nullptr;
+  allocatedPixels = 0;
+  allocatedFrameBufferBytes = 0;
+}
+
+namespace {
+
+// One all-or-nothing pass over the five buffers out of a single heap pool.
+bool claimPixelBuffers(size_t count, uint32_t caps) {
+  leds = static_cast<CRGB*>(heap_caps_calloc(count, sizeof(CRGB), caps));
+  physicalLeds = static_cast<CRGB*>(heap_caps_calloc(count, sizeof(CRGB), caps));
+  frameBuffer = static_cast<uint8_t*>(heap_caps_calloc(count, 3, caps));
+  preparedSequenceFrameBuffer = static_cast<uint8_t*>(heap_caps_calloc(count, 3, caps));
+  kaleidoscopePixelLookup = static_cast<KaleidoscopePixelLookup*>(
+      heap_caps_calloc(count, sizeof(KaleidoscopePixelLookup), caps));
+  return pixelBuffersReady();
+}
+
+}  // namespace
+
+// Allocate the pixel-scaled buffers for this boot. Called exactly once, after
+// the config is loaded and before any LED output is registered, because FastLED
+// keeps the raw pointers for the life of the run and a config change always
+// reboots the card. BENCH-VERIFY: FastLED's ESP32-S3 RMT driver reading CRGB
+// out of PSRAM is not provable from source. If a >= 4096 px piece flickers or
+// shows garbage, pin leds/physicalLeds to MALLOC_CAP_INTERNAL up to the largest
+// count that fits and record the measured ceiling here.
+bool allocatePixelBuffers(uint16_t requestedPixels) {
+  releasePixelBuffers();
+
+  // uint16_t in, so the floor is the only adjustment and 65535 is the ceiling.
+  const size_t count =
+      requestedPixels < LW_MIN_ALLOCATED_PIXELS ? LW_MIN_ALLOCATED_PIXELS : size_t(requestedPixels);
+  const size_t bytesPerPixel = sizeof(CRGB) * 2 + 3 + 3 + sizeof(KaleidoscopePixelLookup);
+  const size_t totalBytes = count * bytesPerPixel;
+
+  const bool preferInternal = totalBytes <= LW_INTERNAL_PIXEL_BUDGET_BYTES;
+  const uint32_t internalCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+  const uint32_t spiramCaps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+  const uint32_t firstCaps = preferInternal ? internalCaps : spiramCaps;
+  const uint32_t secondCaps = preferInternal ? spiramCaps : internalCaps;
+
+  bool internalPool = preferInternal;
+  if (!claimPixelBuffers(count, firstCaps)) {
+    // The preferred pool could not cover the request. Try the other one before
+    // giving up — a dead PSRAM chip should not strand a piece that internal RAM
+    // could still hold, and a full internal heap should not strand a small one.
+    releasePixelBuffers();
+    internalPool = !preferInternal;
+    if (!claimPixelBuffers(count, secondCaps)) {
+      releasePixelBuffers();
+      if (Serial) {
+        Serial.print("Pixel buffer allocation failed for ");
+        Serial.print(count);
+        Serial.print(" pixels (");
+        Serial.print(totalBytes);
+        Serial.println(" bytes) in both internal RAM and PSRAM");
+      }
+      return false;
+    }
+  }
+
+  allocatedPixels = static_cast<uint16_t>(count);
+  allocatedFrameBufferBytes = static_cast<uint32_t>(count) * 3u;
+  if (Serial) {
+    Serial.print("Pixel buffers: ");
+    Serial.print(count);
+    Serial.print(" px / ");
+    Serial.print(totalBytes);
+    Serial.print(" bytes from ");
+    Serial.println(internalPool ? "internal RAM" : "PSRAM");
+  }
+  return true;
+}
+
 bool setupLedOutputs() {
   ledOutputsReady = false;
+  if (!pixelBuffersReady()) {
+    // Never hand FastLED a null slice: it would keep the pointer forever and
+    // write through it on every show().
+    fail(ERROR_CONFIG, "pixel buffers unavailable");
+    return false;
+  }
   if (outputCount == 0) {
     fail(ERROR_CONFIG, "no LED outputs configured");
     return false;
@@ -673,6 +929,8 @@ bool setupLedOutputs() {
 
 bool setupFactoryBeaconOutputs() {
   ledOutputsReady = false;
+  factoryBeaconStepCount = 0;
+  if (!pixelBuffersReady()) return false;
   FastLED.setDither(false);
   FastLED.setCorrection(TypicalLEDStrip);
   FastLED.setMaxPowerInVoltsAndMilliamps(5, LW_FACTORY_BEACON_MAX_MILLIAMPS);
@@ -683,7 +941,14 @@ bool setupFactoryBeaconOutputs() {
                        LW_FACTORY_BEACON_PIXEL_LIMIT)) {
       return false;
     }
+    // Admitting the beacon step and registering the controller are deliberately
+    // the same act. Two separately-derived lists is exactly how the sweep came
+    // to pulse pins FastLED was never given.
+    factoryBeaconSteps[factoryBeaconStepCount++] = i;
   }
+  // Every approved GPIO is claimed by a control pin: there is no port left to
+  // pulse, and reporting ready would leave the beacon silently showing nothing.
+  if (factoryBeaconStepCount == 0) return false;
   FastLED.clear(false);
   ledOutputsReady = true;
   clearPhysicalLeds();
@@ -692,6 +957,7 @@ bool setupFactoryBeaconOutputs() {
 
 bool setupSafeDiscoveryOutputs(uint8_t stepIndex) {
   ledOutputsReady = false;
+  if (!pixelBuffersReady()) return false;
   if (stepIndex >= LW_DISCOVERY_STEP_COUNT) return false;
   uint8_t pin = factoryBeaconPinForStep(stepIndex);
   if (!discoveryPinAvailable(pin)) return false;
@@ -737,10 +1003,17 @@ void showFactoryBeaconFrame() {
   }
   blackHeld = false;
 
-  uint8_t step = uint8_t((now / LW_FACTORY_BEACON_STEP_MS) % LW_APPROVED_OUTPUT_GPIO_COUNT);
+  // Sweep the REGISTERED outputs, not the whole approved menu: a step whose pin
+  // has no FastLED controller transmits nothing, so it reads to the owner as a
+  // dead card rather than as "not this port".
+  if (factoryBeaconStepCount == 0) return;
+  uint8_t step = uint8_t((now / LW_FACTORY_BEACON_STEP_MS) % factoryBeaconStepCount);
   uint32_t elapsedInStep = now % LW_FACTORY_BEACON_STEP_MS;
   bool pulseOn = factoryBeaconPulseOn(elapsedInStep);
-  uint8_t activePin = factoryBeaconPinForStep(step);
+  // Buffer slices stay keyed to the approved-GPIO index, because that is the
+  // offset setupFactoryBeaconOutputs handed each controller.
+  uint8_t slot = factoryBeaconSteps[step];
+  uint8_t activePin = LW_APPROVED_OUTPUT_GPIOS[slot];
   (void)activePin;
   if (step != lastStep) {
     // FastLED cannot unregister controllers. Electrically retire the previous
@@ -754,7 +1027,7 @@ void showFactoryBeaconFrame() {
   fill_solid(physicalLeds, LW_APPROVED_OUTPUT_GPIO_COUNT * LW_FACTORY_BEACON_PIXEL_LIMIT,
              CRGB::Black);
   if (pulseOn) {
-    uint16_t bufferStart = uint16_t(step) * LW_FACTORY_BEACON_PIXEL_LIMIT;
+    uint16_t bufferStart = uint16_t(slot) * LW_FACTORY_BEACON_PIXEL_LIMIT;
     fill_solid(physicalLeds + bufferStart, LW_FACTORY_BEACON_PIXEL_LIMIT,
                CRGB(255, 96, 24));
   }
@@ -787,8 +1060,40 @@ bool discoveryPinAvailable(uint8_t pin) {
   return true;
 }
 
+// FastLED.addLeds<CHIPSET, DATA_PIN, RGB> takes DATA_PIN as a COMPILE-TIME
+// template parameter, so every pin an installer may choose has to be
+// instantiated here — the switch IS the pin menu. The cases must stay in exact
+// agreement with LW_CARD_HARDWARE_OUTPUT_GPIOS (Studio reads the same list from
+// the contract JSON); tests/../lightweaver/tests/hardware-capability-contract.mjs
+// diffs the two.
+//
+// Everything NOT in this list on an ESP32-S3 N16R8, and why:
+//   0, 3, 45, 46  strapping pins — a strip's idle level changes boot mode
+//   10, 11, 12, 13 claimed by the microSD SPI bus (LW_SD_CS/MOSI/SCK/MISO)
+//   19, 20        native USB D-/D+ — the flashing and serial path
+//   26..37        SPI flash + the octal PSRAM bus on this module
+//   39            left free as a JTAG TCK spare for bench debugging
+//   43, 44        UART0 TX/RX — the boot log an owner reads during recovery
+// Collisions with CONTROL pins are a runtime concern, not a compile-time one:
+// controls are freely assignable, so discoveryPinAvailable() (this file) and
+// Studio's assertSupported() reject an output that lands on a claimed control.
+// Note the default control assignment already claims 4/5/6/7, so those four
+// only become usable outputs once the controls are moved.
 bool addLedsForPin(uint8_t pin, CRGB* start, uint16_t count) {
+  // A null slice means the boot allocation failed; registering it would hand
+  // FastLED a pointer it writes through on every show() for the rest of the run.
+  if (start == nullptr || !pixelBuffersReady()) return false;
   switch (pin) {
+    case 4:
+      return addLedsForOrder<4>(start, count);
+    case 5:
+      return addLedsForOrder<5>(start, count);
+    case 6:
+      return addLedsForOrder<6>(start, count);
+    case 7:
+      return addLedsForOrder<7>(start, count);
+    case 15:
+      return addLedsForOrder<15>(start, count);
     case 16:
       return addLedsForOrder<16>(start, count);
     case 17:
@@ -797,6 +1102,18 @@ bool addLedsForPin(uint8_t pin, CRGB* start, uint16_t count) {
       return addLedsForOrder<18>(start, count);
     case 21:
       return addLedsForOrder<21>(start, count);
+    case 38:
+      return addLedsForOrder<38>(start, count);
+    case 40:
+      return addLedsForOrder<40>(start, count);
+    case 41:
+      return addLedsForOrder<41>(start, count);
+    case 42:
+      return addLedsForOrder<42>(start, count);
+    case 47:
+      return addLedsForOrder<47>(start, count);
+    case 48:
+      return addLedsForOrder<48>(start, count);
     default:
       return false;
   }
@@ -911,7 +1228,7 @@ bool readSequenceMetadata(File& file, uint32_t& frameCount, uint16_t& fps, uint3
   frameBytes = pixelCount * channels;
 
   if (version != 1 || channels != 3 || pixelCount != totalPixels ||
-      frameBytes > sizeof(frameBuffer) || frameCount == 0 || fps == 0) return false;
+      frameBytes > allocatedFrameBufferBytes || frameCount == 0 || fps == 0) return false;
   uint64_t requiredBytes = uint64_t(LWSEQ_HEADER_BYTES) + uint64_t(frameCount) * frameBytes;
   if (requiredBytes > file.size()) return false;
   return true;
@@ -1386,9 +1703,10 @@ void transmitPhysicalLeds(uint8_t brightnessByte, OutputSourceClass sourceClass)
 }
 
 void clearPhysicalLeds() {
-  // Clear the complete fixed buffer, including factory-beacon slices which
+  // Clear the complete allocated buffer, including factory-beacon slices which
   // are intentionally separate from the zero-output project runtime.
-  fill_solid(physicalLeds, LW_MAX_PIXELS, CRGB::Black);
+  if (physicalLeds == nullptr || allocatedPixels == 0) return;
+  fill_solid(physicalLeds, allocatedPixels, CRGB::Black);
   transmitPhysicalLeds(0, OUTPUT_LOCAL);
 }
 
@@ -1413,7 +1731,8 @@ void updateOutputTelemetry(uint32_t now) {
 void copyLogicalToPhysicalLeds() {
   // Resolve the color order once per frame, not once per pixel.
   ledColorOrderCode = computeColorOrderCode(ledColorOrder);
-  uint16_t limit = totalPixels > LW_MAX_PIXELS ? LW_MAX_PIXELS : totalPixels;
+  if (!pixelBuffersReady()) return;
+  uint16_t limit = totalPixels > allocatedPixels ? allocatedPixels : totalPixels;
   for (uint8_t outputIndex = 0; outputIndex < outputCount; outputIndex++) {
     const OutputConfig& output = outputs[outputIndex];
     uint16_t segmentStart = output.start;
@@ -1984,6 +2303,10 @@ bool runtimeOutputReady() {
 }
 bool runtimeConfigValid() { return runtimeConfig.configValid; }
 bool runtimeKnownGoodProject() { return runtimeConfig.knownGoodProject; }
+// Mirrors the flag /api/wiring/status already reports as the 'safe-mode' state,
+// so the two can never disagree about whether a project is still sitting unread
+// in NVS. See the contract note in LightweaverRuntimeApi.h.
+bool runtimeSafeModeActive() { return runtimeSafeMode; }
 
 void runtimeApplySavedConfig() {
   // handleConfigPost and loop run on the same Arduino task, so the complete
@@ -2073,6 +2396,9 @@ String runtimeFirmwareInfo() {
   doc["outputReady"] = runtimeOutputReady();
   doc["configValid"] = runtimeConfigValid();
   doc["knownGoodProject"] = runtimeKnownGoodProject();
+  // Tells a blank-looking card that is merely UNREAD apart from one that is
+  // genuinely empty. Studio gates the discovery config write on that difference.
+  doc["safeMode"] = runtimeSafeModeActive();
   doc["configSchemaVersion"] = LW_CONFIG_SCHEMA_VERSION;
   doc["capabilitiesVersion"] = LW_CAPABILITIES_VERSION;
   doc["capabilities"]["kaleidoscopeReflectionPoints"] =
@@ -2658,7 +2984,7 @@ String runtimeRecoverLights(const String& patternId, float brightness, bool sync
   if (ledOutputsReady) showLeds(brightnessByte);
 
   uint16_t nonBlackPixels = 0;
-  for (uint16_t i = 0; i < totalPixels && i < LW_MAX_PIXELS; i++) {
+  for (uint16_t i = 0; leds != nullptr && i < totalPixels && i < allocatedPixels; i++) {
     if (leds[i].r || leds[i].g || leds[i].b) nonBlackPixels++;
   }
 
@@ -2687,14 +3013,18 @@ String runtimeRecoverLights(const String& patternId, float brightness, bool sync
   diagnostics["brightnessBypassMs"] = int32_t(recoveryBrightnessBypassUntilMs - millis()) > 0 ? recoveryBrightnessBypassUntilMs - millis() : 0;
   diagnostics["brightnessKnobPin"] = controls.brightness;
   diagnostics["brightnessKnob"] = readBrightnessKnob();
+  // A boot whose pixel allocation failed reports zeros rather than reading
+  // through a null buffer — this endpoint is exactly what an owner hits when
+  // the card is unhealthy.
+  const bool pixelsReadable = totalPixels && pixelBuffersReady();
   JsonObject logical = diagnostics["firstLogicalPixel"].to<JsonObject>();
-  logical["r"] = totalPixels ? leds[0].r : 0;
-  logical["g"] = totalPixels ? leds[0].g : 0;
-  logical["b"] = totalPixels ? leds[0].b : 0;
+  logical["r"] = pixelsReadable ? leds[0].r : 0;
+  logical["g"] = pixelsReadable ? leds[0].g : 0;
+  logical["b"] = pixelsReadable ? leds[0].b : 0;
   JsonObject physical = diagnostics["firstPhysicalPixel"].to<JsonObject>();
-  physical["r"] = totalPixels ? physicalLeds[0].r : 0;
-  physical["g"] = totalPixels ? physicalLeds[0].g : 0;
-  physical["b"] = totalPixels ? physicalLeds[0].b : 0;
+  physical["r"] = pixelsReadable ? physicalLeds[0].r : 0;
+  physical["g"] = pixelsReadable ? physicalLeds[0].g : 0;
+  physical["b"] = pixelsReadable ? physicalLeds[0].b : 0;
   JsonArray outputArray = diagnostics["outputs"].to<JsonArray>();
   for (uint8_t i = 0; i < outputCount; i++) {
     JsonObject output = outputArray.add<JsonObject>();

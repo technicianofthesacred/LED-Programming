@@ -9,6 +9,7 @@ import {
   productionRecordsJson,
   readProductionRecords,
 } from './productionRecords.js';
+import { CARD_HARDWARE_CONTRACT } from './cardHardwareContract.js';
 
 class Storage {
   values = new Map();
@@ -81,6 +82,20 @@ test('appending an enriched pass retains and exports strict legacy records in th
   const output = productionRecordsCsv({ storage });
   assert.match(output, /\[\{""output"":1,""result"":""correct""\}/);
   assert.match(output, /boundaryId.*outer-run.*count.*44/);
+});
+
+test('a pass record may record any boundary length the card can drive', () => {
+  // The count ceiling was a literal 1024 left behind by the hardware contract,
+  // so a long run that passed on the bench could not be written down at all.
+  const storage = new Storage();
+  const boundary = { boundaryId: 'long-run', result: 'correct', pin: 16, direction: 'forward', colorOrder: 'GRB' };
+  const longest = { ...record(), physicalResults: [{ ...boundary, count: CARD_HARDWARE_CONTRACT.maxPixels }] };
+  appendProductionRecord(longest, { storage });
+  assert.equal(readProductionRecords({ storage })[0].physicalResults[0].count, CARD_HARDWARE_CONTRACT.maxPixels);
+  assert.throws(
+    () => appendProductionRecord({ ...record(2), physicalResults: [{ ...boundary, count: CARD_HARDWARE_CONTRACT.maxPixels + 1 }] }, { storage }),
+    /Physical results/,
+  );
 });
 
 test('production pass records are bounded and reject duplicate run IDs', () => {

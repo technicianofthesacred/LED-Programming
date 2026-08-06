@@ -77,6 +77,24 @@ test('hardware-contract generator rejects unsafe and duplicate output pins', asy
   );
 });
 
+test('hardware-contract generator refuses limits its C++ types would truncate', async () => {
+  const { hardwareManifest, validateCardHardwareManifest } = await loadContract();
+  // The header emits LW_CARD_HARDWARE_MAX_PIXELS as a uint16_t, which is also
+  // the firmware's `totalPixels` / `OutputConfig.start` ceiling. 65536 would
+  // become 0 on the card — a silently broken build, not a loud rejection.
+  assert.throws(
+    () => validateCardHardwareManifest({ ...hardwareManifest, limits: { ...hardwareManifest.limits, maxPixels: 65536 } }),
+    /at most 65535/,
+  );
+  assert.throws(
+    () => validateCardHardwareManifest({ ...hardwareManifest, limits: { ...hardwareManifest.limits, maxZones: 256 } }),
+    /at most 255/,
+  );
+  assert.doesNotThrow(
+    () => validateCardHardwareManifest({ ...hardwareManifest, limits: { ...hardwareManifest.limits, maxPixels: 65535 } }),
+  );
+});
+
 test('hardware-contract generator produces a stable header', async () => {
   const { hardwareManifest, generateCardHardwareHeader } = await loadContract();
   const first = generateCardHardwareHeader(hardwareManifest);

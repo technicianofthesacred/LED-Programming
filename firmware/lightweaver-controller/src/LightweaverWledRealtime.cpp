@@ -2,6 +2,7 @@
 
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <esp_heap_caps.h>
 
 #include "LightweaverFrameSource.h"
 #include "LightweaverConnectivityPolicy.h"
@@ -29,6 +30,14 @@ uint32_t g_lastBindAttemptMs = 0;
 // DRGB stream at us. Reset on every new protocol id we see.
 uint8_t g_lastUnsupportedProto = 0xFF;
 uint32_t g_lastUnsupportedWarnAt = 0;
+// Receive staging buffer, allocated once at setup from the piece's own pixel
+// count. It used to be a static sized at LW_MAX_PIXELS*3+2; now that
+// LW_MAX_PIXELS is the uint16_t validation ceiling rather than an allocation
+// size, that static would reserve ~192 KB of RAM for a capacity almost no
+// piece uses. Sized here for exactly the largest packet handleWledRealtime()
+// is willing to accept.
+uint8_t* g_packetBuffer = nullptr;
+size_t g_packetBufferBytes = 0;
 
 bool bindRealtimeSocket(uint32_t now) {
   g_started = g_udp.begin(WLED_REALTIME_PORT);
@@ -41,6 +50,25 @@ bool bindRealtimeSocket(uint32_t now) {
 void setupWledRealtime(CRGB* leds, uint16_t totalPixels) {
   g_leds = leds;
   g_totalPixels = totalPixels;
+  // Header + one RGB triplet per pixel: the exact oversize cap enforced in
+  // handleWledRealtime(). A failure here only disables realtime ingest; the
+  // card keeps rendering locally.
+  const size_t wanted = size_t(totalPixels) * 3u + 2u;
+  if (g_packetBufferBytes < wanted) {
+    heap_caps_free(g_packetBuffer);
+    // A full-capacity piece wants ~192 KB, more than internal RAM has free, so
+    // take PSRAM for anything large and keep small pieces on-chip.
+    const uint32_t caps = wanted <= 16u * 1024u ? (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+                                                : (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    g_packetBuffer = static_cast<uint8_t*>(heap_caps_malloc(wanted, caps));
+    if (!g_packetBuffer) {
+      g_packetBuffer = static_cast<uint8_t*>(heap_caps_malloc(wanted, MALLOC_CAP_8BIT));
+    }
+    g_packetBufferBytes = g_packetBuffer ? wanted : 0;
+    if (!g_packetBuffer && Serial) {
+      Serial.println("WLED realtime: packet buffer allocation failed; realtime ingest disabled");
+    }
+  }
   if (WiFi.status() != WL_CONNECTED) {
     // Still safe to begin() — WiFiUDP will bind once the interface is up.
     // We log a hint so it's obvious in serial if streaming never starts.
@@ -138,9 +166,10 @@ void handleWledRealtime() {
       continue;
     }
 
-    // Stack buffer sized to the worst-case payload (header + every pixel).
-    // LW_MAX_PIXELS is 1024 by default → 3074 bytes worst case, fine on S3.
-    static uint8_t buf[LW_MAX_PIXELS * 3 + 2];
+    // Staging buffer allocated at setup for exactly this cap; the oversize
+    // check above already guarantees the packet fits.
+    if (!g_packetBuffer || size_t(packetSize) > g_packetBufferBytes) return;
+    uint8_t* buf = g_packetBuffer;
     int got = g_udp.read(buf, packetSize);
     if (got <= 2) continue;
 

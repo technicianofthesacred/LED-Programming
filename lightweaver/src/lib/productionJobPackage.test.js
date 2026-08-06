@@ -19,6 +19,7 @@ import {
   productionJobSignedBytes,
   verifyProductionJobSignature,
 } from './productionJobPackage.js';
+import { CARD_HARDWARE_CAPABILITIES } from './cardRuntimeContract.js';
 import { fingerprintCommissioningProject } from './cardCommissioningFlow.js';
 import { buildCardRuntimePackageFromProject } from './cardRuntimeProject.js';
 import { assignProductionWiringIdentity, productionWiringDigest, productionWiringProjection } from './productionWiringIdentity.js';
@@ -120,6 +121,51 @@ function source(overrides = {}) {
 async function validPackage(overrides) {
   return buildProductionJob(source(overrides), { cryptoImpl: webcrypto });
 }
+
+// A one-run job whose single strip is `pixels` long. Everything downstream of
+// the strip — the wiring run, the controller output, the compiled config and the
+// expected outputs — has to agree, so this rebuilds the lot rather than patching
+// the compiled artifact, which would fail the reproducibility check instead.
+function longStripSource(pixels) {
+  const value = source();
+  const snapshot = value.project.restoreSnapshot;
+  snapshot.layout.strips[0].pixelCount = pixels;
+  snapshot.layout.wiring.runs[0].source.to = pixels - 1;
+  snapshot.devices.standaloneController.outputs[0].pixels = pixels;
+  value.project.fingerprint = fingerprintCommissioningProject(snapshot);
+  value.configuration = buildCardRuntimePackageFromProject({
+    projectId: value.project.id,
+    projectName: snapshot.name,
+    projectRevision: value.project.revision,
+    projectFingerprint: value.project.fingerprint,
+    productionJobId: value.jobId,
+    productionJobDigest: hex('0', 64),
+    strips: snapshot.layout.strips,
+    patchBoard: snapshot.layout.patchBoard,
+    wiring: snapshot.layout.wiring,
+    standaloneController: snapshot.devices.standaloneController,
+  });
+  value.expectedOutputs = [{ ...value.expectedOutputs[0], pixels }];
+  return value;
+}
+
+test('a production job may be as long as the hardware contract, not as long as an old literal', async () => {
+  // Segment length was pinned to a literal 1024 while the contract had already
+  // moved on, so Studio refused to package a job the card runs — and the check
+  // two lines below it, on the same config, already read the contract.
+  const pixels = 2_000;
+  const job = await buildProductionJob(longStripSource(pixels), { cryptoImpl: webcrypto });
+  assert.equal(job.configuration.config.led.outputs[0].segments[0].count, pixels);
+  assert.equal(job.configuration.config.led.pixels, pixels);
+
+  // The contract ceiling itself still holds: past it the card cannot address
+  // the pixel at all, and the runtime compiler refuses before a job is ever
+  // built (hence the callable form — that throw is synchronous).
+  await assert.rejects(
+    async () => buildProductionJob(longStripSource(CARD_HARDWARE_CAPABILITIES.maxPixels + 1), { cryptoImpl: webcrypto }),
+    /hardware supports 65535/,
+  );
+});
 
 function withKaleidoscopeSource(offsets = [0, 0, 0, 0]) {
   const value = source();

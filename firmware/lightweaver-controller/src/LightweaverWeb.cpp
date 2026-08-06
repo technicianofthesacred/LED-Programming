@@ -96,11 +96,13 @@ void scheduleApTeardown(uint32_t generation);
 // with Studio (lightweaver/src/lib/cardBridge.js). Bump when the bridge script
 // gains message types Studio must feature-detect. v1 added the 'frame' relay
 // (live pixel streaming) and version reporting itself. v2 adds the correlated,
-// station-origin-only 'wifi-handoff-ack' relay; pre-v1 firmware sends
-// no version at all and Studio treats it as 0 (legacy). The bridge script
-// strings below splice String(LW_BRIDGE_VERSION) in, so this constant is the
-// single source of truth.
-constexpr int LW_BRIDGE_VERSION = 2;
+// station-origin-only 'wifi-handoff-ack' relay. v3 forwards a per-segment
+// `start` offset on 'frame', which is what lets Studio chunk a frame past the
+// card's 4096-byte WebSocket payload cap (~450 pixels) instead of having the
+// card silently drop the whole frame; pre-v1 firmware sends no version at all
+// and Studio treats it as 0 (legacy). The bridge script strings below splice
+// String(LW_BRIDGE_VERSION) in, so this constant is the single source of truth.
+constexpr int LW_BRIDGE_VERSION = 3;
 
 String apSsid() {
   uint64_t mac = ESP.getEfuseMac();
@@ -309,9 +311,10 @@ String studioBridgeScript() {
               "if(window.opener&&lwReadyOrigin){try{window.opener.postMessage({app:'LightweaverCardBridge',type:'ready',version:");
   script += bridgeVersion;
   script += F(",href:location.href,host:location.host},lwReadyOrigin)}catch(_){}};"
-              // Frame relay (bridge v1): Studio posts {type:'frame',payload:{pixels:['RRGGBB',...],seg?:n}}
+              // Frame relay (bridge v1; +start in v3): Studio posts
+              // {type:'frame',payload:{pixels:['RRGGBB',...],seg?:n,start?:n>=1}}
               // and this page forwards it into ONE persistent same-origin WebSocket
-              // (ws://<own-host>:81/ws) as {seg:[{i:pixels}]} — the firmware's WLED
+              // (ws://<own-host>:81/ws) as {seg:[{i:pixels,id?,start?}]} — the firmware's WLED
               // JSON frame path. Text JSON only (binary WS frames are ignored by the
               // firmware). Single-slot pending: a newer frame replaces an unsent one
               // (latest-frame-wins), never a queue — a congested socket must not
@@ -337,7 +340,12 @@ String studioBridgeScript() {
                 "if(lwFrameWs.readyState===0){lwFrameLastResult={relayed:false,reason:'relay-connecting'};return lwFrameLastResult;}" // onopen flushes
                 "if(lwFrameWs.bufferedAmount>8192){lwFrameLastResult={relayed:false,reason:'relay-congested'};lwFrameLater(lwFrameFlush,40);return lwFrameLastResult;}" // congested: keep only the latest
                 "const p=lwFrameNext;lwFrameNext=null;"
+                // start (bridge v3): the write offset into the card's pixel
+                // buffer, so Studio can split a frame into payload-sized chunks
+                // that each land in the right place. Omitted when absent or 0 so
+                // a single-chunk frame is byte-identical to the v2 payload.
                 "const s={i:p.pixels};if(Number.isInteger(p.seg))s.id=p.seg;"
+                "if(Number.isInteger(p.start)&&p.start>0)s.start=p.start;"
                 "try{lwFrameWs.send(JSON.stringify({seg:[s]}));return lwFrameLastResult={relayed:true,reason:''}}catch(_){lwFrameNext=p;lwFrameLastResult={relayed:false,reason:'relay-send-failed'};try{lwFrameWs.close()}catch(_){};lwFrameRetryLater();return lwFrameLastResult}"
               "};"
               "let lwFrameLastResult={relayed:false,reason:'relay-not-open'};"
@@ -1177,8 +1185,15 @@ void handleStatus() {
   const char* srcLabel = src == 1 ? "wled-realtime" : src == 2 ? "artnet" : "internal";
   int lastBrace = body.lastIndexOf('}');
   if (lastBrace > 0) {
+    // maxMilliampsSource makes the silent throttle visible: FastLED scales
+    // brightness to hold the ceiling either way, so an installer who wired
+    // 100 A but never set a value deserves to be told the card is holding it
+    // to 1500 mA. Reported, never enforced — nothing refuses a config for it.
     String tail = String(",\"streaming\":") + (runtimeIsStreaming() ? "true" : "false") +
-                  ",\"frameSource\":\"" + srcLabel + "\"}";
+                  ",\"frameSource\":\"" + srcLabel + "\"" +
+                  ",\"maxMilliamps\":" + String(runtimeConfigPtr->maxMilliamps) +
+                  ",\"maxMilliampsSource\":\"" +
+                  (runtimeConfigPtr->maxMilliampsExplicit ? "config" : "default") + "\"}";
     body = body.substring(0, lastBrace) + tail;
   }
   server.send(200, "application/json", body);
@@ -2194,6 +2209,14 @@ void handleFirmwareInfo() {
     }
     if (info.indexOf("\"recipeCapabilities\"") < 0) {
       injected += "\"recipeCapabilities\":" + runtimeRecipeCapabilities() + ",";
+    }
+    // Same power honesty as /api/status, on the endpoint Studio reads before
+    // any bridge handshake — a commissioning screen can warn about a defaulted
+    // current ceiling without waiting for a status poll.
+    if (info.indexOf("\"maxMilliampsSource\"") < 0) {
+      injected += "\"maxMilliamps\":" + String(runtimeConfigPtr->maxMilliamps) + ",";
+      injected += String("\"maxMilliampsSource\":\"") +
+                  (runtimeConfigPtr->maxMilliampsExplicit ? "config" : "default") + "\",";
     }
     if (injected.length()) {
       info = info.substring(0, brace + 1) + injected + info.substring(brace + 1);

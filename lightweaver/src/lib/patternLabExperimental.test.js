@@ -534,9 +534,18 @@ test('Studio recording validation rejects raw frames, invalid bounds, and card c
     }),
     /frames|unknown|raw/i,
   );
+  // 1025 used to be refused by a bare 1024 literal here while Studio's own card
+  // profile advertised the card's real ceiling — so a 2000-pixel piece was told
+  // it could record and then couldn't. The bound is now the card contract
+  // narrowed to what the .lwseq sidecar can describe, so a strip past the old
+  // limit records fine and only the sidecar's own ceiling refuses.
+  assert.deepEqual(
+    createPatternLabStudioRecordingDescriptor(authorization, { pixelCount: 1025, fps: 24, frameCount: 1 }).pixelCount,
+    1025,
+  );
   assert.throws(
-    () => createPatternLabStudioRecordingDescriptor(authorization, { pixelCount: 1025, fps: 24, frameCount: 1 }),
-    /pixel.*1024/i,
+    () => createPatternLabStudioRecordingDescriptor(authorization, { pixelCount: 4097, fps: 24, frameCount: 1 }),
+    /pixel.*4096/i,
   );
   assert.throws(
     () => createPatternLabStudioRecordingDescriptor(authorization, { pixelCount: 1, fps: 25, frameCount: 1 }),

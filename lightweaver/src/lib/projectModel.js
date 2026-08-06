@@ -18,6 +18,7 @@ import {
   STANDALONE_RUNTIME_MODES,
 } from './standaloneController.js';
 import { normalizeCardLedType } from './cardHardwareContract.js';
+import { defaultPortRoles, normalizePortRoles } from './portRoles.js';
 import { normalizeCardVisualLook } from './cardVisualLook.js';
 import { normalizePatternLabSequenceAssets } from './patternLabHandoff.js';
 import { normalizeSavedLooks } from './sectionLookModel.js';
@@ -137,6 +138,11 @@ export function createDefaultProject() {
     version: PROJECT_VERSION,
     id: createProjectId(),
     name: 'Untitled Project',
+    // What each of the card's four physical ports carries — strip, control, or
+    // nothing. Top-level rather than inside `layout` because it describes the
+    // card's hardware, not the artwork, and discovery records it before any
+    // layout exists.
+    portRoles: defaultPortRoles(),
     layout: {
       strips: defaultStrips,
       starterPending: true,
@@ -407,6 +413,10 @@ export function migrateProject(data) {
       ...base,
       ...data,
       id: normalizeProjectId(data.id || data.projectId, base.id),
+      // Normalized rather than spread through, so every loaded project is
+      // guaranteed one complete entry per contract pin even when the save
+      // predates the field or was hand-edited.
+      portRoles: normalizePortRoles(data.portRoles),
       layout: {
         ...base.layout,
         ...(data.layout || {}),
@@ -431,6 +441,8 @@ export function migrateProject(data) {
       version: PROJECT_VERSION,
       id: normalizeProjectId(data.id || data.projectId, base.id),
       name: data.name || data.projectName || base.name,
+      // v1/v2 saves predate port roles entirely, so this lands on defaults.
+      portRoles: normalizePortRoles(data.portRoles),
       layout: {
         ...base.layout,
         starterPending: false,

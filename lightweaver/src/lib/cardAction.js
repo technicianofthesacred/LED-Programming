@@ -90,6 +90,41 @@ export function cardActionReducer(state, action) {
   }
 }
 
+// Where a card with no strips recorded has to go.
+//
+// Both blank-card entry points used to point at Layout, which is a dead end: the
+// Layout install button demands a bench LED check, the bench check sends 'frame'
+// messages, and the bridge refuses frames while the card reports
+// playbackReady=false — which a blank card always does. The escape is discovery,
+// which writes the one config a blank card will accept and then works entirely
+// in frames.
+//
+// A bench card — Ready, but holding the synthesized config discovery itself
+// installed — deliberately does NOT land here. Discovery is what put that
+// config on the card, so routing it back would close discovery's own exit and
+// leave the owner circling. Its next step is installing the real project, which
+// the install gate permits as cardAccess:'bench' (src/lib/cardInstallGate.js).
+// Only the card's own report of having no project opens this route.
+export const STRIP_DISCOVERY_ROUTE = 'screen=discovery';
+export const STRIP_DISCOVERY_LABEL = 'Find my strips';
+export const STRIP_DISCOVERY_BLANK_MESSAGE = 'This card has no strips recorded yet. Find its strips first.';
+
+export function needsStripDiscovery({ actionId = '', readinessState = '' } = {}) {
+  if (readinessState === 'blank') return true;
+  // The connection flow's own name for "reachable card, no project on it".
+  return actionId === 'card-needs-project';
+}
+
+export function stripDiscoveryStep(input = {}) {
+  if (!needsStripDiscovery(input)) return null;
+  return Object.freeze({
+    id: 'find-my-strips',
+    label: STRIP_DISCOVERY_LABEL,
+    route: STRIP_DISCOVERY_ROUTE,
+    message: STRIP_DISCOVERY_BLANK_MESSAGE,
+  });
+}
+
 export function cardActionStatusLabel(state = {}) {
   if (state.status === 'pending') return 'Sending to Lightweaver';
   if (state.status === 'confirmed') return 'Applied by Lightweaver runtime';

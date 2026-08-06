@@ -5,11 +5,14 @@ import {
   MAX_PATTERN_LAB_SEQUENCE_ASSETS,
   applyPatternLabHandoff,
   createPatternLabHandoff,
+  normalizePatternLabSequenceAssets,
 } from './patternLabHandoff.js';
 import { classifyPatternLabCompatibility } from './patternLabCompatibility.js';
+import { CARD_HARDWARE_CONTRACT } from './cardHardwareContract.js';
 import { bakePatternLabRecipe } from './lwseqBake.js';
 import { createDefaultProject, migrateProject } from './projectModel.js';
 import { MAX_SAVED_LOOKS } from './sectionLookModel.js';
+import { LWSEQ_HEADER_BYTES } from './standaloneController.js';
 
 function recipe(overrides = {}) {
   return {
@@ -180,6 +183,35 @@ test('creates a complete sequence package from the canonical bake result', async
   assert.equal(result.package.files['/lightweaver.json'].runtimeMode, 'sd-sequence');
   assert.equal(result.package.files['/lightweaver.json'].looks[0].file, result.asset.file);
   assert.notEqual(result.package.files[result.asset.file], baked.bytes);
+});
+
+test('a sequence output may be as long as the card, while the file budget stays its own bound', async () => {
+  const result = await createPatternLabHandoff({
+    recipe: bakedRecipe,
+    compatibility: compatibilityFor(bakedRecipe),
+    bakeResult: baked,
+  });
+  // 2000 sits past the old 1024 wiring literal and inside the .lwseq storage
+  // budget, so it separates the two ceilings cleanly: the card's pixel count is
+  // contract-driven, the file size is not.
+  const pixels = 2_000;
+  const frameCount = 4;
+  const long = structuredClone(result.asset);
+  long.manifest.pixelCount = pixels;
+  long.manifest.frameCount = frameCount;
+  long.byteLength = LWSEQ_HEADER_BYTES + pixels * frameCount * 3;
+  long.outputs = [{ ...long.outputs[0], pixels }];
+  const [normalized] = normalizePatternLabSequenceAssets([long]);
+  assert.equal(normalized?.outputs[0].pixels, pixels);
+  assert.ok(pixels <= CARD_HARDWARE_CONTRACT.maxPixels, 'the fixture must stay a length the card really accepts');
+
+  // The file budget is a separate ceiling and still bites: a manifest asking
+  // for more pixels than a sidecar may describe is dropped, contract or not.
+  const oversizedFile = structuredClone(long);
+  oversizedFile.manifest.pixelCount = 8_192;
+  oversizedFile.outputs = [{ ...long.outputs[0], pixels: 8_192 }];
+  oversizedFile.byteLength = LWSEQ_HEADER_BYTES + 8_192 * frameCount * 3;
+  assert.deepEqual(normalizePatternLabSequenceAssets([oversizedFile]), []);
 });
 
 test('rejects incomplete, tampered, or stale-recipe bake results', async () => {

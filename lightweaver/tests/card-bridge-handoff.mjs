@@ -4,6 +4,8 @@ import {
   CARD_BRIDGE_WINDOW_NAME,
   acquireCardBridgeFromGesture,
   adoptDiscoveredCardBridgeIdentity,
+  authorizeBlankCardDiscoveryConfig,
+  hasBlankCardDiscoveryConfigAuthority,
   buildCardBridgeLaunchUrl,
   bootstrapCardBridgeFromOpener,
   cardBridgeAutoPreviewEnabled,
@@ -533,6 +535,19 @@ function bridgeWindowHarness({
     } : null,
   };
 }
+
+// A card page answers a 'ready' handshake with two chained round trips
+// (firmware-info, then status), each delivered through a real setTimeout. A
+// fixed sleep races them whenever the machine is loaded — the cause of this
+// file's intermittent handoff-latch failures. Wait for the state the next
+// assertion is about, with a deadline, so a slow round trip costs time instead
+// of correctness.
+const settleBridgeUntil = async (predicate, timeoutMs = 500) => {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
+};
 
 // A verified parent/opener bridge is reused without opening another card page.
 const verifiedHost = '192.168.18.71';
@@ -1968,7 +1983,7 @@ handoffHarness.emitMessage({
   source: handoffTab,
   data: { app: 'LightweaverCardBridge', type: 'ready', host: stationHost, version: 2 },
 });
-await new Promise(resolve => setTimeout(resolve, 5));
+await settleBridgeUntil(() => getCardBridgeState().handoffAckReady);
 assert.equal(getCardBridgeState().identityVerified, false,
   'handoff-ready proof grants only acknowledgement authority');
 assert.equal(getCardBridgeState().handoffAckReady, true);
@@ -2003,7 +2018,7 @@ handoffHarness.emitMessage({
   source: handoffTab,
   data: { app: 'LightweaverCardBridge', type: 'ready', host: stationHost, version: 2 },
 });
-await new Promise(resolve => setTimeout(resolve, 5));
+await settleBridgeUntil(() => getCardBridgeState().handoffAckReady);
 assert.equal(getCardBridgeState().handoffAckReady, true,
   'fresh exact handoff status in the current lifecycle can grant a new acknowledgement latch');
 await sendCardBridgeRequest('wifi-handoff-ack', {}, { host: stationHost, timeoutMs: 100 });
@@ -2191,5 +2206,293 @@ const completedRepeat = retargetCardBridge(stationHost, handoffCorrelation, { fl
 assert.equal(completedRepeat.state, 'already-retargeted');
 assert.equal(handoffNavigationCount, 1,
   'duplicate AP evidence cannot reload a station bridge that already answered');
+
+// ── Blank-card strip-discovery one-shot ────────────────────────────────────
+// The discovery grant is the only route to a config write that does not come
+// from a WiFi handoff correlation. It exists so a freshly erased card can be
+// rescued exactly once; every assertion below is about it staying that narrow.
+
+// A live WiFi handoff owns the initial-config authority. Discovery must never
+// race it for the same one-shot.
+const discoveryFlowId = 'flow-strip-discovery-1234';
+assert.deepEqual(
+  authorizeBlankCardDiscoveryConfig({ host: stationHost, flowId: discoveryFlowId }),
+  { ok: false, reason: 'handoff-active' },
+  'a commissioning WiFi handoff blocks the discovery grant',
+);
+assert.deepEqual(
+  authorizeBlankCardDiscoveryConfig({ host: stationHost, flowId: '' }),
+  { ok: false, reason: 'invalid-flow' },
+  'the grant is always bound to a named discovery flow',
+);
+assert.equal(clearCardBridgeHandoff(commissioningFlowId), true);
+
+const discoveryHost = '192.168.4.1';
+const discoveryCardId = 'lw-discovery-blank';
+const discoveryIdentity = {
+  cardId: discoveryCardId,
+  firmwareVersion: '1.4.0',
+  buildId: 'd'.repeat(40),
+};
+const blankDiscoveryStatus = {
+  app: 'Lightweaver', provisioningContractVersion: 1,
+  ...discoveryIdentity,
+  bootId: 'boot-discovery-1',
+  runtimePhase: 'factory', knownGoodProject: false,
+  mode: 'factory-flash', source: 'defaults',
+  commandReady: false, outputReady: false,
+};
+const readyDiscoveryStatus = {
+  ...blankDiscoveryStatus,
+  runtimePhase: 'ready', knownGoodProject: true,
+  mode: 'website-flash', source: 'nvs',
+  projectId: 'owner-project', projectFingerprint: 'f'.repeat(16),
+  commandReady: true, outputReady: true,
+};
+let discoveryHarness;
+let discoveryStatus = readyDiscoveryStatus;
+const discoveryMessages = [];
+const discoveryTab = {
+  closed: false,
+  postMessage(message) {
+    discoveryMessages.push(message);
+    const response = message.type === 'firmware-info'
+      ? discoveryIdentity
+      : message.type === 'status' ? discoveryStatus : { ok: true };
+    setTimeout(() => discoveryHarness.emitMessage({
+      origin: `http://${discoveryHost}`,
+      source: discoveryTab,
+      data: { app: 'LightweaverCardBridge', version: 2, id: message.id, ok: true, response },
+    }), 0);
+  },
+  focus() {},
+};
+const openDiscoveryCardPage = async () => {
+  discoveryHarness.emitMessage({
+    origin: `http://${discoveryHost}`,
+    source: discoveryTab,
+    data: { app: 'LightweaverCardBridge', type: 'ready', host: discoveryHost, version: 2 },
+  });
+  await settleBridgeUntil(() => getCardBridgeState().identityVerified);
+};
+discoveryHarness = bridgeWindowHarness({ host: discoveryHost, openResult: discoveryTab });
+discoveryHarness.storageValues.set('lw_card_identity_v1', JSON.stringify({
+  version: 1, id: discoveryCardId,
+}));
+globalThis.window = discoveryHarness.win;
+globalThis.localStorage = discoveryHarness.win.localStorage;
+assert.equal(openLocalCardPage(discoveryHost).ok, true);
+await openDiscoveryCardPage();
+await sendCardBridgeRequest('status', {}, { host: discoveryHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().identityVerified, true);
+
+// A card with an owner's project on it is exactly what this route must never
+// be able to overwrite.
+assert.deepEqual(
+  authorizeBlankCardDiscoveryConfig({ host: discoveryHost, flowId: discoveryFlowId }),
+  { ok: false, reason: 'card-not-blank' },
+  'a card reporting a real project is refused the discovery grant',
+);
+
+discoveryStatus = blankDiscoveryStatus;
+await sendCardBridgeRequest('status', {}, { host: discoveryHost, timeoutMs: 100 });
+const discoveryGrant = authorizeBlankCardDiscoveryConfig({
+  host: discoveryHost, flowId: discoveryFlowId,
+});
+assert.equal(discoveryGrant.ok, true, 'a provably blank verified card can be granted the one-shot');
+assert.equal(discoveryGrant.cardId, discoveryCardId);
+assert.equal(hasBlankCardDiscoveryConfigAuthority({ host: discoveryHost, flowId: discoveryFlowId }), true);
+assert.equal(
+  hasBlankCardDiscoveryConfigAuthority({ host: discoveryHost, flowId: 'flow-some-other-panel-1234' }),
+  false,
+  'the grant belongs to the one discovery flow that asked for it',
+);
+
+// A card-page reload is a new page lifecycle. The grant never crosses one, and
+// re-proving blankness afterwards must not resurrect it.
+await openDiscoveryCardPage();
+await sendCardBridgeRequest('status', {}, { host: discoveryHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().identityVerified, true,
+  'the reloaded blank card verifies identity again');
+assert.equal(
+  hasBlankCardDiscoveryConfigAuthority({ host: discoveryHost, flowId: discoveryFlowId }),
+  false,
+  'a page lifecycle bump revokes the discovery grant',
+);
+const messagesBeforeStaleDiscoveryWrite = discoveryMessages.length;
+await assert.rejects(
+  sendCardBridgeRequest('config', { project: 'stale-grant' }, {
+    host: discoveryHost, timeoutMs: 25, commissioningFlowId: discoveryFlowId,
+  }),
+  error => error?.reason === 'runtime-not-ready',
+  'a grant from an older lifecycle cannot write config',
+);
+assert.equal(discoveryMessages.length, messagesBeforeStaleDiscoveryWrite,
+  'the refused discovery write never reaches postMessage');
+
+assert.equal(
+  authorizeBlankCardDiscoveryConfig({ host: discoveryHost, flowId: discoveryFlowId }).ok,
+  true,
+  'the same blank card can be granted again in the new lifecycle',
+);
+const discoveryConfig = await sendCardBridgeRequest('config', { project: 'bench' }, {
+  host: discoveryHost, timeoutMs: 100, commissioningFlowId: discoveryFlowId,
+});
+assert.equal(discoveryConfig.ok, true, 'the granted one-shot writes the bench config');
+assert.equal(
+  discoveryHarness.sessionValues.has('lw_wifi_handoff_recovery_v1'),
+  false,
+  'the discovery route never invents a WiFi handoff recovery record',
+);
+assert.equal(
+  hasBlankCardDiscoveryConfigAuthority({ host: discoveryHost, flowId: discoveryFlowId }),
+  false,
+  'the grant is spent by its first write',
+);
+await assert.rejects(
+  sendCardBridgeRequest('config', { project: 'second-bench' }, {
+    host: discoveryHost, timeoutMs: 25, commissioningFlowId: discoveryFlowId,
+  }),
+  error => error?.reason === 'runtime-not-ready',
+  'the discovery config authority is strictly one-shot',
+);
+assert.deepEqual(
+  authorizeBlankCardDiscoveryConfig({ host: discoveryHost, flowId: discoveryFlowId }),
+  { ok: false, reason: 'authority-spent' },
+  'a spent one-shot cannot be re-granted in the same lifecycle',
+);
+
+// The regression that shipped: an unspent discovery grant left over from an
+// earlier lifecycle must not divert a WiFi handoff's initial config around
+// markWifiHandoffConfigAttempted. That persistence write is the fail-closed
+// record which stops a Studio reload mid-handoff from restoring a spent
+// one-shot, so a handoff push that skips it silently un-spends itself.
+const rescueHost = '192.168.4.1';
+const rescueStationHost = '192.168.18.96';
+const rescueCardId = 'lw-rescue-blank';
+const rescueIdentity = {
+  cardId: rescueCardId,
+  firmwareVersion: '1.4.0',
+  buildId: 'e'.repeat(40),
+};
+const rescueCorrelation = {
+  host: rescueStationHost,
+  expectedCardId: rescueCardId,
+  expectedFirmwareVersion: rescueIdentity.firmwareVersion,
+  expectedBuildId: rescueIdentity.buildId,
+  expectedBootId: 'boot-rescue-1',
+  handoffGeneration: 4,
+};
+const rescueBlankStatus = {
+  app: 'Lightweaver', provisioningContractVersion: 1,
+  ...rescueIdentity,
+  bootId: rescueCorrelation.expectedBootId,
+  runtimePhase: 'factory', knownGoodProject: false,
+  mode: 'factory-flash', source: 'defaults',
+  commandReady: false, outputReady: true,
+};
+let rescueHarness;
+let rescueStatus = rescueBlankStatus;
+let rescueHref = '';
+// The one card page answers from the setup AP first and from its station
+// address after the handoff, so responses follow whichever origin it is on.
+let rescueOrigin = rescueHost;
+const rescueTab = {
+  closed: false,
+  location: {
+    get href() { return rescueHref; },
+    set href(value) { rescueHref = String(value); },
+  },
+  postMessage(message) {
+    const response = message.type === 'firmware-info'
+      ? rescueIdentity
+      : message.type === 'status' ? rescueStatus : { ok: true };
+    setTimeout(() => rescueHarness.emitMessage({
+      origin: `http://${rescueOrigin}`,
+      source: rescueTab,
+      data: { app: 'LightweaverCardBridge', version: 2, id: message.id, ok: true, response },
+    }), 0);
+  },
+  focus() {},
+};
+const emitRescueReady = async host => {
+  rescueOrigin = host;
+  rescueHarness.emitMessage({
+    origin: `http://${host}`,
+    source: rescueTab,
+    data: { app: 'LightweaverCardBridge', type: 'ready', host, version: 2 },
+  });
+  // The setup-AP page verifies identity outright; the station page reached
+  // through the handoff can only reach the acknowledgement latch.
+  await settleBridgeUntil(() => (
+    getCardBridgeState().identityVerified || getCardBridgeState().handoffAckReady
+  ));
+};
+rescueHarness = bridgeWindowHarness({ host: rescueHost, openResult: rescueTab });
+rescueHarness.win.location.href = 'https://led.mandalacodes.com/#screen=discovery';
+rescueHarness.win.location.origin = 'https://led.mandalacodes.com';
+rescueHarness.storageValues.set('lw_card_identity_v1', JSON.stringify({
+  version: 1, id: rescueCardId,
+}));
+globalThis.window = rescueHarness.win;
+globalThis.localStorage = rescueHarness.win.localStorage;
+assert.equal(openLocalCardPage(rescueHost).ok, true);
+await emitRescueReady(rescueHost);
+await sendCardBridgeRequest('status', {}, { host: rescueHost, timeoutMs: 100 });
+const rescueFlowId = 'flow-rescue-discovery-1234';
+assert.equal(
+  authorizeBlankCardDiscoveryConfig({ host: rescueHost, flowId: rescueFlowId }).ok,
+  true,
+  'the blank card on its setup AP is granted the discovery one-shot',
+);
+
+const rescueHandoffFlowId = 'flow-rescue-handoff-1234';
+rescueStatus = {
+  ...rescueBlankStatus,
+  wifi: {
+    transport: 'ap', transition: 'handoff-ready', transitionPending: true,
+    apActive: true, stationIp: rescueStationHost, ip: rescueStationHost,
+    handoffGeneration: rescueCorrelation.handoffGeneration,
+  },
+};
+assert.equal(
+  retargetCardBridge(rescueStationHost, rescueCorrelation, { flowId: rescueHandoffFlowId }).ok,
+  true,
+);
+assert.equal(
+  hasBlankCardDiscoveryConfigAuthority({ host: rescueHost, flowId: rescueFlowId }),
+  false,
+  'retargeting to the station lifecycle revokes the setup-AP discovery grant',
+);
+await emitRescueReady(rescueStationHost);
+assert.equal(getCardBridgeState().handoffAckReady, true);
+await sendCardBridgeRequest('wifi-handoff-ack', {}, { host: rescueStationHost, timeoutMs: 100 });
+rescueStatus = {
+  ...rescueStatus,
+  wifi: {
+    ...rescueStatus.wifi,
+    transport: 'station', transition: 'station', transitionPending: false,
+    apActive: false, ip: rescueStationHost,
+  },
+};
+await sendCardBridgeRequest('status', {}, { host: rescueStationHost, timeoutMs: 100 });
+assert.equal(getCardBridgeState().initialConfigAuthority, true,
+  'the exact final station envelope grants the handoff initial-config authority');
+const rescueConfig = await sendCardBridgeRequest('config', { project: 'owner' }, {
+  host: rescueStationHost, timeoutMs: 100, commissioningFlowId: rescueHandoffFlowId,
+});
+assert.equal(rescueConfig.ok, true);
+assert.equal(
+  JSON.parse(rescueHarness.sessionValues.get('lw_wifi_handoff_recovery_v1')).configAttempted,
+  true,
+  'a handoff initial config still persists its one-way attempt when a stale discovery grant exists',
+);
+await assert.rejects(
+  sendCardBridgeRequest('config', { project: 'owner-again' }, {
+    host: rescueStationHost, timeoutMs: 25, commissioningFlowId: rescueHandoffFlowId,
+  }),
+  error => error?.reason === 'runtime-not-ready',
+  'the handoff initial config stays one-shot alongside the discovery route',
+);
 
 console.log('card-bridge-handoff tests passed');

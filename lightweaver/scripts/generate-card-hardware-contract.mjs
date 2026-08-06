@@ -13,6 +13,28 @@ function positiveInteger(value, label) {
   return value;
 }
 
+// The generated header pins each limit to a fixed-width C++ type. A manifest
+// value that overflows its type would be silently truncated by the template
+// literal (65536 -> a uint16_t of 0), so the ceiling is enforced here rather
+// than discovered on a card. maxPixels shares the uint16_t ceiling with the
+// firmware's `totalPixels` / `OutputConfig.start`; widening past it is a
+// firmware type change, not a contract edit.
+const LIMIT_CEILINGS = {
+  maxOutputs: 0xff,
+  maxPixels: 0xffff,
+  maxZones: 0xff,
+  maxRangesPerZone: 0xff,
+  configCapacityBytes: 0xffff,
+};
+
+function boundedInteger(value, label, ceiling) {
+  const parsed = positiveInteger(value, label);
+  if (parsed > ceiling) {
+    throw new RangeError(`${label} must be at most ${ceiling} — the generated header's C++ type would truncate it.`);
+  }
+  return parsed;
+}
+
 export function validateCardHardwareManifest(manifest) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     throw new TypeError('Hardware contract must be an object.');
@@ -38,11 +60,11 @@ export function validateCardHardwareManifest(manifest) {
     contractVersion,
     outputPins: [...outputPins],
     limits: {
-      maxOutputs: positiveInteger(limits.maxOutputs, 'limits.maxOutputs'),
-      maxPixels: positiveInteger(limits.maxPixels, 'limits.maxPixels'),
-      maxZones: positiveInteger(limits.maxZones, 'limits.maxZones'),
-      maxRangesPerZone: positiveInteger(limits.maxRangesPerZone, 'limits.maxRangesPerZone'),
-      configCapacityBytes: positiveInteger(limits.configCapacityBytes, 'limits.configCapacityBytes'),
+      maxOutputs: boundedInteger(limits.maxOutputs, 'limits.maxOutputs', LIMIT_CEILINGS.maxOutputs),
+      maxPixels: boundedInteger(limits.maxPixels, 'limits.maxPixels', LIMIT_CEILINGS.maxPixels),
+      maxZones: boundedInteger(limits.maxZones, 'limits.maxZones', LIMIT_CEILINGS.maxZones),
+      maxRangesPerZone: boundedInteger(limits.maxRangesPerZone, 'limits.maxRangesPerZone', LIMIT_CEILINGS.maxRangesPerZone),
+      configCapacityBytes: boundedInteger(limits.configCapacityBytes, 'limits.configCapacityBytes', LIMIT_CEILINGS.configCapacityBytes),
     },
   };
   if (normalized.outputPins.length < normalized.limits.maxOutputs) {

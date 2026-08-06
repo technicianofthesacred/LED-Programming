@@ -53,7 +53,7 @@ import {
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
 import { classifyCardReadiness } from '../lib/cardReadiness.js';
 import { isCardLinkPlaybackReady } from '../lib/cardConnectionFlow.js';
-import { evaluateCardInstallGate } from '../lib/cardInstallGate.js';
+import { evaluateCardInstallGate, readCardAccessLevel } from '../lib/cardInstallGate.js';
 import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
 import {
   consumeCardEditAuthorization,
@@ -1749,9 +1749,19 @@ import { PatternPreview } from './PatternPreview.jsx';
     const selectedTargetName = selectedTarget ? targetLabel(selectedTarget) : 'All sections';
     const showFlashAction = statusKind === 'err' && status === cardBridgeFeatureGap('frame')?.message;
     const hasPreviewFailureAction = previewAction.status === 'failed' && Boolean(previewFailure?.actionId);
-    const authorizedPatternCardAccess = patternCardAccess === 'ready' && !projectAuthorizationCurrent
-      ? 'project'
-      : patternCardAccess;
+    // A card fresh out of strip discovery is holding Studio's own bench config,
+    // so its project fingerprint cannot match the open project and the check
+    // below downgrades it to 'project' — the "somebody else's artwork is
+    // installed" verdict. That warning is wrong here: Studio put that config
+    // there itself, minutes ago. readCardAccessLevel re-reads the card's own
+    // project evidence and upgrades exactly that case to 'bench', so trying a
+    // look straight after discovery is not refused as a mismatch.
+    const authorizedPatternCardAccess = readCardAccessLevel(
+      patternCardAccess === 'ready' && !projectAuthorizationCurrent
+        ? 'project'
+        : patternCardAccess,
+      cardLink?.readiness,
+    );
     // Shared install precondition (src/lib/cardInstallGate.js). savePreviewToCard
     // only sets allowLayoutChange for the explicit bench test-strip override, and
     // it aborts if the card stages the write as a wiring change, so a normal

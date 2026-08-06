@@ -270,4 +270,26 @@ assert.ok(
 assert.match(setup, /startLook\(currentLookIndex\)[\s\S]*startWiringProbation\(loadResult\.bootedCandidate\)/,
   'candidate physical startup frame must remain independent from the web command-admission gate');
 
+// A card that booted safe defaults over a project it STILL HOLDS publishes the
+// same absence a factory-erased one does — no project identity, knownGoodProject
+// false, source defaults. Strip discovery writes its bench config straight over
+// a card it reads as blank, so if this flag stops being published the owner's
+// installed artwork gets silently overwritten with a discovery scaffold. Studio
+// treats the field's ABSENCE as "not damaged" (it has to, for cards already in
+// the field), which means a regression here fails open and silently. Hence a
+// contract test rather than reliance on a Studio-side unit test.
+assert.match(runtimeApi, /bool\s+runtimeSafeModeActive\s*\(\s*\)\s*;/,
+  'safe-mode truth must be exposed to the storage translation unit through the runtime API');
+assert.match(main, /bool\s+runtimeSafeModeActive\s*\(\s*\)\s*\{\s*return\s+runtimeSafeMode\s*;\s*\}/,
+  'runtimeSafeModeActive must report the same flag setup() takes from RuntimeLoadResult.safeMode');
+assert.match(main, /runtimeSafeMode\s*=\s*loadResult\.safeMode/,
+  'boot must carry RuntimeLoadResult.safeMode into the runtime flag the envelopes publish');
+for (const [label, source, signature] of [
+  ['/api/firmware-info', main, /String\s+runtimeFirmwareInfo\s*\(/],
+  ['/api/status', storage, /String\s+runtimeStatusJson\s*\(/],
+]) {
+  assert.match(functionBody(source, signature), /doc\["safeMode"\]\s*=\s*runtimeSafeModeActive\(\)/,
+    `${label} must publish safeMode so a merely-unread card is never mistaken for an erased one`);
+}
+
 console.log('firmware provisioning status contract tests passed');

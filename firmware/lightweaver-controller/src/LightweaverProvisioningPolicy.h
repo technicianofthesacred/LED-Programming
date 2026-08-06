@@ -12,10 +12,24 @@ constexpr size_t LW_APPROVED_OUTPUT_GPIO_COUNT = LW_CARD_HARDWARE_OUTPUT_GPIO_CO
 constexpr uint16_t LW_FACTORY_BEACON_PIXEL_LIMIT = 8;
 constexpr uint8_t LW_FACTORY_BEACON_BRIGHTNESS_LIMIT = 24;
 constexpr uint32_t LW_FACTORY_BEACON_MAX_MILLIAMPS = 100;
-constexpr uint32_t LW_FACTORY_BEACON_STEP_MS = 3000;
-constexpr uint32_t LW_FACTORY_BEACON_STEADY_ON_MS = 1200;
-constexpr uint32_t LW_FACTORY_BEACON_SECOND_ON_START_MS = 1600;
-constexpr uint32_t LW_FACTORY_BEACON_SECOND_ON_END_MS = 2400;
+// These four are one rhythm, not four numbers: hold, gap, second pulse, pause.
+// Change them together or the flash-twice-then-pause signature stops reading as
+// deliberate and starts reading as a fault.
+//
+// The step was 3000ms back when four approved GPIOs meant a 12-second sweep. The
+// pin menu is now 15 (11 after the default controls claim theirs), and at the old
+// step that is 33 seconds before an owner watching a freshly flashed card sees
+// their port come round — long enough to conclude the card is dead, which is the
+// exact misdiagnosis this beacon exists to prevent. Halving the whole rhythm
+// restores a ~16-second sweep while keeping two clearly separate pulses per port.
+// The tradeoff is real and was made deliberately: each port now holds for 1.5s
+// rather than 3s. That is still an unmistakable double-blink at arm's length, but
+// it is the floor — going shorter turns the pair into a flicker and the beacon
+// stops being readable as "this port, twice, on purpose".
+constexpr uint32_t LW_FACTORY_BEACON_STEP_MS = 1500;
+constexpr uint32_t LW_FACTORY_BEACON_STEADY_ON_MS = 600;
+constexpr uint32_t LW_FACTORY_BEACON_SECOND_ON_START_MS = 800;
+constexpr uint32_t LW_FACTORY_BEACON_SECOND_ON_END_MS = 1200;
 constexpr uint32_t LW_FACTORY_BEACON_SAFETY_POLL_MS = 100;
 
 enum class ProvisioningPhase : uint8_t {

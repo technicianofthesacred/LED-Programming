@@ -44,8 +44,23 @@ assert.match(patternsHeader, /renderProceduralPattern\([\s\S]*const PatternCoord
 assert.match(patternsHeader, /renderNativeRecipe\([\s\S]*const PatternCoordinateContext\*\s*\w+\s*=\s*nullptr\)/);
 assert.match(patterns, /patternSpatialIndex\(/);
 assert.match(patterns, /sampleKaleidoscope\(context->kaleidoscope/);
-assert.match(main, /KaleidoscopePixelLookup\s+kaleidoscopePixelLookup\[LW_MAX_PIXELS\]/,
+// The lookup is boot-allocated from the loaded config's totalPixels rather
+// than statically sized, but it stays bounded: applyRuntimeConfig() fits the
+// whole live geometry — totalPixels, every output start/length and every
+// segment count — inside allocatedPixels, so the lookup can never be indexed
+// past what was allocated. (The bound used to be a bare totalPixels clamp;
+// see runtime-output-allocation-clamp.mjs for why that was not enough.)
+assert.match(main, /KaleidoscopePixelLookup\*\s+kaleidoscopePixelLookup = nullptr;/,
   'the runtime must keep a bounded precomputed global-pixel lookup');
+assert.match(main, /clampRuntimeOutputsToAllocation\(\);/,
+  'the live pixel count must never exceed what the boot allocation covers');
+// Offsets live INSIDE RuntimeConfig (so they multiply per config copy) and
+// serialize per point into the config byte budget. Tying them to LW_MAX_PIXELS
+// again would cost ~256 KB per copy for a number the byte budget can never
+// reach, and would break agreement with Studio's
+// CARD_KALEIDOSCOPE_MAX_AGGREGATE_OFFSETS.
+assert.match(types, /constexpr uint16_t LW_MAX_KALEIDOSCOPE_OFFSETS = 1024;/,
+  'kaleidoscope offsets stay decoupled from LW_MAX_PIXELS and fixed at 1024');
 assert.match(main, /rebuildKaleidoscopePixelLookup\(config\)/,
   'config application must rebuild the bounded lookup once');
 assert.match(runtimeApi, /void\s+runtimeApplySavedConfig\(\)/,

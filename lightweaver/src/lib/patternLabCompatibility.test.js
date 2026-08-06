@@ -12,6 +12,12 @@ import {
   stepPatternLabDiagnosticsFrame,
 } from './patternLabCompatibility.js';
 import { createPatternLabRecipe } from './patternLabRecipe.js';
+import { CARD_HARDWARE_CAPABILITIES } from './cardRuntimeContract.js';
+
+// The pixel budget is the card hardware contract's, not a number this suite
+// gets to pick — pinning a literal here just means one more place to forget
+// when the contract moves.
+const CARD_MAX_PIXELS = CARD_HARDWARE_CAPABILITIES.maxPixels;
 
 function recipe(overrides = {}) {
   return {
@@ -119,7 +125,7 @@ test('budget status distinguishes missing, invalid, too-low, fitting, and over-l
     [-1, 'invalid', 'pixel-count-invalid'],
     [0, 'too-low', 'pixel-count-too-low'],
     [10, 'fits', null],
-    [1025, 'over-limit', 'pixel-count-over-budget'],
+    [CARD_MAX_PIXELS + 1, 'over-limit', 'pixel-count-over-budget'],
     [Number.POSITIVE_INFINITY, 'invalid', 'pixel-count-invalid'],
   ];
 
@@ -262,7 +268,7 @@ test('reports every explicit native and sequence budget including the 3968-byte 
     'microSdBytes',
   ]);
   assert.deepEqual(result.budgets.pixelCount, {
-    used: 10, limit: 1024, known: true, status: 'fits', ok: true,
+    used: 10, limit: CARD_MAX_PIXELS, known: true, status: 'fits', ok: true,
   });
   assert.deepEqual(result.budgets.fps, {
     used: 20, limit: 30, known: true, status: 'fits', ok: true,
@@ -284,7 +290,7 @@ test('reports every explicit native and sequence budget including the 3968-byte 
 
 test('physical pixel overflow blocks both native and baked card output', () => {
   const result = classifyPatternLabCompatibility(recipe(), {
-    metrics: { ...FIT_METRICS, pixelCount: 1025, framebufferBytes: 3075 },
+    metrics: { ...FIT_METRICS, pixelCount: CARD_MAX_PIXELS + 1, framebufferBytes: 3075 },
   });
   assert.equal(result.classification, 'studio-only');
   assert.equal(result.budgets.pixelCount.ok, false);

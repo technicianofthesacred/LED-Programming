@@ -251,6 +251,7 @@ void resetConfig(RuntimeConfig& config) {
   config.brightnessLimit = 0.0f;
   resetOutputColor(config.outputColor);
   config.maxMilliamps = LW_DEFAULT_MAX_MILLIAMPS;
+  config.maxMilliampsExplicit = false;
   for (uint8_t i = 0; i < LW_MAX_OUTPUTS; i++) resetOutput(config.outputs[i]);
   config.outputCount = 0;
   for (uint8_t i = 0; i < LW_MAX_LOOKS; i++) resetLook(config.looks[i]);
@@ -294,6 +295,10 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
   config.ledColorOrder = String(led["colorOrder"] | "RGB");
   config.brightnessLimit = clampUnit(led["brightnessLimit"] | 0.65f);
   config.maxMilliamps = clampMilliamps(led["maxMilliamps"] | LW_DEFAULT_MAX_MILLIAMPS);
+  // Record whether the number came from the owner or from us. The 1500 mA
+  // fallback stays as the safety net either way — this only makes the
+  // difference observable so /api/status can say which one is in force.
+  config.maxMilliampsExplicit = !led["maxMilliamps"].isNull();
 
   JsonObject controlsJson = doc["controls"].as<JsonObject>();
   JsonObject encoder = controlsJson["encoder"].as<JsonObject>();
@@ -2140,6 +2145,18 @@ bool runtimeConfigJsonChangesWiring(const String& json, const RuntimeConfig& cur
     delete parsed;
     return false;
   }
+  // A card with no outputs is exempt: report no wiring change so the caller
+  // takes the ordinary save-and-restart path. The candidate/probation dance
+  // exists to protect a KNOWN-GOOD layout from a bad rewire, and a card that
+  // has never held a layout has nothing to protect. Staging a first config
+  // would instead strand the card forever — activation demands commandReady,
+  // and a zero-output card never reaches it (the factory beacon owns the
+  // render loop), so the owner could not light a strip to escape.
+  if (current.outputCount == 0) {
+    delete parsed;
+    message = "first wiring applied directly";
+    return true;
+  }
   changes = parsed->outputCount != current.outputCount;
   changes = changes || parsed->wiringRevision != current.wiringRevision ||
             parsed->wiringDigest != current.wiringDigest ||
@@ -2318,6 +2335,9 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["outputReady"] = runtimeOutputReady();
   doc["configValid"] = config.configValid;
   doc["knownGoodProject"] = config.knownGoodProject;
+  // Same claim and same spelling as /api/firmware-info: a card that booted safe
+  // defaults over a project it still holds must not read as factory-empty.
+  doc["safeMode"] = runtimeSafeModeActive();
   doc["configSchemaVersion"] = LW_CONFIG_SCHEMA_VERSION;
   doc["capabilitiesVersion"] = LW_CAPABILITIES_VERSION;
   doc["capabilities"]["kaleidoscopeReflectionPoints"] =

@@ -1,3 +1,5 @@
+import { CARD_HARDWARE_CONTRACT } from './cardHardwareContract.js';
+
 export const PRODUCTION_DIAGNOSTIC_MAX_CHANNEL = 0x20;
 export const PRODUCTION_CANDIDATE_ROLLBACK_MS = 90_000;
 export const PRODUCTION_PHYSICAL_OBSERVATIONS = Object.freeze([
@@ -24,12 +26,17 @@ export function productionDiagnosticCurrentEstimate(frame, maxMilliamps) {
 }
 
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
+// The pixel ceilings in this file are all card-capacity mirrors and read from
+// the hardware contract, so a job the card accepts is never refused on the
+// bench. Nothing here bounds CURRENT — that is productionDiagnosticCurrentEstimate's
+// 100-20000 mA check above, which the card enforces with its own aggregate cap,
+// and it is unaffected by how long a strip is.
 function boundedOutputs(outputs) {
   if (!Array.isArray(outputs) || !outputs.length || outputs.length > 4) throw new Error('Physical verification requires one to four outputs.');
   const ids = new Set();
   return outputs.map(output => {
     const pixels = Number(output?.pixels);
-    if (!output?.id || ids.has(output.id) || !Number.isSafeInteger(pixels) || pixels < 2 || pixels > 1024) throw new Error('Each diagnostic output must have a unique ID and at least two bounded pixels.');
+    if (!output?.id || ids.has(output.id) || !Number.isSafeInteger(pixels) || pixels < 2 || pixels > CARD_HARDWARE_CONTRACT.maxPixels) throw new Error('Each diagnostic output must have a unique ID and at least two bounded pixels.');
     ids.add(output.id);
     return { ...output, pixels };
   });
@@ -129,7 +136,7 @@ export function buildProductionDiagnosticFrame({ outputs: source, outputId, dire
   const active = outputs.find(output => output.id === outputId);
   if (!active) throw new Error('The selected output does not belong to this production job.');
   const total = outputs.reduce((sum, output) => sum + output.pixels, 0);
-  if (total > 1024) throw new Error('The diagnostic pixel count is outside card capacity.');
+  if (total > CARD_HARDWARE_CONTRACT.maxPixels) throw new Error('The diagnostic pixel count is outside card capacity.');
   const start = outputs.slice(0, outputs.indexOf(active)).reduce((sum, output) => sum + output.pixels, 0);
   const frame = Array(total).fill('000000');
   frame.fill('020202', start, start + active.pixels);
@@ -249,12 +256,12 @@ export function buildProductionBoundaryCandidate(snapshot, boundaryId, correctio
     const delta = Number(correction.delta);
     if (!Number.isSafeInteger(delta) || Math.abs(delta) !== 1) throw new Error('Pixel count changes are bounded to plus or minus one.');
     const segmentPixels = output.segments[segmentIndex].count + delta;
-    if (segmentPixels < 2 || segmentPixels > 1024) throw new Error('Pixel count change is outside the bounded diagnostic range.');
+    if (segmentPixels < 2 || segmentPixels > CARD_HARDWARE_CONTRACT.maxPixels) throw new Error('Pixel count change is outside the bounded diagnostic range.');
     const oldEnd = boundary.start + boundary.count;
     output.segments[segmentIndex].count = segmentPixels;
     output.pixels += delta;
     config.led.pixels = config.led.outputs.reduce((sum, output) => sum + Number(output.pixels), 0);
-    if (config.led.pixels > 1024) throw new Error('Pixel count change is outside card capacity.');
+    if (config.led.pixels > CARD_HARDWARE_CONTRACT.maxPixels) throw new Error('Pixel count change is outside card capacity.');
     let boundaryAdjusted = false;
     for (const zone of config.zones || []) for (const range of zone.ranges || []) {
       const rangeStart = Number(range.start);

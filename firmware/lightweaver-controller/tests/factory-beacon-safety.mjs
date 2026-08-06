@@ -42,15 +42,50 @@ assert.doesNotMatch(defaults, /pin\s*=\s*16|pixels\s*=\s*44|"aurora"|"RGB"/,
 
 assert.match(policy, /LW_APPROVED_OUTPUT_GPIOS[\s\S]*LW_CARD_HARDWARE_OUTPUT_GPIOS/,
   'provisioning must consume the generated hardware contract');
-assert.match(hardware, /LW_CARD_HARDWARE_OUTPUT_GPIOS\[\]\s*=\s*\{16, 17, 18, 21\}/);
+// The pin menu is contract data, not a firmware literal — pinning the numbers
+// here would just be a second place to forget to update. What matters for the
+// beacon is that the header's list IS the manifest's list, so a blank card
+// pulses exactly the GPIOs Studio offers.
+const manifestPins = JSON.parse(
+  readFileSync(resolve(root, '../../packages/lightweaver-contract/card-hardware.json'), 'utf8'),
+).outputPins;
+assert.match(
+  hardware,
+  new RegExp(`LW_CARD_HARDWARE_OUTPUT_GPIOS\\[\\]\\s*=\\s*\\{${manifestPins.join(', ')}\\}`),
+  'the generated header must list exactly the manifest output GPIOs',
+);
 assert.match(policy, /LW_FACTORY_BEACON_PIXEL_LIMIT\s*=\s*8/);
 assert.match(policy, /LW_FACTORY_BEACON_BRIGHTNESS_LIMIT\s*=\s*24/,
   'the beacon must use the brightest approved bench-safe level');
 assert.match(policy, /LW_FACTORY_BEACON_MAX_MILLIAMPS\s*=\s*100/);
-assert.match(policy, /LW_FACTORY_BEACON_STEP_MS\s*=\s*3000/,
+// Halved from 3000 when the approved-GPIO list grew to 15. The sweep, not the
+// step, is what an owner actually experiences, and 15 x 3000 put it at 45s.
+assert.match(policy, /LW_FACTORY_BEACON_STEP_MS\s*=\s*1500/,
   'each output must stay selected long enough for a clear human observation');
+// The whole point of the beacon is being recognisable from across a bench, so the
+// sweep has to stay inside the patience of someone deciding whether a freshly
+// flashed card is alive. This bounds the WORST case: every approved GPIO
+// registered, none claimed by controls.
+assert.ok(15 * 1500 <= 25000,
+  'a full beacon sweep must stay well inside how long an owner will watch before calling a card dead');
 assert.match(policy, /factoryBeaconPulseOn[\s\S]*<\s*LW_FACTORY_BEACON_STEADY_ON_MS[\s\S]*>=\s*LW_FACTORY_BEACON_SECOND_ON_START_MS[\s\S]*<\s*LW_FACTORY_BEACON_SECOND_ON_END_MS/,
   'the visibility pattern must provide a long steady hold and a distinct second pulse');
+
+// The beacon runs with NO config at all, writing one 8-pixel slice per approved
+// GPIO into physicalLeds. Now that the buffers are boot-allocated from the
+// config's own totalPixels, a blank card would allocate nothing without a floor
+// — so the floor has to cover every slice, and the compiler has to enforce it.
+assert.match(main, /constexpr uint16_t LW_MIN_ALLOCATED_PIXELS = (\d+);/,
+  'the boot allocation must declare a floor for the config-less beacon path');
+assert.match(
+  main,
+  /static_assert\(LW_APPROVED_OUTPUT_GPIO_COUNT \* LW_FACTORY_BEACON_PIXEL_LIMIT <=\s*LW_MIN_ALLOCATED_PIXELS,/,
+  'widening the pin menu past the allocation floor must fail the build, not scribble past the buffer',
+);
+assert.ok(
+  manifestPins.length * 8 <= Number(main.match(/constexpr uint16_t LW_MIN_ALLOCATED_PIXELS = (\d+);/)[1]),
+  'every approved GPIO beacon slice must fit inside the allocation floor',
+);
 
 const factorySetup = functionBody(main, 'bool setupFactoryBeaconOutputs()', 'bool setupSafeDiscoveryOutputs(');
 assert.match(factorySetup, /LW_APPROVED_OUTPUT_GPIO_COUNT/);
@@ -73,7 +108,21 @@ assert.match(factoryFrame, /LW_FACTORY_BEACON_SAFETY_POLL_MS/,
   'the factory animation must not read NVS on every 10ms frame');
 assert.match(factoryFrame, /clearPhysicalLeds\(\)/,
   'every factory beacon step must first submit black to every registered output');
-assert.match(factoryFrame, /factoryBeaconPinForStep/);
+// The frame used to re-derive its pin with factoryBeaconPinForStep(step), walking
+// the whole approved list independently of what setupFactoryBeaconOutputs had
+// actually registered. Once the pin menu widened past the four default control
+// GPIOs those two lists disagreed: registration skipped 4/5/6/7 as control pins
+// while the sweep kept pulsing them, so a blank card sat dark for the first 12
+// seconds of every cycle and read as dead — on the exact state the beacon exists
+// to make legible. The step list is now built by registration itself, so the
+// sweep can only address a slot FastLED was actually given. Re-deriving the pin
+// here would reintroduce the second list; that is what this guards.
+assert.match(factoryFrame, /factoryBeaconSteps\[/,
+  'the beacon frame must address only slots registration recorded, never a re-derived pin list');
+assert.doesNotMatch(factoryFrame, /factoryBeaconPinForStep/,
+  'the beacon frame must not re-derive its pin independently of what was registered');
+assert.match(factoryFrame, /factoryBeaconStepCount/,
+  'the sweep length must come from the registered-output count, not the approved-GPIO count');
 assert.match(factoryFrame, /LW_FACTORY_BEACON_PIXEL_LIMIT/);
 assert.match(factoryFrame, /transmitPhysicalLeds\(LW_FACTORY_BEACON_BRIGHTNESS_LIMIT/);
 assert.equal((factoryFrame.match(/fill_solid\(physicalLeds \+ bufferStart/g) || []).length, 1,
