@@ -3,6 +3,7 @@ import {
   BENCH_DEFAULT_PORT_PIXELS,
   BENCH_MAX_MILLIAMPS,
   BENCH_RESERVED_CONTROL_PINS,
+  BENCH_SKIP_MAX_OUTPUTS,
   benchSkipReasonText,
   buildBenchConfig,
 } from '../../lib/benchConfig.js';
@@ -12,7 +13,8 @@ import {
   readBeaconPorts,
   releaseBeaconPort,
 } from '../../lib/beaconProbe.js';
-import { installBenchConfig } from '../../lib/benchInstall.js';
+import { installBenchConfig, waitForClearedCard } from '../../lib/benchInstall.js';
+import { clearCardProject } from '../../lib/cardClearProject.js';
 import { getCardBridgeState } from '../../lib/cardBridge.js';
 import {
   normalizeCardHost,
@@ -31,13 +33,22 @@ import {
 import {
   DISCOVERY_FRAME_RATE_WARN_PIXELS,
   advance,
+  buildChannelProofFrame,
+  channelMapFromProofAnswers,
+  correctFrameForChannelMap,
   createStripDiscoverySession,
   discoveryFrame,
   discoveryPortRoleUpdates,
   discoveryWarnings,
   totalDiscoveredPixels,
 } from '../../lib/stripDiscovery.js';
-import { readDiscoveredPortRoles, writeDiscoveredPortRoles } from '../../lib/stripDiscoveryStore.js';
+import {
+  clearDiscoveryRun,
+  readDiscoveredPortRoles,
+  readDiscoveryRun,
+  writeDiscoveredPortRoles,
+  writeDiscoveryRun,
+} from '../../lib/stripDiscoveryStore.js';
 
 // Find the strips.
 //
@@ -159,8 +170,22 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
   const [failureDetail, setFailureDetail] = useState('');
   const [benchNotice, setBenchNotice] = useState('');
   const [recorded, setRecorded] = useState(false);
+  // Which BenchInstallError stopped the run — 'staged-existing-project' gets
+  // its own one-tap way out instead of the generic retry (ui-repair B0).
+  const [failureReason, setFailureReason] = useState('');
+  // A run a reload interrupted, offered back on the idle screen (ui-repair B2).
+  const [interruptedRun, setInterruptedRun] = useState(readDiscoveryRun);
+  // The two-question colour proof (ui-repair B-COLOUR). 'first'/'second' are
+  // the open questions, 'done' carries the measured map, 'skipped' is the
+  // owner's explicit opt-out (colours then behave exactly as before).
+  const [channelProof, setChannelProof] = useState({ stage: 'first', firstSeen: '', map: null, retry: false });
   const [streamHealth, setStreamHealth] = useState(null);
   const streamRef = useRef(null);
+  // The "look at your strip" question assumes the light holds steady while the
+  // owner walks over and looks. If the card restarts in that window, the answer
+  // they were about to give no longer describes reality — say so.
+  const [cardRestartedDuringLook, setCardRestartedDuringLook] = useState(false);
+  const lookBootIdRef = useRef('');
 
   // The ceiling the CARD reported, not Studio's. The firmware publishes it as
   // `limits.pixels` in every status envelope and normalizeCardReadiness is what
@@ -207,6 +232,11 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
     ]));
     return buildBenchConfig(portRoles, { pixelsPerPort, maxPixels: cardMaxPixels });
   }, [portRoles, probeTargets, cardMaxPixels]);
+
+  // Ports that only overflow the 4-output silicon limit are reported once, in
+  // the output-limit banner, instead of one near-identical line per port.
+  const outputLimitSkips = bench.skipped.filter(entry => entry.reason === BENCH_SKIP_MAX_OUTPUTS);
+  const otherSkips = bench.skipped.filter(entry => entry.reason !== BENCH_SKIP_MAX_OUTPUTS);
 
   // ── Port probe ─────────────────────────────────────────────────────────────
   // Before any setup is written, the owner usually already knows roughly where
@@ -297,6 +327,27 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
   // dark strip means nothing, so no delivery claim is made either.
   const lighting = Boolean(session) && ['probe', 'decade', 'end-marker'].includes(session.phase);
 
+  // A changed bootId is the card's own report that it restarted. Only watched
+  // while a question is on screen; deliberate restarts (Extend and keep
+  // looking) reset the baseline below so they never raise this notice.
+  const cardBootId = cardLink?.readiness?.bootId || '';
+  useEffect(() => {
+    if (!lighting) {
+      lookBootIdRef.current = '';
+      setCardRestartedDuringLook(false);
+      return;
+    }
+    if (!cardBootId) return;
+    if (!lookBootIdRef.current) {
+      lookBootIdRef.current = cardBootId;
+      return;
+    }
+    if (cardBootId !== lookBootIdRef.current) {
+      lookBootIdRef.current = cardBootId;
+      setCardRestartedDuringLook(true);
+    }
+  }, [lighting, cardBootId]);
+
   // The stream is created once per session and torn down with it. Stopping
   // releases the card's frame-source claim through the existing control path,
   // so the card's own bench look resumes rather than freezing on a probe frame.
@@ -331,14 +382,91 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
     void stream?.stop();
   }, []);
 
+  // The frame actually sent to the card. While a colour-proof question is open
+  // the probe run is lit in a single pure send-channel (the owner's answer IS
+  // the colour-order measurement); once answered, every discovery frame is
+  // corrected through the measured map so the hues the instructions name are
+  // the hues on the physical strip (ui-repair B-COLOUR).
+  const outgoingFrame = useCallback(() => {
+    if (session?.phase === 'probe' && session.activePin !== null
+      && (channelProof.stage === 'first' || channelProof.stage === 'second')) {
+      const port = session.ports.find(item => item.pin === session.activePin);
+      return buildChannelProofFrame({
+        benchLayout: session.benchLayout,
+        pin: session.activePin,
+        litCount: port?.litCount || 0,
+        step: channelProof.stage,
+      });
+    }
+    return correctFrameForChannelMap(discoveryFrame(session), channelProof.map);
+  }, [session, channelProof]);
+
   // Frames are pushed, not sent: the stream owns the throttle, the keepalive,
   // and (after chunking) the splitting of a long frame into card-sized writes.
   useEffect(() => {
-    const frame = discoveryFrame(session);
+    const frame = outgoingFrame();
     if (frame && streamRef.current) streamRef.current.push(frame);
-  }, [session]);
+  }, [outgoingFrame]);
 
   const dispatch = useCallback(event => setSession(current => advance(current, event)), []);
+
+  // ui-repair B2: a reload mid-run used to lose everything while the card kept
+  // playing the bench setup. The session is plain serializable data by design,
+  // so every question phase is persisted verbatim and offered back on the next
+  // visit. Completion clears it.
+  useEffect(() => {
+    if (!session) return;
+    if (session.phase === 'done') {
+      clearDiscoveryRun();
+      return;
+    }
+    writeDiscoveryRun({ host, session, channelProof });
+  }, [session, channelProof, host]);
+
+  const resumeRun = () => {
+    if (!interruptedRun) return;
+    setFailure('');
+    setFailureDetail('');
+    setFailureReason('');
+    if (interruptedRun.channelProof) setChannelProof(interruptedRun.channelProof);
+    setSession(interruptedRun.session);
+    setInterruptedRun(null);
+  };
+
+  const discardRun = () => {
+    clearDiscoveryRun();
+    setInterruptedRun(null);
+  };
+
+  // ui-repair B-COLOUR: the two colour-proof answers. The same colour twice is
+  // physically impossible — one answer was a slip — so the check starts over
+  // rather than recording a map that lies.
+  const answerChannelProof = seen => {
+    setChannelProof(current => {
+      if (current.stage === 'first') {
+        return { stage: 'second', firstSeen: seen, map: null, retry: false };
+      }
+      if (current.stage === 'second') {
+        const map = channelMapFromProofAnswers(current.firstSeen, seen);
+        if (!map) return { stage: 'first', firstSeen: '', map: null, retry: true };
+        return { stage: 'done', firstSeen: current.firstSeen, map, retry: false };
+      }
+      return current;
+    });
+  };
+
+  const skipChannelProof = () => setChannelProof({ stage: 'skipped', firstSeen: '', map: null, retry: false });
+
+  // Explicit "show me again": re-push the current phase's frame and clear the
+  // restart notice. The stream keepalive re-sends on its own; this exists so
+  // the owner can force it after a doubt or a reboot without leaving the step.
+  // It is also the gate that re-enables the answer buttons after a detected
+  // restart (ui-repair B5).
+  const relight = useCallback(() => {
+    setCardRestartedDuringLook(false);
+    const frame = outgoingFrame();
+    if (frame && streamRef.current) streamRef.current.push(frame);
+  }, [outgoingFrame]);
 
   const setPortRole = (pin, role) => setPortRoles(current => normalizePortRoles(
     current.map(entry => (entry.pin === pin ? { ...entry, role } : entry)),
@@ -348,8 +476,12 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
     setBusy(true);
     setFailure('');
     setFailureDetail('');
+    setFailureReason('');
     setBenchNotice('');
     setStreamHealth(null);
+    // A fresh run replaces whatever interrupted run was stored (ui-repair B2).
+    clearDiscoveryRun();
+    setInterruptedRun(null);
     const next = createStripDiscoverySession({ portRoles, benchLayout: bench.layout });
     setSession(next);
     try {
@@ -358,14 +490,51 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
       // including the 'staged' answer from a card that still needs a firmware
       // update — throws, so the probe phase is never entered against a card
       // that cannot light a pixel.
-      await installBenchConfig({ host, config: bench.config, flowId: flowIdRef.current, initial: true });
+      await installBenchConfig({
+        host,
+        config: bench.config,
+        flowId: flowIdRef.current,
+        initial: true,
+        // The card's own pre-install claim. A staged answer on a card that
+        // showed a project means "clear the card", never "update the
+        // firmware" (ui-repair B0).
+        cardShowsProject: Boolean(cardLink?.readiness?.projectId)
+          || cardLink?.readiness?.knownGoodProject === true
+          || cardLink?.readiness?.provisionalSetup === true,
+      });
       setSession(current => advance(current, { type: 'bench-installed' }));
     } catch (error) {
       const message = error?.message || 'Studio could not set this card up for discovery.';
       setFailure(message);
-      setFailureDetail(benchSizeSentence(bench, cardMaxPixels));
+      setFailureReason(error?.reason || '');
+      // Size numbers explain a size refusal; on the existing-project cause
+      // they would only bury the one action that helps.
+      if (error?.reason !== 'staged-existing-project') {
+        setFailureDetail(benchSizeSentence(bench, cardMaxPixels));
+      }
       setSession(current => advance(current, { type: 'bench-failed', error: message }));
     } finally {
+      setBusy(false);
+    }
+  };
+
+  // ui-repair B0: the one-tap way out when the staged answer was caused by the
+  // card already holding a project. Clear it (the card keeps its WiFi), wait
+  // for the card to come back blank, then run the exact same start again.
+  const clearCardAndRetry = async () => {
+    setBusy(true);
+    setFailure('');
+    setFailureDetail('');
+    try {
+      await clearCardProject({ host });
+      await waitForClearedCard({ host });
+      setFailureReason('');
+      setSession(null);
+      setBusy(false);
+      await startDiscovery();
+      return;
+    } catch (error) {
+      setFailure(error?.message || 'Studio could not clear the card.');
       setBusy(false);
     }
   };
@@ -387,6 +556,10 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
       // failure counters from the gap are stale the moment it returns.
       await installBenchConfig({ host, config: larger.config, flowId: flowIdRef.current });
       setStreamHealth(null);
+      // This restart is deliberate; do not report it as the card changing
+      // underneath the owner.
+      lookBootIdRef.current = '';
+      setCardRestartedDuringLook(false);
       // Doubling stops at the card's own ceiling, and pressing Extend again
       // after that changes nothing. Saying so is the difference between a real
       // answer and a button the owner presses forever.
@@ -420,6 +593,19 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
   const warnings = discoveryWarnings(session);
   const activePort = session?.ports.find(port => port.pin === session.activePin) || null;
   const phase = session?.phase || 'idle';
+
+  // Abandoning discovery mid-run leaves the card holding the temporary bench
+  // setup with no project of the owner's on it (findings 2026-08-06, #1).
+  // The browser cannot stop that, but it can make closing the tab deliberate.
+  useEffect(() => {
+    if (!phaseIsPastIdle || phase === 'done') return undefined;
+    const warn = event => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [phaseIsPastIdle, phase]);
 
   return (
     <div className="screen strip-discovery" data-testid="strip-discovery">
@@ -466,15 +652,40 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
                    ${FRAME_CHUNK_MAX_PIXELS} LEDs stays dark. Treat the far end as unmeasured.`}
             </p>
           )}
+          {cardRestartedDuringLook && (
+            <p className="lw-card-banner is-inline" role="alert" data-testid="discovery-card-restarted">
+              The card restarted while you were looking, so what the strip showed may have changed.
+              The answer buttons are paused — light it again and take another look first.
+            </p>
+          )}
+          <button type="button" className="btn" data-testid="discovery-relight" onClick={relight}>
+            Light these again
+          </button>
         </div>
       )}
 
       {phase === 'idle' && (
         <section className="strip-discovery-step" data-testid="discovery-plan">
+          {interruptedRun && (
+            <div className="lw-card-banner is-inline" role="status" data-testid="discovery-resume">
+              <p>
+                A Find-my-strips run was interrupted before it finished, and the card is still
+                holding its temporary setup. You can pick up exactly where you left off — the
+                answers already given are kept.
+              </p>
+              <button type="button" className="btn primary" data-testid="discovery-resume-continue" onClick={resumeRun}>
+                Pick up where I left off
+              </button>
+              <button type="button" className="btn" data-testid="discovery-resume-discard" onClick={discardRun}>
+                Start over
+              </button>
+            </div>
+          )}
           <h3>Which ports should Studio look at?</h3>
           <p>
             A port can carry a strip, a knob or slider, or nothing. Studio only lights the ports you
-            leave set to a strip.
+            leave set to a strip. Pick up to {CARD_HARDWARE_CONTRACT.maxOutputs} — that is how many
+            strip outputs this card can drive at once.
           </p>
           {probePorts?.available && (
             <p className="strip-discovery-note" data-testid="discovery-probe-hint">
@@ -529,13 +740,16 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
           </ul>
           {overOutputLimit && (
             <p className="lw-card-banner is-inline" role="alert" data-testid="discovery-output-limit">
-              This card can drive {CARD_HARDWARE_CONTRACT.maxOutputs} strip outputs at once. Pick at most
+              This card can drive {CARD_HARDWARE_CONTRACT.maxOutputs} strip outputs at once
+              {outputLimitSkips.length > 0
+                ? `, so ${outputLimitSkips.map(entry => `GPIO ${entry.pin}`).join(', ')} will not be lit`
+                : ''}. Pick at most
               {' '}{CARD_HARDWARE_CONTRACT.maxOutputs}, or use a second card for the rest.
             </p>
           )}
-          {bench.skipped.length > 0 && (
+          {otherSkips.length > 0 && (
             <ul className="strip-discovery-skipped" data-testid="discovery-skipped">
-              {bench.skipped.map(entry => (
+              {otherSkips.map(entry => (
                 <li key={entry.pin} role="status" data-testid={`discovery-skipped-${entry.pin}`}>
                   GPIO {entry.pin} will not be lit — {benchSkipReasonText(entry.reason)}.
                 </li>
@@ -557,9 +771,10 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
           >
             {busy ? 'Setting the card up…' : 'Start finding strips'}
           </button>
-          <p className="strip-discovery-note">
-            This writes one temporary setup to the card so it can light LEDs at all. Your own project
-            replaces it at the end.
+          <p className="strip-discovery-note" data-testid="discovery-start-note">
+            This writes one temporary setup to the card — {DISCOVERY_BENCH_HEADROOM} LEDs per chosen
+            port — so it can light LEDs at all. The card keeps playing that setup, even after a
+            restart, until your own project replaces it at the end.
           </p>
         </section>
       )}
@@ -574,7 +789,18 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
             <>
               <h3>The card could not be set up</h3>
               <p data-testid="discovery-install-error">{session.error}</p>
-              <button type="button" className="btn" data-testid="discovery-install-retry" onClick={() => setSession(null)}>
+              {failureReason === 'staged-existing-project' && (
+                <button
+                  type="button"
+                  className="btn primary"
+                  data-testid="discovery-clear-and-retry"
+                  onClick={() => void clearCardAndRetry()}
+                  disabled={busy}
+                >
+                  {busy ? 'Clearing the card…' : 'Clear the card and start again'}
+                </button>
+              )}
+              <button type="button" className="btn" data-testid="discovery-install-retry" onClick={() => setSession(null)} disabled={busy}>
                 Back to the port list
               </button>
             </>
@@ -599,6 +825,29 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
               {benchNotice}
             </p>
           )}
+          {(channelProof.stage === 'first' || channelProof.stage === 'second') && (
+            <div className="lw-card-banner is-inline" role="status" data-testid="discovery-color-proof">
+              <p>
+                {channelProof.stage === 'first'
+                  ? 'First, a quick colour check so every colour used later can be trusted: the lit LEDs are all showing ONE colour right now. What colour do you see?'
+                  : 'One more: Studio changed the lit LEDs to a different colour. What colour do you see now?'}
+              </p>
+              {channelProof.retry && (
+                <p role="alert" data-testid="discovery-color-proof-retry">
+                  Those two answers were the same colour, which cannot happen — one of them was a
+                  slip. The check starts over: look again.
+                </p>
+              )}
+              <div className="strip-discovery-actions">
+                <button type="button" className="btn" data-testid="discovery-color-red" onClick={() => answerChannelProof('red')}>Red</button>
+                <button type="button" className="btn" data-testid="discovery-color-green" onClick={() => answerChannelProof('green')}>Green</button>
+                <button type="button" className="btn" data-testid="discovery-color-blue" onClick={() => answerChannelProof('blue')}>Blue</button>
+                <button type="button" className="btn btn-ghost" data-testid="discovery-color-skip" onClick={skipChannelProof}>
+                  I can’t tell — skip this
+                </button>
+              </div>
+            </div>
+          )}
           {activePort.needsLargerBench ? (
             <>
               <p className="lw-card-banner is-inline" role="status" data-testid="discovery-bench-ceiling">
@@ -611,13 +860,13 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
             </>
           ) : (
             <div className="strip-discovery-actions">
-              <button type="button" className="btn primary" data-testid="discovery-more" onClick={() => dispatch({ type: 'probe-more' })}>
+              <button type="button" className="btn primary" data-testid="discovery-more" disabled={cardRestartedDuringLook} onClick={() => dispatch({ type: 'probe-more' })}>
                 There are more lights past the end
               </button>
-              <button type="button" className="btn" data-testid="discovery-enough" onClick={() => dispatch({ type: 'probe-enough' })}>
+              <button type="button" className="btn" data-testid="discovery-enough" disabled={cardRestartedDuringLook} onClick={() => dispatch({ type: 'probe-enough' })}>
                 The lit part covers the whole strip
               </button>
-              <button type="button" className="btn btn-ghost" data-testid="discovery-skip" onClick={() => dispatch({ type: 'probe-skip' })}>
+              <button type="button" className="btn btn-ghost" data-testid="discovery-skip" disabled={cardRestartedDuringLook} onClick={() => dispatch({ type: 'probe-skip' })}>
                 Nothing lit up on this port
               </button>
             </div>
@@ -651,7 +900,7 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
               </li>
             ))}
           </ul>
-          <button type="button" className="btn primary" data-testid="discovery-counts-done" onClick={() => dispatch({ type: 'counts-entered' })}>
+          <button type="button" className="btn primary" data-testid="discovery-counts-done" disabled={cardRestartedDuringLook} onClick={() => dispatch({ type: 'counts-entered' })}>
             Check the last LED
           </button>
         </section>
@@ -665,10 +914,10 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
             last light on this strip.
           </p>
           <div className="strip-discovery-actions">
-            <button type="button" className="btn primary" data-testid="discovery-end-yes" onClick={() => dispatch({ type: 'end-marker-yes' })}>
+            <button type="button" className="btn primary" data-testid="discovery-end-yes" disabled={cardRestartedDuringLook} onClick={() => dispatch({ type: 'end-marker-yes' })}>
               Yes, that is the last one
             </button>
-            <button type="button" className="btn" data-testid="discovery-end-no" onClick={() => dispatch({ type: 'end-marker-no' })}>
+            <button type="button" className="btn" data-testid="discovery-end-no" disabled={cardRestartedDuringLook} onClick={() => dispatch({ type: 'end-marker-no' })}>
               No, there are more
             </button>
           </div>

@@ -126,6 +126,7 @@ String runtimeRecipeCapabilities();
 FactoryResetResult runtimeFactoryReset();
 bool runtimeFinalizeFactoryResetRadio(String& message);
 void runtimeResetWifi();
+bool runtimeClearProject(String& message);
 bool runtimeRename(const String& pieceName, const String& hostname, String& message);
 
 // External-frame streaming. When a source (WLED realtime UDP / Art-Net) is

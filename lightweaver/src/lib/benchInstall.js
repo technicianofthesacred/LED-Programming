@@ -46,6 +46,19 @@ export const BENCH_INSTALL_STAGED_MESSAGE = 'This card is running older firmware
   + 'card’s first setup as a staged wiring change instead of applying it, so its LEDs cannot be '
   + 'lit yet. Update the card firmware from the Flash screen, then run Find my strips again.';
 
+// The OTHER reason a config comes back staged (ui-repair B0, observed live
+// twice): the card already HOLDS a project — often the bench setup from an
+// earlier abandoned run — so its wiring protection files the new bench layout
+// as a candidate. That is not a firmware problem, and telling the owner to
+// reflash cannot help. Deliberately no mention of firmware here.
+export const BENCH_INSTALL_EXISTING_PROJECT_MESSAGE = 'This card is already holding a saved setup '
+  + '— often the temporary one from an earlier Find-my-strips run — so it filed the discovery '
+  + 'setup as a wiring change instead of applying it. Clear what is on the card (it keeps its '
+  + 'WiFi), then discovery can start fresh.';
+
+export const BENCH_INSTALL_CLEARED_TIMEOUT_MESSAGE = 'The card accepted the clear but did not come '
+  + 'back blank. Check that it still has power, then try again.';
+
 export const BENCH_INSTALL_TIMEOUT_MESSAGE = 'The card took the discovery setup but did not come '
   + 'back ready. Check that it still has power, then try again.';
 
@@ -53,7 +66,8 @@ export class BenchInstallError extends Error {
   constructor(reason, message) {
     super(message);
     this.name = 'BenchInstallError';
-    // 'no-config' | 'authority' | 'refused' | 'staged' | 'wrong-card' | 'not-ready'
+    // 'no-config' | 'authority' | 'refused' | 'staged' | 'staged-existing-project'
+    // | 'wrong-card' | 'not-ready' | 'not-cleared'
     this.reason = reason;
   }
 }
@@ -155,6 +169,47 @@ export async function waitForBenchPlayback({
   }
 }
 
+// After POST /api/clear-project the card reboots into the blank factory phase
+// with its WiFi kept. This waits until the card ITSELF answers as blank, so a
+// retried discovery install never races the reboot. Same polling contract as
+// waitForBenchPlayback: reads that throw are the card still restarting and
+// count only against the deadline.
+export async function waitForClearedCard({
+  host,
+  transport = canPushDirectlyToCard() ? 'direct' : 'bridge',
+  fetchImpl,
+  expectedCard = readPersistedCardIdentity(),
+  statusImpl = readCardStatusEnvelope,
+  waitImpl = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  now = () => Date.now(),
+  pollIntervalMs = BENCH_READY_POLL_INTERVAL_MS,
+  timeoutMs = BENCH_READY_TIMEOUT_MS,
+} = {}) {
+  const deadline = now() + timeoutMs;
+  for (;;) {
+    await waitImpl(pollIntervalMs);
+    let readiness = null;
+    try {
+      const status = await statusImpl({
+        host,
+        transport,
+        timeoutMs: BENCH_READY_STATUS_TIMEOUT_MS,
+        fetchImpl,
+      });
+      readiness = classifyCardReadiness(status || {}, { expectedCard });
+    } catch {
+      /* still rebooting — keep waiting until the deadline */
+    }
+    if (readiness?.state === 'blank') return readiness;
+    if (readiness?.state === 'identity-mismatch') {
+      throw new BenchInstallError('wrong-card', 'A different Lightweaver card answered at this address, so discovery stopped.');
+    }
+    if (now() >= deadline) {
+      throw new BenchInstallError('not-cleared', BENCH_INSTALL_CLEARED_TIMEOUT_MESSAGE);
+    }
+  }
+}
+
 /**
  * Install the bench config and return only once the card can actually play.
  *
@@ -171,6 +226,12 @@ export async function installBenchConfig({
   config,
   flowId,
   initial = false,
+  // What Studio already knew about the card BEFORE this write: true when the
+  // live status showed a project (projectId, knownGoodProject, or the new
+  // firmware's provisionalSetup claim). A staged answer on such a card means
+  // "the card is protecting an existing layout", not "the firmware is too old"
+  // — the two need opposite advice (ui-repair B0).
+  cardShowsProject = false,
   direct = canPushDirectlyToCard(),
   fetchImpl,
   guardImpl = guardDirectCardMutation,
@@ -189,6 +250,9 @@ export async function installBenchConfig({
     : await postBenchConfigOverBridge({ host, config, flowId, initial, authorizeImpl, bridgeRequestImpl });
 
   if (benchConfigWasStaged(response)) {
+    if (cardShowsProject) {
+      throw new BenchInstallError('staged-existing-project', BENCH_INSTALL_EXISTING_PROJECT_MESSAGE);
+    }
     throw new BenchInstallError('staged', BENCH_INSTALL_STAGED_MESSAGE);
   }
 

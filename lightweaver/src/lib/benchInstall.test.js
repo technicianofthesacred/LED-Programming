@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  BENCH_INSTALL_EXISTING_PROJECT_MESSAGE,
   BENCH_INSTALL_STAGED_MESSAGE,
   BenchInstallError,
   benchConfigWasStaged,
   installBenchConfig,
   waitForBenchPlayback,
+  waitForClearedCard,
 } from './benchInstall.js';
 
 const HOST = 'lightweaver.local';
@@ -324,4 +326,88 @@ test('a blank card that cannot prove itself over the bridge is refused before an
     error => error.reason === 'authority',
   );
   assert.equal(bridge.calls.length, 0);
+});
+
+test('a staged answer on a card that showed a project blames the project, not the firmware', async () => {
+  // ui-repair B0: the observed misdiagnosis. The card held the bench project
+  // from an earlier run, staged the new config as a wiring change, and Studio
+  // told the owner to reflash — which cannot help.
+  const bridge = recordingBridge({ ok: true, state: 'staged', activationId: 'act-3', requiresReboot: false, requiresConfirmation: true });
+  let rebooted = 0;
+  let waited = 0;
+  await assert.rejects(
+    () => installBenchConfig({
+      host: HOST,
+      config: CONFIG,
+      flowId: 'discoveryabc',
+      initial: true,
+      direct: false,
+      cardShowsProject: true,
+      authorizeImpl: () => ({ ok: true }),
+      bridgeRequestImpl: bridge.impl,
+      rebootImpl: async () => { rebooted += 1; },
+      waitForPlaybackImpl: async () => { waited += 1; },
+    }),
+    error => {
+      assert.ok(error instanceof BenchInstallError);
+      assert.equal(error.reason, 'staged-existing-project');
+      assert.equal(error.message, BENCH_INSTALL_EXISTING_PROJECT_MESSAGE);
+      assert.doesNotMatch(error.message, /firmware/i, 'the wrong diagnosis was the bug: no firmware advice here');
+      return true;
+    },
+  );
+  assert.equal(rebooted, 0);
+  assert.equal(waited, 0);
+});
+
+test('waitForClearedCard resolves once the card itself answers as blank', async () => {
+  const clock = fakeClock();
+  let calls = 0;
+  const readiness = await waitForClearedCard({
+    host: HOST,
+    transport: 'direct',
+    expectedCard: null,
+    statusImpl: async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('rebooting');
+      if (calls === 2) return readyStatus();
+      return blankStatus();
+    },
+    waitImpl: clock.wait,
+    now: clock.now,
+  });
+  assert.equal(readiness.state, 'blank');
+  assert.equal(calls, 3, 'a throwing read and a still-project read both keep waiting');
+});
+
+test('waitForClearedCard is bounded and honest when the card never comes back blank', async () => {
+  const clock = fakeClock();
+  await assert.rejects(
+    () => waitForClearedCard({
+      host: HOST,
+      transport: 'direct',
+      expectedCard: null,
+      statusImpl: async () => readyStatus(),
+      waitImpl: clock.wait,
+      now: clock.now,
+      pollIntervalMs: 750,
+      timeoutMs: 3000,
+    }),
+    error => error.reason === 'not-cleared',
+  );
+});
+
+test('waitForClearedCard stops immediately when a different card answers', async () => {
+  const clock = fakeClock();
+  await assert.rejects(
+    () => waitForClearedCard({
+      host: HOST,
+      transport: 'direct',
+      expectedCard: { id: 'lw-owner-9' },
+      statusImpl: async () => blankStatus(),
+      waitImpl: clock.wait,
+      now: clock.now,
+    }),
+    error => error.reason === 'wrong-card',
+  );
 });

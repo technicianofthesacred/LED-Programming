@@ -16,6 +16,7 @@ import { prepareCardDeployment } from '../lib/cardDeployment.js';
 import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
 import { readCardProjectEvidence, readCardStatusEnvelope } from '../lib/cardPushClient.js';
 import { recoverCardLights } from '../lib/cardLiveControl.js';
+import { clearCardProject } from '../lib/cardClearProject.js';
 import {
   cardProjectFingerprint,
   cardProjectId,
@@ -25,6 +26,13 @@ import {
   sameCardResolutionContext,
 } from '../lib/cardProjectResolver.js';
 import { normalizeCardHost } from '../lib/cardConnection.js';
+import { BENCH_PROJECT_ID } from '../lib/benchConfig.js';
+import { STRIP_DISCOVERY_LABEL } from '../lib/cardAction.js';
+
+// navigateStudio (the `go` prop) takes a bare screen key, not the `screen=…`
+// hash fragment that STRIP_DISCOVERY_ROUTE holds — passing the fragment fell
+// through normalizeView() and silently landed on Layout.
+const STRIP_DISCOVERY_VIEW = 'discovery';
 import { classifyCardReadiness } from '../lib/cardReadiness.js';
 import {
   clearCardEditAuthorization,
@@ -136,6 +144,13 @@ function CardOverview({
     state === 'connected-direct' || state === 'connected-bridge'
   ));
   const blankCard = verifiedTransport && cardLink?.cardBlank === true;
+  // Prefer the card's own claim: new firmware reports provisionalSetup on
+  // /api/status when the stored config carries "provisional": true
+  // (cardLink.readiness is the raw status envelope). Older firmware never
+  // sends the field, so the projectId string match stays as the fallback that
+  // recognizes bench configs written before the flag existed (finding #5).
+  const benchProject = cardLink?.readiness?.provisionalSetup === true
+    || cardLink?.readiness?.projectId === BENCH_PROJECT_ID;
   let currentProjectInstallable = false;
   try {
     prepareCardStoragePayload(prepareCardDeployment(currentProject).runtimePackage);
@@ -213,9 +228,17 @@ function CardOverview({
   } else if (blankCard) {
     presentation = {
       tone: 'failure',
-      message: 'Blank — load a project before using this card.',
-      primary: { label: 'Install current project', section: 'settings', disabled: !currentProjectInstallable },
-      secondary: { label: 'Start a new project', action: 'new-project' },
+      message: 'Blank — load a project, or find this card’s strips first.',
+      primary: { label: STRIP_DISCOVERY_LABEL, action: 'discovery' },
+      secondary: { label: 'Install current project', section: 'settings', disabled: !currentProjectInstallable },
+      tertiary: { label: 'Start a new project', action: 'new-project' },
+    };
+  } else if (ready && benchProject) {
+    presentation = {
+      tone: 'connecting',
+      message: `${identity || 'A Lightweaver card'} is connected, but it is running the temporary Find-my-strips setup — not one of your projects. Install your project to replace it, run Find my strips again, or use Clear temporary setup under Checks & recovery below.`,
+      primary: { label: 'Install on card', section: 'settings' },
+      secondary: { label: STRIP_DISCOVERY_LABEL, action: 'discovery' },
     };
   } else if (ready) {
     presentation = {
@@ -228,6 +251,18 @@ function CardOverview({
       tone: 'connecting',
       message: 'Checking card. Studio is waiting for complete identity, project, and command readiness evidence.',
       primary: { label: 'Checking card', disabled: true },
+      secondary: { label: 'Open support', section: 'support' },
+    };
+  } else if (reason === 'found-unpaired') {
+    const foundProjectId = cardLink?.discoveredCard?.projectId || '';
+    presentation = {
+      tone: 'disconnected',
+      message: foundProjectId === BENCH_PROJECT_ID
+        ? 'Lightweaver found — it is holding an unfinished Find my strips setup, not one of your projects. Tap Connect to pair, then finish setup or install your project.'
+        : foundProjectId
+          ? `Lightweaver found running “${foundProjectId}” — tap Connect to pair.`
+          : 'Lightweaver found — tap Connect to pair.',
+      primary: { label: 'Connect card', action: 'connect' },
       secondary: { label: 'Open support', section: 'support' },
     };
   } else if (reason && reason !== 'never-connected') {
@@ -287,10 +322,33 @@ function CardOverview({
       requireExactReadyStatus(await readCardStatusEnvelope({ host: cardLink?.host || cardHost }));
       setHardwareActionState({
         status: 'ok',
-        message: `Recovery command ${response?.restarted ? 'survived restart and was' : 'was'} acknowledged with ready-state readback. Check the real LEDs; visible warm white is not confirmed automatically.`,
+        // On a bench card the honest headline is what did NOT change: leading
+        // with "acknowledged" read as success while the thing the owner wanted
+        // fixed stayed broken (ui-repair B4).
+        message: benchProject
+          ? 'The lights were recovered to warm white, but that is all this did: the card is still running the temporary Find-my-strips setup and will return to it after a restart. Use Clear temporary setup below to actually remove it, or install your project to replace it.'
+          : `Recovery command ${response?.restarted ? 'survived restart and was' : 'was'} acknowledged with ready-state readback. Check the real LEDs; visible warm white is not confirmed automatically.`,
       });
     } catch (error) {
       setHardwareActionState({ status: 'error', message: error?.message || 'Recovery was not verified. Keep the card powered, reconnect, and retry.' });
+    }
+  };
+  // The non-destructive way off a stranded Find-my-strips bench project:
+  // clears only the temporary setup (the card keeps its WiFi and name), then
+  // the card reboots blank and the ordinary blank-card flow takes over. No
+  // browser confirm dialog: the temporary setup contains nothing the owner
+  // made, and the firmware itself demands the CLEAR token before acting.
+  const clearTemporarySetup = async () => {
+    if (hardwareActionState.status === 'loading') return;
+    setHardwareActionState({ status: 'loading', message: 'Clearing the temporary Find-my-strips setup…' });
+    try {
+      await clearCardProject({ host: cardLink?.host || cardHost });
+      setHardwareActionState({
+        status: 'ok',
+        message: 'The temporary setup was cleared. The card kept its WiFi and is restarting blank — reconnect in a few seconds, then install your project or run Find my strips.',
+      });
+    } catch (error) {
+      setHardwareActionState({ status: 'error', message: error?.message || 'The card did not confirm the clear. Keep it powered, reconnect, and try again.' });
     }
   };
   const loadMatchingCardProject = useCallback(async ({ probeOnly = false, selectionKey = '', autoIntent = '', probeSignature = '' } = {}) => {
@@ -681,6 +739,8 @@ function CardOverview({
       disabled={action.disabled}
       onClick={() => action.action === 'connect'
         ? openConnection()
+        : action.action === 'discovery'
+          ? go(STRIP_DISCOVERY_VIEW)
         : action.action === 'new-project'
           ? onStartNewProject?.()
         : action.view
@@ -722,12 +782,14 @@ function CardOverview({
         ) : ready && activity === 'idle' ? (
           <>
             {renderAction(presentation.primary, true)}
+            {renderAction(presentation.secondary)}
             <button type="button" className="btn" onClick={() => onOpenSection('install')}>Check for update</button>
           </>
         ) : (
           <>
             {renderAction(presentation.primary, true)}
             {renderAction(presentation.secondary)}
+            {renderAction(presentation.tertiary)}
           </>
         )}
       </div>
@@ -779,6 +841,9 @@ function CardOverview({
           <div className="card-overview-actions">
             <button type="button" className="btn" disabled={hardwareActionState.status === 'loading'} onClick={() => void verifyHardware()}>Verify hardware</button>
             <button type="button" className="btn" disabled={hardwareActionState.status === 'loading'} onClick={() => void recoverLights()}>Recover lights</button>
+            {benchProject && (
+              <button type="button" className="btn" disabled={hardwareActionState.status === 'loading'} onClick={() => void clearTemporarySetup()}>Clear temporary setup</button>
+            )}
             <button type="button" className="btn" onClick={() => { window.location.hash = '#screen=card&section=settings&tool=color-order'; }}>Color-order test</button>
           </div>
           {hardwareActionState.message && (

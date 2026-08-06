@@ -19,7 +19,8 @@ import {
   isBenchProjectEvidence,
 } from './benchConfig.js';
 import { CARD_HARDWARE_CONTRACT } from './cardHardwareContract.js';
-import { CARD_CONFIG_STORAGE_LIMIT_BYTES } from './cardStoragePayload.js';
+import { makeCardRuntimePackage } from './cardRuntimeContract.js';
+import { CARD_CONFIG_STORAGE_LIMIT_BYTES, prepareCardStoragePayload } from './cardStoragePayload.js';
 import { PORT_ROLE_CONTROL, PORT_ROLE_STRIP, PORT_ROLE_UNUSED } from './portRoles.js';
 
 const PINS = CARD_HARDWARE_CONTRACT.outputPins;
@@ -313,4 +314,43 @@ test('defaults are WS2812B / GRB', () => {
   const { config } = buildBenchConfig(stripRoles({ [SAFE_PINS[0]]: 12 }), { maxPixels: 1024 });
   assert.equal(config.led.type, 'WS2812B');
   assert.equal(config.led.colorOrder, 'GRB');
+});
+
+test('the bench config is marked provisional and the flag survives compaction to the wire', () => {
+  // buildBenchConfig returns the POST-COMPACTION config (it runs
+  // prepareCardStoragePayload internally), so this asserts the flag on the
+  // exact object installBenchConfig serializes to POST /api/config.
+  const { config } = buildBenchConfig(stripRoles({ [SAFE_PINS[0]]: 48 }), { maxPixels: 1024 });
+  assert.equal(config.provisional, true);
+  assert.equal(JSON.parse(JSON.stringify(config)).provisional, true);
+});
+
+test('a real project package never carries the provisional flag', () => {
+  // A real project marked provisional would boot DARK on new firmware — the
+  // flag must be strictly opt-in and strictly boolean true.
+  const pkg = makeCardRuntimePackage({
+    projectId: 'lwproj-real-project',
+    projectName: 'Real Project',
+    led: { pixels: 44 },
+  });
+  assert.equal(Object.hasOwn(pkg.config, 'provisional'), false);
+  const { config } = prepareCardStoragePayload(pkg);
+  assert.equal(Object.hasOwn(config, 'provisional'), false);
+
+  for (const junk of [false, 'true', 1, null]) {
+    const tainted = makeCardRuntimePackage({
+      projectId: 'lwproj-real-project',
+      projectName: 'Real Project',
+      provisional: junk,
+      led: { pixels: 44 },
+    });
+    assert.equal(Object.hasOwn(tainted.config, 'provisional'), false, `provisional=${JSON.stringify(junk)} must be dropped`);
+  }
+});
+
+test('isBenchProjectEvidence honours the card-reported provisionalSetup claim', () => {
+  assert.equal(isBenchProjectEvidence({ provisionalSetup: true, projectId: 'lwproj-real' }), true);
+  assert.equal(isBenchProjectEvidence({ provisionalSetup: false, projectId: 'lwproj-real' }), false);
+  assert.equal(isBenchProjectEvidence({ provisionalSetup: 'yes', projectId: 'lwproj-real' }), false);
+  assert.equal(isBenchProjectEvidence({ provisionalSetup: true }), true);
 });

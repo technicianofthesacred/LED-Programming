@@ -1451,6 +1451,99 @@ test('Card overview distinguishes checking, blank, and ready evidence', async ({
   await expect(page.getByTestId('card-detected-state')).toContainText('ready for light check');
 });
 
+test('Card overview flags the temporary bench discovery project and offers Find my strips', async ({ page }) => {
+  const status = readyStatus('lw-bench-card', {
+    projectId: 'lightweaver-bench-discovery-v1',
+    projectRevision: 1,
+    projectFingerprint: 'f'.repeat(16),
+  });
+  await page.addInitScript(identity => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify(identity));
+  }, { version: 1, id: 'lw-bench-card', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) });
+  await page.route('**/api/**', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(status),
+  }));
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('heading', { name: 'Your Lightweaver hardware' })).toBeVisible();
+  await dispatchCardLink(page, [{
+    type: 'direct-status', connected: true, host: 'lightweaver.local',
+    card: { id: 'lw-bench-card', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) },
+    expectedCard: { id: 'lw-bench-card', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) },
+    readiness: status,
+  }]);
+
+  await expect(page.getByTestId('card-detected-state')).toContainText('temporary Find-my-strips setup');
+  // The card is not presented as a commissioned project…
+  await expect(page.getByTestId('card-detected-state')).not.toContainText('ready for light check');
+  // …and discovery is one tap away without the connection popover.
+  await page.getByRole('button', { name: 'Find my strips', exact: true }).click();
+  await expect(page).toHaveURL(/#screen=discovery/);
+});
+
+test('an unpaired card running the bench discovery project is flagged before pairing', async ({ page }) => {
+  const strandedCard = readyStatus('lw-stranded-card', {
+    projectId: 'lightweaver-bench-discovery-v1',
+    projectRevision: 1,
+    projectFingerprint: 'f'.repeat(16),
+    bootId: 'boot-stranded-1',
+  });
+  await page.route('http://lightweaver.local/api/status', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(strandedCard),
+  }));
+  await page.route('http://lightweaver.local/api/firmware-info', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(strandedCard),
+  }));
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  // No persisted pairing: this origin has never adopted a card.
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('heading', { name: 'Your Lightweaver hardware' })).toBeVisible();
+
+  const detected = page.getByTestId('card-detected-state');
+  await expect(detected).toContainText('unfinished Find my strips setup', { timeout: 15000 });
+  await expect(detected).toContainText(/connect to pair/i);
+});
+
+test('a bench card offers Clear temporary setup and posts the confirmation token', async ({ page }) => {
+  // provisionalSetup:true is the NEW firmware claim; the projectId fallback is
+  // covered by the bench-overview test above, which omits the field entirely.
+  const status = readyStatus('lw-bench-card', {
+    projectId: 'lightweaver-bench-discovery-v1',
+    projectRevision: 1,
+    projectFingerprint: 'f'.repeat(16),
+    provisionalSetup: true,
+  });
+  const clears: string[] = [];
+  await page.addInitScript(identity => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify(identity));
+  }, { version: 1, id: 'lw-bench-card', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) });
+  await page.route('**/api/**', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(status),
+  }));
+  // Registered after the generic route so it takes precedence for this path.
+  await page.route('**/api/clear-project', route => {
+    clears.push(route.request().postData() || '');
+    return route.fulfill({
+      status: 202, contentType: 'application/json',
+      body: JSON.stringify({ ok: true, accepted: true, wifiPreserved: true, requiresReboot: true }),
+    });
+  });
+  await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('heading', { name: 'Your Lightweaver hardware' })).toBeVisible();
+  await dispatchCardLink(page, [{
+    type: 'direct-status', connected: true, host: 'lightweaver.local',
+    card: { id: 'lw-bench-card', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) },
+    expectedCard: { id: 'lw-bench-card', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) },
+    readiness: status,
+  }]);
+
+  await expect(page.getByTestId('card-detected-state')).toContainText('temporary Find-my-strips setup');
+  await page.getByRole('button', { name: 'Clear temporary setup', exact: true }).click();
+  await expect.poll(() => clears.length).toBe(1);
+  expect(JSON.parse(clears[0])).toEqual({ confirm: 'CLEAR' });
+  await expect(page.getByText(/temporary setup was cleared/i)).toBeVisible();
+});
+
 test('reachable recovering factory card uses URL IP and offers blank setup without automatic writes', async ({ page }) => {
   const cardId = 'lw-b0fe81f61b44';
   const buildId = '19369537be823b74362896fdadd32b8182f27417';
