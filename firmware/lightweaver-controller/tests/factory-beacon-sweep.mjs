@@ -52,6 +52,13 @@ function sliceFunction(source, signature) {
 const extracted = [
   sliceFunction(main, 'bool setupFactoryBeaconOutputs('),
   sliceFunction(main, 'void showFactoryBeaconFrame('),
+  // The owner-facing port probe. Pinning steers the SAME frame function the
+  // sweep uses, so it is sliced in here rather than tested separately: the whole
+  // risk is that pinning and sweeping disagree about which buffer slice belongs
+  // to which GPIO, and that can only show up when both run against one buffer.
+  sliceFunction(main, 'bool runtimeBeaconPinPort('),
+  sliceFunction(main, 'void runtimeBeaconReleasePort('),
+  sliceFunction(main, 'bool runtimeBeaconPortsAvailable('),
 ].join('\n\n');
 
 // The stock control assignment is the premise of the first scenario below. If
