@@ -102,7 +102,10 @@ void scheduleApTeardown(uint32_t generation);
 // card silently drop the whole frame; pre-v1 firmware sends no version at all
 // and Studio treats it as 0 (legacy). The bridge script strings below splice
 // String(LW_BRIDGE_VERSION) in, so this constant is the single source of truth.
-constexpr int LW_BRIDGE_VERSION = 3;
+// v4 adds 'beacon-ports' / 'beacon-port': the blank-card port probe, which lets
+// Studio ask ONE named port to light instead of making the owner wait for the
+// sweep to reach it. Studio feature-detects, so a v3 card simply offers no grid.
+constexpr int LW_BRIDGE_VERSION = 4;
 
 String apSsid() {
   uint64_t mac = ESP.getEfuseMac();
@@ -361,6 +364,12 @@ String studioBridgeScript() {
                 "try{let response=null;"
                   "if(m.type==='status'||m.type==='ping'){response=await get('/api/status')}"
                   "else if(m.type==='zones'){response=await get('/api/zones')}"
+                  // Blank-card port probe. GET lists the ports this card can light;
+                  // POST pins one so the owner can ask a named port directly instead
+                  // of waiting for the sweep to reach it. Relayed because the HTTPS
+                  // Studio can only reach the card through this page.
+                  "else if(m.type==='beacon-ports'){response=await get('/api/beacon/port')}"
+                  "else if(m.type==='beacon-port'){response=await post('/api/beacon/port',m.payload||{})}"
                   "else if(m.type==='firmware-info'){response=await get('/api/firmware-info')}"
                   "else if(m.type==='wifi-handoff-ack'){response=await lwRelayWifiHandoffAck(ev)}"
                   "else if(m.type==='frame'){const sent=lwFrameSend(m.payload||{});response={ok:true,relayed:sent.relayed,wsOpen:!!(lwFrameWs&&lwFrameWs.readyState===1),reason:sent.reason}}"
@@ -2120,6 +2129,75 @@ void handleZones() {
   server.send(200, "application/json", runtimeZonesJson());
 }
 
+// GET  -> which ports this card can light right now.
+// POST -> light ONE of them, or {"release":true} to hand the card back to the
+//         sweep. Answers the owner's actual question: "is my strip on port 18?"
+//
+// Deliberately NOT behind provisioningControlAdmitted, unlike /api/identify and
+// /api/control. Those drive an owner's configured project and must refuse a card
+// that is not ready. This drives nothing but the factory beacon's own bench-safe
+// slices on a card that HAS no project — refusing it here would mean the probe
+// is available only on cards that never need it. runtimeBeaconPinPort itself
+// refuses unless the card is in beacon mode with outputs bound, so a configured
+// card cannot be steered through this path.
+void handleBeaconPort() {
+  sendCors();
+  if (server.method() == HTTP_GET) {
+    uint8_t gpios[LW_APPROVED_OUTPUT_GPIO_COUNT] = {};
+    uint8_t count = 0;
+    bool available = runtimeBeaconPortsAvailable(gpios, sizeof(gpios), count);
+    JsonDocument doc;
+    doc["ok"] = true;
+    doc["available"] = available;
+    doc["pixelsPerPort"] = LW_FACTORY_BEACON_PIXEL_LIMIT;
+    JsonArray ports = doc["ports"].to<JsonArray>();
+    for (uint8_t i = 0; i < count; i++) ports.add(gpios[i]);
+    String body;
+    serializeJson(doc, body);
+    server.send(200, "application/json", body);
+    return;
+  }
+
+  JsonDocument doc;
+  if (server.hasArg("plain") && server.arg("plain").length()) {
+    DeserializationError parseError = deserializeJson(doc, server.arg("plain"));
+    if (parseError) {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"beacon port body is not valid JSON\"}");
+      return;
+    }
+  }
+  if (doc["release"] | false) {
+    runtimeBeaconReleasePort();
+    server.send(200, "application/json", "{\"ok\":true,\"pinned\":false}");
+    return;
+  }
+  long requested = doc["gpio"] | -1L;
+  if (requested < 0 || requested > UINT8_MAX) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"beacon port requires a gpio\"}");
+    return;
+  }
+  uint16_t litPixels = 0;
+  if (!runtimeBeaconPinPort(static_cast<uint8_t>(requested), litPixels)) {
+    // 409 rather than 400: the request is well formed, the card just cannot
+    // drive that port right now — either it is configured (so the beacon is not
+    // running) or a control has claimed the pin.
+    server.send(409, "application/json",
+                "{\"ok\":false,\"error\":\"this card cannot light that port right now\"}");
+    return;
+  }
+  JsonDocument out;
+  out["ok"] = true;
+  out["pinned"] = true;
+  out["gpio"] = requested;
+  out["litPixels"] = litPixels;
+  // Studio re-asserts before this lapses while its grid is open, so a closed tab
+  // returns the card to advertising itself instead of sitting on one port.
+  out["holdMs"] = LW_FACTORY_BEACON_PIN_HOLD_MS;
+  String body;
+  serializeJson(out, body);
+  server.send(200, "application/json", body);
+}
+
 void handleFactoryReset() {
   sendCors();
   // Require a confirmation token in the body so this can't fire from a
@@ -2756,6 +2834,9 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   server.on("/api/patterns", HTTP_GET, handlePatterns);
   server.on("/api/zones", HTTP_OPTIONS, handleOptions);
   server.on("/api/zones", HTTP_GET, handleZones);
+  server.on("/api/beacon/port", HTTP_OPTIONS, handleOptions);
+  server.on("/api/beacon/port", HTTP_GET, handleBeaconPort);
+  server.on("/api/beacon/port", HTTP_POST, handleBeaconPort);
 
   // Pretend-WLED JSON API — lets the existing designer's WLED bar +
   // DevicesPanel + live-frame push path talk to the card without changes.

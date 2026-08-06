@@ -31,6 +31,12 @@ constexpr uint32_t LW_FACTORY_BEACON_STEADY_ON_MS = 600;
 constexpr uint32_t LW_FACTORY_BEACON_SECOND_ON_START_MS = 800;
 constexpr uint32_t LW_FACTORY_BEACON_SECOND_ON_END_MS = 1200;
 constexpr uint32_t LW_FACTORY_BEACON_SAFETY_POLL_MS = 100;
+// How long the beacon stays pointed at one owner-chosen port before resuming the
+// sweep. A pin is a held request, not a mode: if Studio closes or the owner walks
+// away, the card must go back to advertising itself rather than sitting on one
+// port looking like a fault. Studio re-asserts while its port grid is open, so
+// this only has to outlast a poll interval, not a work session.
+constexpr uint32_t LW_FACTORY_BEACON_PIN_HOLD_MS = 20000;
 
 enum class ProvisioningPhase : uint8_t {
   Factory = 0,

@@ -40,6 +40,12 @@ CRGB physicalLeds[LW_BEACON_BUFFER_PIXELS];
 bool ledOutputsReady = false;
 uint8_t factoryBeaconSteps[LW_APPROVED_OUTPUT_GPIO_COUNT] = {};
 uint8_t factoryBeaconStepCount = 0;
+uint8_t factoryBeaconPinnedStep = UINT8_MAX;
+uint32_t factoryBeaconPinExpiresAtMs = 0;
+// The probe refuses unless the card is genuinely in beacon mode, so the harness
+// has to stand in for that. A configured card drives its real outputs and must
+// not be steerable through this path.
+bool factoryBeaconMode = true;
 RuntimeConfig runtimeConfig;
 bool restartTransitionPending = false;
 bool identifyActive = false;
@@ -183,8 +189,101 @@ int main(int argc, char** argv) {
   // dead, so it has to stay inside the ceiling main.cpp static_asserts.
   assert(uint32_t(factoryBeaconStepCount) * LW_FACTORY_BEACON_STEP_MS <= 45000U);
 
-  printf("factory-beacon-sweep: %u registered ports, %u beacon steps, sweep %ums\n",
+  // ── The owner-facing port probe ────────────────────────────────────────────
+  // "Click port 18, and if something is plugged into 18 it lights." The whole
+  // value is that the port the owner NAMED is the port that lights; pinning the
+  // wrong slice would tell them a strip is somewhere it is not, which is worse
+  // than the sweep it replaces.
+  uint8_t reported[LW_APPROVED_OUTPUT_GPIO_COUNT] = {};
+  uint8_t reportedCount = 0;
+  assert(runtimeBeaconPortsAvailable(reported, sizeof(reported), reportedCount));
+  std::set<uint8_t> reportedPins(reported, reported + reportedCount);
+  assert(reportedPins == registeredPins &&
+         "the grid Studio renders must be exactly the ports the card can light");
+
+  for (uint8_t pin : registeredPins) {
+    uint16_t litPixels = 0;
+    assert(runtimeBeaconPinPort(pin, litPixels) &&
+           "every port the card reports available must be pinnable");
+    assert(litPixels == LW_FACTORY_BEACON_PIXEL_LIMIT);
+
+    // Hold across several steps' worth of clock. A pinned port must stay put:
+    // if the sweep bled through, the owner would see a DIFFERENT port light and
+    // conclude their strip is on the wrong one.
+    for (uint16_t tick = 1; tick <= 4; tick++) {
+      hostNowMs = LW_FACTORY_BEACON_STEP_MS * tick + 200;
+      showFactoryBeaconFrame();
+      int slice = litSlice();
+      assert(slice >= 0 && "a pinned port must actually light");
+      const HostController* controller = controllerForSlice(slice);
+      assert(controller != nullptr && controller->pin == pin &&
+             "a pinned port must light the port the owner asked for, and only it");
+    }
+  }
+
+  // A control-claimed GPIO has no controller, so the card must say so rather
+  // than accept the click and light nothing — Studio greys the button out.
+  for (size_t index = 0; index < LW_APPROVED_OUTPUT_GPIO_COUNT; index++) {
+    uint8_t pin = LW_APPROVED_OUTPUT_GPIOS[index];
+    if (discoveryPinAvailable(pin)) continue;
+    uint16_t litPixels = 0;
+    assert(!runtimeBeaconPinPort(pin, litPixels) &&
+           "a control-claimed port must be refused, not silently accepted");
+    assert(litPixels == 0);
+  }
+  uint16_t offMenuPixels = 0;
+  assert(!runtimeBeaconPinPort(99, offMenuPixels) &&
+         "a GPIO outside the approved menu must be refused");
+
+  // Releasing hands the card straight back to advertising itself, rather than
+  // leaving it parked on one port looking like a fault.
+  {
+    uint8_t firstPin = *registeredPins.begin();
+    uint16_t litPixels = 0;
+    assert(runtimeBeaconPinPort(firstPin, litPixels));
+    runtimeBeaconReleasePort();
+    std::set<uint8_t> afterRelease;
+    for (uint16_t step = 0; step < LW_APPROVED_OUTPUT_GPIO_COUNT; step++) {
+      hostNowMs = LW_FACTORY_BEACON_STEP_MS * (step + 1) + 200;
+      showFactoryBeaconFrame();
+      int slice = litSlice();
+      assert(slice >= 0);
+      afterRelease.insert(controllerForSlice(slice)->pin);
+    }
+    assert(afterRelease == registeredPins &&
+           "releasing the pin must resume the full sweep");
+  }
+
+  // A pin that is never renewed must lapse on its own. Studio re-asserts while
+  // its grid is open; a closed tab or a walked-away owner must not leave the
+  // card pinned forever.
+  {
+    uint8_t firstPin = *registeredPins.begin();
+    uint16_t litPixels = 0;
+    hostNowMs = LW_FACTORY_BEACON_STEP_MS;
+    assert(runtimeBeaconPinPort(firstPin, litPixels));
+    // Sample points must land inside the steady-on window, so walk whole steps
+    // from a step-aligned base past the expiry. Adding the hold directly shifts
+    // the phase into the gap between the two pulses and reads as dark.
+    const uint32_t lapsedBase =
+        ((hostNowMs + LW_FACTORY_BEACON_PIN_HOLD_MS) / LW_FACTORY_BEACON_STEP_MS + 1) *
+        LW_FACTORY_BEACON_STEP_MS;
+    std::set<uint8_t> afterLapse;
+    for (uint16_t step = 0; step < LW_APPROVED_OUTPUT_GPIO_COUNT; step++) {
+      hostNowMs = lapsedBase + LW_FACTORY_BEACON_STEP_MS * step + 200;
+      showFactoryBeaconFrame();
+      int slice = litSlice();
+      assert(slice >= 0);
+      afterLapse.insert(controllerForSlice(slice)->pin);
+    }
+    assert(afterLapse == registeredPins &&
+           "an un-renewed pin must lapse back to the sweep");
+  }
+
+  printf("factory-beacon-sweep: %u registered ports, %u beacon steps, sweep %ums, "
+         "%u pinnable\n",
          unsigned(registeredPins.size()), unsigned(factoryBeaconStepCount),
-         unsigned(uint32_t(factoryBeaconStepCount) * LW_FACTORY_BEACON_STEP_MS));
+         unsigned(uint32_t(factoryBeaconStepCount) * LW_FACTORY_BEACON_STEP_MS),
+         unsigned(reportedCount));
   return 0;
 }

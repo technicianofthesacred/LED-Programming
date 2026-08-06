@@ -107,6 +107,16 @@ bool runtimeKnownGoodProject();
 // piece. Already surfaced as the 'safe-mode' state on /api/wiring/status; this
 // exposes the same truth on the status and firmware-info envelopes.
 bool runtimeSafeModeActive();
+// Blank-card port probe. Pins the beacon to one port so the owner can ask a
+// specific port "is my strip on you?" and read the answer immediately, instead
+// of waiting for the sweep to reach it. Needs no config and no reboot: every
+// available approved GPIO already holds a beacon controller. Returns false if
+// this card cannot drive that GPIO. litPixels reports how many pixels the probe
+// lights, which is the bench-safe beacon limit rather than the whole strip —
+// the card does not yet know the strip length or the supply.
+bool runtimeBeaconPinPort(uint8_t gpio, uint16_t& litPixels);
+void runtimeBeaconReleasePort();
+bool runtimeBeaconPortsAvailable(uint8_t* gpios, uint8_t capacity, uint8_t& count);
 void runtimeApplySavedConfig();
 void runtimeMarkRestartPending();
 void runtimeSetWifiTransitionPending(bool pending);

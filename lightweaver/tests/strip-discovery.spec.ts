@@ -96,7 +96,15 @@ interface FakeCard {
   booted: boolean;
   restartPending: boolean;
   statusReads: number;
+  beaconPinned: number | null;
+  beaconPins: number[];
+  beaconRefused: number[];
 }
+
+// The ports a stock card can actually light: the approved output menu minus the
+// GPIOs the default control assignment claims (4/5/6/7). Studio must render THIS
+// list, not its own hardware contract, or it offers buttons that do nothing.
+const BEACON_PORTS = [15, 16, 17, 18, 21, 38, 40, 41, 42, 47, 48];
 
 /**
  * A blank card at `lightweaver.local`.
@@ -112,6 +120,7 @@ interface FakeCard {
 async function mockBlankCard(page: any, { firmware = 'blank-applies' as CardFirmware } = {}) {
   const card: FakeCard = {
     configs: [], applied: null, reboots: 0, booted: false, restartPending: false, statusReads: 0,
+    beaconPinned: null, beaconPins: [], beaconRefused: [],
   };
   await page.route(`http://${HOST}/**`, async (route: any) => {
     const request = route.request();
@@ -140,6 +149,35 @@ async function mockBlankCard(page: any, { firmware = 'blank-applies' as CardFirm
     if (pathname === '/api/status' || pathname === '/api/firmware-info') {
       card.statusReads += 1;
       await route.fulfill({ json: card.booted ? readyStatus(card.applied, card.reboots) : blankStatus() });
+      return;
+    }
+    // The blank-card port probe. GET lists the ports this card can light; POST
+    // pins one. GPIO 4/5/6/7 are absent because the stock control assignment
+    // claims them — the card, not Studio, decides which ports exist.
+    if (pathname === '/api/beacon/port') {
+      if (request.method() === 'GET') {
+        await route.fulfill({
+          json: { ok: true, available: !card.booted, ports: BEACON_PORTS, pixelsPerPort: 8 },
+        });
+        return;
+      }
+      const body = JSON.parse(request.postData() || '{}');
+      if (body.release) {
+        card.beaconPinned = null;
+        await route.fulfill({ json: { ok: true, pinned: false } });
+        return;
+      }
+      if (!BEACON_PORTS.includes(body.gpio)) {
+        card.beaconRefused.push(body.gpio);
+        await route.fulfill({
+          status: 409,
+          json: { ok: false, error: 'this card cannot light that port right now' },
+        });
+        return;
+      }
+      card.beaconPinned = body.gpio;
+      card.beaconPins.push(body.gpio);
+      await route.fulfill({ json: { ok: true, pinned: true, gpio: body.gpio, litPixels: 8, holdMs: 20000 } });
       return;
     }
     await route.fulfill({ json: { ok: true } });
@@ -188,6 +226,72 @@ test.describe('a blank card whose firmware applies its first config', () => {
   test.beforeEach(async ({ page }) => {
     card = await mockBlankCard(page, { firmware: 'blank-applies' });
     await seedBlankCardLink(page);
+  });
+
+  // The owner usually already knows roughly where they plugged the strip in.
+  // Confirming that by waiting for the beacon sweep to reach their port means
+  // watching and trusting they read the timing right; clicking the port and
+  // looking is the same answer without the guesswork.
+  test('clicking a port lights that port, and only that port', async ({ page }) => {
+    await page.goto('/#screen=discovery', { waitUntil: 'domcontentloaded' });
+    await dispatchBlankCard(page);
+    await expect(page.getByTestId('strip-discovery')).toBeVisible();
+
+    await page.getByTestId('discovery-probe-18').click();
+    await expect(page.getByTestId('discovery-probe-18')).toHaveText('Lit — turn off');
+    await expect(page.getByTestId('discovery-probe-18')).toHaveAttribute('aria-pressed', 'true');
+    // Polled, not asserted outright: the button label reflects Studio's own
+    // state as soon as React re-renders, while the card only knows once the
+    // request lands. What matters is where the light ends up.
+    await expect.poll(() => card.beaconPinned, {
+      message: 'the card must be lighting the port the owner named',
+    }).toBe(18);
+    expect(card.beaconPins).toEqual([18]);
+
+    // Picking a different port moves the light rather than lighting both, or the
+    // owner could not tell which port answered.
+    await page.getByTestId('discovery-probe-21').click();
+    await expect(page.getByTestId('discovery-probe-21')).toHaveText('Lit — turn off');
+    await expect(page.getByTestId('discovery-probe-18')).toHaveText('Light it');
+    await expect.poll(() => card.beaconPinned).toBe(21);
+
+    // Clicking the lit port again turns it off, so a probe can be stopped
+    // without leaving the screen.
+    await page.getByTestId('discovery-probe-21').click();
+    await expect(page.getByTestId('discovery-probe-21')).toHaveText('Light it');
+    await expect.poll(() => card.beaconPinned).toBeNull();
+  });
+
+  test('the grid offers exactly the ports the card says it can light', async ({ page }) => {
+    await page.goto('/#screen=discovery', { waitUntil: 'domcontentloaded' });
+    await dispatchBlankCard(page);
+    await expect(page.getByTestId('strip-discovery')).toBeVisible();
+    await expect(page.getByTestId('discovery-probe-hint')).toBeVisible();
+
+    for (const pin of BEACON_PORTS) {
+      await expect(page.getByTestId(`discovery-probe-${pin}`)).toBeVisible();
+    }
+    // The stock controls claim 4/5/6/7. Studio must take that from the CARD, not
+    // from its own hardware contract, because the control assignment lives in
+    // the card's config and differs between cards. A button here would light
+    // nothing and read as a dead port.
+    for (const claimed of [4, 5, 6, 7]) {
+      await expect(page.getByTestId(`discovery-probe-${claimed}`)).toHaveCount(0);
+    }
+    expect(card.beaconRefused, 'Studio must never ask for a port the card excluded').toEqual([]);
+  });
+
+  test('starting the run releases the port so the card is not left pinned', async ({ page }) => {
+    await page.goto('/#screen=discovery', { waitUntil: 'domcontentloaded' });
+    await dispatchBlankCard(page);
+    await expect(page.getByTestId('strip-discovery')).toBeVisible();
+    await page.getByTestId('discovery-probe-16').click();
+    await expect.poll(() => card.beaconPinned).toBe(16);
+
+    await startDiscoveryOnGpio16(page);
+    // Once the bench config owns the outputs the beacon is no longer driving
+    // anything, so a pin left behind would be a stale claim on the card.
+    await expect.poll(() => card.beaconPinned).toBeNull();
   });
 
   test('a blank card is offered discovery, not the Layout dead end', async ({ page }) => {

@@ -6,7 +6,14 @@ import {
   benchSkipReasonText,
   buildBenchConfig,
 } from '../../lib/benchConfig.js';
+import {
+  BEACON_PIN_RENEW_MS,
+  pinBeaconPort,
+  readBeaconPorts,
+  releaseBeaconPort,
+} from '../../lib/beaconProbe.js';
 import { installBenchConfig } from '../../lib/benchInstall.js';
+import { getCardBridgeState } from '../../lib/cardBridge.js';
 import {
   normalizeCardHost,
   readStoredCardHost,
@@ -201,6 +208,84 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
     return buildBenchConfig(portRoles, { pixelsPerPort, maxPixels: cardMaxPixels });
   }, [portRoles, probeTargets, cardMaxPixels]);
 
+  // ── Port probe ─────────────────────────────────────────────────────────────
+  // Before any setup is written, the owner usually already knows roughly where
+  // they plugged the strip in. Waiting for the beacon sweep to reach that port
+  // and trusting they read the timing right is a worse way to confirm it than
+  // asking the port directly. So: click a port, the card lights it, they look.
+  //
+  // The card is the authority on which ports exist — a control pin claims its
+  // GPIO, and that assignment lives in the card's own config, so Studio's
+  // hardware contract would offer buttons this particular card cannot drive.
+  //
+  // The probe belongs to the idle screen only. Once a run starts, the bench
+  // config takes the outputs over and the beacon is no longer driving anything.
+  const phaseIsPastIdle = Boolean(session) && session.phase !== 'idle';
+  const [probePorts, setProbePorts] = useState(null);
+  const [pinnedPort, setPinnedPort] = useState(null);
+  const [probeError, setProbeError] = useState('');
+  const pinnedPortRef = useRef(null);
+  pinnedPortRef.current = pinnedPort;
+
+  useEffect(() => {
+    if (phaseIsPastIdle) return undefined;
+    let cancelled = false;
+    readBeaconPorts(host, { bridgeVersion: getCardBridgeState().version })
+      .then(result => { if (!cancelled) setProbePorts(result); })
+      // A card that cannot answer simply gets no grid; the sweep still runs and
+      // the role pickers below are unaffected.
+      .catch(() => { if (!cancelled) setProbePorts(null); });
+    return () => { cancelled = true; };
+  }, [host, phaseIsPastIdle]);
+
+  // The firmware drops a pin on its own so a closed tab cannot park the card on
+  // one port forever. Re-assert while the owner is still looking at it.
+  useEffect(() => {
+    if (pinnedPort === null) return undefined;
+    const timer = setInterval(() => {
+      pinBeaconPort(host, pinnedPort, { bridgeVersion: getCardBridgeState().version })
+        .catch(() => {});
+    }, BEACON_PIN_RENEW_MS);
+    return () => clearInterval(timer);
+  }, [host, pinnedPort]);
+
+  // Hand the card back to advertising itself the moment this screen stops
+  // asking about a port — on unmount, or once the real discovery run begins and
+  // takes the outputs over.
+  useEffect(() => () => {
+    if (pinnedPortRef.current !== null) {
+      releaseBeaconPort(host, { bridgeVersion: getCardBridgeState().version });
+    }
+  }, [host]);
+  useEffect(() => {
+    if (!phaseIsPastIdle || pinnedPortRef.current === null) return;
+    releaseBeaconPort(host, { bridgeVersion: getCardBridgeState().version });
+    setPinnedPort(null);
+  }, [phaseIsPastIdle, host]);
+
+  const probePort = useCallback(async pin => {
+    setProbeError('');
+    // Clicking the lit port again turns it off, so the owner can stop a probe
+    // without leaving the screen.
+    if (pinnedPort === pin) {
+      setPinnedPort(null);
+      await releaseBeaconPort(host, { bridgeVersion: getCardBridgeState().version });
+      return;
+    }
+    try {
+      const result = await pinBeaconPort(host, pin, { bridgeVersion: getCardBridgeState().version });
+      if (!result.ok) {
+        setProbeError(`This card cannot light GPIO ${pin} right now.`);
+        setPinnedPort(null);
+        return;
+      }
+      setPinnedPort(pin);
+    } catch (error) {
+      setProbeError(error?.message || `Studio could not reach the card to light GPIO ${pin}.`);
+      setPinnedPort(null);
+    }
+  }, [host, pinnedPort]);
+
   const noteStreamHealth = useCallback(report => {
     setStreamHealth(current => {
       const next = { ...(current || {}), ...summarizeStreamHealth(report) };
@@ -391,6 +476,19 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
             A port can carry a strip, a knob or slider, or nothing. Studio only lights the ports you
             leave set to a strip.
           </p>
+          {probePorts?.available && (
+            <p className="strip-discovery-note" data-testid="discovery-probe-hint">
+              Not sure which port your strip is on? Press <b>Light it</b> and look — the card lights
+              {' '}{probePorts.pixelsPerPort || BENCH_DEFAULT_PORT_PIXELS} LEDs on that port straight
+              away. It stays dim and short until the setup below is written, because the card does
+              not know your strip length or your power supply yet.
+            </p>
+          )}
+          {probeError && (
+            <p className="lw-card-banner is-inline" role="alert" data-testid="discovery-probe-error">
+              {probeError}
+            </p>
+          )}
           <ul className="strip-discovery-ports">
             {portRoles.map(entry => (
               <li key={entry.pin}>
@@ -403,15 +501,28 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
                     In use by the controls
                   </span>
                 ) : (
-                  <select
-                    aria-label={`${portLabel(entry)} role`}
-                    value={entry.role}
-                    onChange={event => setPortRole(entry.pin, event.target.value)}
-                  >
-                    <option value={PORT_ROLE_STRIP}>Look for a strip</option>
-                    <option value={PORT_ROLE_CONTROL}>Physical control</option>
-                    <option value={PORT_ROLE_UNUSED}>Skip</option>
-                  </select>
+                  <>
+                    {probePorts?.available && probePorts.ports.includes(entry.pin) && (
+                      <button
+                        type="button"
+                        className={`btn strip-discovery-probe${pinnedPort === entry.pin ? ' is-lit' : ''}`}
+                        data-testid={`discovery-probe-${entry.pin}`}
+                        aria-pressed={pinnedPort === entry.pin}
+                        onClick={() => probePort(entry.pin)}
+                      >
+                        {pinnedPort === entry.pin ? 'Lit — turn off' : 'Light it'}
+                      </button>
+                    )}
+                    <select
+                      aria-label={`${portLabel(entry)} role`}
+                      value={entry.role}
+                      onChange={event => setPortRole(entry.pin, event.target.value)}
+                    >
+                      <option value={PORT_ROLE_STRIP}>Look for a strip</option>
+                      <option value={PORT_ROLE_CONTROL}>Physical control</option>
+                      <option value={PORT_ROLE_UNUSED}>Skip</option>
+                    </select>
+                  </>
                 )}
               </li>
             ))}
