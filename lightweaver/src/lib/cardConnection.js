@@ -422,3 +422,76 @@ export function cardLoadMethodForProtocol(protocol = '') {
     label: 'Copy or download',
   };
 }
+
+// ── Finding a card whose address moved ───────────────────────────────────────
+//
+// Home routers hand out addresses on a lease. A card that was at .70 yesterday
+// can be at .83 today, and every remembered address then fails. Studio used to
+// read that as "there is no card here" and send the owner off to join a setup
+// hotspot that does not exist — telling them to re-do a card that is sitting on
+// their Wi-Fi working perfectly.
+//
+// The card's own name (lightweaver.local) is tried first and is the cheap answer
+// when its responder is healthy. This is the backstop for when it is not: take
+// any address the card has EVER answered on, and look across that same network.
+// It needs no router configuration and no reflash, which is the whole point.
+export const SUBNET_SWEEP_TIMEOUT_MS = 900;
+export const SUBNET_SWEEP_BATCH = 32;
+
+function subnetsFromKnownHosts(hosts = []) {
+  const seen = new Set();
+  for (const host of hosts) {
+    const match = /^(\d{1,3}\.\d{1,3}\.\d{1,3})\.(\d{1,3})$/.exec(normalizeCardHost(host));
+    if (match) seen.add(match[1]);
+  }
+  return [...seen];
+}
+
+/**
+ * Look for the card across every network it has previously answered on.
+ * Resolves with { host, status } for the first Lightweaver that answers and
+ * matches the expected card, or null.
+ */
+export async function sweepKnownSubnetsForCard({
+  expectedCard = readPersistedCardIdentity(),
+  knownHosts = [readStoredCardHost(), ...readStoredCardHostHistory()],
+  timeoutMs = SUBNET_SWEEP_TIMEOUT_MS,
+  batchSize = SUBNET_SWEEP_BATCH,
+  fetchImpl = globalThis.fetch,
+  onProgress = null,
+} = {}) {
+  const subnets = subnetsFromKnownHosts(knownHosts);
+  const expectedId = String(expectedCard?.id || '').trim().toLowerCase();
+  for (const subnet of subnets) {
+    for (let start = 1; start < 255; start += batchSize) {
+      const addresses = [];
+      for (let n = start; n < Math.min(start + batchSize, 255); n += 1) addresses.push(`${subnet}.${n}`);
+      onProgress?.(`Looking for your card on ${subnet}.x …`);
+      const hits = await Promise.all(addresses.map(async host => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const response = await fetchImpl(`${cardHostToUrl(host)}/api/status`, {
+            method: 'GET', cache: 'no-store', signal: controller.signal,
+          });
+          if (!response.ok) return null;
+          const status = await response.json();
+          if (status?.app !== 'Lightweaver') return null;
+          if (expectedId && String(status.cardId || '').trim().toLowerCase() !== expectedId) return null;
+          return { host, status };
+        } catch {
+          return null;
+        } finally {
+          clearTimeout(timer);
+        }
+      }));
+      const found = hits.find(Boolean);
+      if (found) {
+        rememberCardHost(found.host);
+        writeStoredCardHost(found.host);
+        return found;
+      }
+    }
+  }
+  return null;
+}

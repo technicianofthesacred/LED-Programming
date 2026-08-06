@@ -254,4 +254,10 @@ inline ConnectivityState advanceConnectivity(
   return next;
 }
 
+// How often the card re-announces its name on the network. The responder is
+// bound to one WiFi association and goes quiet after a reconnect; without this
+// the card is only reachable by an address its router is free to change, which
+// is what makes Studio mistake a working card for a brand-new one.
+constexpr uint32_t LW_MDNS_REANNOUNCE_MS = 120000;
+
 }  // namespace lightweaver

@@ -14,6 +14,7 @@ import { WireDiscovery } from '../wire/WireDiscovery.jsx';
 import { WiringPlanSummary } from '../wire/WiringPlanSummary.jsx';
 import { planAdjacentStripBoundary, planOutputPixelCountAdjustment } from '../../../lib/wiringChase.js';
 import { activeBoardGpios, BOARD_CONTROL_FIELDS, planBoardGpioAssignment } from '../../../lib/gpioAssignments.js';
+import { PORT_ROLE_STRIP } from '../../../lib/portRoles.js';
 import { evaluateCardInstallGate, readCardAccessLevel, readCardCommissioningVerification } from '../../../lib/cardInstallGate.js';
 import { STRIP_DISCOVERY_BLANK_MESSAGE, STRIP_DISCOVERY_LABEL, STRIP_DISCOVERY_ROUTE, needsStripDiscovery } from '../../../lib/cardAction.js';
 import { estimatePowerBudget } from '../../../lib/controllerProfiles.js';
@@ -40,7 +41,7 @@ export function WireModePanel({ state, connected, cardHost }) {
   } = state;
   const {
     wiring, updateWiring, compiledWiring, patchBoard,
-    projectId, projectName, standaloneController, setStandaloneController, confirmedCardLook,
+    projectId, projectName, standaloneController, setStandaloneController, confirmedCardLook, portRoles,
   } = useProject();
   const [mutationError, setMutationError] = useState('');
   const [showAssembly, setShowAssembly] = useState(false);
@@ -53,6 +54,28 @@ export function WireModePanel({ state, connected, cardHost }) {
   const [checkFlowOpen, setCheckFlowOpen] = useState(false);
   const stripsById = useMemo(() => new Map(strips.map(strip => [strip.id, strip])), [strips]);
   const runsById = useMemo(() => new Map(wiring.runs.map(run => [run.id, run])), [wiring.runs]);
+  // Strips the guided setup learned about from the real card: one entry per
+  // measured strip, carrying its true GPIO and light count.
+  const discoveredStripEntries = useMemo(() => (Array.isArray(portRoles) ? portRoles : [])
+    .filter(entry => entry
+      && entry.role === PORT_ROLE_STRIP
+      && Number.isInteger(entry.pin)
+      && Number.isInteger(entry.pixelCount)
+      && entry.pixelCount > 0), [portRoles]);
+  // Pair each output with a discovered strip so an owner who ran the guided
+  // card setup sees the real strip next to the drawing's plan. A discovered
+  // strip already on this output's GPIO wins; otherwise the first unmatched
+  // measured strip is the truth this output should be pointing at.
+  const discoveredByOutput = useMemo(() => {
+    const used = new Set();
+    const byOutput = new Map();
+    for (const output of wiring.outputs || []) {
+      let entry = discoveredStripEntries.find(item => item.pin === output.pin && !used.has(item.pin));
+      if (!entry) entry = discoveredStripEntries.find(item => !used.has(item.pin));
+      if (entry) { byOutput.set(output.id, entry); used.add(entry.pin); }
+    }
+    return byOutput;
+  }, [wiring.outputs, discoveredStripEntries]);
   // CardPushControl still accepts the legacy transport shape. Build that shape
   // from canonical wiring at the boundary; patchBoard is never read or mutated.
   const cardTransportBoard = useMemo(() => normalizePatchBoard({
@@ -366,6 +389,40 @@ export function WireModePanel({ state, connected, cardHost }) {
         <span className="meta">{physicalStripCount} {stripWord} · {compiledWiring.totalPixels} LEDs · from Wire</span>
       </div>
       <WiringPlanSummary wiring={wiring} strips={strips}/>
+      {discoveredByOutput.size > 0 && (
+        <section className="wire-discovered-list" aria-label="What the setup found on the card">
+          {wiring.outputs.map(output => {
+            const discovered = discoveredByOutput.get(output.id);
+            if (!discovered) return null;
+            const drawingCount = compiledWiring.ok
+              ? (compiledWiring.outputs.find(item => item.id === output.id)?.count ?? 0)
+              : 0;
+            const disagrees = output.pin !== discovered.pin || drawingCount !== discovered.pixelCount;
+            return (
+              <div key={output.id} className="wire-discovered-output">
+                <span className="wire-discovered-chip" data-testid={`wire-discovered-${discovered.pin}`}>
+                  Found on your card: GPIO {discovered.pin} · {discovered.pixelCount} light{discovered.pixelCount === 1 ? '' : 's'}
+                </span>
+                {disagrees && (
+                  <>
+                    <p className="wire-discovered-mismatch" data-testid={`wire-mismatch-${discovered.pin}`}>
+                      Your drawing says {drawingCount} lights on GPIO {output.pin}, but your strip has {discovered.pixelCount} lights on GPIO {discovered.pin}.
+                    </p>
+                    <button
+                      type="button"
+                      className="btn wire-discovered-adopt"
+                      data-testid={`wire-adopt-${discovered.pin}`}
+                      title="Point this output at the GPIO the guided setup found on the real card."
+                      data-tooltip="Point this output at the GPIO the guided setup found on the real card."
+                      onClick={() => changeOutputPin(output.id, discovered.pin)}
+                    >Use what was found</button>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </section>
+      )}
       {powerEstimate.status === 'over' && (
         <p className="lww-power-warning" role="alert">
           Needs {powerEstimate.maxAmps.toFixed(1)} A at full white — your supply is {powerSettings.psuAmps} A.

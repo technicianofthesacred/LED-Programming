@@ -2407,8 +2407,11 @@ void handleNotFound() {
 // reconnect, since the responder bound to the old association goes stale. Keeps
 // the friendly <hostname>.local plus a unique MAC-suffixed instance label so
 // discovery tools can tell two pieces apart even when hostnames collide.
+static String lastAnnouncedHostname;
+
 void announceMdns(const String& hostname) {
   static bool mdnsUp = false;
+  lastAnnouncedHostname = hostname;
   if (mdnsUp) MDNS.end();
   mdnsUp = MDNS.begin(hostname.c_str());
   if (mdnsUp) {
@@ -2906,8 +2909,24 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   // it loads, which is the only moment the list is actually needed.
 }
 
+// Home routers move a card's address on a lease, so the owner's only stable
+// handle on it is its name. The mDNS responder is bound to a particular WiFi
+// association and goes quiet after a reconnect — or simply ages out — leaving
+// <hostname>.local unresolvable while the card sits there working. Studio then
+// reads "cannot find it" as "this card is new" and sends the owner to a setup
+// hotspot that does not exist. Re-announcing on a slow timer keeps the name
+// answering for the life of the piece, which is what makes the address stop
+// mattering at all.
+static uint32_t lastMdnsAnnounceMs = 0;
+
 void handleLightweaverWeb() {
   if (dnsServerActive) dnsServer.processNextRequest();
   maintainConnectivity();
+  const uint32_t nowMs = millis();
+  if (WiFi.status() == WL_CONNECTED
+      && (lastMdnsAnnounceMs == 0 || nowMs - lastMdnsAnnounceMs >= lightweaver::LW_MDNS_REANNOUNCE_MS)) {
+    lastMdnsAnnounceMs = nowMs;
+    if (lastAnnouncedHostname.length()) announceMdns(lastAnnouncedHostname);
+  }
   server.handleClient();
 }

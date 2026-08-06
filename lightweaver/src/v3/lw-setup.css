@@ -1,0 +1,243 @@
+/* ============================================================
+   Light Weaver Setup — the guided ladder an owner meets first.
+   Styles only `.lw-setup-*` classes (markup in lw-setup.jsx);
+   colours, spacing and radii come from the shared tokens.
+   ============================================================ */
+
+.lw-setup-body { padding-bottom: 72px; }
+
+.lw-setup-intro {
+  max-width: 64ch;
+  color: var(--text-mid);
+  line-height: 1.55;
+}
+
+/* The four banners ("This card is running…") are normal support panels,
+   given a faint accent so they read as guidance rather than errors. */
+.lw-setup-banner {
+  border-color: var(--accent-line);
+  background: color-mix(in oklch, var(--accent) 6%, var(--bg-panel));
+}
+.lw-setup-banner h2 { font-size: 16px; font-weight: 620; letter-spacing: -.01em; }
+
+.lw-setup-steps { display: grid; gap: 16px; }
+
+/* ---- the numbered ladder ---- */
+.lw-setup-ladder,
+.lw-setup-list {
+  margin: 0; padding: 0; list-style: none;
+  display: grid; gap: 10px;
+}
+
+.lw-setup-step {
+  position: relative;
+  display: grid; gap: 10px;
+  justify-items: start;
+  padding: 20px 18px;
+}
+.lw-setup-step-head { display: flex; align-items: flex-start; gap: 13px; min-width: 0; }
+
+.lw-setup-marker {
+  display: grid; place-items: center;
+  min-width: 26px; height: 26px; padding: 0 6px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  color: var(--text-faint);
+  font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  transition: background .15s, border-color .15s, color .15s;
+}
+
+.lw-setup-step-text { min-width: 0; display: grid; gap: 3px; flex: 1; }
+.lw-setup-step-text strong { font-size: 14.5px; font-weight: 600; line-height: 1.3; }
+.lw-setup-step-text strong,
+.lw-setup-step-text p { margin: 0; }
+.lw-setup-step-text p { color: var(--text-lo); font-size: 12px; line-height: 1.5; }
+
+/* ---- locked / not-yet: quieter than the panels around it, never errored ---- */
+.lw-setup-step.is-locked { border-color: var(--border-hair); box-shadow: none; }
+.lw-setup-step.is-locked .lw-setup-step-text strong { color: var(--text-mid); }
+.lw-setup-step.is-locked .lw-setup-step-text p { color: var(--text-faint); }
+.lw-setup-step.is-locked .lw-setup-marker { color: var(--text-faint); }
+
+/* ---- current — the single live thing on the page ---- */
+.lw-setup-step.is-current {
+  border-color: var(--accent-line);
+  background: linear-gradient(180deg,
+    color-mix(in oklch, var(--accent) 9%, var(--bg-panel)),
+    var(--bg-panel));
+  box-shadow: 0 12px 28px -18px color-mix(in oklch, var(--accent) 60%, transparent);
+  transition: box-shadow .15s;
+}
+.lw-setup-step.is-current .lw-setup-marker {
+  background: var(--accent); border-color: var(--accent); color: var(--on-accent);
+}
+.lw-setup-step.is-current .lw-setup-step-text strong { color: var(--text-hi); font-weight: 650; }
+
+/* ---- done — settled, calm, a quiet tick ---- */
+.lw-setup-step.is-done { border-color: var(--border-hair); box-shadow: none; }
+.lw-setup-step.is-done .lw-setup-marker {
+  background: var(--ok-dim);
+  border-color: color-mix(in oklch, var(--ok) 45%, var(--border));
+  color: var(--ok);
+}
+.lw-setup-step.is-done .lw-setup-step-text strong { color: var(--text-mid); }
+
+.lw-setup-redo {
+  padding: 3px 6px; min-height: 0; margin-top: 2px;
+  font-size: 12px;
+}
+
+/* ---- open step actions ---- */
+.lw-setup-detail {
+  width: 100%;
+  display: flex; flex-direction: column; align-items: flex-start;
+  gap: 10px; margin-top: 2px;
+}
+.lw-setup-detail .lw-input {
+  width: min(200px, 100%); height: 34px; padding: 0 11px;
+  background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+  color: var(--text-hi); font-family: var(--font-mono); font-size: 13px;
+  transition: border-color .12s;
+}
+.lw-setup-detail .lw-input:focus { outline: none; border-color: var(--accent); }
+.lw-setup-detail .lw-select { height: 34px; }
+.lw-setup-detail .btn { justify-self: start; }
+
+.lw-setup-note {
+  max-width: 70ch; margin: 0;
+  color: var(--text-mid); font-size: 12px; line-height: 1.55;
+}
+/* a problem, but never an alarming red panel — a quiet danger note */
+.lw-setup-note-bad {
+  color: var(--danger);
+  padding: 9px 11px; border-radius: var(--r-sm);
+  border: 1px solid color-mix(in oklch, var(--danger) 35%, var(--border-soft));
+  background: color-mix(in oklch, var(--danger) 6%, var(--bg-panel));
+}
+
+/* ---- shortcut — an escape hatch, deliberately secondary ---- */
+.lw-setup-shortcut {
+  width: 100%;
+  display: grid; gap: 10px;
+  padding-top: 14px; margin-top: 2px;
+  border-top: 1px solid var(--border-hair);
+}
+.lw-setup-shortcut > summary {
+  width: fit-content; cursor: pointer; padding: 2px 0;
+  color: var(--text-lo); font-size: 12px; font-weight: 500;
+  border-radius: var(--r-sm);
+  transition: color .12s;
+}
+.lw-setup-shortcut > summary:hover { color: var(--text-hi); }
+.lw-setup-shortcut > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lw-setup-shortcut-grid {
+  width: 100%;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px;
+}
+.lw-setup-field { display: grid; gap: 5px; min-width: 0; }
+.lw-setup-field > span { color: var(--text-lo); font-size: 11px; font-weight: 550; }
+.lw-setup-field .lw-select,
+.lw-setup-shortcut-grid .lw-setup-count { width: 100%; height: 34px; }
+.lw-setup-shortcut-grid .lw-setup-count {
+  background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+  color: var(--text-hi); font-family: var(--font-mono); font-size: 13px; padding: 0 10px;
+}
+.lw-setup-shortcut-grid .lw-setup-count:focus { outline: none; border-color: var(--accent); }
+.lw-setup-shortcut .btn { justify-self: start; }
+
+/* ---- optional group — its own calmer group off the numbered ladder ---- */
+.lw-setup-optional {
+  display: grid; gap: 10px;
+  padding-top: 24px; border-top: 1px solid var(--border-soft);
+}
+.lw-setup-optional h2 {
+  margin: 0 0 2px; color: var(--text-lo);
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase; font-weight: 600;
+}
+.lw-setup-optional .lw-setup-step {
+  background: transparent; border: 1px dashed var(--border-soft);
+  padding: 13px 16px; gap: 2px;
+}
+.lw-setup-optional .lw-setup-step strong { font-weight: 550; }
+
+.lw-setup-skip { margin: 24px 0 0; text-align: center; }
+.lw-setup-skip .link-btn { font-size: 12px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .lw-setup-step, .lw-setup-marker, .lw-setup-step.is-current {
+    transition: none; box-shadow: none;
+  }
+}
+/* The colour step: three chips the owner drags into the order they actually see. */
+.lw-setup-chips {
+  display: flex;
+  gap: 8px;
+  list-style: none;
+  margin: 12px 0;
+  padding: 0;
+  flex-wrap: wrap;
+}
+
+.lw-setup-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  cursor: grab;
+  user-select: none;
+}
+
+.lw-setup-chip:active { cursor: grabbing; }
+
+.lw-setup-chip-label {
+  min-width: 3.5em;
+  text-align: center;
+  text-transform: capitalize;
+  font-weight: 600;
+}
+
+.lw-setup-chip.is-red .lw-setup-chip-label { color: #FF6B6B; }
+.lw-setup-chip.is-green .lw-setup-chip-label { color: #6BE39A; }
+.lw-setup-chip.is-blue .lw-setup-chip-label { color: #6BA8FF; }
+
+/* Walking the ladder: exactly one row is open, the rest are single lines. */
+.lw-setup-progress {
+  margin: 0 0 10px;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.55;
+}
+
+.lw-setup-step-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.lw-setup-step-text { flex: 1; min-width: 0; }
+
+/* A finished, collapsed step is one quiet line — no description competing with
+   the step the owner still has to do. */
+.lw-setup-step.is-done[data-open='false'] .lw-setup-step-text p { display: none; }
+.lw-setup-step.is-done[data-open='false'] { padding-top: 10px; padding-bottom: 10px; }
+
+.lw-setup-redo {
+  flex: none;
+  align-self: center;
+  opacity: 0.7;
+}
+
+.lw-setup-redo:hover { opacity: 1; }
+
+.lw-setup-step.is-open { scroll-margin-top: 80px; }
+
+/* The change link belongs at the end of the row, not beside the title. */
+.lw-setup-step .lw-setup-step-head { width: 100%; }
+.lw-setup-step .lw-setup-step-text { flex: 1 1 auto; }
+.lw-setup-step .lw-setup-redo { margin-left: auto; }
+.lw-setup-progress { margin-top: 18px; }
+

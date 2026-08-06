@@ -18,6 +18,8 @@
 // the single yes/no that proves the number is the LAST pixel and not a pixel
 // somewhere in the middle.
 
+import { COLOR_ORDERS } from './usbLedColorOrder.js';
+
 // First lit block per port. Small enough that a short strip is obvious at a
 // glance, large enough to be visible across a room.
 export const DISCOVERY_PROBE_START = 8;
@@ -474,4 +476,48 @@ export function correctFrameForChannelMap(frame, channelMap) {
     }
     return corrected;
   });
+}
+
+// ── Named colour order (bottom of ui-repair B-COLOUR) ────────────────────────
+//
+// channelMapFromProofAnswers records which SEND SLOT a value must occupy for
+// each real colour to show up on the strip. Turning that measured map back into
+// ONE of the six named COLOR_ORDERS is just the same composition inverted:
+//   - the strip maps each byte position to a physical R/G/B channel by its TRUE
+//     order T — so real colour c is driven by the byte at T.indexOf(c);
+//   - the card serializes a hex colour under the DECLARED order D, so that byte
+//     position actually carries the hex slot occupied by D[T.indexOf(c)].
+//   Predicted channelMap[c] = slot of D[T.indexOf(c)].
+// So, holding D fixed, we predict the channel map for every candidate true
+// order and return the ONE that reproduces the measurement. It is a bijection —
+// each channel map belongs to exactly one order. Sanity check: when D and T are
+// the same permutation the predicted map is the identity, which must resolve to
+// D itself.
+const COLOR_SLOT_OF_LETTER = Object.freeze({ R: 0, G: 1, B: 2 });
+
+function predictedChannelMap(declaredOrder, trueOrder) {
+  const predicted = {};
+  predicted.red = COLOR_SLOT_OF_LETTER[declaredOrder[trueOrder.indexOf('R')]];
+  predicted.green = COLOR_SLOT_OF_LETTER[declaredOrder[trueOrder.indexOf('G')]];
+  predicted.blue = COLOR_SLOT_OF_LETTER[declaredOrder[trueOrder.indexOf('B')]];
+  return predicted;
+}
+
+/**
+ * The one member of COLOR_ORDERS that makes the strip render truly, given the
+ * frames were streamed under `declaredOrder` and the proof measured the
+ * permutation described by `channelMap`. Empty string when there is no map to
+ * resolve (unknown / incomplete) or when no candidate reproduces it.
+ */
+export function namedColorOrderFromChannelMap(channelMap, declaredOrder = 'GRB') {
+  if (!channelMap || typeof channelMap !== 'object' || Array.isArray(channelMap)) return '';
+  const { red, green, blue } = channelMap;
+  if (!Number.isInteger(red) || !Number.isInteger(green) || !Number.isInteger(blue)) return '';
+  const declared = String(declaredOrder || '').toUpperCase();
+  if (!COLOR_ORDERS.includes(declared)) return '';
+  for (const candidate of COLOR_ORDERS) {
+    const predicted = predictedChannelMap(declared, candidate);
+    if (predicted.red === red && predicted.green === green && predicted.blue === blue) return candidate;
+  }
+  return '';
 }

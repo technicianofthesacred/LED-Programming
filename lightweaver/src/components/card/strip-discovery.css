@@ -1,0 +1,62 @@
+/* Find my strips — the port picker.
+   These rules used to live in the setup screen's stylesheet, which this screen
+   never loads, so the port grid rendered as a run of unstyled text. */
+
+/* Picking a port: a button that lights it, and a tick for "this is the one". */
+.strip-discovery-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 10px;
+  white-space: nowrap;
+}
+
+.strip-discovery-pick input { width: 18px; height: 18px; accent-color: #C8813F; }
+
+/* The port grid: every output the card has, as something you press. */
+.strip-discovery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.strip-discovery-port {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.strip-discovery-port:disabled { opacity: 0.35; cursor: default; }
+.strip-discovery-port:not(:disabled):hover { border-color: rgba(255, 255, 255, 0.28); }
+.strip-discovery-port.is-lit { border-color: #C8813F; background: rgba(200, 129, 63, 0.16); }
+.strip-discovery-port.is-picked .strip-discovery-port-note { color: #6BE39A; }
+.strip-discovery-port-pin { font-weight: 600; letter-spacing: 0.02em; }
+.strip-discovery-port-note { font-size: 0.75rem; opacity: 0.7; }
+.strip-discovery-port.is-selected { outline: 2px solid rgba(200, 129, 63, 0.55); outline-offset: 1px; }
+
+/* The port picker had the tick, the caption and the start button all colliding
+   on one line. Give each its own row and let the choice breathe. */
+.strip-discovery-pick-block {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(200, 129, 63, 0.35);
+  background: rgba(200, 129, 63, 0.08);
+  font-size: 1rem;
+}
+
+.strip-discovery-note { margin: 10px 0; opacity: 0.6; font-size: 0.9rem; }
+.strip-discovery-grid { margin: 14px 0 6px; }
+.strip-discovery-port { min-height: 62px; justify-content: center; }

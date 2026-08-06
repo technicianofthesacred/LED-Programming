@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   BENCH_INSTALL_EXISTING_PROJECT_MESSAGE,
   BENCH_INSTALL_STAGED_MESSAGE,
+  BENCH_INSTALL_STAGED_UNKNOWN_MESSAGE,
   BenchInstallError,
   benchConfigWasStaged,
   installBenchConfig,
@@ -81,9 +82,11 @@ test('benchConfigWasStaged recognizes the firmware envelope that means "nothing 
   assert.equal(benchConfigWasStaged(null), false);
 });
 
-test('a staged answer fails the install — it never reboots, waits, or resolves', async () => {
+test('a staged answer without any project knowledge fails with neutral advice', async () => {
   // ok:true is the whole trap: the old code checked only response.ok and
   // entered the probe phase against a card that had applied nothing.
+  // Nobody checked whether the card already held a project, so the message
+  // must not guess — and must never tell the owner to reflash (ui-repair B0).
   const bridge = recordingBridge({ ok: true, state: 'staged', activationId: 'act-1', requiresReboot: false, requiresConfirmation: true });
   let rebooted = 0;
   let waited = 0;
@@ -102,9 +105,9 @@ test('a staged answer fails the install — it never reboots, waits, or resolves
     }),
     error => {
       assert.ok(error instanceof BenchInstallError);
-      assert.equal(error.reason, 'staged');
-      assert.equal(error.message, BENCH_INSTALL_STAGED_MESSAGE);
-      assert.match(error.message, /Update the card firmware/);
+      assert.equal(error.reason, 'staged-unknown');
+      assert.equal(error.message, BENCH_INSTALL_STAGED_UNKNOWN_MESSAGE);
+      assert.doesNotMatch(error.message, /firmware/i, 'no firmware advice when nobody checked');
       return true;
     },
   );
@@ -114,7 +117,10 @@ test('a staged answer fails the install — it never reboots, waits, or resolves
   assert.equal(waited, 0, 'a staged config must never enter the ready wait');
 });
 
-test('a staged answer over direct http fails the same way', async () => {
+test('a staged answer on a card positively seen as blank still blames the firmware', async () => {
+  // The one case where old firmware really is the likely explanation: the
+  // caller established the card was blank before the write (cardShowsProject:
+  // false), so the ordinary "update the card" advice is the honest one.
   let rebooted = 0;
   let waited = 0;
   const fetchImpl = async () => ({
@@ -127,12 +133,17 @@ test('a staged answer over direct http fails the same way', async () => {
       host: HOST,
       config: CONFIG,
       direct: true,
+      cardShowsProject: false,
       fetchImpl,
       guardImpl: async () => ({ id: 'lw-bench-1' }),
       rebootImpl: async () => { rebooted += 1; },
       waitForPlaybackImpl: async () => { waited += 1; },
     }),
-    error => error.reason === 'staged',
+    error => {
+      assert.equal(error.reason, 'staged');
+      assert.equal(error.message, BENCH_INSTALL_STAGED_MESSAGE);
+      return true;
+    },
   );
   assert.equal(rebooted, 0);
   assert.equal(waited, 0);
