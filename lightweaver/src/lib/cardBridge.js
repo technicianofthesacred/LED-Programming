@@ -33,6 +33,7 @@ const PRIVILEGED_BRIDGE_TYPES = new Set([
   'control',
   'reboot',
   'recover-lights',
+  'clear-project',
   'frame',
   'wiring-candidate',
   'wiring-activate',

@@ -430,3 +430,45 @@ test('on firmware without playbackReady the playback and command gates are ident
   assert.equal(isCardLinkPlaybackReady(legacyBusy), isCardLinkConnected(legacyBusy));
   assert.equal(isCardLinkPlaybackReady(legacyBusy), false);
 });
+
+test('a remembered card whose firmware build changed offers keeping the new firmware', () => {
+  // ui-repair B1: after a bench flash the only offered action was "Update
+  // card", which re-flashes and undoes the update.
+  const action = nextCardConnectionAction({
+    intent: 'working-card',
+    link: {
+      state: 'disconnected',
+      reason: 'wrong-firmware-build',
+      discoveredCard: { id: 'lw-bench-1', buildId: 'b'.repeat(40) },
+    },
+    rememberedCard: { id: 'lw-bench-1', buildId: 'a'.repeat(40) },
+    capabilities: secureBrowserUsb,
+  });
+  assert.equal(action.id, 'needs-card-update');
+  assert.deepEqual(action.secondaryAction, {
+    id: 'trust-updated-card',
+    label: 'Keep the new firmware on this card',
+  });
+  assert.match(action.explanation, /updated or reflashed/i);
+});
+
+test('the keep-new-firmware offer never appears without an exact id match', () => {
+  for (const input of [
+    // a different physical card must never be adopted through this path
+    {
+      link: { state: 'disconnected', reason: 'wrong-firmware-build', discoveredCard: { id: 'lw-stranger' } },
+      rememberedCard: { id: 'lw-bench-1' },
+    },
+    // no discovered identity at all
+    { link: { state: 'disconnected', reason: 'wrong-firmware-build' }, rememberedCard: { id: 'lw-bench-1' } },
+    // reasons that genuinely mean old firmware keep the plain update path
+    {
+      link: { state: 'disconnected', reason: 'firmware-too-old', discoveredCard: { id: 'lw-bench-1' } },
+      rememberedCard: { id: 'lw-bench-1' },
+    },
+  ]) {
+    const action = nextCardConnectionAction({ intent: 'working-card', capabilities: secureBrowserUsb, ...input });
+    assert.equal(action.id, 'needs-card-update');
+    assert.equal(action.secondaryAction, undefined);
+  }
+});

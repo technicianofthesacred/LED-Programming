@@ -165,6 +165,12 @@ export function normalizeCardRuntimeConfig(config = {}) {
       name: String(config.piece?.name || config.projectName || 'Lightweaver Piece'),
     },
     ...projectIdentity,
+    // Emitted ONLY as the literal boolean true, and only when the caller
+    // explicitly set it (today: buildBenchConfig's bench sentinel). A real
+    // project must never carry it — new firmware holds a provisional project's
+    // internal renderer dark on an unattended boot, so a stray flag here would
+    // make a finished piece boot black. Anything but `true` is dropped.
+    ...(config.provisional === true ? { provisional: true } : {}),
     led,
     controls: normalizeControls({
       ...controls,
@@ -395,6 +401,7 @@ export function buildCardRuntimeConfig({
   projectFingerprint,
   productionJobId,
   productionJobDigest,
+  provisional,
   mode = 'factory-flash',
   led = {},
   controls = {},
@@ -413,6 +420,7 @@ export function buildCardRuntimeConfig({
     projectFingerprint,
     productionJobId,
     productionJobDigest,
+    provisional,
     led,
     controls,
     patterns,

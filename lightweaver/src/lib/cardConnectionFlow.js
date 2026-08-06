@@ -279,6 +279,27 @@ export function nextCardConnectionAction(input = {}) {
     if (capabilities.mustEscapeToSecureInstaller === true) {
       return action('escape-insecure-card-frame');
     }
+    // ui-repair B1: a remembered card whose FIRMWARE identity changed is
+    // usually a card the owner just reflashed on purpose (a bench build has a
+    // different buildId). Offering only "Update card" re-flashes and undoes
+    // that update, with no way forward. When the card at this address is
+    // provably the SAME physical card (exact id match), also offer to
+    // re-learn its new firmware — the existing re-pair path does the rest.
+    const discovered = input.discoveredCard || link.discoveredCard || null;
+    const remembered = input.rememberedCard || null;
+    if (
+      (reason === 'wrong-firmware-build' || reason === 'wrong-firmware-version')
+      && hasCardIdentity(discovered)
+      && hasCardIdentity(remembered)
+      && (discovered.id ?? discovered.cardId).trim() === (remembered.id ?? remembered.cardId).trim()
+    ) {
+      return action('needs-card-update', {
+        explanation: 'This is the card Studio remembers, but its firmware changed — usually because it '
+          + 'was just updated or reflashed. Updating from here would overwrite that firmware. '
+          + 'If the new firmware is intentional, keep it and re-pair instead.',
+        secondaryAction: { id: 'trust-updated-card', label: 'Keep the new firmware on this card' },
+      });
+    }
     return action('needs-card-update');
   }
 

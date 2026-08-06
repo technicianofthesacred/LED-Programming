@@ -42,6 +42,9 @@ constexpr const char* NVS_DISCOVERY_ACTIVE_KEY = "discoveryActive";
 constexpr const char* NVS_DISCOVERY_BATCH_KEY = "discoveryBatch";
 constexpr const char* NVS_RECOVERY_PENDING_KEY = "recoveryPending";
 constexpr const char* NVS_WIFI_KEY = "wifi";
+// Written by runtimeRename() in main.cpp with the same literal "pieceName" —
+// keep the two spellings in sync.
+constexpr const char* NVS_PIECE_NAME_KEY = "pieceName";
 constexpr const char* NVS_SD_AUTORUN_SUPPRESSED_KEY = "sdAutorunOff";
 constexpr size_t NVS_STRING_LIMIT = 3968;
 
@@ -237,6 +240,7 @@ void resetConfig(RuntimeConfig& config) {
   config.configValid = false;
   config.knownGoodProject = false;
   config.runtimePhase = ProvisioningPhase::Factory;
+  config.provisionalProject = false;
   config.pieceId = "";
   config.pieceName = "Lightweaver";
   config.projectRevision = 0;
@@ -288,6 +292,7 @@ void applyJsonToConfig(JsonDocument& doc, RuntimeConfig& config, RuntimeSource s
   config.productionJobDigest = String(doc["productionJobDigest"] | "");
   config.wiringRevision = doc["wiringRevision"] | 0U;
   config.wiringDigest = String(doc["wiringDigest"] | "");
+  config.provisionalProject = doc["provisional"] | false;
   config.startupLookId = String(doc["startupPatternId"] | doc["startupLook"] | "aurora");
 
   JsonObject led = doc["led"].as<JsonObject>();
@@ -784,6 +789,11 @@ bool validateRuntimeConfigJsonStrict(const String& json,
   }
   if (fingerprint.length() && revision.isNull()) {
     message = "project fingerprint requires a project revision";
+    return false;
+  }
+  JsonVariant provisionalValue = doc["provisional"];
+  if (!provisionalValue.isNull() && !provisionalValue.is<bool>()) {
+    message = "provisional must be a boolean";
     return false;
   }
   String productionJobId = String(doc["productionJobId"] | "");
@@ -1419,6 +1429,18 @@ void overlayNvsWifi(RuntimeConfig& config) {
   config.wifi.channel = lightweaver::normalizeWifiChannel(doc["channel"] | 0);
 }
 
+// An owner's explicit rename (POST /api/rename) persists under its own NVS
+// key. Overlaying it on a project-less boot keeps the name across
+// /api/clear-project, which erases the project JSON that normally carries
+// piece.name. Never applied over a loaded project: the project's name wins.
+void overlayNvsPieceName(RuntimeConfig& config) {
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, true)) return;
+  String savedName = prefs.getString(NVS_PIECE_NAME_KEY, "");
+  prefs.end();
+  if (savedName.length()) config.pieceName = savedName;
+}
+
 
 void setRuntimeLoadTruth(RuntimeConfig& config,
                          RuntimeLoadResult& result,
@@ -1738,6 +1760,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
 
   applyDefaultRuntimeConfig(config);
   overlayNvsWifi(config);
+  overlayNvsPieceName(config);
   ensureDefaultZone(config);
   result.ok = true;
   result.source = SOURCE_DEFAULTS;
@@ -1881,6 +1904,47 @@ bool suppressSdProjectAutorunAfterFactoryReset(String& message) {
       ? "sd project autorun suppressed until the next installed project"
       : "nvs reset marker write failed";
   return suppressed;
+}
+
+// Non-destructive escape from a bench/temporary project: erase the saved
+// project, wiring transaction, discovery, and recovery state while KEEPING
+// WiFi credentials (NVS_WIFI_KEY), the owner's rename (NVS_PIECE_NAME_KEY),
+// and the SD autorun suppression marker — none of those keys are named here,
+// so this function cannot erase them. Bootable markers are removed before the
+// project bytes: a power cut mid-clear leaves either the old consistent state
+// or a plain factory boot, never a candidate tuple with no config behind it.
+bool clearRuntimeProjectStorage(String& message) {
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    message = "nvs clear-project open failed";
+    return false;
+  }
+  bool ok = true;
+  const char* orderedKeys[] = {
+    NVS_CANDIDATE_STATE_KEY,
+    NVS_PROMOTION_ARMED_KEY,
+    NVS_DISCOVERY_ACTIVE_KEY,
+    NVS_DISCOVERY_BATCH_KEY,
+    NVS_RECOVERY_PENDING_KEY,
+    NVS_CONFIRMED_ID_KEY,
+    NVS_CANDIDATE_ID_KEY,
+    NVS_CANDIDATE_CONFIG_KEY,
+    NVS_PREVIOUS_KNOWN_GOOD_KEY,
+    NVS_LEGACY_CONFIG_KEY,
+    NVS_KNOWN_GOOD_CONFIG_KEY,
+  };
+  for (const char* key : orderedKeys) {
+    if (prefs.isKey(key) && !prefs.remove(key)) ok = false;
+  }
+  bool projectGone = !prefs.isKey(NVS_KNOWN_GOOD_CONFIG_KEY) &&
+                     !prefs.isKey(NVS_CANDIDATE_CONFIG_KEY);
+  prefs.end();
+  if (!ok || !projectGone) {
+    message = "clear-project could not remove all project keys";
+    return false;
+  }
+  message = "project cleared; wifi and piece name preserved";
+  return true;
 }
 
 bool stageRuntimeConfigJson(const String& json, String& activationId, String& message) {
@@ -2335,6 +2399,10 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["outputReady"] = runtimeOutputReady();
   doc["configValid"] = config.configValid;
   doc["knownGoodProject"] = config.knownGoodProject;
+  // True while the card is running Find-my-strips scaffolding rather than a
+  // project the owner chose — Studio reads this to say "unfinished setup"
+  // instead of presenting the bench project as commissioned.
+  doc["provisionalSetup"] = config.provisionalProject;
   // Same claim and same spelling as /api/firmware-info: a card that booted safe
   // defaults over a project it still holds must not read as factory-empty.
   doc["safeMode"] = runtimeSafeModeActive();

@@ -105,7 +105,9 @@ void scheduleApTeardown(uint32_t generation);
 // v4 adds 'beacon-ports' / 'beacon-port': the blank-card port probe, which lets
 // Studio ask ONE named port to light instead of making the owner wait for the
 // sweep to reach it. Studio feature-detects, so a v3 card simply offers no grid.
-constexpr int LW_BRIDGE_VERSION = 4;
+// v5 adds the 'clear-project' relay — the non-destructive "clear temporary
+// setup" for a card stranded on a bench-discovery project.
+constexpr int LW_BRIDGE_VERSION = 5;
 
 String apSsid() {
   uint64_t mac = ESP.getEfuseMac();
@@ -375,6 +377,10 @@ String studioBridgeScript() {
                   "else if(m.type==='frame'){const sent=lwFrameSend(m.payload||{});response={ok:true,relayed:sent.relayed,wsOpen:!!(lwFrameWs&&lwFrameWs.readyState===1),reason:sent.reason}}"
                   "else if(m.type==='control'){const c=m.payload||{};if(c.cancelStream)lwFrameCancel();response=await post('/api/control',c)}"
                   "else if(m.type==='recover-lights'){response=await post('/api/recover-lights',m.payload||{})}"
+                  // clear-project (bridge v5): the non-destructive "clear
+                  // temporary setup" relay — clears the saved project, keeps
+                  // WiFi, then the card reboots.
+                  "else if(m.type==='clear-project'){response=await post('/api/clear-project',m.payload||{})}"
                   "else if(m.type==='wiring-status'){response=await get('/api/wiring/status')}"
                   "else if(m.type==='wiring-candidate'){response=await post('/api/wiring/candidate',m.payload||{})}"
                   "else if(m.type==='wiring-activate'){response=await post('/api/wiring/activate',m.payload||{})}"
@@ -2264,6 +2270,41 @@ void handleRenamePost() {
   server.send(200, "application/json", String("{\"ok\":true,\"message\":\"") + message + "\",\"requiresReboot\":true}");
 }
 
+// Clear the saved project WITHOUT touching WiFi or the owner's rename — the
+// "clear temporary setup" Studio offers on a bench-discovery card (findings
+// 2026-08-06 #1/#5b). Same confirmation-token shape as handleFactoryReset so
+// a stray click cannot fire it; the token differs so one memorized string
+// cannot trigger both. Unauthenticated like every control endpoint — the
+// deliberate whoever-is-on-the-WiFi trust model (THINKING.md 2026-06-16) —
+// which is why the explicit token and exact-origin CORS both stay mandatory.
+void handleClearProject() {
+  sendCors();
+  if (!server.hasArg("plain")) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing confirmation\"}");
+    return;
+  }
+  JsonDocument doc;
+  if (deserializeJson(doc, server.arg("plain"))) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing confirmation\"}");
+    return;
+  }
+  String token = String(doc["confirm"] | "");
+  if (token != "CLEAR") {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing confirmation\"}");
+    return;
+  }
+  String message;
+  if (!runtimeClearProject(message)) {
+    server.send(500, "application/json", String("{\"ok\":false,\"error\":\"") + message + "\"}");
+    return;
+  }
+  server.send(202, "application/json", String("{\"ok\":true,\"accepted\":true,\"wifiPreserved\":true,\"requiresReboot\":true,\"message\":\"") +
+              message + "\"}");
+  server.client().flush();
+  delay(200);
+  ESP.restart();
+}
+
 void handleFirmwareInfo() {
   sendCors();
   // The bridge protocol version belongs to the card page's bridge script
@@ -2826,6 +2867,8 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   server.on("/api/factory-reset", HTTP_POST, handleFactoryReset);
   server.on("/api/reset-wifi", HTTP_OPTIONS, handleOptions);
   server.on("/api/reset-wifi", HTTP_POST, handleResetWifi);
+  server.on("/api/clear-project", HTTP_OPTIONS, handleOptions);
+  server.on("/api/clear-project", HTTP_POST, handleClearProject);
   server.on("/api/rename", HTTP_OPTIONS, handleOptions);
   server.on("/api/rename", HTTP_POST, handleRenamePost);
   server.on("/api/firmware-info", HTTP_OPTIONS, handleOptions);

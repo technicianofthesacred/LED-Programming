@@ -419,7 +419,16 @@ void setup() {
       if (loadResult.bootedCandidate) rollbackCandidateBeforeRestart("candidate startup frame failed");
       return;
     }
-    fadeTo(1.0f, looks[currentLookIndex].fadeInMs);
+    if (runtimeConfig.provisionalProject && !loadResult.bootedCandidate) {
+      // A provisional (Find-my-strips bench) setup must not silently relight
+      // the whole strip on an unattended boot. fadeScale stays 0: the internal
+      // renderer holds dark, while Studio streaming (external source ignores
+      // fadeScale) and the physical look buttons (selectLook -> fadeTo(1.0f))
+      // both restore light on demand.
+      fadeTo(0.0f, 0);
+    } else {
+      fadeTo(1.0f, looks[currentLookIndex].fadeInMs);
+    }
     startWiringProbation(loadResult.bootedCandidate);
 
     setupArtnet(leds, totalPixels);
@@ -2461,6 +2470,7 @@ String runtimeFirmwareInfo() {
   doc["outputReady"] = runtimeOutputReady();
   doc["configValid"] = runtimeConfigValid();
   doc["knownGoodProject"] = runtimeKnownGoodProject();
+  doc["provisionalSetup"] = runtimeConfig.provisionalProject;
   // Tells a blank-looking card that is merely UNREAD apart from one that is
   // genuinely empty. Studio gates the discovery config write on that difference.
   doc["safeMode"] = runtimeSafeModeActive();
@@ -2674,6 +2684,20 @@ void runtimeResetWifi() {
   }
   delay(200);
   ESP.restart();
+}
+
+// Clears the saved project/wiring while KEEPING WiFi credentials, hostname,
+// and any owner rename — the non-destructive way out of a stranded
+// bench-discovery project that /api/factory-reset (which wipes WiFi) is not.
+// The web handler reboots after acknowledging; the next boot lands in factory
+// phase on the same network.
+bool runtimeClearProject(String& message) {
+  runtimeMarkRestartPending();
+  if (!clearRuntimeProjectStorage(message)) {
+    restartTransitionPending = false;
+    return false;
+  }
+  return true;
 }
 
 bool runtimeRename(const String& newPieceName, const String& newHostname, String& message) {

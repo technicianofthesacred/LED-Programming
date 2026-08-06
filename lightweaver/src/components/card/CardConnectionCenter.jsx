@@ -489,6 +489,14 @@ export function CardConnectionCenter({
             {action.secondaryAction?.id === 'adopt-discovered-card' && (
               <button type="button" className="btn" onClick={useDiscoveredCard}>Use this card instead</button>
             )}
+            {action.secondaryAction?.id === 'trust-updated-card' && (
+              // Same verified adoption path as "Use this card instead": it
+              // re-reads identity at the host, re-checks full status, and only
+              // then replaces the remembered firmware identity (ui-repair B1).
+              <button type="button" className="btn" data-testid="trust-updated-card" onClick={useDiscoveredCard} disabled={pairingBusy}>
+                {pairingBusy ? 'Re-pairing…' : action.secondaryAction.label}
+              </button>
+            )}
           </div>
         </div>
       )}

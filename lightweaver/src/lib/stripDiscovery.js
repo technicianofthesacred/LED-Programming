@@ -402,3 +402,76 @@ export function totalDiscoveredPixels(session) {
   if (!session || !Array.isArray(session.ports)) return 0;
   return session.ports.reduce((total, port) => total + (port.confirmed ? port.count : 0), 0);
 }
+
+// ── Colour proof (ui-repair B-COLOUR) ────────────────────────────────────────
+//
+// On the real bench every colour the flow used as information rendered wrong —
+// warm amber came out green, magenta came out blue — because the bench config
+// guesses a channel order the strip may not have, and the counting protocol
+// reads colours off the strip. The fix never assumes any colour renders truly:
+// during the probe (where colour carries no meaning — only how FAR the light
+// reaches does) Studio lights the probe run in one pure send-channel at a time
+// and asks what colour it came out as. Two answers determine the whole
+// send-slot -> seen-colour permutation; from then on every frame is corrected
+// through that map before it is streamed, so green really means green by the
+// time the decade ruler needs it. No card write is involved, and a wrong
+// channel order cannot defeat the questions: whatever the owner sees IS the
+// measurement.
+export const DISCOVERY_CHANNEL_PROOF_COLORS = Object.freeze({
+  first: '3C0000', // only send-slot 1 lit
+  second: '003C00', // only send-slot 2 lit
+});
+
+/**
+ * The probe extent lit in one pure send-channel. Same shape and extent as the
+ * expanding probe frame, so "how far do the lights go" stays answerable while
+ * the colour is being measured.
+ */
+export function buildChannelProofFrame({ benchLayout = [], pin, litCount = 0, step = 'first' } = {}) {
+  const proofColor = DISCOVERY_CHANNEL_PROOF_COLORS[step] || DISCOVERY_CHANNEL_PROOF_COLORS.first;
+  return buildExpandingProbeFrame({ benchLayout, pin, litCount })
+    .map(color => (color === DISCOVERY_PROBE_COLOR ? proofColor : color));
+}
+
+const PROOF_COLOR_NAMES = Object.freeze(['red', 'green', 'blue']);
+
+/**
+ * What the owner saw for send-slot 1 and send-slot 2 -> the full permutation,
+ * as { red, green, blue }: which SEND SLOT (0..2) ends up rendering each real
+ * colour. Returns null when the answers cannot both be true (the same colour
+ * twice, or not a colour name) — callers re-ask instead of recording a map
+ * that lies.
+ */
+export function channelMapFromProofAnswers(seenFirst, seenSecond) {
+  if (!PROOF_COLOR_NAMES.includes(seenFirst) || !PROOF_COLOR_NAMES.includes(seenSecond)) return null;
+  if (seenFirst === seenSecond) return null;
+  const seenThird = PROOF_COLOR_NAMES.find(name => name !== seenFirst && name !== seenSecond);
+  return { [seenFirst]: 0, [seenSecond]: 1, [seenThird]: 2 };
+}
+
+/**
+ * Re-arrange every hex colour of a frame so the PHYSICAL strip shows the
+ * intended hues: the desired red amount is sent on whichever slot the proof
+ * showed to render red, and so on. A missing or identity map is a pass-through,
+ * so an unanswered or skipped proof behaves exactly like today.
+ */
+export function correctFrameForChannelMap(frame, channelMap) {
+  if (!Array.isArray(frame) || !channelMap) return frame;
+  if (channelMap.red === 0 && channelMap.green === 1 && channelMap.blue === 2) return frame;
+  const cache = new Map();
+  return frame.map(color => {
+    let corrected = cache.get(color);
+    if (corrected === undefined) {
+      const sent = [0, 0, 0];
+      sent[channelMap.red] = parseInt(color.slice(0, 2), 16) || 0;
+      sent[channelMap.green] = parseInt(color.slice(2, 4), 16) || 0;
+      sent[channelMap.blue] = parseInt(color.slice(4, 6), 16) || 0;
+      // Uppercase to match every DISCOVERY_*_COLOR constant: corrected frames
+      // are compared against them by exact string equality elsewhere, so a
+      // lowercase pair would silently stop matching.
+      corrected = sent.map(value => value.toString(16).padStart(2, '0')).join('').toUpperCase();
+      cache.set(color, corrected);
+    }
+    return corrected;
+  });
+}

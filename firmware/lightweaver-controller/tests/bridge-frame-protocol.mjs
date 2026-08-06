@@ -55,7 +55,7 @@ const web = readFileSync(resolve(here, '../src/LightweaverWeb.cpp'), 'utf8');
 const bridgeVersionMatch = web.match(/constexpr int LW_BRIDGE_VERSION = (\d+);/);
 assert.ok(bridgeVersionMatch, 'LightweaverWeb.cpp must pin the bridge protocol version constant');
 const bridgeVersion = Number(bridgeVersionMatch[1]);
-assert.equal(bridgeVersion, 4, 'the bridge protocol version should be 4 (adds the beacon port probe)');
+assert.equal(bridgeVersion, 5, 'the bridge protocol version should be 5 (adds the clear-project relay)');
 
 // Every relay type Studio can send must actually exist in the card's router,
 // or the request round-trips into an 'invalid-payload' throw the owner reads as

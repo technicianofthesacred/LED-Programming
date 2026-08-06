@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  DISCOVERY_CHANNEL_PROOF_COLORS,
   DISCOVERY_DECADE_COLOR,
   DISCOVERY_END_MARKER_COLOR,
   DISCOVERY_FIFTY_COLOR,
@@ -11,9 +12,12 @@ import {
   DISCOVERY_PROBE_COLOR,
   DISCOVERY_PROBE_START,
   advance,
+  buildChannelProofFrame,
   buildDecadeMarkerFrame,
   buildEndMarkerFrame,
   buildExpandingProbeFrame,
+  channelMapFromProofAnswers,
+  correctFrameForChannelMap,
   createStripDiscoverySession,
   discoveryFrame,
   discoveryPortRoleUpdates,
@@ -232,4 +236,38 @@ test('a long strip warns about frame rate and never blocks the flow', () => {
   state = advance(state, { type: 'end-marker-yes' });
   assert.equal(state.phase, 'record');
   assert.equal(discoveryPortRoleUpdates(state)[0].pixelCount, DISCOVERY_FRAME_RATE_WARN_PIXELS + 1);
+});
+
+test('the channel-proof frames light exactly the probe extent in one pure channel each', () => {
+  const first = buildChannelProofFrame({ benchLayout, pin: 16, litCount: 8, step: 'first' });
+  assert.deepEqual(litIndexes(first, DISCOVERY_CHANNEL_PROOF_COLORS.first), [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.equal(first.length, 1200, 'proof frames cover the whole provisioned buffer');
+  assert.equal(first[8], DISCOVERY_OFF_COLOR, 'nothing past the probe extent is lit');
+  const second = buildChannelProofFrame({ benchLayout, pin: 17, litCount: 8, step: 'second' });
+  assert.deepEqual(litIndexes(second, DISCOVERY_CHANNEL_PROOF_COLORS.second), [600, 601, 602, 603, 604, 605, 606, 607]);
+});
+
+test('two different colour answers deduce the channel map; contradictions are refused', () => {
+  assert.deepEqual(channelMapFromProofAnswers('red', 'green'), { red: 0, green: 1, blue: 2 });
+  assert.deepEqual(channelMapFromProofAnswers('green', 'red'), { green: 0, red: 1, blue: 2 });
+  assert.deepEqual(channelMapFromProofAnswers('blue', 'red'), { blue: 0, red: 1, green: 2 });
+  assert.equal(channelMapFromProofAnswers('red', 'red'), null, 'the same colour twice is impossible');
+  assert.equal(channelMapFromProofAnswers('', 'green'), null);
+  assert.equal(channelMapFromProofAnswers('red', 'purple'), null);
+});
+
+test('correctFrameForChannelMap makes the real strip show the intended hues', () => {
+  // The live case from the bench walkthrough (ui-repair B-COLOUR): warm amber
+  // rendered green and magenta rendered blue — send-slot 1 was landing on the
+  // green channel. Proof answers: slot 1 looked GREEN, slot 2 looked RED.
+  const map = channelMapFromProofAnswers('green', 'red');
+  assert.deepEqual(correctFrameForChannelMap(['281400'], map), ['142800'],
+    'true warm amber sends its red on the slot that renders red');
+  assert.deepEqual(correctFrameForChannelMap(['3C003C'], map), ['003C3C'],
+    'the end marker really comes out magenta (red + blue on the right slots)');
+  // Identity map and missing map are both exact pass-throughs.
+  assert.deepEqual(correctFrameForChannelMap(['281400'], channelMapFromProofAnswers('red', 'green')), ['281400']);
+  const frame = ['3C0000'];
+  assert.equal(correctFrameForChannelMap(frame, null), frame);
+  assert.equal(correctFrameForChannelMap(null, map), null);
 });

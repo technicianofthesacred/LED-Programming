@@ -278,6 +278,11 @@ struct RuntimeConfig {
   bool configValid = false;
   bool knownGoodProject = false;
   ProvisioningPhase runtimePhase = ProvisioningPhase::Factory;
+  // True when the loaded project JSON carried top-level "provisional": true —
+  // Find-my-strips bench scaffolding, not a project the owner chose. Stored
+  // inside the config JSON itself, so direct saves, candidate promotion, and
+  // boot parsing all preserve it without a separate NVS marker to drift.
+  bool provisionalProject = false;
   String pieceId;
   String pieceName = "Lightweaver";
   uint32_t projectRevision = 0;

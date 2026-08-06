@@ -103,6 +103,10 @@ export function benchSkipReasonText(reason) {
 
 export function isBenchProjectEvidence(evidence) {
   if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return false;
+  // The card's own claim wins when present (raw /api/status from new
+  // firmware); the projectId string match remains for older firmware and for
+  // normalized evidence objects that do not carry provisionalSetup.
+  if (evidence.provisionalSetup === true) return true;
   return evidence.projectId === BENCH_PROJECT_ID;
 }
 
@@ -204,6 +208,12 @@ export function buildBenchConfig(portRoles, {
     projectRevision: BENCH_PROJECT_REVISION,
     projectFingerprint: fingerprintCommissioningProject(snapshot),
     mode: 'website-flash',
+    // Top-level "provisional": true inside the stored config JSON marks this as
+    // Find-my-strips scaffolding, not a project the owner chose. New firmware
+    // reports it back as provisionalSetup on /api/status + /api/firmware-info
+    // and holds an unattended boot of it dark (findings 2026-08-06 #1); old
+    // firmware ignores the unknown key, so this is safe to send everywhere.
+    provisional: true,
     led: {
       type: ledType,
       colorOrder,

@@ -1089,3 +1089,49 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .la-wire-len { font-family: var(--font-mono); font-size: 11px; color: var(--text-lo); }
 .la-wire-link { display: none; }
 .la-wire-total { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-hair); font-family: var(--font-mono); font-size: 10.5px; color: var(--text-faint); }
+
+/* ── Strip discovery (Find my strips) ───────────────────────────────────── */
+.strip-discovery { max-width: 760px; }
+.strip-discovery-step { margin-top: 14px; }
+.strip-discovery-step h3 { margin: 0 0 6px; font-size: 15px; font-weight: 600; color: var(--text-hi); }
+.strip-discovery-step > p { color: var(--text-mid); }
+.strip-discovery-note { color: var(--text-lo); font-size: 12.5px; }
+.strip-discovery-ports { list-style: none; margin: 12px 0; padding: 0; display: grid; gap: 6px; }
+.strip-discovery-ports li {
+  display: grid;
+  grid-template-columns: 84px 1fr max-content 190px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm);
+}
+.strip-discovery-ports li > span:first-child { grid-column: 1; font-family: var(--font-mono); font-size: 12.5px; color: var(--text-hi); }
+.strip-discovery-port-unavailable { grid-column: 2 / -1; justify-self: end; color: var(--text-faint); font-size: 12px; }
+.strip-discovery-probe { grid-column: 3; }
+.strip-discovery-probe.is-lit { border-color: var(--accent); color: var(--accent-hi); }
+.strip-discovery-ports select {
+  grid-column: 4;
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 8px;
+  color: var(--text-hi);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.strip-discovery-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.strip-discovery-counts { list-style: none; margin: 12px 0; padding: 0; display: grid; gap: 8px; }
+.strip-discovery-counts input {
+  margin-left: 8px;
+  min-height: 34px;
+  padding: 4px 8px;
+  color: var(--text-hi);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.strip-discovery-skipped,
+.strip-discovery-warnings { list-style: none; margin: 10px 0; padding: 0; display: grid; gap: 4px; color: var(--warn); font-size: 12.5px; }
+.strip-discovery-stream { margin: 8px 0; }
