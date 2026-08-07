@@ -1960,9 +1960,16 @@ test('production screen reflows at 200% equivalent width and honors reduced moti
 test('production setup is keyboard operable, restores heading focus, and announces state', async ({ page }) => {
   await installDriver(page);
   await page.goto('/#screen=layout');
-  const entry = page.getByRole('button', { name: 'Hardware', exact: true });
+  // One rail destination owns the card now, and it opens on the guided ladder.
+  // The batch link lives on Card status, so reaching it by keyboard is two hops.
+  const entry = page.getByRole('button', { name: 'Setup', exact: true });
   await entry.focus();
   await entry.press('Enter');
+  await expect(page).toHaveURL(/#screen=card&section=setup/);
+  const status = page.getByRole('navigation', { name: 'Hardware sections' })
+    .getByRole('button', { name: 'Card status', exact: true });
+  await status.focus();
+  await status.press('Enter');
   await expect(page).toHaveURL(/#screen=card&section=overview/);
   // Batch production is no longer a section tab; it is reached from the
   // low-emphasis overview link.
