@@ -149,7 +149,7 @@ test('imports SVG, creates strips, saves, reloads, and previews on the Show scre
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-workflow-'));
   const fixture = writeLayerFixture(tmp);
 
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: 'Import SVG' }).first()).toBeVisible();
   await page.setInputFiles('input[accept=".svg"]', fixture);
   await expect(page.locator('.layer-row')).toHaveCount(3);
@@ -217,7 +217,7 @@ test('groups selected strips and merges them into one composite strip', async ({
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-strip-groups-'));
   const fixture = writeLayerFixture(tmp, 'strip-groups.svg');
 
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.setInputFiles('input[accept=".svg"]', fixture);
@@ -297,7 +297,7 @@ test('clicked vector path can be deleted from the canvas with the keyboard', asy
   </g>
 </svg>`);
 
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.setInputFiles('input[accept=".svg"]', fixture);
