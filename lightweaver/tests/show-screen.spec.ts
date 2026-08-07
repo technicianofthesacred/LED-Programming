@@ -423,3 +423,61 @@ test('mobile Show uses one document column with the inspector below the canvas',
   expect(layout?.inspectorTop).toBeGreaterThanOrEqual((layout?.timelineBottom || 0) - 1);
   expect(layout?.scrollWidth).toBeLessThanOrEqual(layout?.viewportWidth || 0);
 });
+
+// A design bigger than the strip on the desk is the normal state while a piece
+// is being designed. Picking one strip sends only that strip to the card, at the
+// front of whatever is attached, so the pattern can be seen in real light. The
+// screen keeps showing the whole piece, and nothing is installed.
+test('one strip of the design can be sent to the card while the screen shows the whole piece', async ({ page }) => {
+  await openShow(page);
+  await mutateSavedLayout(page, layout => {
+    layout.hidden = {};
+    layout.strips = [
+      { ...layout.strips[0], name: 'Outer circle', pixels: [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }], pixelCount: 3 },
+      { ...layout.strips[1], name: 'Inner circle', pixels: [{ x: 0, y: 100 }, { x: 100, y: 100 }], pixelCount: 2 },
+    ];
+    layout.patchBoard = null;
+  });
+
+  const stage = page.getByTestId('show-stage');
+  await expect(stage).toHaveAttribute('data-frame-size', '5');
+  const strips = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}')
+    .layout.strips.map((strip: any) => strip.id));
+  const [outerId, innerId] = strips;
+
+  await expect(page.getByTestId('show-bench-strip')).toBeVisible();
+  await expect(page.getByTestId('show-bench-whole')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId(`show-bench-strip-${outerId}`)).toHaveText('Outer circle · 3');
+  await expect(page.getByTestId(`show-bench-strip-${innerId}`)).toHaveText('Inner circle · 2');
+
+  await page.getByRole('button', { name: 'Play on the lights' }).click();
+  await expect.poll(async () => page.evaluate(() => (window as any).__streamedFrames().length)).toBeGreaterThan(0);
+
+  // Whole design: every light in the piece carries colour.
+  const whole = await page.evaluate(() => (window as any).__streamedFrames().at(-1));
+  expect(whole).toHaveLength(5);
+  expect(whole.filter((pixel: string) => pixel !== '000000').length).toBe(5);
+
+  // One strip: its two lights move to the front, the rest of the card goes dark.
+  await page.getByTestId(`show-bench-strip-${innerId}`).click();
+  await expect(page.getByTestId('show-bench-whole')).toHaveAttribute('aria-pressed', 'false');
+  await expect.poll(async () => {
+    const frame = await page.evaluate(() => (window as any).__streamedFrames().at(-1));
+    return frame.slice(2).every((pixel: string) => pixel === '000000') && frame.length === 5;
+  }).toBe(true);
+  const narrowed = await page.evaluate(() => (window as any).__streamedFrames().at(-1));
+  expect(narrowed.filter((pixel: string) => pixel !== '000000').length).toBeLessThanOrEqual(2);
+
+  // The design is untouched — the screen still draws all five lights.
+  await expect(stage).toHaveAttribute('data-frame-size', '5');
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}')
+    .layout.strips.reduce((sum: number, strip: any) => sum + strip.pixelCount, 0));
+  expect(saved).toBe(5);
+
+  // Back to the whole design.
+  await page.getByTestId('show-bench-whole').click();
+  await expect.poll(async () => {
+    const frame = await page.evaluate(() => (window as any).__streamedFrames().at(-1));
+    return frame.filter((pixel: string) => pixel !== '000000').length;
+  }).toBe(5);
+});

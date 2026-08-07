@@ -23,6 +23,7 @@ import {
   createMandalaSpatialTemplate,
 } from '../lib/showSpatialTemplate.js';
 import { createCardFrameStream, DEFAULT_FRAME_FPS } from '../lib/cardFrameStream.js';
+import { applyBenchStripView, templateStripIds, templateStripLength } from '../lib/benchStripView.js';
 import { cardBridgeFeatureGap, hasCardBridge, pingCardBridge } from '../lib/cardBridge.js';
 import { canPushDirectlyToCard, readStoredCardHost } from '../lib/cardConnection.js';
 
@@ -208,6 +209,12 @@ function ShowScreen({ go }) {
     [connectedTemplate],
   );
   const [requestedTemplate, setRequestedTemplate] = useState('connected');
+  // Which one strip of the design goes to the card that is plugged in. Empty is
+  // the whole design. This exists so a four-hundred-light piece that has not been
+  // built yet can still be seen in real light on one short test strip: pick a
+  // strip, its lights land on the front of the attached one. Preview only — it
+  // streams frames and writes nothing, so there is no mode to remember to leave.
+  const [benchStripId, setBenchStripId] = useState('');
   const activeTemplateKind = requestedTemplate === 'connected' && connectedUsable
     ? 'connected'
     : 'mandala';
@@ -221,6 +228,19 @@ function ShowScreen({ go }) {
       return `${sample.stripId}:${pixelIndex}`;
     }).join(',');
   }, [activeTemplate]);
+  // One entry per strip the active template actually carries lights for. Offered
+  // only when there is more than one — with a single strip there is nothing to
+  // choose between, and "whole design" already IS that strip.
+  const benchStripChoices = useMemo(() => templateStripIds(activeTemplate).map((id) => ({
+    id,
+    name: strips.find(strip => strip.id === id)?.name || id,
+    length: templateStripLength(activeTemplate, id),
+  })), [activeTemplate, strips]);
+  // A strip that has been deleted or hidden must not stay selected, or the card
+  // would quietly go dark with nothing on screen explaining why.
+  useEffect(() => {
+    setBenchStripId(current => (current && !benchStripChoices.some(choice => choice.id === current) ? '' : current));
+  }, [benchStripChoices]);
   const samplePositions = useMemo(() => activeTemplate
     .map((sample) => `${sample.x.toFixed(3)}:${sample.y.toFixed(3)}`)
     .join(','), [activeTemplate]);
@@ -232,6 +252,10 @@ function ShowScreen({ go }) {
   const stageRef = useRef(null);
   const templateRef = useRef(activeTemplate);
   const templateKindRef = useRef(activeTemplateKind);
+  // Read inside the frame loop, so changing the choice does not tear down the
+  // running animation.
+  const benchStripRef = useRef('');
+  benchStripRef.current = benchStripId;
   const audioRef = useRef({ ctx: null, analyser: null, source: null, micStream: null, elSource: null, objectUrl: '' });
   const featureRef = useRef(null);
   const playerRef = useRef(null);
@@ -347,7 +371,15 @@ function ShowScreen({ go }) {
       rgbBufRef.current = engineRef.current.frameRGB(rgbBufRef.current, colorBufRef.current);
       hexBufRef.current = frameToHex(rgbBufRef.current, hexBufRef.current);
       if (stageRef.current) stageRef.current.dataset.frameHash = frameHash(rgbBufRef.current);
-      stream.push(hexBufRef.current);
+      // Only what goes to the card is narrowed. The canvas above keeps showing
+      // the whole design, which is the point: the piece on screen, one strip of
+      // it in real light. Same length either way, so the card is never sent a
+      // different number of lights than it is configured for.
+      stream.push(applyBenchStripView(
+        hexBufRef.current,
+        templateRef.current,
+        benchStripRef.current ? { mode: 'compact', stripId: benchStripRef.current } : null,
+      ));
     };
     const renderFrame = ({ push = false } = {}) => {
       const engine = engineRef.current;
@@ -759,7 +791,15 @@ function ShowScreen({ go }) {
 
         {/* body: stage + controls */}
         <div className="sh-body">
-          <div style={{ minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: 24, background: 'var(--bg-canvas)', overflow: 'auto' }}>
+          {/*
+            `safe center`, not `center`: a centred flex column that overflows
+            pushes its FIRST child off the top, behind the sticky transport bar,
+            where it cannot be clicked. Adding the on-the-card picker below made
+            that happen to the template chips. `safe` falls back to flex-start
+            the moment the content is taller than the column, so anything added
+            here later stays reachable.
+          */}
+          <div style={{ minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'safe center', gap: 14, padding: 24, background: 'var(--bg-canvas)', overflow: 'auto' }}>
             <div
               role="group"
               aria-label="Show layout template"
@@ -812,6 +852,49 @@ function ShowScreen({ go }) {
             <div className="mono" style={{ fontSize: 10.5, letterSpacing: '0.06em', color: 'var(--text-lo)', textAlign: 'center' }}>
               {modeInfo.name} · {preset === 'Calm' ? 'calm' : 'listening closely'}
             </div>
+            {/*
+              Which part of the design goes to the card. The screen above always
+              shows the whole piece; this only narrows what is SENT to the
+              hardware, so a design bigger than the strip on the desk can still be
+              seen in real light. Nothing is installed and nothing is scaled.
+
+              It sits below the canvas on purpose: the template chips above are
+              pinned right under the sticky transport bar, and a second row up
+              there pushed them underneath it on a short window.
+            */}
+            {benchStripChoices.length > 1 && (
+              <div
+                role="group"
+                aria-label="What plays on the card"
+                data-testid="show-bench-strip"
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}
+              >
+                <span className="mono" style={{ fontSize: 10, color: 'var(--text-faint)' }}>On the card:</span>
+                <button
+                  type="button"
+                  data-testid="show-bench-whole"
+                  aria-pressed={benchStripId === ''}
+                  onClick={() => setBenchStripId('')}
+                  title="Send the whole design to the card."
+                  style={chipStyle(benchStripId === '')}
+                >
+                  Whole design
+                </button>
+                {benchStripChoices.map(choice => (
+                  <button
+                    key={choice.id}
+                    type="button"
+                    data-testid={`show-bench-strip-${choice.id}`}
+                    aria-pressed={benchStripId === choice.id}
+                    onClick={() => setBenchStripId(choice.id)}
+                    title={`Send only ${choice.name} to the card, starting at its first light. The screen still shows the whole piece.`}
+                    style={chipStyle(benchStripId === choice.id)}
+                  >
+                    {choice.name} · {choice.length}
+                  </button>
+                ))}
+              </div>
+            )}
             {notice && (
               <div style={{
                 maxWidth: 460,
