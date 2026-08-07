@@ -21,11 +21,13 @@
   line-height: 1.55;
 }
 
-/* The banners ("This card is running…") are genuine panels, given a faint
-   accent so they read as guidance rather than as errors. */
+/* The banners ("This card is running…") are context, not the task. They used
+   to carry the accent tint, which put the biggest warm block on the page above
+   the step the owner actually has to do — the accent belongs to the live step
+   alone. A panel and a firm heading are enough to be noticed. */
 .lw-setup-banner {
-  border-color: var(--accent-line);
-  background: color-mix(in oklch, var(--accent) 6%, var(--bg-panel));
+  border-color: var(--border-soft);
+  background: var(--bg-panel);
 }
 .lw-setup-banner h2 { font-size: 15px; font-weight: 620; letter-spacing: -.01em; }
 
