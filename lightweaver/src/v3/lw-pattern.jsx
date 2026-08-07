@@ -1896,12 +1896,18 @@ import { PatternPreview } from './PatternPreview.jsx';
                     <button
                       type="button"
                       className="btn primary"
-                      onClick={() => go?.(patternCardGate === 'blank' ? 'layout' : 'card')}
+                      onClick={() => (patternCardGate === 'blank'
+                        ? go?.('layout')
+                        // Verifying and recovering a card is the Card status
+                        // board's job, not the guided ladder's — so it names
+                        // that section rather than riding the card default,
+                        // which now lands on Setup.
+                        : (window.location.hash = '#screen=card&section=overview'))}
                     >
                       {patternCardGate === 'blank'
                         ? 'Set up LED strips and install on card'
                         : patternCardGate === 'project'
-                          ? 'Verify project in Hardware'
+                          ? 'Verify project in Card status'
                           : 'Recover and verify card'}
                     </button>
                   </div>
