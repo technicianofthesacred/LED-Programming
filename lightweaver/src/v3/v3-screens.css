@@ -449,6 +449,14 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .install-release { min-height: 44px; box-sizing: border-box; display: flex; align-items: center; padding: 11px 14px; border-radius: var(--r-sm); border: 1px solid var(--border-soft); color: var(--text-mid); background: var(--bg-elev); }
 .install-release.ready { color: var(--ok); background: var(--ok-dim); border-color: oklch(0.6 0.1 150 / .25); }
 .install-release.error { color: var(--danger); border-color: oklch(0.55 0.16 30 / .45); }
+/* What this install does to the card in front of you. Going BACKWARDS is the
+   only state coloured as a warning — an ordinary update, a reinstall of the same
+   build, and an unknown card are all normal things to be doing. */
+.install-update-plan { box-sizing: border-box; padding: 11px 14px; border-radius: var(--r-sm); border: 1px solid var(--border-soft); background: var(--bg-elev); }
+.install-update-plan.is-downgrade { border-color: oklch(0.55 0.16 30 / .45); }
+.install-update-headline { margin: 0; color: var(--text-hi); font-size: 13px; line-height: 1.5; }
+.install-update-plan.is-downgrade .install-update-headline { color: var(--danger); }
+.install-update-caution { margin: 5px 0 0; color: var(--text-lo); font-size: 11.5px; line-height: 1.5; }
 .install-card-check { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 14px 20px; }
 .install-card-check h2,
 .install-confirm h2 { margin: 0 0 6px; font-size: 16px; }
