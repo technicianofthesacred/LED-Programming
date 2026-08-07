@@ -60,8 +60,10 @@ const PatternLabScreen = lazy(() => import('../pattern-lab/PatternLabScreen.jsx'
 const PlaylistScreen = lazy(() => import('./lw-playlist.jsx').then(module => ({ default: module.PlaylistScreen })));
 const ShowScreen = lazy(() => import('./lw-show.jsx').then(module => ({ default: module.ShowScreen })));
 const CardScreen = lazy(() => import('./lw-card.jsx').then(module => ({ default: module.CardScreen })));
+const SetupScreen = lazy(() => import('./lw-setup.jsx').then(module => ({ default: module.SetupScreen })));
 
 const STUDIO_SCREENS = [
+  { id: 'setup', label: 'Setup', Component: SetupScreen },
   { id: 'layout', label: 'Layout', Component: LayoutScreen },
   { id: 'pattern', label: 'Patterns', Component: PatternScreen },
   { id: 'pattern-lab', label: 'Pattern Lab', Component: PatternLabScreen },
@@ -224,20 +226,34 @@ class ScreenErrorBoundary extends Component {
   }
 }
 
+// Where a bare URL lands. Setup is the front door for anyone who has not been
+// through it — the old fallback dropped a first-time owner onto Layout with a
+// placeholder circle and no route to their card. Once the owner has said they
+// are done with it, the fallback returns to Layout. Deep links are untouched:
+// only the FALLBACK moves, so #screen=layout still opens Layout for everyone.
+const SETUP_SKIP_KEY = 'lw_setup_skip_v1';
+function defaultView() {
+  try {
+    return window.localStorage.getItem(SETUP_SKIP_KEY) === '1' ? 'layout' : 'setup';
+  } catch {
+    return 'layout';
+  }
+}
 function normalizeView(v) {
   const s = String(v || '').trim().toLowerCase();
   if (s === 'patterns') return 'pattern';
   if (LEGACY_CARD_SCREENS.has(s)) return 'card';
-  return SCREEN_KEYS.includes(s) ? s : 'layout';
+  return SCREEN_KEYS.includes(s) ? s : defaultView();
 }
 function viewFromHash() {
   const hash = window.location.hash.slice(1);
   const params = new URLSearchParams(hash.includes('=') ? hash : '');
-  return normalizeView(params.get('screen') || 'layout');
+  return normalizeView(params.get('screen') || defaultView());
 }
 
 /* ---------- tiny icon set (stroked, 1.6) ---------- */
 const I = {
+  setup: <svg viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h14"/><circle cx="9" cy="6" r="2.2"/><circle cx="15" cy="12" r="2.2"/><circle cx="11" cy="18" r="2.2"/></svg>,
   layout: <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 9v12"/></svg>,
   pattern: <svg viewBox="0 0 24 24"><path d="M4 12c2-5 6-5 8 0s6 5 8 0"/><path d="M4 17c2-3 6-3 8 0s6 3 8 0"/></svg>,
   'pattern-lab': <svg viewBox="0 0 24 24"><path d="M9 3h6M10 3v5l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3"/><path d="M7.8 15h8.4M9.4 12h5.2"/></svg>,
@@ -1043,6 +1059,7 @@ function Shell() {
               isProjectSwitchSnapshotCurrent={isProjectSwitchSnapshotCurrent}
               onMatchedProjectLoaded={onMatchedCardProjectLoaded}
               onStartNewProject={onStartNewProject}
+              onSaveProject={onSave}
               route={cardRoute}
             />
             <ScreenReady />

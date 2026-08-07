@@ -18,6 +18,7 @@ import {
   resolveStartupProject,
 } from '../lib/projectModel.js';
 import { recordLivePattern as buildLiveRecording } from '../lib/liveRecorder.js';
+import { defaultPortRoles, normalizePortRoles } from '../lib/portRoles.js';
 import { easeCrossfade } from '../lib/motionSmoothing.js';
 import { PATTERNS } from '../lib/patterns-library.js';
 import { createDefaultPatchBoard, normalizePatchBoard } from '../lib/patchBoard.js';
@@ -558,6 +559,11 @@ export function ProjectProvider({ children }) {
     setStandaloneControllerRaw(next);
     return { ok: true, wiring: boundary.wiring, errors: [] };
   }, [standaloneController, wiring]);
+  const [portRoles, setPortRolesRaw] = useState(defaults.portRoles || defaultPortRoles());
+  const setPortRoles = useCallback(value => {
+    const next = typeof value === 'function' ? value(portRoles) : value;
+    setPortRolesRaw(normalizePortRoles(next));
+  }, [portRoles]);
 
   // ── Audio bands (0–1, updated by useAudio hook) ──────────────────────────
   const [audioBands, setAudioBands] = useState({ bass: 0, mid: 0, hi: 0, energy: 0 });
@@ -768,6 +774,7 @@ export function ProjectProvider({ children }) {
     setControllerProfiles(devices.controllerProfiles || []);
     setActiveControllerId(devices.activeControllerId || '');
     setStandaloneControllerRaw(defaultStandaloneController(devices.standaloneController));
+    setPortRolesRaw(normalizePortRoles(data.portRoles));
     setWledIp(devices.wledIp || '');
     historyRef.current = { past: [], future: [] };
     setProjectRevision(v => v + 1);
@@ -854,6 +861,7 @@ export function ProjectProvider({ children }) {
       version: PROJECT_VERSION,
       id: projectId,
       name: projectName,
+      portRoles,
       layout: {
         strips, starterPending, viewBox, svgText, hidden, projectWarnings,
         layers: layoutLayers,
@@ -911,6 +919,7 @@ export function ProjectProvider({ children }) {
     motionSmoothing,
     showClips, showTransitions, showCues, autoLanes, showDuration,
     liveRecording, liveQuantize, wledIp, wledSegmentMap, physicalControls, controllerProfiles, activeControllerId, standaloneController,
+    portRoles,
   ]);
 
   useEffect(() => {
@@ -1054,7 +1063,7 @@ export function ProjectProvider({ children }) {
       masterHueShift,  setMasterHueShift,
       patternParams,   setPatternParams,
       bpm,             setBpm,
-      projectId,
+      projectId, setProjectId,
       projectName,     setProjectName,
       motionSmoothing, setMotionSmoothing,
       // Timeline
@@ -1098,6 +1107,7 @@ export function ProjectProvider({ children }) {
       controllerProfiles, setControllerProfiles,
       activeControllerId, setActiveControllerId,
       standaloneController, setStandaloneController,
+      portRoles, setPortRoles,
       // Project persistence
       serializeProject,
       flushProjectAutosave,

@@ -1,0 +1,276 @@
+/* ============================================================
+   Lightweaver Setup — the guided ladder an owner meets first.
+   Styles only `.lw-setup-*` classes (markup in lw-setup.jsx);
+   colours, spacing and radii come from the shared tokens.
+   ============================================================ */
+
+/* The shared Card workspace runs to 1180px because its screens are dense
+   two-and-three-column instrument panels. This one is a single column of
+   short steps, and at that width a step title sat a thousand pixels from
+   its own Change link. Setup gets a task column instead. */
+.card-workspace-body.lw-setup-body {
+  padding-bottom: 80px;
+}
+.card-workspace-body.lw-setup-body > * {
+  width: min(660px, 100%);
+}
+
+.lw-setup-intro {
+  max-width: 56ch;
+  color: var(--text-mid);
+  line-height: 1.55;
+}
+
+/* The banners ("This card is running…") are context, not the task. They used
+   to carry the accent tint, which put the biggest warm block on the page above
+   the step the owner actually has to do — the accent belongs to the live step
+   alone. A panel and a firm heading are enough to be noticed. */
+.lw-setup-banner {
+  border-color: var(--border-soft);
+  background: var(--bg-panel);
+}
+.lw-setup-banner h2 { font-size: 15px; font-weight: 620; letter-spacing: -.01em; }
+
+.lw-setup-steps { display: grid; gap: 12px; margin-top: 28px; }
+
+/* Where you are in the sequence. Real information, so it is set at a tier
+   that clears the contrast floor rather than at the usual label grey —
+   --text-lo lands at 4.1:1 on this background and --text-faint at 2.6:1,
+   both under 4.5:1. Recession on this screen comes from size and weight. */
+.lw-setup-progress {
+  margin: 0;
+  color: var(--text-mid);
+  font-family: var(--font-mono); font-size: 10px; font-weight: 650;
+  letter-spacing: .11em; text-transform: uppercase;
+}
+
+/* ---- the ladder ------------------------------------------------------
+   Geometry first: every row reserves the same border and padding, open or
+   not, so the markers stay on one axis and the connector between them is
+   straight. The row that is open is the only one that becomes a surface. */
+.lw-setup-ladder {
+  --lw-row-pad: 15px;
+  --lw-marker: 26px;
+  --lw-rail: calc(1px + var(--lw-row-pad) + var(--lw-marker) / 2);
+  --lw-gap: 7px;
+  margin: 0; padding: 0; list-style: none;
+  display: grid; gap: var(--lw-gap);
+}
+
+.lw-setup-step {
+  position: relative;
+  display: grid; gap: 12px;
+  justify-items: start;
+  padding: 11px var(--lw-row-pad);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+}
+
+/* The chain between markers. A gutter segment rather than a line behind the
+   rows, so an open step can carry a background without breaking it. The
+   finished part of the chain carries the same green as the ticks, so the
+   sequence reads as filling in. */
+.lw-setup-step:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  left: var(--lw-rail); top: 100%;
+  width: 1px; height: var(--lw-gap);
+  background: var(--border);
+}
+.lw-setup-step.is-done:not(:last-child)::after {
+  background: color-mix(in oklch, var(--ok) 40%, var(--border));
+}
+
+.lw-setup-step-head {
+  width: 100%; min-width: 0;
+  display: flex; align-items: center; gap: 12px;
+}
+
+.lw-setup-marker {
+  flex: none;
+  display: grid; place-items: center;
+  width: var(--lw-marker); height: var(--lw-marker);
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  color: var(--text-mid);
+  font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  transition: background .15s, border-color .15s, color .15s;
+}
+
+.lw-setup-step-text { flex: 1 1 auto; min-width: 0; display: grid; gap: 2px; }
+.lw-setup-step-text strong,
+.lw-setup-step-text p { margin: 0; }
+.lw-setup-step-text strong {
+  color: var(--text-mid);
+  font-size: 14px; font-weight: 600; line-height: 1.35; letter-spacing: -.005em;
+}
+.lw-setup-step-text p { color: var(--text-mid); font-size: 12px; line-height: 1.5; }
+
+/* ---- not yet: present, ordered, and plainly not the thing to do now.
+   Held back by weight and a hollow marker, never by a grey too faint to
+   read — a step you cannot reach yet is still a step you must be able to
+   read ahead to. ---- */
+.lw-setup-step.is-locked .lw-setup-step-text strong { font-weight: 550; }
+.lw-setup-step.is-locked .lw-setup-marker { border-color: var(--border-soft); }
+
+/* ---- done: one quiet line with its tick ---- */
+.lw-setup-step.is-done .lw-setup-marker {
+  background: var(--ok-dim);
+  border-color: color-mix(in oklch, var(--ok) 45%, var(--border));
+  color: var(--ok);
+}
+/* A collapsed finished step keeps only its title — its description would
+   compete with the step still to do. */
+.lw-setup-step.is-done[data-open='false'] .lw-setup-step-text p { display: none; }
+
+/* ---- open: the single live surface on the page ---- */
+.lw-setup-step.is-open {
+  padding-top: 15px; padding-bottom: 17px;
+  border-color: var(--border-soft);
+  background: var(--bg-panel);
+  scroll-margin-top: 80px;
+}
+.lw-setup-step.is-current {
+  border-color: var(--accent-line);
+  background: linear-gradient(180deg,
+    color-mix(in oklch, var(--accent) 8%, var(--bg-panel)),
+    var(--bg-panel));
+  box-shadow: 0 14px 30px -22px color-mix(in oklch, var(--accent) 65%, transparent);
+}
+.lw-setup-step.is-current .lw-setup-marker {
+  background: var(--accent); border-color: var(--accent); color: var(--on-accent);
+}
+.lw-setup-step.is-current .lw-setup-step-text strong { color: var(--text-hi); font-weight: 650; }
+.lw-setup-step.is-open .lw-setup-step-text strong { color: var(--text-hi); }
+.lw-setup-step.is-open .lw-setup-step-head { align-items: flex-start; }
+.lw-setup-step.is-open .lw-setup-marker { margin-top: 1px; }
+
+.lw-setup-redo {
+  flex: none; align-self: center;
+  min-height: 0; padding: 4px 2px 4px 10px;
+  color: var(--text-mid); font-size: 12px;
+}
+/* On an open step the head is top-aligned, so the link rides the title's
+   first line rather than floating in the middle of a tall row. */
+.lw-setup-step.is-open .lw-setup-redo { align-self: flex-start; margin-top: 1px; }
+.lw-setup-redo:hover { color: var(--text-hi); }
+
+/* ---- what an open step asks -----------------------------------------
+   Indented to the title, so the question reads as belonging to its step
+   rather than to the ladder. */
+.lw-setup-detail {
+  width: 100%;
+  padding-left: calc(var(--lw-marker) + 12px);
+  display: flex; flex-direction: column; align-items: flex-start;
+  gap: 10px;
+}
+.lw-setup-detail .lw-input {
+  height: 34px; padding: 0 11px;
+  background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+  color: var(--text-hi); font-family: var(--font-mono); font-size: 13px;
+  transition: border-color .12s;
+}
+.lw-setup-detail .lw-input:focus { outline: none; border-color: var(--accent); }
+.lw-setup-detail .lw-select { height: 34px; }
+
+/* One question, one control. The width is the answer's width — a port name
+   or a three-digit count — not the width of the page. */
+.lw-setup-field { display: grid; gap: 5px; min-width: 0; width: min(240px, 100%); }
+.lw-setup-field > span {
+  color: var(--text-mid); font-size: 11px; font-weight: 550; letter-spacing: .01em;
+}
+.lw-setup-field .lw-select,
+.lw-setup-field .lw-input { width: 100%; height: 34px; }
+
+.lw-setup-note {
+  max-width: 62ch; margin: 0;
+  color: var(--text-mid); font-size: 12px; line-height: 1.55;
+}
+/* A problem, but never an alarming red panel — a quiet danger note. */
+.lw-setup-note-bad {
+  color: var(--danger);
+  padding: 9px 11px; border-radius: var(--r-sm);
+  border: 1px solid color-mix(in oklch, var(--danger) 35%, var(--border-soft));
+  background: color-mix(in oklch, var(--danger) 6%, var(--bg-panel));
+}
+
+/* ---- an aside inside a step: the rarer path, folded away ---- */
+.lw-setup-aside {
+  width: 100%;
+  display: grid; gap: 8px;
+  padding-top: 13px; margin-top: 2px;
+  border-top: 1px solid var(--border-hair);
+}
+.lw-setup-aside > summary {
+  width: fit-content; cursor: pointer; padding: 2px 0;
+  color: var(--text-mid); font-size: 12px; font-weight: 500;
+  border-radius: var(--r-sm);
+  transition: color .12s;
+}
+.lw-setup-aside > summary:hover { color: var(--text-hi); }
+.lw-setup-aside > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lw-setup-aside > p { max-width: 62ch; margin: 0; color: var(--text-mid); font-size: 12px; line-height: 1.55; }
+
+/* The colour step: three blocks the owner drags into the order they see. */
+.lw-setup-chips {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  list-style: none; margin: 2px 0; padding: 0;
+}
+.lw-setup-chip {
+  display: flex; align-items: center; gap: 2px;
+  padding: 5px 6px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-elev);
+  cursor: grab; user-select: none;
+}
+.lw-setup-chip:active { cursor: grabbing; }
+.lw-setup-chip .link-btn { min-height: 0; padding: 2px 5px; color: var(--text-faint); }
+.lw-setup-chip .link-btn:hover { color: var(--text-hi); }
+.lw-setup-chip-label {
+  min-width: 3.5em; text-align: center;
+  text-transform: capitalize; font-size: 12px; font-weight: 600;
+}
+/* The three probe colours, named in the tokens' own space so they hold up
+   in both themes. */
+.lw-setup-chip.is-red .lw-setup-chip-label { color: oklch(0.68 0.19 25); }
+.lw-setup-chip.is-green .lw-setup-chip-label { color: oklch(0.78 0.16 150); }
+.lw-setup-chip.is-blue .lw-setup-chip-label { color: oklch(0.70 0.14 250); }
+
+/* ---- the shelf: things to do whenever, off the sequence --------------- */
+.lw-setup-optional { display: grid; gap: 0; margin-top: 30px; }
+.lw-setup-optional h2 {
+  margin: 0 0 4px;
+  color: var(--text-mid);
+  font-family: var(--font-mono); font-size: 10px; font-weight: 650;
+  letter-spacing: .11em; text-transform: uppercase;
+}
+.lw-setup-shelf-row {
+  display: flex; align-items: center; gap: 16px;
+  padding: 13px 0;
+  border-top: 1px solid var(--border-hair);
+}
+.lw-setup-shelf-row:last-child { border-bottom: 1px solid var(--border-hair); }
+.lw-setup-shelf-row .lw-setup-step-text { flex: 1 1 auto; min-width: 0; display: grid; gap: 2px; }
+.lw-setup-shelf-row strong {
+  margin: 0; color: var(--text-mid); font-size: 13.5px; font-weight: 550; line-height: 1.35;
+}
+.lw-setup-shelf-row p { margin: 0; color: var(--text-mid); font-size: 12px; line-height: 1.5; }
+.lw-setup-optional-action { flex: none; white-space: nowrap; }
+
+.lw-setup-skip { margin: 28px 0 0; }
+.lw-setup-skip .link-btn { font-size: 12px; color: var(--text-mid); }
+.lw-setup-skip .link-btn:hover { color: var(--text-hi); }
+
+/* ---- narrow: the row keeps its shape, the action drops below ---- */
+@media (max-width: 560px) {
+  .lw-setup-ladder { --lw-row-pad: 12px; --lw-marker: 24px; }
+  .lw-setup-detail { padding-left: 0; }
+  .lw-setup-shelf-row { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .lw-setup-optional-action { align-self: stretch; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lw-setup-step, .lw-setup-marker { transition: none; }
+  .lw-setup-step.is-current { box-shadow: none; }
+}

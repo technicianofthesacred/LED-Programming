@@ -56,6 +56,13 @@ export const BENCH_INSTALL_EXISTING_PROJECT_MESSAGE = 'This card is already hold
   + 'setup as a wiring change instead of applying it. Clear what is on the card (it keeps its '
   + 'WiFi), then discovery can start fresh.';
 
+// The case where nobody checked whether the card already held a project before
+// the write came back staged (ui-repair B0, observed live twice). Guessing here
+// is exactly what sent owners to reflash a card whose firmware was fine, so the
+// message stays neutral: no firmware, updating, or reflashing language at all.
+export const BENCH_INSTALL_STAGED_UNKNOWN_MESSAGE = 'This card filed the setup as a change to '
+  + 'confirm instead of applying it. Clear the card’s current setup, then try again.';
+
 export const BENCH_INSTALL_CLEARED_TIMEOUT_MESSAGE = 'The card accepted the clear but did not come '
   + 'back blank. Check that it still has power, then try again.';
 
@@ -67,7 +74,7 @@ export class BenchInstallError extends Error {
     super(message);
     this.name = 'BenchInstallError';
     // 'no-config' | 'authority' | 'refused' | 'staged' | 'staged-existing-project'
-    // | 'wrong-card' | 'not-ready' | 'not-cleared'
+    // | 'staged-unknown' | 'wrong-card' | 'not-ready' | 'not-cleared'
     this.reason = reason;
   }
 }
@@ -218,8 +225,9 @@ export async function waitForClearedCard({
  * ordinary commissioned config write and must NOT ask for the one-shot
  * authority again — that authority is spent by design.
  *
- * Throws BenchInstallError for every refusal, including the 'staged' answer
- * from a card that still needs a firmware update.
+ * Throws BenchInstallError for every refusal, including the 'staged' family of
+ * answers ('staged', 'staged-existing-project', 'staged-unknown') from a card
+ * that applied nothing.
  */
 export async function installBenchConfig({
   host,
@@ -228,10 +236,13 @@ export async function installBenchConfig({
   initial = false,
   // What Studio already knew about the card BEFORE this write: true when the
   // live status showed a project (projectId, knownGoodProject, or the new
-  // firmware's provisionalSetup claim). A staged answer on such a card means
-  // "the card is protecting an existing layout", not "the firmware is too old"
-  // — the two need opposite advice (ui-repair B0).
-  cardShowsProject = false,
+  // firmware's provisionalSetup claim), false when it positively saw a blank
+  // card. The two get opposite advice (ui-repair B0): a staged answer on a
+  // card with a project means "clear the card", on a blank card it means
+  // "the firmware is too old". When nobody checked (undefined), a staged
+  // answer gets neutral advice that blames neither — guessing wrong sent
+  // owners to reflash a working card twice.
+  cardShowsProject,
   direct = canPushDirectlyToCard(),
   fetchImpl,
   guardImpl = guardDirectCardMutation,
@@ -250,10 +261,13 @@ export async function installBenchConfig({
     : await postBenchConfigOverBridge({ host, config, flowId, initial, authorizeImpl, bridgeRequestImpl });
 
   if (benchConfigWasStaged(response)) {
-    if (cardShowsProject) {
+    if (cardShowsProject === true) {
       throw new BenchInstallError('staged-existing-project', BENCH_INSTALL_EXISTING_PROJECT_MESSAGE);
     }
-    throw new BenchInstallError('staged', BENCH_INSTALL_STAGED_MESSAGE);
+    if (cardShowsProject === false) {
+      throw new BenchInstallError('staged', BENCH_INSTALL_STAGED_MESSAGE);
+    }
+    throw new BenchInstallError('staged-unknown', BENCH_INSTALL_STAGED_UNKNOWN_MESSAGE);
   }
 
   // The card page's relay reboots on Studio's behalf for an applied config

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import './strip-discovery.css';
 import {
   BENCH_DEFAULT_PORT_PIXELS,
   BENCH_MAX_MILLIAMPS,
@@ -6,6 +7,7 @@ import {
   BENCH_SKIP_MAX_OUTPUTS,
   benchSkipReasonText,
   buildBenchConfig,
+  isBenchProjectEvidence,
 } from '../../lib/benchConfig.js';
 import {
   BEACON_PIN_RENEW_MS,
@@ -13,13 +15,21 @@ import {
   readBeaconPorts,
   releaseBeaconPort,
 } from '../../lib/beaconProbe.js';
-import { installBenchConfig, waitForClearedCard } from '../../lib/benchInstall.js';
+import {
+  BENCH_INSTALL_EXISTING_PROJECT_MESSAGE,
+  BenchInstallError,
+  installBenchConfig,
+  waitForClearedCard,
+} from '../../lib/benchInstall.js';
 import { clearCardProject } from '../../lib/cardClearProject.js';
 import { getCardBridgeState } from '../../lib/cardBridge.js';
-import {
-  normalizeCardHost,
-  readStoredCardHost,
-} from '../../lib/cardConnection.js';
+import { cardHostToUrl, normalizeCardHost, readStoredCardHost } from '../../lib/cardConnection.js';
+import { prepareCardDeployment } from '../../lib/cardDeployment.js';
+import { readCardProjectEvidence, readCardStatusEnvelope } from '../../lib/cardPushClient.js';
+import { readPersistedCardIdentity } from '../../lib/cardIdentity.js';
+import { buildPackageForPortRoles, deploySetupToCard } from '../../lib/cardSetupDeploy.js';
+import { discoveryProjectParts } from '../../lib/discoveryCommit.js';
+import { useProject } from '../../state/ProjectContext.jsx';
 import { CARD_HARDWARE_CONTRACT } from '../../lib/cardHardwareContract.js';
 import { FRAME_CHUNK_MAX_PIXELS, createCardFrameStream } from '../../lib/cardFrameStream.js';
 import { normalizeCardReadiness } from '../../lib/cardReadiness.js';
@@ -64,6 +74,12 @@ import {
 // probe can double past it; hitting the ceiling asks for a bigger bench rather
 // than telling the owner their strip is too long.
 const DISCOVERY_BENCH_HEADROOM = BENCH_DEFAULT_PORT_PIXELS;
+
+// How much of a port to light when the owner clicks it just to SEE it, and
+// in what colour. Generous enough to be obvious across a room, dim enough
+// that an unknown strip on an unknown supply is never driven hard.
+const PROBE_PROVISION_PIXELS = 120;
+const PROBE_LIGHT_COLOR = '303030';
 
 // A flow id is only a binding token here: it ties the one-shot config authority
 // to this page lifecycle and this card. Deliberately NOT minted through
@@ -153,10 +169,42 @@ function streamFailureText(reason) {
   }
 }
 
+function installFailureText(error) {
+  if (error instanceof BenchInstallError && error.reason === 'staged-existing-project') {
+    return BENCH_INSTALL_EXISTING_PROJECT_MESSAGE;
+  }
+  if (error?.message) return error.message;
+  return 'Studio could not put this setup on the card.';
+}
+
+
+// Stop whatever the card is playing so a probe frame is actually visible. A card
+// running its own pattern redraws continuously and paints straight over anything
+// sent to it, which reads as a dead button.
+async function stopCardPlayback(host) {
+  try {
+    await fetch(`${cardHostToUrl(host)}/api/control`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+      body: JSON.stringify({ cancelStream: false, blackout: false, patternId: '' }),
+    });
+  } catch { /* a card that will not take the request will show the probe or not on its own */ }
+}
+
 export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null }) {
   const host = normalizeCardHost(cardHost || cardLink?.host || readStoredCardHost());
   const flowIdRef = useRef('');
+  const committedPartsRef = useRef(null);
+  const probeStreamRef = useRef(null);
   if (!flowIdRef.current) flowIdRef.current = makeDiscoveryFlowId();
+  const {
+    setPortRoles: setProjectPortRoles,
+    setStandaloneController: setProjectStandaloneController,
+    serializeProject,
+    projectRevision,
+    projectLifecycle,
+  } = useProject();
 
   // Which ports to go looking on. Seeded from whatever discovery last recorded
   // so a second pass starts from the owner's own answers, and left entirely
@@ -170,6 +218,16 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
   const [failureDetail, setFailureDetail] = useState('');
   const [benchNotice, setBenchNotice] = useState('');
   const [recorded, setRecorded] = useState(false);
+  // Whether the real project (not the provisional bench config) is on the card
+  // and verified (T3: discovery install). Pending until the owner presses
+  // "Put this setup on the card".
+  const [installed, setInstalled] = useState(false);
+  // Why the final install failed, so the done screen can offer a way out.
+  const [installError, setInstallError] = useState('');
+  const [installErrorReason, setInstallErrorReason] = useState('');
+  // A running line from the card install, so the owner is not staring at a
+  // button that does not say what the card is doing.
+  const [installProgress, setInstallProgress] = useState('');
   // Which BenchInstallError stopped the run — 'staged-existing-project' gets
   // its own one-tap way out instead of the generic retry (ui-repair B0).
   const [failureReason, setFailureReason] = useState('');
@@ -253,6 +311,12 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
   const phaseIsPastIdle = Boolean(session) && session.phase !== 'idle';
   const [probePorts, setProbePorts] = useState(null);
   const [pinnedPort, setPinnedPort] = useState(null);
+  const [probeBusy, setProbeBusy] = useState(null);
+  // The port the owner is currently talking about. Set the instant they press
+  // one, so saying "my strip is here" never waits on the card managing to
+  // light it — an owner who already knows their port should not be blocked by
+  // a lighting attempt that may be slow or refused.
+  const [selectedPort, setSelectedPort] = useState(null);
   const [probeError, setProbeError] = useState('');
   const pinnedPortRef = useRef(null);
   pinnedPortRef.current = pinnedPort;
@@ -295,26 +359,66 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
 
   const probePort = useCallback(async pin => {
     setProbeError('');
-    // Clicking the lit port again turns it off, so the owner can stop a probe
-    // without leaving the screen.
+    // Clicking the lit port again turns it off.
     if (pinnedPort === pin) {
       setPinnedPort(null);
-      await releaseBeaconPort(host, { bridgeVersion: getCardBridgeState().version });
+      setProbeBusy(null);
+      setSelectedPort(pin);
+      probeStreamRef.current?.stop?.();
+      probeStreamRef.current = null;
+      await releaseBeaconPort(host, { bridgeVersion: getCardBridgeState().version }).catch(() => {});
       return;
     }
+    // Answer the press immediately. Anything that takes seconds has to say so
+    // while it happens, or the owner presses again and thinks nothing works.
+    setSelectedPort(pin);
+    setProbeBusy({ pin, message: `Lighting GPIO ${pin}…` });
+    probeStreamRef.current?.stop?.();
+    probeStreamRef.current = null;
     try {
-      const result = await pinBeaconPort(host, pin, { bridgeVersion: getCardBridgeState().version });
-      if (!result.ok) {
-        setProbeError(`This card cannot light GPIO ${pin} right now.`);
-        setPinnedPort(null);
+      // Fast path 1: a blank card lights a port instantly through its beacon.
+      const beacon = await pinBeaconPort(host, pin, { bridgeVersion: getCardBridgeState().version })
+        .catch(() => ({ ok: false }));
+      if (beacon?.ok) {
+        setPinnedPort(pin);
+        setProbeBusy(null);
         return;
       }
-      setPinnedPort(pin);
+      // Fast path 2: the card is already driving this port, so just send light
+      // to it. No rewrite, no reboot, no waiting.
+      const status = await readCardStatusEnvelope({ host }).catch(() => null);
+      const outputs = Array.isArray(status?.outputs) ? status.outputs : [];
+      const existing = outputs.find(output => Number(output?.pin) === Number(pin));
+      if (existing && Number(existing.pixels) > 0) {
+        // The card is playing its own pattern and redraws every frame. Sending
+        // light without stopping it means the pattern immediately paints over
+        // the probe, which looks exactly like "the button did nothing". Stop
+        // playback first, then drive the port.
+        await stopCardPlayback(host);
+        const frame = new Array(Number(existing.pixels)).fill(PROBE_LIGHT_COLOR);
+        probeStreamRef.current = createCardFrameStream({ host });
+        probeStreamRef.current.start();
+        probeStreamRef.current.push(frame);
+        setPinnedPort(pin);
+        setProbeBusy(null);
+        return;
+      }
+      // NO reconfigure path. Rewriting the card's setup just to look at a port
+      // moves its output away from the strip that is actually plugged in — the
+      // probe destroys the very thing it is meant to help find. If the card is
+      // not already driving this port, say so and let the owner tick it instead.
+      setProbeBusy(null);
+      setProbeError(
+        `This card is not set up to drive GPIO ${pin} yet, so it cannot light it without changing your setup. `
+        + `If you know your strip is there, tick it below and carry on.`,
+      );
+      return;
     } catch (error) {
-      setProbeError(error?.message || `Studio could not reach the card to light GPIO ${pin}.`);
+      setProbeBusy(null);
       setPinnedPort(null);
+      setProbeError(`Could not light GPIO ${pin}: ${error?.message || 'the card did not answer'}. You can still tick it below if you know your strip is there.`);
     }
-  }, [host, pinnedPort]);
+  }, [host, pinnedPort, serializeProject, projectRevision]);
 
   const noteStreamHealth = useCallback(report => {
     setStreamHealth(current => {
@@ -583,11 +687,98 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
       ...portRoles,
     ]);
     setPortRoles(writeDiscoveredPortRoles(merged));
+    // T3: the discovery answers become the project's own portRoles and
+    // standalone controller outputs, so a layout can be wired up and pushed
+    // straight to this card from Studio.
+    const parts = discoveryProjectParts(session, channelProof);
+    // Hold on to exactly what was measured. The panel's own portRoles list still
+    // carries the bench headroom the probe expanded to, so installing from it puts
+    // the temporary length on the card instead of the one the owner counted.
+    committedPartsRef.current = parts;
+    setProjectPortRoles(parts.portRoles);
+    setProjectStandaloneController(previous => ({
+      ...previous,
+      ...(parts.colorOrder ? { led: { ...(previous?.led || {}), colorOrder: parts.colorOrder } } : {}),
+      outputs: parts.outputs,
+    }));
     setRecorded(true);
     dispatch({ type: 'recorded' });
     void streamRef.current?.stop();
     streamRef.current = null;
     setStreamHealth(null);
+  };
+
+  // T3: put the REAL project on the card, replacing the provisional bench
+  // config this walk installed. Same shared path the guided Setup screen uses
+  // (deploySetupToCard), so a card that is streaming frames, mid-reboot, or
+  // holding a half-finished wiring change is handled the same way every time.
+  // A card that holds a DIFFERENT project is never overwritten — the push stops
+  // and offers the clear-and-retry path instead of writing over it.
+  const installOnCard = async (takeOver = false) => {
+    if (!host) {
+      setInstallError('Studio does not know which card to install onto.');
+      setInstallErrorReason('');
+      return;
+    }
+    if (projectLifecycle.generation == null) {
+      setInstallError('This project has no generation, so Studio cannot install it. Open a project first.');
+      setInstallErrorReason('');
+      return;
+    }
+    setBusy(true);
+    setInstallError('');
+    setInstallErrorReason('');
+    setInstallProgress('');
+    try {
+      const cardId = cardLink?.card?.id || readPersistedCardIdentity()?.id || '';
+      // prepareCardDeployment takes the FLAT card-facing shape, not the nested
+      // saved-project shape — handing it the nested one silently collapses to
+      // the built-in placeholder wiring. Same contract lw-setup-ish installs use.
+      // Build from what this walk MEASURED, not from the drawing. The drawing is
+      // still the starter placeholder at this point and describes a strip that does
+      // not exist; using it is how a card ends up driving the wrong port and length.
+      const saved = serializeProject();
+      const prepared = buildPackageForPortRoles({
+        projectId: saved.id,
+        projectName: saved.name,
+        projectRevision,
+        standaloneController: saved.devices?.standaloneController || {},
+        portRoles: committedPartsRef.current?.portRoles || portRoles,
+      }, prepareCardDeployment);
+      // The card is holding the temporary setup THIS walk just put on it. That is
+      // not somebody else's piece, and refusing to replace it made the walk block
+      // its own last step — telling the owner to clear the card and start over,
+      // throwing away everything they had just answered. Replacing our own scratch
+      // setup is the entire point of this button. A card holding a REAL project is
+      // still spoken for and stops below with the clear-and-retry way out.
+      let ownScratchSetup = false;
+      try {
+        ownScratchSetup = isBenchProjectEvidence(await readCardProjectEvidence({ host }));
+      } catch { /* cannot tell; fall through to the refusal path */ }
+      await deploySetupToCard(prepared.runtimePackage, host, {
+        onProgress: setInstallProgress,
+        allowProjectChange: ownScratchSetup || takeOver,
+      });
+      clearDiscoveryRun();
+      setInstalled(true);
+    } catch (error) {
+      if (error?.reason === 'project-mismatch') {
+        // The card is paired with a different project than the open one, so it
+        // is not Studio's to overwrite. Same plain-English refusal and the same
+        // one-tap clear-and-retry path used elsewhere on this screen.
+        // Never answer this with "clear the card and start over" — that throws
+        // away everything the owner just walked through. Offer to use this card
+        // for this piece, which is what they meant by pressing the button.
+        setInstallErrorReason('project-mismatch');
+        setInstallError('This card is set up for a different piece. Sending this setup will replace what is on it.');
+      } else {
+        setInstallError(installFailureText(error));
+        setInstallErrorReason(error?.reason || '');
+      }
+    } finally {
+      setBusy(false);
+      setInstallProgress('');
+    }
   };
 
   const warnings = discoveryWarnings(session);
@@ -700,44 +891,50 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
               {probeError}
             </p>
           )}
-          <ul className="strip-discovery-ports">
-            {portRoles.map(entry => (
-              <li key={entry.pin}>
-                <span>{portLabel(entry)}</span>
-                {BENCH_RESERVED_CONTROL_PINS.includes(entry.pin) ? (
-                  <span
-                    className="strip-discovery-port-unavailable"
-                    data-testid={`discovery-port-unavailable-${entry.pin}`}
-                  >
-                    In use by the controls
-                  </span>
-                ) : (
-                  <>
-                    {probePorts?.available && probePorts.ports.includes(entry.pin) && (
-                      <button
-                        type="button"
-                        className={`btn strip-discovery-probe${pinnedPort === entry.pin ? ' is-lit' : ''}`}
-                        data-testid={`discovery-probe-${entry.pin}`}
-                        aria-pressed={pinnedPort === entry.pin}
-                        onClick={() => probePort(entry.pin)}
-                      >
-                        {pinnedPort === entry.pin ? 'Lit — turn off' : 'Light it'}
-                      </button>
-                    )}
-                    <select
-                      aria-label={`${portLabel(entry)} role`}
-                      value={entry.role}
-                      onChange={event => setPortRole(entry.pin, event.target.value)}
-                    >
-                      <option value={PORT_ROLE_STRIP}>Look for a strip</option>
-                      <option value={PORT_ROLE_CONTROL}>Physical control</option>
-                      <option value={PORT_ROLE_UNUSED}>Skip</option>
-                    </select>
-                  </>
-                )}
-              </li>
-            ))}
-          </ul>
+          {/* Every port, as buttons. Click one and it lights, so the owner looks at
+              the strip instead of reading a list. Under the grid, one check: is a
+              light actually installed on the port you just lit. */}
+          {probeBusy && (
+            <p className="strip-discovery-note" role="status" data-testid="discovery-probe-busy">{probeBusy.message}</p>
+          )}
+          <div className="strip-discovery-grid" role="group" aria-label="Card output ports">
+            {portRoles.filter(entry => !BENCH_RESERVED_CONTROL_PINS.includes(entry.pin)).map(entry => {
+              const lit = pinnedPort === entry.pin;
+              const picked = entry.role === PORT_ROLE_STRIP;
+              return (
+                <button
+                  key={entry.pin}
+                  type="button"
+                  className={`strip-discovery-port${lit ? ' is-lit' : ''}${picked ? ' is-picked' : ''}${selectedPort === entry.pin ? ' is-selected' : ''}`}
+                  data-testid={`discovery-probe-${entry.pin}`}
+                  aria-pressed={lit}
+                  title={`Light GPIO ${entry.pin}`}
+                  onClick={() => probePort(entry.pin)}
+                >
+                  <span className="strip-discovery-port-pin">{portLabel(entry)}</span>
+                  {probeBusy?.pin === entry.pin && <span className="strip-discovery-port-note">Lighting…</span>}
+                  {lit && <span className="strip-discovery-port-note">Lit — turn off</span>}
+                  {picked && !lit && <span className="strip-discovery-port-note">lights here</span>}
+                </button>
+              );
+            })}
+          </div>
+          {portRoles.some(entry => BENCH_RESERVED_CONTROL_PINS.includes(entry.pin)) && (
+            <p className="strip-discovery-note" data-testid="discovery-control-pins">
+              The other ports are held by the knobs and buttons.
+            </p>
+          )}
+          {selectedPort !== null && (
+            <label className="strip-discovery-pick strip-discovery-pick-block" data-testid="discovery-pick-row">
+              <input
+                type="checkbox"
+                data-testid={`discovery-claim-${selectedPort}`}
+                checked={portRoles.find(entry => entry.pin === selectedPort)?.role === PORT_ROLE_STRIP}
+                onChange={event => setPortRole(selectedPort, event.target.checked ? PORT_ROLE_STRIP : PORT_ROLE_UNUSED)}
+              />
+              <span>Lights are installed on GPIO {selectedPort}</span>
+            </label>
+          )}
           {overOutputLimit && (
             <p className="lw-card-banner is-inline" role="alert" data-testid="discovery-output-limit">
               This card can drive {CARD_HARDWARE_CONTRACT.maxOutputs} strip outputs at once
@@ -942,11 +1139,69 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
 
       {phase === 'done' && (
         <section className="strip-discovery-step" data-testid="discovery-done">
-          <h3>Saved</h3>
-          <p>The card is still holding the temporary setup. Build your layout, then install it to replace this.</p>
-          <button type="button" className="btn primary" data-testid="discovery-open-layout" onClick={() => go?.('layout')}>
-            Go to Layout
-          </button>
+          {installed ? (
+            <div data-testid="discovery-installed">
+              <h3>On the card</h3>
+              <p>Your setup is saved on the card and the lights are running. Open Patterns to start the show.</p>
+              <button
+                type="button"
+                className="btn primary"
+                data-testid="discovery-open-patterns"
+                onClick={() => { window.location.hash = '#screen=pattern'; }}
+              >
+                Open Patterns
+              </button>
+            </div>
+          ) : (
+            <>
+              <h3>One more step</h3>
+              <p>Your answers are saved, but the card is still running the temporary test setup from this walk. Put your real setup on it to finish.</p>
+              <button
+                type="button"
+                className="btn primary"
+                data-testid="discovery-install"
+                disabled={busy}
+                onClick={() => void installOnCard()}
+              >
+                {busy ? 'Putting this on the card…' : 'Put this setup on the card'}
+              </button>
+              {busy && installProgress && (
+                <p className="strip-discovery-note" role="status" data-testid="discovery-install-progress">
+                  {installProgress}
+                </p>
+              )}
+              <button type="button" className="btn" data-testid="discovery-open-layout" onClick={() => go?.('layout')}>
+                Go to Layout
+              </button>
+            </>
+          )}
+          {installError && (
+            <div className="card-connection-failure" role="alert" data-testid="discovery-install-failed">
+              <p>{installError}</p>
+              {installErrorReason === 'project-mismatch' && (
+                <button
+                  type="button"
+                  className="btn primary"
+                  data-testid="discovery-install-takeover"
+                  disabled={busy}
+                  onClick={() => void installOnCard(true)}
+                >
+                  Use this card for this piece
+                </button>
+              )}
+              {installErrorReason === 'staged-existing-project' && (
+                <button
+                  type="button"
+                  className="btn"
+                  data-testid="discovery-install-clear-and-retry"
+                  disabled={busy}
+                  onClick={() => void clearCardAndRetry()}
+                >
+                  Clear the card and start over
+                </button>
+              )}
+            </div>
+          )}
         </section>
       )}
 

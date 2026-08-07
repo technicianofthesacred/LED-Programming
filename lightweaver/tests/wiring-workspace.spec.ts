@@ -213,7 +213,7 @@ test('Test & Install is a compiler-derived read-only commissioning surface', asy
 
 test('Test & Install shows a compact Wire summary and one next-action CTA instead of step chrome', async ({ page }) => {
   await gotoWire(page);
-  await expect(planMeta(page)).toHaveText('2 strips · 44 LEDs · from Wire');
+  await expect(planMeta(page)).toHaveText('2 strips · 44 LEDs in this design');
   // Deleted chrome: the step rail, stat tiles, card step titles/pills.
   await expect(page.getByRole('group', { name: 'Steps' })).toHaveCount(0);
   await expect(page.locator('.lwui-tile')).toHaveCount(0);
@@ -281,7 +281,7 @@ test('Custom mapping inserts and removes a zero-address cable jump without chang
     .filter((run: any) => run?.type === 'strip')
     .map((run: any) => run.source.stripId))
     .toEqual(['default-outer-circle', 'default-inner-circle']);
-  await expect(planMeta(page)).toHaveText('2 strips · 44 LEDs · from Wire');
+  await expect(planMeta(page)).toHaveText('2 strips · 44 LEDs in this design');
 
   await jumpRow.getByRole('button', { name: 'Remove cable jump' }).click();
   await expect(jumpRow).toHaveCount(0);

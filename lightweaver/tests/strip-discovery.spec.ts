@@ -186,9 +186,14 @@ async function mockBlankCard(page: any, { firmware = 'blank-applies' as CardFirm
   return card;
 }
 
+// addInitScript re-runs on EVERY navigation, including page.reload(). Clearing
+// storage unconditionally therefore wiped lw_discovery_run_v1 before the app
+// booted, which made the resume-after-reload banner unreachable in tests no
+// matter how the product behaved (ui-repair B2/O1). Clear only on the first
+// boot of a context — the identity key is the sentinel for "already seeded".
 async function seedBlankCardLink(page: any) {
   await page.addInitScript(cardId => {
-    localStorage.clear();
+    if (!localStorage.getItem('lw_card_identity_v1')) localStorage.clear();
     localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: cardId }));
     localStorage.setItem('lw_card_host', 'lightweaver.local');
   }, CARD_ID);
@@ -216,7 +221,12 @@ async function startDiscoveryOnGpio16(page: any) {
   const panel = page.getByTestId('strip-discovery');
   await expect(panel).toBeVisible();
   await expect(page.getByTestId('discovery-start')).toBeDisabled();
-  await page.getByLabel('GPIO 16 role').selectOption('strip');
+  // Idempotent: the port may already be lit from an earlier step, and clicking a
+  // lit port turns it off.
+  if (await page.getByTestId('discovery-probe-16').getAttribute('aria-pressed') !== 'true') {
+    await page.getByTestId('discovery-probe-16').click();
+  }
+  await page.getByTestId('discovery-claim-16').check();
   await page.getByTestId('discovery-start').click();
 }
 
@@ -238,7 +248,7 @@ test.describe('a blank card whose firmware applies its first config', () => {
     await expect(page.getByTestId('strip-discovery')).toBeVisible();
 
     await page.getByTestId('discovery-probe-18').click();
-    await expect(page.getByTestId('discovery-probe-18')).toHaveText('Lit — turn off');
+    await expect(page.getByTestId('discovery-probe-18')).toContainText('Lit — turn off');
     await expect(page.getByTestId('discovery-probe-18')).toHaveAttribute('aria-pressed', 'true');
     // Polled, not asserted outright: the button label reflects Studio's own
     // state as soon as React re-renders, while the card only knows once the
@@ -251,14 +261,14 @@ test.describe('a blank card whose firmware applies its first config', () => {
     // Picking a different port moves the light rather than lighting both, or the
     // owner could not tell which port answered.
     await page.getByTestId('discovery-probe-21').click();
-    await expect(page.getByTestId('discovery-probe-21')).toHaveText('Lit — turn off');
-    await expect(page.getByTestId('discovery-probe-18')).toHaveText('Light it');
+    await expect(page.getByTestId('discovery-probe-21')).toContainText('Lit — turn off');
+    await expect(page.getByTestId('discovery-probe-18')).not.toContainText('Lit — turn off');
     await expect.poll(() => card.beaconPinned).toBe(21);
 
     // Clicking the lit port again turns it off, so a probe can be stopped
     // without leaving the screen.
     await page.getByTestId('discovery-probe-21').click();
-    await expect(page.getByTestId('discovery-probe-21')).toHaveText('Light it');
+    await expect(page.getByTestId('discovery-probe-21')).not.toContainText('Lit — turn off');
     await expect.poll(() => card.beaconPinned).toBeNull();
   });
 
@@ -409,7 +419,8 @@ test.describe('a blank card whose firmware applies its first config', () => {
     await expect(page.getByTestId('discovery-plan')).toContainText('up to 4');
 
     for (const pin of [15, 16, 17, 18, 21]) {
-      await page.getByLabel(`GPIO ${pin} role`).selectOption('strip');
+      await page.getByTestId(`discovery-probe-${pin}`).click();
+      await page.getByTestId(`discovery-claim-${pin}`).check();
     }
     const limit = page.getByTestId('discovery-output-limit');
     await expect(limit).toBeVisible();
@@ -581,7 +592,7 @@ test.describe('a reload mid-discovery (ui-repair B2)', () => {
   // so the fault is somewhere between the write and the read and needs a live
   // debugging pass, not another reading of the code. These two tests describe
   // the intended behaviour exactly and should be un-fixme'd by whoever fixes it.
-  test.fixme('the run is offered back after a reload and resumes at the same question', async ({ page }) => {
+  test('the run is offered back after a reload and resumes at the same question', async ({ page }) => {
     await page.goto('/#screen=discovery', { waitUntil: 'domcontentloaded' });
     await dispatchBlankCard(page);
     await startDiscoveryOnGpio16(page);
@@ -608,7 +619,7 @@ test.describe('a reload mid-discovery (ui-repair B2)', () => {
   });
 
   // KNOWN BROKEN — same cause as the test above (ui-repair B2).
-  test.fixme('Start over discards the stored run and returns a clean port picker', async ({ page }) => {
+  test('Start over discards the stored run and returns a clean port picker', async ({ page }) => {
     await page.goto('/#screen=discovery', { waitUntil: 'domcontentloaded' });
     await dispatchBlankCard(page);
     await startDiscoveryOnGpio16(page);

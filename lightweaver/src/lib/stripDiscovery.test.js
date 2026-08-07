@@ -22,6 +22,7 @@ import {
   discoveryFrame,
   discoveryPortRoleUpdates,
   discoveryWarnings,
+  namedColorOrderFromChannelMap,
   totalDiscoveredPixels,
 } from './stripDiscovery.js';
 
@@ -270,4 +271,36 @@ test('correctFrameForChannelMap makes the real strip show the intended hues', ()
   const frame = ['3C0000'];
   assert.equal(correctFrameForChannelMap(frame, null), frame);
   assert.equal(correctFrameForChannelMap(null, map), null);
+});
+
+test('namedColorOrderFromChannelMap resolves every true order from the measured map', () => {
+  // Predicted under the default declared order GRB: for each physical order,
+  // the send slot a value must occupy for red/green/blue to render.
+  const expectedMaps = {
+    GRB: { red: 0, green: 1, blue: 2 },
+    RGB: { red: 1, green: 0, blue: 2 },
+    BRG: { red: 0, green: 2, blue: 1 },
+    BGR: { red: 2, green: 0, blue: 1 },
+    RBG: { red: 1, green: 2, blue: 0 },
+    GBR: { red: 2, green: 1, blue: 0 },
+  };
+  for (const [order, channelMap] of Object.entries(expectedMaps)) {
+    assert.equal(namedColorOrderFromChannelMap(channelMap), order, `${JSON.stringify(channelMap)} should resolve to ${order}`);
+  }
+});
+
+test('namedColorOrderFromChannelMap identity map resolves to the declared order', () => {
+  // The sanity case: red sent renders red, green sent renders green — the strip
+  // is exactly what the bench was told to assume, so the answer is that order.
+  assert.equal(namedColorOrderFromChannelMap({ red: 0, green: 1, blue: 2 }), 'GRB');
+  assert.equal(namedColorOrderFromChannelMap({ red: 0, green: 1, blue: 2 }, 'RGB'), 'RGB');
+  assert.equal(namedColorOrderFromChannelMap({ red: 1, green: 0, blue: 2 }, 'RGB'), 'GRB');
+});
+
+test('namedColorOrderFromChannelMap is empty when the map is unknown or incomplete', () => {
+  assert.equal(namedColorOrderFromChannelMap(null), '');
+  assert.equal(namedColorOrderFromChannelMap(undefined), '');
+  assert.equal(namedColorOrderFromChannelMap({}), '');
+  assert.equal(namedColorOrderFromChannelMap({ red: 0, green: 1 }), '', 'a missing blue leaves no resolvable order');
+  assert.equal(namedColorOrderFromChannelMap({ red: 0, green: 0, blue: 2 }), '', 'a repeated slot is not any real order');
 });
