@@ -62,6 +62,7 @@ import {
   stageCardProjectForPhysicalCheck,
   writeCardCommissioning,
 } from '../../lib/cardCommissioningFlow.js';
+import { describeSetupHotspotWait, SETUP_HOTSPOT_RESCAN_MS } from '../../lib/setupHotspotWait.js';
 
 // The card's soft-AP address. Only reachable while this device is joined to the
 // card's own setup hotspot.
@@ -187,6 +188,29 @@ export function CardCommissioningSteps({ stage = 'connect-card' }) {
   );
 }
 
+// A once-a-second clock, running only while something on screen is actually
+// counting. The setup-hotspot wait is the only such thing, and it has to tick:
+// a countdown rendered once at mount is a number the owner watches not change,
+// which is worse than no countdown at all. `until` stops the interval once the
+// last phase boundary is behind us, so a panel left open on this step does not
+// re-render forever to say the same sentence.
+function useSecondTick(active, until = Infinity) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return undefined;
+    const start = Date.now();
+    setNow(start);
+    if (start >= until) return undefined;
+    const timer = window.setInterval(() => {
+      const tick = Date.now();
+      setNow(tick);
+      if (tick >= until) window.clearInterval(timer);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [active, until]);
+  return now;
+}
+
 function identityMessage(reason, expected = {}, actual = {}) {
   if (reason === 'wrong-card') return `Studio expected ${expected.id}, but ${actual.id || 'another card'} answered. Reconnect the installed card.`;
   if (reason === 'wrong-firmware-version') return `Studio expected firmware ${expected.firmwareVersion}, but the card reports ${actual.firmwareVersion || 'no version'}.`;
@@ -249,6 +273,19 @@ export function CardCommissioningPanel({
     flow?.project?.pendingWiring
     && flow.project.wiringEvidenceState !== 'legacy-inconclusive',
   );
+
+  // `updatedAt` is stamped by completeCardInstall / returnCardToSetupNetworkPath
+  // at the moment the card was left broadcasting its setup hotspot, and nothing
+  // rewrites it while `setup-required` holds — so it is the honest start of the
+  // owner's wait for that network to show up in their Wi-Fi list. Tick only
+  // during that state; every other screen here is event-driven.
+  const awaitingSetupHotspot = flow?.stage === 'set-up-card' && flow?.networkState === 'setup-required';
+  // Past the last boundary the wording is fixed, so there is nothing left to
+  // count and the clock can stop.
+  const hotspotWaitEndsAt = Number(flow?.updatedAt) > 0
+    ? Number(flow.updatedAt) + SETUP_HOTSPOT_RESCAN_MS + 1000
+    : 0;
+  const hotspotNow = useSecondTick(awaitingSetupHotspot, hotspotWaitEndsAt);
 
   useEffect(() => {
     const sync = () => {
@@ -752,6 +789,14 @@ export function CardCommissioningPanel({
   // flow, fixture data) the copy describes the network instead of naming one.
   const setupSsid = setupNetworkSsidForCardId(flow.expectedCard?.id);
   const setupNetworkLabel = setupNetworkLabelForCardId(flow.expectedCard?.id);
+  // "Join the setup network" is an instruction the owner cannot obey for the
+  // first half-minute of its life: the card is broadcasting, but this device
+  // has not rescanned yet. Say which of those three things is true right now.
+  const hotspotWait = describeSetupHotspotWait({
+    startedAt: flow.updatedAt,
+    now: hotspotNow,
+    label: setupNetworkLabel,
+  });
 
   // What the USB serial port said the card did after the flash. `station-detected`
   // means the card's saved Wi-Fi survived the install: it went straight onto the
@@ -1041,9 +1086,23 @@ export function CardCommissioningPanel({
             </div>
           )}
           {!flow.cardAcknowledgedAt && !['found', 'return-to-gallery'].includes(detection.state) && flow.networkState === 'setup-required' && (
-            <div className="card-commissioning-network">
-              <p>The clean installation reset Wi-Fi. First open this device’s Wi-Fi settings and join <strong>{setupNetworkLabel}</strong>. The setup address only works while that network is joined.</p>
+            <div className="card-commissioning-network" data-hotspot-wait={hotspotWait.phase}>
+              <p>The clean installation reset Wi-Fi, so the card is now broadcasting <strong>{setupNetworkLabel}</strong> for you to join. The setup address only works while that network is joined.</p>
+              {/*
+                The wait itself, stated. Without it the owner opens Wi-Fi
+                settings, does not see the network, and concludes something is
+                broken — when all that has happened is that their phone has not
+                rescanned yet. This counts down instead of asserting.
+              */}
+              <p className="card-commissioning-hotspot-wait" role="status" data-testid="setup-hotspot-wait">
+                <strong>{hotspotWait.headline}</strong> {hotspotWait.detail}
+              </p>
               <button type="button" className="btn primary" onClick={confirmSetupNetwork}>{setupSsid ? `I’ve joined ${setupSsid}` : 'I’ve joined the setup network'}</button>
+              {hotspotWait.phase === 'overdue' && (
+                <button type="button" className="btn" onClick={reconnectInstalledCard} disabled={reconnecting} data-testid="setup-hotspot-no-network">
+                  {reconnecting ? 'Reconnecting…' : 'There is no such network — look for the card on my Wi-Fi'}
+                </button>
+              )}
               {detection.state === 'searching' && <p role="status">Looking for {flow.expectedCard.id} on your network…</p>}
             </div>
           )}

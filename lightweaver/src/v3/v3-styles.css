@@ -722,6 +722,24 @@ input[type=number]::-webkit-outer-spin-button {
 .card-commissioning-steps li.complete { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, var(--border)); }
 .card-commissioning-steps li.active { color: var(--text-hi); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .card-commissioning-network { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; }
+/* The setup-hotspot wait. Reads as guidance while the network is still coming,
+   and as something to act on once it is overdue — the phase drives the tint so
+   an owner scanning the screen can tell "keep waiting" from "do something". */
+.card-commissioning-hotspot-wait {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-mid);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+}
+.card-commissioning-hotspot-wait strong { color: var(--text-hi); }
+[data-hotspot-wait='overdue'] .card-commissioning-hotspot-wait {
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 35%, var(--border));
+}
 @media (max-width: 640px) {
   .card-commissioning-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

@@ -82,6 +82,10 @@ uint8_t apChannel = 0;
 // Slow enough not to thrash the shared radio, fast enough that the setup
 // page fills in within a poll or two once the radio is free.
 constexpr uint32_t LW_WIFI_SCAN_RETRY_MS = 3000;
+// How many networks the setup picker is given. The list is deduplicated by name
+// and sorted strongest-first before this bound is applied, so the bound cuts off
+// distant networks rather than whichever ones the radio happened to find last.
+constexpr int LW_WIFI_SCAN_MAX_NETWORKS = 20;
 uint32_t lastScanStartMs = 0;
 uint32_t apTeardownGeneration = 0;
 uint32_t apTeardownDeadlineMs = 0;
@@ -1517,6 +1521,18 @@ void handleWifiScan() {
     lastScanStartMs = 0;
     found = WIFI_SCAN_FAILED;
   }
+  // A completed scan that found NOTHING is not an answer, it is a scan that
+  // lost the race with the radio — the AP beacon, an in-flight join, or a
+  // channel switch. Serving it as final is what put "No networks found" on the
+  // setup page and made pressing Rescan a required step of setup: the owner's
+  // network was always there, the card had simply stopped looking. Fold it into
+  // the retry branch so the card keeps looking on its own. A location that
+  // genuinely has no networks still ends at the same message, one poll budget
+  // later, with the manual name field beside it.
+  if (found == 0) {
+    WiFi.scanDelete();
+    found = WIFI_SCAN_FAILED;
+  }
   if (found == WIFI_SCAN_RUNNING) {
     server.send(200, "application/json", "{\"scanning\":true,\"networks\":[]}");
     return;
@@ -1531,15 +1547,58 @@ void handleWifiScan() {
     server.send(200, "application/json", "{\"scanning\":true,\"networks\":[]}");
     return;
   }
+  // Which networks survive the bound decides whether the owner's own network is
+  // in the picker, and the raw scan is the wrong order for that. It arrives in
+  // discovery order, and a mesh or dual-band router publishes one SSID several
+  // times over — so a truncated raw list could spend every slot on duplicates
+  // and far-away neighbours while the network the owner is standing inside sat
+  // below the cut. Pressing Rescan reshuffled discovery order and it "appeared",
+  // which is how a list problem read as a scanning problem. One row per name,
+  // strongest first, and the bound then only ever drops the weakest.
+  struct ScanEntry { int index; int32_t rssi; };
+  ScanEntry entries[LW_WIFI_SCAN_MAX_NETWORKS];
+  int count = 0;
+  for (int i = 0; i < found; i++) {
+    String ssid = WiFi.SSID(i);
+    // A hidden network has no name to select, and renders as a blank row.
+    if (!ssid.length()) continue;
+    int32_t rssi = WiFi.RSSI(i);
+    int existing = -1;
+    for (int j = 0; j < count; j++) {
+      if (WiFi.SSID(entries[j].index) == ssid) { existing = j; break; }
+    }
+    if (existing >= 0) {
+      // Same network, nearer radio: keep the one the card can actually hear.
+      if (rssi > entries[existing].rssi) entries[existing] = ScanEntry{i, rssi};
+      continue;
+    }
+    if (count < LW_WIFI_SCAN_MAX_NETWORKS) {
+      entries[count++] = ScanEntry{i, rssi};
+      continue;
+    }
+    int weakest = 0;
+    for (int j = 1; j < count; j++) {
+      if (entries[j].rssi < entries[weakest].rssi) weakest = j;
+    }
+    if (rssi > entries[weakest].rssi) entries[weakest] = ScanEntry{i, rssi};
+  }
+  // Insertion sort, strongest first. `count` is bounded by the cap above, so
+  // this is a few dozen comparisons at worst.
+  for (int i = 1; i < count; i++) {
+    ScanEntry key = entries[i];
+    int j = i - 1;
+    while (j >= 0 && entries[j].rssi < key.rssi) { entries[j + 1] = entries[j]; j--; }
+    entries[j + 1] = key;
+  }
+
   JsonDocument doc;
   doc["scanning"] = false;
   JsonArray arr = doc["networks"].to<JsonArray>();
-  int limit = found > 12 ? 12 : found;
-  for (int i = 0; i < limit; i++) {
+  for (int i = 0; i < count; i++) {
     JsonObject net = arr.add<JsonObject>();
-    net["ssid"] = WiFi.SSID(i);
-    net["rssi"] = WiFi.RSSI(i);
-    net["secure"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+    net["ssid"] = WiFi.SSID(entries[i].index);
+    net["rssi"] = entries[i].rssi;
+    net["secure"] = WiFi.encryptionType(entries[i].index) != WIFI_AUTH_OPEN;
   }
   // Results are kept, not deleted-and-rescanned: the channel of the chosen
   // network is read back from them when the join starts.

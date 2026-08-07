@@ -221,10 +221,14 @@ async function seedCommissioningFlow(
   // What Studio observed on the USB serial port as the card rebooted after the
   // flash. Omitted = no observation recorded (the pre-detection behaviour).
   postFlashNetwork: { state: string; stationIp?: string } | null = null,
+  // How long ago the flow was stamped. The setup-hotspot wait is measured from
+  // that stamp, so ageing the flow is how a test reaches the later phases of it
+  // without sitting through a real minute.
+  ageMs = 0,
 ) {
-  await page.evaluate(async ([requestedProgress, observedNetwork]: any) => {
+  await page.evaluate(async ([requestedProgress, observedNetwork, age]: any) => {
     const api = await import('/src/lib/cardCommissioningFlow.js');
-    const startedAt = Date.now();
+    const startedAt = Date.now() - Number(age || 0);
     const projectRecord = {
       id: 'card-workspace-project',
       updatedAt: 100,
@@ -287,7 +291,7 @@ async function seedCommissioningFlow(
       delete saved.project.pendingWiring;
       localStorage.setItem(api.CARD_COMMISSIONING_STORAGE_KEY, JSON.stringify(registry));
     }
-  }, [progress, postFlashNetwork] as any);
+  }, [progress, postFlashNetwork, ageMs] as any);
 }
 
 async function connectCommissioningCard(page) {
@@ -452,6 +456,42 @@ test('a genuinely factory-blank card still gets the unchanged hotspot step', asy
 
   await page.getByRole('button', { name: 'I\u2019ve joined Lightweaver-EEFF', exact: true }).click();
   await expect(page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toBeVisible();
+});
+
+// The reported confusion: told to join Lightweaver-EEFF, the owner opens Wi-Fi
+// settings, the network is not listed yet, and nothing on screen says that is
+// normal. Studio now states which phase of the wait it is in and counts down.
+test('the setup hotspot step says the network takes a moment, then escalates', async ({ page }) => {
+  await page.goto('/#screen=card&section=install', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'wifi', { state: 'setup-ap' });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  const wait = page.getByTestId('setup-hotspot-wait');
+  await expect(wait).toBeVisible();
+  await expect(page.locator('[data-hotspot-wait="appearing"]')).toBeVisible();
+  await expect(wait).toContainText('may not be in this device\u2019s Wi-Fi list yet');
+  // Nothing that reads as a fault while the card is still perfectly healthy.
+  await expect(page.getByTestId('setup-hotspot-no-network')).toHaveCount(0);
+
+  // The countdown is live, not a number printed once at mount.
+  const firstReading = await wait.innerText();
+  await expect.poll(() => wait.innerText(), { timeout: 4000 }).not.toBe(firstReading);
+});
+
+// Two scan cycles after the card started broadcasting, every device that was
+// going to notice on its own has had its chance. Studio stops asking for
+// patience and names the two things that actually cause a missing network.
+test('a setup hotspot that never appears stops asking the owner to wait', async ({ page }) => {
+  await page.goto('/#screen=card&section=install', { waitUntil: 'domcontentloaded' });
+  await seedCommissioningFlow(page, 'wifi', { state: 'setup-ap' }, 90_000);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await expect(page.locator('[data-hotspot-wait="overdue"]')).toBeVisible();
+  const wait = page.getByTestId('setup-hotspot-wait');
+  await expect(wait).toContainText('Wi-Fi off and back on');
+  await expect(wait).toContainText('already on your network');
+  await expect(wait).not.toContainText('more seconds');
+  await expect(page.getByTestId('setup-hotspot-no-network')).toBeVisible();
 });
 
 test('an inconclusive post-flash observation offers both routes instead of asserting one', async ({ page }) => {
