@@ -1,5 +1,5 @@
 /* Lightweaver v3 — safe automatic installer + technician diagnostics. */
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { I } from './lw-shared.jsx';
 import { connectESP, disconnectESP, flashFirmware, inspectConnectedESP } from '../lib/flash.js';
 import {
@@ -32,6 +32,8 @@ import {
   writeCardCommissioning,
 } from '../lib/cardCommissioningFlow.js';
 import { observePostFlashNetwork } from '../lib/cardPostFlashNetwork.js';
+import { describeFirmwareUpdate, resolveInstalledFirmware } from '../lib/firmwareUpdatePlan.js';
+import { readPersistedCardIdentity } from '../lib/cardIdentity.js';
 import { openInChrome } from '../lib/openInChrome.js';
 
   const STEPS = [
@@ -438,6 +440,17 @@ import { openInChrome } from '../lib/openInChrome.js';
     const [installState, setInstallState] = useState('idle');
     const [releaseAttempt, setReleaseAttempt] = useState(0);
     const [commissioning, setCommissioning] = useState(readCardCommissioning);
+    // What the card is running NOW, so the screen can say which direction this
+    // install moves it. A live link is the best account; a remembered identity
+    // is used only when it belongs to the card actually plugged in.
+    const updatePlan = useMemo(() => describeFirmwareUpdate({
+      installed: resolveInstalledFirmware({
+        linkedCard: cardLink?.card,
+        rememberedCard: readPersistedCardIdentity(),
+        hardware: cardState.hardware,
+      }),
+      available: releaseState.state === 'ready' ? releaseState.release.manifest : null,
+    }), [cardLink?.card, cardState.hardware, releaseState]);
     const loaderRef = useRef(null);
     const transportRef = useRef(null);
     const mountedRef = useRef(true);
@@ -659,6 +672,18 @@ import { openInChrome } from '../lib/openInChrome.js';
           {releaseState.state === 'ready' && `Official Lightweaver ${releaseState.release.manifest.firmwareVersion} · ${formatFirmwareBuildLabel(releaseState.release.manifest)} verified and ready.`}
           {releaseState.state === 'error' && `Official firmware could not be verified. Nothing can be installed. ${releaseState.error}`}
         </div>
+        {/*
+          What this install actually does to THIS card. Stating only the firmware
+          about to be written answers "what is this?" but not "am I changing
+          anything, and which way?" — and an install is never free, so the same
+          build being reinstalled has to read as a wipe, not as an upgrade.
+        */}
+        {updatePlan.headline && (
+          <div className={`install-update-plan is-${updatePlan.state}`} data-testid="install-update-plan" role="status">
+            <p className="install-update-headline">{updatePlan.headline}</p>
+            <p className="install-update-caution">{updatePlan.caution}</p>
+          </div>
+        )}
         {releaseState.state === 'error' && (
           <button className="btn" type="button" onClick={() => setReleaseAttempt(attempt => attempt + 1)}>Retry official firmware</button>
         )}
