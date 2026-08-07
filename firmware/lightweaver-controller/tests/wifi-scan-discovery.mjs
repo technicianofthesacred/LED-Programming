@@ -70,6 +70,36 @@ const windowMs = Number(pollBudget[1]) * Number(pollBudget[2]);
 assert.ok(windowMs >= 40000,
   `setup page must poll for at least 40s so a scan blocked by an in-flight join still lands, got ${windowMs}ms`);
 
+// The reported failure: open the setup page, the owner's own network is not in
+// the picker, and pressing Rescan by hand makes it appear. Two causes, both of
+// which made the card stop looking while the network was there the whole time.
+
+// 1. A completed scan that found nothing was served as a final answer, so the
+//    page said "No networks found" and only an explicit Rescan tried again.
+assert.match(scan, /if\s*\(found\s*==\s*0\)\s*\{[\s\S]{0,200}found\s*=\s*WIFI_SCAN_FAILED;/,
+  'a completed scan with zero results must fall into the rate-limited retry branch, not be reported as "no networks": an empty scan means the scan lost the race with the radio, and serving it makes pressing Rescan a required step of setup');
+const emptyRetry = scan.slice(scan.indexOf('if (found == 0)'), scan.indexOf('JsonDocument doc;'));
+assert.ok(!/server\.send/.test(emptyRetry.slice(0, emptyRetry.indexOf('WIFI_SCAN_RUNNING'))),
+  'the zero-result branch must fall through to the existing retry, not answer on its own');
+
+// 2. The bound on the list was applied to raw discovery order, so duplicates
+//    from a mesh or dual-band router and distant neighbours could fill every
+//    slot while the network the owner is standing in fell below the cut.
+const listBuild = scan.slice(0, scan.indexOf('JsonDocument doc;'));
+assert.ok(!/found\s*>\s*12\s*\?/.test(scan),
+  'the network list must not truncate raw scan order; that is what dropped the owner network below the cut and made Rescan look like the fix');
+assert.match(web, /constexpr\s+int\s+LW_WIFI_SCAN_MAX_NETWORKS\s*=\s*(\d+);/,
+  'the list bound must be a named constant');
+const maxNetworks = Number(web.match(/LW_WIFI_SCAN_MAX_NETWORKS\s*=\s*(\d+);/)[1]);
+assert.ok(maxNetworks >= 16,
+  `the picker must carry enough networks to survive a dense area, got ${maxNetworks}`);
+assert.match(listBuild, /if\s*\(WiFi\.SSID\(entries\[j\]\.index\)\s*==\s*ssid\)/,
+  'networks must be deduplicated by SSID, or one mesh network eats several slots');
+assert.match(listBuild, /if\s*\(!ssid\.length\(\)\)\s*continue;/,
+  'a hidden network has no name to select and must not render as a blank row');
+assert.match(listBuild, /while\s*\(j\s*>=\s*0\s*&&\s*entries\[j\]\.rssi\s*<\s*key\.rssi\)/,
+  'the list must be sorted strongest-first so the bound only ever drops the weakest networks');
+
 // No speculative scan at boot: that ran the radio off-channel during the exact
 // seconds a phone is joining the hotspot.
 const setupWeb = functionBody(web, /void\s+setupLightweaverWeb\s*\(/);

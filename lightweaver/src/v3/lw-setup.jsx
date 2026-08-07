@@ -570,6 +570,19 @@ export function SetupScreen({
               Join that on this device, open <strong>192.168.4.1</strong>, and give it your home
               Wi-Fi. When it reconnects, this screen carries on by itself.
             </p>
+            {/*
+              The network is almost never there the moment someone first looks:
+              the card broadcasts within seconds, but phones only rescan every
+              so often. Saying so here stops "I can't find it" from reading as
+              a broken card — the same wait the install flow counts down.
+            */}
+            <p>
+              Give it half a minute before deciding it is missing, and if it still
+              does not appear, turn this device’s Wi-Fi off and on to force a fresh
+              scan. A network that never shows up usually means the card kept the
+              Wi-Fi it already had — in which case it is already on your network and
+              there is nothing to join.
+            </p>
           </details>
         </div>
       );
