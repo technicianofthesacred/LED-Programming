@@ -1059,6 +1059,7 @@ function Shell() {
               isProjectSwitchSnapshotCurrent={isProjectSwitchSnapshotCurrent}
               onMatchedProjectLoaded={onMatchedCardProjectLoaded}
               onStartNewProject={onStartNewProject}
+              onSaveProject={onSave}
               route={cardRoute}
             />
             <ScreenReady />

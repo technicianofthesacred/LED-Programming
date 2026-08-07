@@ -115,35 +115,34 @@
   background: color-mix(in oklch, var(--danger) 6%, var(--bg-panel));
 }
 
-/* ---- shortcut — an escape hatch, deliberately secondary ---- */
-.lw-setup-shortcut {
+/* ---- an aside inside a step: the rarer path, folded away ---- */
+.lw-setup-aside {
   width: 100%;
-  display: grid; gap: 10px;
+  display: grid; gap: 8px;
   padding-top: 14px; margin-top: 2px;
   border-top: 1px solid var(--border-hair);
 }
-.lw-setup-shortcut > summary {
+.lw-setup-aside > summary {
   width: fit-content; cursor: pointer; padding: 2px 0;
   color: var(--text-lo); font-size: 12px; font-weight: 500;
   border-radius: var(--r-sm);
   transition: color .12s;
 }
-.lw-setup-shortcut > summary:hover { color: var(--text-hi); }
-.lw-setup-shortcut > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.lw-setup-shortcut-grid {
-  width: 100%;
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px;
-}
-.lw-setup-field { display: grid; gap: 5px; min-width: 0; }
+.lw-setup-aside > summary:hover { color: var(--text-hi); }
+.lw-setup-aside > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lw-setup-aside > p { max-width: 70ch; margin: 0; color: var(--text-mid); font-size: 12px; line-height: 1.55; }
+
+/* ---- a single question inside an open step ---- */
+/* Deliberately narrow. The old three-across shortcut grid stretched a port
+   picker to the full width of the screen, which is what made one small answer
+   feel like a form. */
+.lw-setup-field { display: grid; gap: 5px; min-width: 0; width: min(280px, 100%); }
 .lw-setup-field > span { color: var(--text-lo); font-size: 11px; font-weight: 550; }
 .lw-setup-field .lw-select,
-.lw-setup-shortcut-grid .lw-setup-count { width: 100%; height: 34px; }
-.lw-setup-shortcut-grid .lw-setup-count {
-  background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
-  color: var(--text-hi); font-family: var(--font-mono); font-size: 13px; padding: 0 10px;
-}
-.lw-setup-shortcut-grid .lw-setup-count:focus { outline: none; border-color: var(--accent); }
-.lw-setup-shortcut .btn { justify-self: start; }
+.lw-setup-field .lw-input { width: 100%; height: 34px; }
+
+/* The "Any time" rows act, so their button sits at the end of the row. */
+.lw-setup-optional-action { flex: none; align-self: center; margin-left: auto; }
 
 /* ---- optional group — its own calmer group off the numbered ladder ---- */
 .lw-setup-optional {

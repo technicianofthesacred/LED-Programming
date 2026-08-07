@@ -47,9 +47,8 @@ test('the whole setup loop, on the real card', async ({ page }) => {
   }));
 
   // 3. The pin only — the colour is measured, not guessed.
-  await page.locator('details.lw-setup-shortcut summary').first().click();
-  await page.locator('details.lw-setup-shortcut select').first().selectOption(String(PIN));
-  await page.locator('details.lw-setup-shortcut button').last().click();
+  await page.getByTestId('setup-pin-value').selectOption(String(PIN));
+  await page.getByTestId('setup-pin-apply').click();
   await page.waitForTimeout(1500);
   console.log('STEP pin:', JSON.stringify({ pin: await statusOf('pin'), colour: await statusOf('colour') }));
 
@@ -68,10 +67,10 @@ test('the whole setup loop, on the real card', async ({ page }) => {
   // 5. Count the lights with the ruler.
   await page.getByTestId('setup-count-show').click();
   for (let i = 0; i < 60; i += 1) {
-    if (await page.getByTestId('setup-count-value').count()) break;
+    if (await page.getByTestId('setup-count-ruler-lit').count()) break;
     await page.waitForTimeout(3000);
   }
-  if (!(await page.getByTestId('setup-count-value').count())) {
+  if (!(await page.getByTestId('setup-count-ruler-lit').count())) {
     const notes = await page.locator('[data-testid=setup-counting] .lw-setup-note').allTextContents();
     console.log('STEP ruler FAILED:', JSON.stringify(notes));
     throw new Error('ruler never lit');

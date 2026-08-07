@@ -39,11 +39,16 @@ test('steps 8 to 11, used for real', async ({ page }) => {
   // Get to a genuinely set-up project the way an owner does.
   await page.goto('/#screen=setup', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(4500);
-  await page.locator('details.lw-setup-shortcut summary').first().click();
-  await page.locator('details.lw-setup-shortcut select').first().selectOption(String(PIN));
-  await page.locator('details.lw-setup-shortcut select').nth(1).selectOption('RGB');
-  await page.locator('details.lw-setup-shortcut input[type=number]').fill(String(LIGHTS));
-  await page.locator('details.lw-setup-shortcut button').last().click();
+  // Each step now answers its own question in place — port, then colour order,
+  // then the light count — instead of one shared form that re-asked all three.
+  await page.getByTestId('setup-pin-value').selectOption(String(PIN));
+  await page.getByTestId('setup-pin-apply').click();
+  await page.waitForTimeout(1200);
+  await page.getByTestId('setup-colour-value').selectOption('RGB');
+  await page.getByTestId('setup-colour-set').click();
+  await page.waitForTimeout(1200);
+  await page.getByTestId('setup-count-value').fill(String(LIGHTS));
+  await page.getByTestId('setup-count-apply').click();
   await page.waitForTimeout(1500);
   await page.getByTestId('setup-step-install-action').click();
   for (let i = 0; i < 60; i += 1) {

@@ -20,7 +20,7 @@ import { buildDecadeMarkerFrame } from '../lib/stripDiscovery.js';
 import { COLOUR_PROBE_BLOCKS, buildColourProbeFrame, colourOrderFromSeenOrder } from '../lib/colourReorder.js';
 import { createCardFrameStream } from '../lib/cardFrameStream.js';
 import { useProject } from '../state/ProjectContext.jsx';
-import { PORT_ROLE_STRIP } from '../lib/portRoles.js';
+import { PORT_ROLE_STRIP, PORT_ROLE_UNUSED } from '../lib/portRoles.js';
 
 const SKIP_KEY = 'lw_setup_skip_v1';
 // How much strip to provision while counting. Long enough that almost any
@@ -28,33 +28,14 @@ const SKIP_KEY = 'lw_setup_skip_v1';
 // than counting where the card ran out of room.
 const COUNTING_CEILING = 600;
 
-// Navigation target for acting on each step. Locked and optional rows never act
-// here; only the currently-emphasised row carries an action button, and done
-// rows offer a quiet "Do this again" that lands on the same target.
-function stepTarget(id) {
-  switch (id) {
-    case 'flash': return '#screen=card&section=install';
-    case 'wifi': return null;
-    case 'pin': return '#screen=discovery';
-    case 'colour': return '#screen=discovery';
-    case 'count': return '#screen=discovery';
-    case 'install': return null;
-    case 'layout': return '#screen=layout';
-    case 'save': return '#screen=settings';
-    case 'controls': return '#screen=layout&mode=wire';
-    default: return null;
-  }
-}
-
-// The primary action label on the currently-emphasised row.
-function currentStepLabel(id) {
-  switch (id) {
-    case 'pin': return 'Find my strips';
-    case 'colour': return 'Find my strips';
-    case 'count': return 'Find my strips';
-    default: return 'Continue';
-  }
-}
+// The "Any time" rows are shortcuts to somewhere real. They used to render as
+// plain text with no button at all, which read as an instruction the screen was
+// refusing to carry out. Every one of them now does the thing it names.
+const OPTIONAL_ACTIONS = {
+  layout: { label: 'Open Layout', hash: '#screen=layout' },
+  save: { label: 'Save the project', save: true },
+  controls: { label: 'Open Wire mode', hash: '#screen=layout&mode=wire' },
+};
 
 export function SetupScreen({
   connected,
@@ -65,6 +46,7 @@ export function SetupScreen({
   activeCloudProjects = [],
   browserProjects = [],
   replaceProject,
+  onSaveProject,
 }) {
   const {
     setProjectId,
@@ -86,11 +68,12 @@ export function SetupScreen({
   const [cardState, setCardState] = useState({ evidence: null, status: null, read: false });
   const [resolution, setResolution] = useState({ kind: 'unknown' });
   const importRef = useRef(null);
-  // Shortcut draft state ("I already know my wiring").
-  const [shortcutPin, setShortcutPin] = useState(CARD_HARDWARE_CONTRACT.outputPins[0] ?? 18);
-  const [shortcutOrder, setShortcutOrder] = useState('');
-  const [shortcutCount, setShortcutCount] = useState(0);
   const [counting, setCounting] = useState({ busy: false, lit: false, message: '' });
+  // One draft per question, each seeded from the answer already on record, so
+  // reopening a finished step shows what that step currently says instead of a
+  // blank form that silently overwrites it.
+  const [pinDraft, setPinDraft] = useState('');
+  const [orderDraft, setOrderDraft] = useState('');
   const [countDraft, setCountDraft] = useState('');
   const countingStreamRef = useRef(null);
   // Which finished step the owner has reopened to change. Empty means none, and
@@ -127,12 +110,17 @@ export function SetupScreen({
       try {
         const readHost = cardLink?.host || cardHost || '';
         const readTransport = cardLink?.transport;
-        const [readEvidence, readStatus] = await Promise.all([
+        // Settled, not all: these are two independent questions of the card, and
+        // Promise.all threw away a perfectly good status read whenever the
+        // project read failed. That status is what lets a card which is already
+        // driving a strip hand its wiring back — losing it sent the owner
+        // through questions the card had already answered.
+        const [readEvidence, readStatus] = await Promise.allSettled([
           readCardProjectEvidence({ host: readHost, transport: readTransport }),
           readCardStatusEnvelope({ host: readHost, transport: readTransport }),
         ]);
-        evidence = readEvidence;
-        status = readStatus;
+        evidence = readEvidence.status === 'fulfilled' ? readEvidence.value : null;
+        status = readStatus.status === 'fulfilled' ? readStatus.value : null;
       } catch {
         evidence = null;
         status = null;
@@ -241,6 +229,17 @@ export function SetupScreen({
   };
 
   const journeyProject = { portRoles: Array.isArray(currentProject?.portRoles) ? currentProject.portRoles : [] };
+
+  // What the project already says. Each editor below shows this until the owner
+  // types over it, so opening a finished step reads as "here is your answer",
+  // never as an empty form that will quietly erase it on the next click.
+  const stripRole = journeyProject.portRoles.find(entry => entry.role === PORT_ROLE_STRIP);
+  const savedPin = Number.isFinite(Number(stripRole?.pin)) ? Number(stripRole.pin) : null;
+  const savedCount = Number(stripRole?.pixelCount) > 0 ? Number(stripRole.pixelCount) : null;
+  const savedOrder = currentProject?.devices?.standaloneController?.led?.colorOrder || '';
+  const pinValue = pinDraft !== '' ? pinDraft : String(savedPin ?? CARD_HARDWARE_CONTRACT.outputPins[0] ?? 18);
+  const orderValue = orderDraft !== '' ? orderDraft : savedOrder;
+  const countValue = countDraft !== '' ? countDraft : (savedCount ? String(savedCount) : '');
 
   // Send the owner's real setup to the card. Deliberately NOT the provisional
   // bench document Find-my-strips writes: that one is a temporary test the card
@@ -441,31 +440,59 @@ export function SetupScreen({
     }
   };
 
-  const applyCount = () => {
+  // Which port the strip is plugged into. Moving it carries the measured length
+  // across: the old shortcut form zeroed every other strip port, so re-answering
+  // the port question silently threw away the count and the colour order with it.
+  const applyPin = () => {
+    const pin = Number(pinValue);
+    if (!Number.isFinite(pin)) return;
     setOpenStepId('');
-    const count = Math.max(1, Number(countDraft) || 0);
+    const carried = savedCount || 0;
+    const roles = journeyProject.portRoles.map((entry) => {
+      if (Number(entry.pin) === pin) {
+        const kept = Number(entry.pixelCount) > 0 ? Number(entry.pixelCount) : carried;
+        return { ...entry, role: PORT_ROLE_STRIP, pixelCount: kept };
+      }
+      return entry.role === PORT_ROLE_STRIP ? { ...entry, role: PORT_ROLE_UNUSED, pixelCount: 0 } : entry;
+    });
+    applyWiring(roles, '');
+    setPinDraft('');
+  };
+
+  const applyOrder = () => {
+    const order = String(orderValue || '').trim();
+    if (!order) {
+      setColourProbe(prev => ({ ...prev, message: 'Pick the order you see on the strip, or light it to compare.' }));
+      return;
+    }
+    setOpenStepId('');
+    countingStreamRef.current?.stop?.();
+    countingStreamRef.current = null;
+    setColourProbe({ busy: false, lit: false, message: `Colour order set to ${order}.` });
+    applyWiring(journeyProject.portRoles, order);
+    setOrderDraft('');
+  };
+
+  const applyCount = () => {
+    const count = Math.max(0, Math.round(Number(countValue) || 0));
+    // Zero lights is not an answer, and accepting it left the step looking
+    // finished while the card was sent a strip with nothing on it.
+    if (count <= 0) {
+      setCounting(prev => ({ ...prev, message: 'Type how many lights are on the strip — a number above zero.' }));
+      return;
+    }
+    setOpenStepId('');
     countingStreamRef.current?.stop?.();
     countingStreamRef.current = null;
     setCounting({ busy: false, lit: false, message: `Recorded ${count} lights.` });
-    const roles = (Array.isArray(currentProject?.portRoles) ? currentProject.portRoles : []).map(entry => (
+    const roles = journeyProject.portRoles.map(entry => (
       entry?.role === PORT_ROLE_STRIP ? { ...entry, pixelCount: count } : entry
     ));
-    applyWiring(roles, currentProject?.devices?.standaloneController?.led?.colorOrder || '');
-  };
-
-  const applyShortcut = () => {
-    setOpenStepId('');
-    const pinNumber = Number(shortcutPin);
-    const count = Math.max(0, Number(shortcutCount) || 0);
-    const colorOrder = shortcutOrder;
-    // Go through the same commit as a discovery run, so a shortcut and a walked
-    // run leave the project in exactly the same state.
-    const nextRoles = (Array.isArray(currentProject?.portRoles) ? currentProject.portRoles : []).map(entry => (
-      entry && entry.pin === pinNumber
-        ? { ...entry, role: PORT_ROLE_STRIP, pixelCount: count }
-        : (entry && entry.role === PORT_ROLE_STRIP ? { ...entry, role: 'unused', pixelCount: 0 } : entry)
-    ));
-    applyWiring(nextRoles, colorOrder);
+    // Deliberately no colour order here. applyWiring treats any order it is
+    // handed as one the owner confirmed, so passing the project's own default
+    // marked the colour step done without ever having asked the question.
+    applyWiring(roles, '');
+    setCountDraft('');
   };
 
   const startFromCard = () => {
@@ -494,7 +521,11 @@ export function SetupScreen({
     event.target.value = '';
   };
 
-  const renderCurrentStep = (step) => {
+  // The controls for one step. Rendered whenever the row is open — whether that
+  // is because it is the step to do next, or because the owner pressed Change on
+  // a finished one. Gating this on "current" meant Change opened an empty box on
+  // four of the six steps, which is what made the row look like decoration.
+  const renderStepBody = (step) => {
     if (step.id === 'flash') {
       // A card sitting on the network that Studio has simply not been paired with
       // is NOT an unflashed card. Leading with "Install the firmware" tells the
@@ -537,7 +568,7 @@ export function SetupScreen({
           >
             My card is already on Wi-Fi — connect to it
           </button>
-          <details className="lw-setup-shortcut">
+          <details className="lw-setup-aside">
             <summary>My card has never been on Wi-Fi</summary>
             <p>
               A card with no network of its own makes one, called <strong>Lightweaver-XXXX</strong>.
@@ -602,16 +633,38 @@ export function SetupScreen({
         </div>
       );
     }
-    const target = stepTarget(step.id);
-    if (!target) return null;
-    return (
-      <div className="lw-setup-detail">
-        <button type="button" className="btn primary" data-testid={`setup-step-${step.id}-action`} onClick={() => go(target)}>
-          {currentStepLabel(step.id)}
-        </button>
-      </div>
-    );
+    if (step.id === 'pin') return renderPin();
+    if (step.id === 'colour') return renderColour();
+    if (step.id === 'count') return renderCounting();
+    return null;
   };
+
+  // Which of the four ports the strip is plugged into. This used to live inside a
+  // collapsed "I already know how my strip is wired" panel that also re-asked the
+  // colour order and the light count on every one of the three steps.
+  const renderPin = () => (
+    <div className="lw-setup-detail" data-testid="setup-pin">
+      <label className="lw-setup-field">
+        <span>Output port</span>
+        <select
+          className="lw-select"
+          data-testid="setup-pin-value"
+          value={pinValue}
+          onChange={event => setPinDraft(event.target.value)}
+        >
+          {CARD_HARDWARE_CONTRACT.outputPins.map(pin => (
+            <option key={pin} value={String(pin)}>GPIO {pin}</option>
+          ))}
+        </select>
+      </label>
+      <button type="button" className="btn primary" data-testid="setup-pin-apply" onClick={applyPin}>
+        Use this port
+      </button>
+      <button type="button" className="link-btn" data-testid="setup-pin-discover" onClick={() => go('#screen=discovery')}>
+        I do not know — light each port in turn
+      </button>
+    </div>
+  );
 
   // Counting the strip. The owner cannot count 41 identical lights by eye, so
   // the strip is painted as a ruler: every 10th green, every 50th blue, every
@@ -666,15 +719,33 @@ export function SetupScreen({
     }
     countingStreamRef.current?.stop?.();
     countingStreamRef.current = null;
-    setColourProbe({ busy: false, lit: false, message: 'Colours set.' });
+    setColourProbe({ busy: false, lit: false, message: `Colour order set to ${resolved}.` });
     applyWiring(journeyProject.portRoles, resolved);
+    setOrderDraft('');
   };
 
-  const renderColourProbe = () => (
+  const renderColour = () => (
     <div className="lw-setup-detail" data-testid="setup-colour">
       <p className="lw-setup-note">
         {colourProbe.message || 'Your strip will show three blocks of colour. Put them in the order you actually see.'}
       </p>
+      <label className="lw-setup-field">
+        <span>Colour order</span>
+        <select
+          className="lw-select"
+          data-testid="setup-colour-value"
+          value={orderValue}
+          onChange={event => setOrderDraft(event.target.value)}
+        >
+          <option value="">Not set yet</option>
+          {COLOR_ORDERS.map(order => (
+            <option key={order} value={order}>{order}</option>
+          ))}
+        </select>
+      </label>
+      <button type="button" className="btn primary" data-testid="setup-colour-set" onClick={applyOrder}>
+        Use this order
+      </button>
       <button
         type="button"
         className="btn"
@@ -682,7 +753,7 @@ export function SetupScreen({
         disabled={!reachable || colourProbe.busy}
         onClick={showColourProbe}
       >
-        {colourProbe.busy ? 'Painting the strip…' : 'Show me the three colours'}
+        {colourProbe.busy ? 'Painting the strip…' : 'I do not know — show me three colours on the strip'}
       </button>
       {colourProbe.lit && (
         <>
@@ -714,12 +785,29 @@ export function SetupScreen({
     </div>
   );
 
+  // The count field is always here. It used to appear only after the ruler had
+  // been lit, so an owner who already knew their strip had 41 lights had no way
+  // to say so without running a hardware probe first.
   const renderCounting = () => {
-    const pin = journeyProject.portRoles.find(entry => entry.role === PORT_ROLE_STRIP)?.pin;
+    const pin = savedPin;
     return (
       <div className="lw-setup-detail" data-testid="setup-counting">
+        <label className="lw-setup-field">
+          <span>Number of lights</span>
+          <input
+            type="number"
+            min="1"
+            className="lw-input"
+            data-testid="setup-count-value"
+            value={countValue}
+            onChange={event => setCountDraft(event.target.value)}
+          />
+        </label>
+        <button type="button" className="btn primary" data-testid="setup-count-apply" onClick={applyCount}>
+          Use this count
+        </button>
         <p className="lw-setup-note">
-          {counting.message || 'Light the strip as a ruler, then count what you see.'}
+          {counting.message || 'Do not know the number? Light the strip as a ruler and count what you see.'}
         </p>
         <button
           type="button"
@@ -731,66 +819,14 @@ export function SetupScreen({
           {counting.busy ? 'Lighting the strip…' : 'Light the counting colours'}
         </button>
         {counting.lit && (
-          <>
-            <p className="lw-setup-note">
-              Every 10th light is green, every 50th blue, every 100th red. Count the greens,
-              then the warm ones after the last green, and add them up.
-            </p>
-            <input
-              type="number"
-              min="1"
-              className="lw-input"
-              data-testid="setup-count-value"
-              value={countDraft}
-              onChange={event => setCountDraft(event.target.value)}
-            />
-            <button type="button" className="btn primary" data-testid="setup-count-apply" onClick={applyCount}>
-              Use this count
-            </button>
-          </>
+          <p className="lw-setup-note" data-testid="setup-count-ruler-lit">
+            Every 10th light is green, every 50th blue, every 100th red. Count the greens,
+            then the warm ones after the last green, and add them up.
+          </p>
         )}
       </div>
     );
   };
-
-  const renderShortcut = () => (
-    <details className="lw-setup-shortcut">
-      <summary>I already know how my strip is wired</summary>
-      <div className="lw-setup-shortcut-grid">
-        <label className="lw-setup-field">
-          <span>Output port</span>
-          <select className="lw-select" data-testid="setup-shortcut-pin" value={shortcutPin} onChange={event => setShortcutPin(Number(event.target.value))}>
-            {CARD_HARDWARE_CONTRACT.outputPins.map(pin => (
-              <option key={pin} value={pin}>GPIO {pin}</option>
-            ))}
-          </select>
-        </label>
-        <label className="lw-setup-field">
-          <span>Colour order</span>
-          <select className="lw-select" data-testid="setup-shortcut-order" value={shortcutOrder} onChange={event => setShortcutOrder(event.target.value)}>
-            <option value="">I do not know yet</option>
-            {COLOR_ORDERS.map(order => (
-              <option key={order} value={order}>{order}</option>
-            ))}
-          </select>
-        </label>
-        <label className="lw-setup-field">
-          <span>Number of LEDs</span>
-          <input
-            className="lw-setup-count"
-            type="number"
-            min={1}
-            value={shortcutCount}
-            data-testid="setup-shortcut-count"
-            onChange={event => setShortcutCount(Number(event.target.value))}
-          />
-        </label>
-      </div>
-      <button type="button" className="btn" data-testid="setup-shortcut-apply" onClick={applyShortcut}>
-        Use these
-      </button>
-    </details>
-  );
 
   return (
     <div className="screen card-workspace-screen">
@@ -882,21 +918,14 @@ export function SetupScreen({
                         <button
                           type="button"
                           className="link-btn lw-setup-redo"
-                          data-testid={`setup-step-${step.id}-action`}
+                          data-testid={`setup-step-${step.id}-change`}
                           onClick={() => setOpenStepId(openStepId === step.id ? '' : step.id)}
                         >
                           {openStepId === step.id ? 'Close' : 'Change'}
                         </button>
                       )}
                     </div>
-                    {open && (
-                      <>
-                        {step.status === 'current' && renderCurrentStep(step)}
-                        {['pin', 'colour', 'count'].includes(step.id) && renderShortcut()}
-                        {step.id === 'colour' && renderColourProbe()}
-                        {step.id === 'count' && renderCounting()}
-                      </>
-                    )}
+                    {open && renderStepBody(step)}
                   </li>
                 );
               })}
@@ -905,14 +934,29 @@ export function SetupScreen({
             {optionalSteps.length > 0 && (
               <div className="lw-setup-optional">
                 <h2>Any time</h2>
-                {optionalSteps.map(step => (
-                  <div key={step.id} className={`card-support-panel lw-setup-step is-${step.status}`} data-status={step.status} data-testid={`setup-step-${step.id}`}>
-                    <div className="lw-setup-step-text">
-                      <strong>{step.title}</strong>
-                      <p>{step.detail}</p>
+                {optionalSteps.map((step) => {
+                  const action = OPTIONAL_ACTIONS[step.id];
+                  return (
+                    <div key={step.id} className={`card-support-panel lw-setup-step is-${step.status}`} data-status={step.status} data-testid={`setup-step-${step.id}`}>
+                      <div className="lw-setup-step-head">
+                        <div className="lw-setup-step-text">
+                          <strong>{step.title}</strong>
+                          <p>{step.detail}</p>
+                        </div>
+                        {action && (
+                          <button
+                            type="button"
+                            className="btn lw-setup-optional-action"
+                            data-testid={`setup-step-${step.id}-action`}
+                            onClick={() => (action.save ? onSaveProject?.() : go(action.hash))}
+                          >
+                            {action.label}
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>
