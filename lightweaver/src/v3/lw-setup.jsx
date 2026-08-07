@@ -836,14 +836,18 @@ export function SetupScreen({
     );
   };
 
+  // Setup renders INSIDE the card workspace, which already supplies the screen
+  // frame, the section tabs and the <h1>. Returning bare children keeps this a
+  // section rather than a second page wearing the workspace's clothes.
   return (
-    <div className="screen card-workspace-screen">
-      <div className="card-workspace">
-        <div className="card-workspace-body lw-setup-body">
-          <header className="card-workspace-header">
-            <h1>Set up your Lightweaver</h1>
+    <>
+          {/* The lede needs a block of its own: the workspace lays out its
+              direct children as a centred task column, and a bare <p> with a
+              56ch measure would be centred inside that column instead of
+              starting where every step below it starts. */}
+          <div className="lw-setup-lede">
             <p className="lw-setup-intro">This takes you from unboxing to patterns playing on your strip. Each step tells you exactly what to do next.</p>
-          </header>
+          </div>
 
           <div className="card-status-area" data-testid="setup-card-status" aria-live="polite">
             {resolution.kind === 'bench' && (
@@ -981,8 +985,6 @@ export function SetupScreen({
             data-testid="setup-import-input"
             onChange={onImportFile}
           />
-        </div>
-      </div>
-    </div>
+    </>
   );
 }

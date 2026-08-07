@@ -4,7 +4,8 @@ import { InstallerScreen } from './lw-installer.jsx';
 import { DeploymentCheckPanel } from '../components/card/DeploymentCheckPanel.jsx';
 import { ProductionScreen } from './lw-production.jsx';
 import { SettingsScreen } from './lw-settings.jsx';
-import { consumeCardSectionNavigation } from './cardWorkspaceRoute.js';
+import { SetupScreen } from './lw-setup.jsx';
+import { consumeCardSectionNavigation, DEFAULT_CARD_SECTION } from './cardWorkspaceRoute.js';
 import { cardLinkReasonText, getCardLinkState, isCardLinkConnected } from '../lib/cardLink.js';
 import {
   CARD_COMMISSIONING_CHANGED_EVENT,
@@ -43,8 +44,14 @@ import {
 // Section bar labels. `workshop` is deliberately absent: Batch production is a
 // manufacturing surface reached from the overview link, the support tile, or a
 // deep link (#screen=production / #screen=card&section=workshop) — never a tab.
+// Setup leads: it is the guided ladder every owner meets, and it is the answer
+// to "which port, which colour order, how many LEDs, install it". The tabs
+// after it are the same hardware, unguided, for anyone who already knows what
+// they want to change. `overview` is deliberately no longer called "Hardware" —
+// with Setup beside it, two tabs named for the same box read as two setups.
 const SECTION_LABELS = Object.freeze({
-  overview: 'Hardware',
+  setup: 'Setup',
+  overview: 'Card status',
   install: 'Install or update',
   settings: 'Hardware settings',
   support: 'Advanced & Support',
@@ -921,7 +928,7 @@ function CardSupport({ initialTool, cardProps, onOpenConnectionCenter, onOpenSec
   );
 }
 
-export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection, go, replaceProject, currentProject, projectGeneration, activeCloudProjects, browserProjects, readBrowserProjects, readCloudProject, openMatchingCardProject, confirmProjectReplacement, saveBeforeCardProjectSwitch, saveProjectToBrowserGuarded, isProjectSwitchSnapshotCurrent, onMatchedProjectLoaded, onStartNewProject, route = { section: 'overview', supportTool: '' } }) {
+export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection, go, replaceProject, currentProject, projectGeneration, activeCloudProjects, browserProjects, readBrowserProjects, readCloudProject, openMatchingCardProject, confirmProjectReplacement, saveBeforeCardProjectSwitch, saveProjectToBrowserGuarded, isProjectSwitchSnapshotCurrent, onMatchedProjectLoaded, onStartNewProject, onSaveProject, route = { section: DEFAULT_CARD_SECTION, supportTool: '' } }) {
   const headingRef = useRef(null);
   const mountedRef = useRef(false);
 
@@ -940,7 +947,18 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
 
   const cardProps = { connected, cardHost, cardLink, onConnectCard };
   let content;
-  if (route.section === 'install') content = (
+  if (route.section === 'setup') content = (
+    <SetupScreen
+      {...cardProps}
+      onOpenConnectionCenter={onOpenConnectionCenter}
+      currentProject={currentProject}
+      activeCloudProjects={activeCloudProjects}
+      browserProjects={browserProjects}
+      replaceProject={replaceProject}
+      onSaveProject={onSaveProject}
+    />
+  );
+  else if (route.section === 'install') content = (
     <AutomaticInstallScreen
       embedded
       cardLink={cardLink}
@@ -958,9 +976,12 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
   // Batch production (route.section === 'workshop') renders outside the tab
   // set: its own heading and kicker, no section tab highlighted.
   const workshop = route.section === 'workshop';
-  const heading = route.section === 'overview'
-    ? 'Your Lightweaver hardware'
-    : workshop ? 'Batch production' : SECTION_LABELS[route.section];
+  const setup = route.section === 'setup';
+  const heading = setup
+    ? 'Set up your Lightweaver'
+    : route.section === 'overview'
+      ? 'Your Lightweaver hardware'
+      : workshop ? 'Batch production' : SECTION_LABELS[route.section];
   return (
     <div className="screen card-workspace-screen">
       <div className="card-workspace">
@@ -976,7 +997,7 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
             </button>
           ))}
         </nav>
-        <main className="card-workspace-body">
+        <main className={`card-workspace-body${setup ? ' lw-setup-body' : ''}`}>
           <header className="card-workspace-header">
             <span className="card-workspace-kicker">{workshop ? 'Manufacturing mode' : 'Lightweaver hardware'}</span>
             <h1 ref={headingRef} tabIndex={-1}>{heading}</h1>

@@ -995,20 +995,25 @@ test('light-check hardware mutations stay locked after loss until two stable exa
   });
 });
 
-test('Hardware replaces the setup rail destinations and exposes ordinary section navigation', async ({ page }) => {
+test('one Setup rail destination owns the card and exposes ordinary section navigation', async ({ page }) => {
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Hardware', exact: true }).click();
+  await page.getByRole('button', { name: 'Setup', exact: true }).click();
 
-  await expect(page).toHaveURL(/#screen=card&section=overview$/);
+  // The rail lands on the guided ladder, not on the unguided status board.
+  await expect(page).toHaveURL(/#screen=card&section=setup$/);
+  await expect(page.getByRole('heading', { name: 'Set up your Lightweaver', level: 1 })).toBeVisible();
   const sections = page.getByRole('navigation', { name: 'Hardware sections' });
   await expect(sections).toBeVisible();
-  for (const label of ['Install or update', 'Hardware settings', 'Advanced & Support']) {
+  for (const label of ['Setup', 'Card status', 'Install or update', 'Hardware settings', 'Advanced & Support']) {
     await expect(sections.getByRole('button', { name: label, exact: true })).toBeVisible();
   }
+  await expect(sections.getByRole('button', { name: 'Setup', exact: true })).toHaveAttribute('aria-current', 'page');
   // Batch production (formerly Workshop setup) is not a section tab.
   await expect(sections.getByRole('button', { name: 'Workshop setup', exact: true })).toHaveCount(0);
   await expect(sections.getByRole('button', { name: 'Batch production', exact: true })).toHaveCount(0);
-  for (const label of ['Flash', 'Installer', 'Production setup', 'Settings']) {
+  // Setup and Hardware were peer rail items asking the same questions. Neither
+  // name survives as a second destination — there is one card entry now.
+  for (const label of ['Flash', 'Installer', 'Production setup', 'Settings', 'Hardware']) {
     await expect(page.locator('.rail').getByRole('button', { name: label, exact: true })).toHaveCount(0);
   }
   await expect(sections.getByRole('menu')).toHaveCount(0);
@@ -1305,7 +1310,7 @@ test('Card section navigation wraps without page overflow on a 390px viewport', 
   }));
   expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
 
-  for (const label of ['Hardware', 'Install or update', 'Hardware settings', 'Advanced & Support', 'Preferences']) {
+  for (const label of ['Setup', 'Card status', 'Install or update', 'Hardware settings', 'Advanced & Support', 'Preferences']) {
     const button = sections.getByRole('button', { name: label, exact: true });
     await expect(button).toBeVisible();
     await expect(button).toBeInViewport();
@@ -1796,7 +1801,7 @@ for (const legacy of [
     await page.goto(`/${legacy.hash}`, { waitUntil: 'domcontentloaded' });
 
     await expect(page).toHaveURL(new RegExp(`${legacy.hash.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
-    await expect(page.locator('.rail-item.active')).toHaveAccessibleName('Hardware');
+    await expect(page.locator('.rail-item.active')).toHaveAccessibleName('Setup');
     const sections = page.getByRole('navigation', { name: 'Hardware sections' });
     if (legacy.section) {
       await expect(sections.getByRole('button', { name: legacy.section, exact: true })).toHaveAttribute('aria-current', 'page');
@@ -1914,7 +1919,7 @@ test('an active firmware install keeps rail navigation locked to install', async
   await page.getByRole('button', { name: 'Layout', exact: true }).click();
 
   await expect(page).toHaveURL(/#screen=card&section=install$/);
-  await expect(page.locator('.rail-item.active')).toHaveAccessibleName('Hardware');
+  await expect(page.locator('.rail-item.active')).toHaveAccessibleName('Setup');
   await expect(page.getByRole('heading', { name: 'Install Lightweaver' })).toBeVisible();
 });
 

@@ -48,7 +48,7 @@ import {
 } from '../lib/cardCommissioningFlow.js';
 import { readTestStrip, writeTestStrip, TEST_STRIP_CHANGED_EVENT } from '../lib/testStrip.js';
 import { LayoutScreen } from './lw-layout.jsx';
-import { cardRouteFromHash, isCardSection, markCardSectionNavigation } from './cardWorkspaceRoute.js';
+import { cardRouteFromHash, DEFAULT_CARD_SECTION, FIRST_RUN_CARD_SECTION, isCardSection, markCardSectionNavigation } from './cardWorkspaceRoute.js';
 import { canonicalProjectFileName, PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
 import { clearScreenFailure, rememberScreenFailure } from '../lib/screenRecoveryDiagnostics.js';
 import { createStudioFreshnessMonitor } from '../lib/studioFreshness.js';
@@ -60,16 +60,17 @@ const PatternLabScreen = lazy(() => import('../pattern-lab/PatternLabScreen.jsx'
 const PlaylistScreen = lazy(() => import('./lw-playlist.jsx').then(module => ({ default: module.PlaylistScreen })));
 const ShowScreen = lazy(() => import('./lw-show.jsx').then(module => ({ default: module.ShowScreen })));
 const CardScreen = lazy(() => import('./lw-card.jsx').then(module => ({ default: module.CardScreen })));
-const SetupScreen = lazy(() => import('./lw-setup.jsx').then(module => ({ default: module.SetupScreen })));
 
+// Setup is no longer a rail destination of its own. It is the first section of
+// the card workspace, which is where every other answer about the card already
+// lived — see SECTION_LABELS in lw-card.jsx.
 const STUDIO_SCREENS = [
-  { id: 'setup', label: 'Setup', Component: SetupScreen },
+  { id: 'card', label: 'Setup', Component: CardScreen },
   { id: 'layout', label: 'Layout', Component: LayoutScreen },
   { id: 'pattern', label: 'Patterns', Component: PatternScreen },
   { id: 'pattern-lab', label: 'Pattern Lab', Component: PatternLabScreen },
   { id: 'playlist', label: 'Playlist', Component: PlaylistScreen },
   { id: 'show', label: 'Show', Component: ShowScreen },
-  { id: 'card', label: 'Hardware', Component: CardScreen },
 ];
 // Routable, but deliberately not in the rail: strip discovery is where a blank
 // card is SENT, not a place the owner browses to. Its two entrances are the
@@ -82,7 +83,7 @@ const SCREEN_BY_ID = {
   ...Object.fromEntries(STUDIO_SCREENS.map(screen => [screen.id, screen.Component])),
   ...OFF_RAIL_SCREENS,
 };
-const LEGACY_CARD_SCREENS = new Set(['flash', 'settings', 'installer', 'production']);
+const LEGACY_CARD_SCREENS = new Set(['flash', 'settings', 'installer', 'production', 'setup']);
 const PROTECTED_COMMISSIONING_STAGES = new Set(['install-safely', 'set-up-card', 'check-lights']);
 const SCREEN_RECOVERY_KEY = 'lw_screen_recovery_v1';
 
@@ -234,7 +235,7 @@ class ScreenErrorBoundary extends Component {
 const SETUP_SKIP_KEY = 'lw_setup_skip_v1';
 function defaultView() {
   try {
-    return window.localStorage.getItem(SETUP_SKIP_KEY) === '1' ? 'layout' : 'setup';
+    return window.localStorage.getItem(SETUP_SKIP_KEY) === '1' ? 'layout' : 'card';
   } catch {
     return 'layout';
   }
@@ -250,6 +251,26 @@ function viewFromHash() {
   const params = new URLSearchParams(hash.includes('=') ? hash : '');
   return normalizeView(params.get('screen') || defaultView());
 }
+
+// A first-time owner typing the bare domain should meet the guided ladder.
+// Writing that into the hash before React mounts keeps every downstream route
+// decision reading from one place — the URL — instead of special-casing an
+// empty hash in the view state, the card route and the hash-sync effect.
+function bootstrapFirstRunSetupRoute() {
+  try {
+    if (window.location.hash) return;
+    if (window.localStorage.getItem(SETUP_SKIP_KEY) === '1') return;
+    window.history.replaceState(
+      null,
+      '',
+      `${window.location.pathname}${window.location.search}#screen=card&section=${FIRST_RUN_CARD_SECTION}`,
+    );
+  } catch {
+    // No hash rewrite is possible without history/storage; the ordinary
+    // fallback route still applies.
+  }
+}
+bootstrapFirstRunSetupRoute();
 
 /* ---------- tiny icon set (stroked, 1.6) ---------- */
 const I = {
@@ -308,7 +329,7 @@ function TopBar({ projectName, onNew, onLoad, onDownload, onSave, onPreferences 
 /* ---------- Left rail ---------- */
 function Rail({ view, setView, openCard }) {
   const item = ({ id, label }) => (
-    <button key={id} aria-label={label} aria-current={view === id ? 'page' : undefined} className={"rail-item" + (view === id ? " active" : "")} onClick={() => id === 'card' ? openCard('overview') : setView(id)}>
+    <button key={id} aria-label={label} aria-current={view === id ? 'page' : undefined} className={"rail-item" + (view === id ? " active" : "")} onClick={() => id === 'card' ? openCard(FIRST_RUN_CARD_SECTION) : setView(id)}>
       <span className="ico">{I[id]}</span><span className="lbl">{label}</span>
     </button>
   );
@@ -446,6 +467,11 @@ function Shell() {
   const hardwareOperationActiveRef = useRef(false);
   const commissioningActiveRef = useRef(commissioningActive);
   const installRouteRef = useRef('#screen=card&section=install');
+  // A view that in-app navigation has asked the hash-sync effect below to
+  // write. Without it the effect cannot tell "code moved the view, the URL must
+  // follow" from "a screen moved the URL, the view is catching up" — and
+  // guessing wrong overwrites a real navigation.
+  const pendingViewWriteRef = useRef(null);
   const [connectionCenterOpen, setConnectionCenterOpen] = useState(false);
   const {
     projectName, serializeProject, flushProjectAutosave, replaceProject, replaceWithNewProject, requestReplacementConfirmation,
@@ -629,13 +655,13 @@ function Shell() {
     window.addEventListener('lw-install-active', onInstallActive);
     return () => window.removeEventListener('lw-install-active', onInstallActive);
   }, []);
-  const openCardSection = useCallback((section = 'overview') => {
+  const openCardSection = useCallback((section = DEFAULT_CARD_SECTION) => {
     if (installActiveRef.current) return;
     markCardSectionNavigation();
     flushProjectAutosave();
     const params = new URLSearchParams(window.location.hash.slice(1));
     params.set('screen', 'card');
-    params.set('section', isCardSection(section) ? section : 'overview');
+    params.set('section', isCardSection(section) ? section : DEFAULT_CARD_SECTION);
     params.delete('mode');
     setCardRoute(cardRouteFromHash(`#${params.toString()}`));
     setView('card');
@@ -650,9 +676,15 @@ function Shell() {
     if (requested === 'installer') { openCardSection('support'); return; }
     if (requested === 'production') { openCardSection('workshop'); return; }
     if (requested === 'settings') { openCardSection('preferences'); return; }
-    if (requested === 'card') { openCardSection('overview'); return; }
+    if (requested === 'setup') { openCardSection('setup'); return; }
+    if (requested === 'card') { openCardSection(); return; }
     flushProjectAutosave();
-    setView(normalizeView(requested));
+    const next = normalizeView(requested);
+    // Claim the hash write: this is a real in-app navigation, so the effect
+    // below must move the URL to match even if the URL currently names
+    // something else.
+    pendingViewWriteRef.current = next;
+    setView(next);
   }, [flushProjectAutosave, openCardSection]);
 
   // navigation <-> URL hash. Preserve the layout screen's `mode` deep-link
@@ -662,10 +694,21 @@ function Shell() {
   useEffect(() => {
     if (bridgeBooting) return;
     const params = new URLSearchParams(window.location.hash.slice(1));
-    if (view === 'card' && LEGACY_CARD_SCREENS.has(String(params.get('screen') || '').toLowerCase())) return;
+    const hashScreen = String(params.get('screen') || '').toLowerCase();
+    if (view === 'card' && LEGACY_CARD_SCREENS.has(hashScreen)) return;
+    // `view` is authoritative only on the run where it actually changed — that
+    // is a real navigation, and the hash must follow it. When this effect fires
+    // for any other reason (the bridge-boot flip), the hash may instead be
+    // AHEAD of state: a screen that navigates by writing window.location.hash
+    // moves the URL a tick before the hashchange listener moves `view`, and
+    // rewriting from stale state threw that navigation away. Then only
+    // canonicalize a hash that still names the screen we are on.
+    const claimed = pendingViewWriteRef.current === view;
+    if (claimed) pendingViewWriteRef.current = null;
+    if (!claimed && hashScreen && normalizeView(hashScreen) !== view) return;
     params.set('screen', view);
     if (view === 'card') {
-      if (!isCardSection(params.get('section'))) params.set('section', 'overview');
+      if (!isCardSection(params.get('section'))) params.set('section', DEFAULT_CARD_SECTION);
       params.delete('mode');
     } else {
       params.delete('section');

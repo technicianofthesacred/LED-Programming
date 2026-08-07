@@ -16,6 +16,7 @@
 }
 
 .lw-setup-intro {
+  margin: 0;
   max-width: 56ch;
   color: var(--text-mid);
   line-height: 1.55;
@@ -258,7 +259,11 @@
 .lw-setup-shelf-row p { margin: 0; color: var(--text-mid); font-size: 12px; line-height: 1.5; }
 .lw-setup-optional-action { flex: none; white-space: nowrap; }
 
-.lw-setup-skip { margin: 28px 0 0; }
+/* `auto` on the inline sides, not 0: these are direct children of the shared
+   workspace body, which centres each one as the task column. A flat `0` pinned
+   the row to the full-width body's left edge instead, a hundred pixels left of
+   every step above it. */
+.lw-setup-skip { margin: 28px auto 0; }
 .lw-setup-skip .link-btn { font-size: 12px; color: var(--text-mid); }
 .lw-setup-skip .link-btn:hover { color: var(--text-hi); }
 

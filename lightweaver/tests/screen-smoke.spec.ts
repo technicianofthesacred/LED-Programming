@@ -3,7 +3,9 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
 // Every primary Studio destination must retain the shared shell controls.
-const SCREENS = ['Patterns', 'Pattern Lab', 'Playlist', 'Layout', 'Show', 'Hardware'];
+// 'Setup' is the single card destination — the old 'Setup' and 'Hardware' rail
+// items merged into it, so it stands in for both here.
+const SCREENS = ['Patterns', 'Pattern Lab', 'Playlist', 'Layout', 'Show', 'Setup'];
 const STUDIO_SOURCE_REVISION = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 const STUDIO_BUILD_NUMBER = Number(
   execFileSync('git', ['rev-list', '--count', 'HEAD'], { encoding: 'utf8' }).trim(),
