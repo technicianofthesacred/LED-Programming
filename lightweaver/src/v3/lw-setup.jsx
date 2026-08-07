@@ -14,6 +14,7 @@ import { getCardHostname, CardPushError } from '../lib/cardPushClient.js';
 import { deploySetupToCard } from '../lib/cardSetupDeploy.js';
 import { sweepKnownSubnetsForCard } from '../lib/cardConnection.js';
 import { sampleStripPixels } from '../lib/layoutGeometry.js';
+import { planStripCountShares, shouldRescaleDrawing } from '../lib/designCapacity.js';
 import { buildBenchConfig } from '../lib/benchConfig.js';
 import { installBenchConfig } from '../lib/benchInstall.js';
 import { buildDecadeMarkerFrame } from '../lib/stripDiscovery.js';
@@ -349,31 +350,25 @@ export function SetupScreen({
     }, { changeKind: 'gpio' });
   };
 
-  // The card is built from the drawing, so the drawing has to carry the real
-  // number of lights or the card is sent a length that does not exist. Only the
-  // untouched placeholder line is resized — never artwork the owner has drawn.
-  const resizePlaceholderStrip = (count) => {
-    if (!Number.isFinite(count) || count <= 0 || typeof setStrips !== 'function') return;
-    // Safe to reshape while there is nothing to protect: the untouched starter
-    // layout, or a project with no imported artwork. Once real artwork exists the
-    // drawing is the owner's and is never touched here.
-    const hasArtwork = Boolean(currentProject?.layout?.svgText);
-    if (!starterLayoutPending && hasArtwork) return;
+  // The card is built from the drawing, so a brand-new project's placeholder line
+  // has to become the strip actually in front of the owner. Beyond that the
+  // drawing is the piece being designed and the card is only what happens to be
+  // plugged in — a 41-light development card must never shrink a 400-light design.
+  //
+  // `force` is the owner pressing the button themselves. Without it, only the
+  // untouched factory placeholder is reshaped: `starterPending` is cleared by any
+  // geometry or count edit, so it means exactly "nobody has drawn this yet".
+  //
+  // The previous guard also required `layout.svgText`, which is set ONLY by the
+  // SVG import path. A piece drawn with the drawing tools has it empty, so a
+  // hand-drawn design was silently rescaled to whatever the bench card measured.
+  const resizePlaceholderStrip = (count, { force = false } = {}) => {
+    if (typeof setStrips !== 'function') return;
+    if (!shouldRescaleDrawing({ starterPending: starterLayoutPending, force })) return;
     setStrips(prev => {
-      const list = Array.isArray(prev) ? prev : [];
-      if (!list.length) return list;
-      const total = list.reduce((sum, strip) => sum + (Number(strip.pixelCount) || 0), 0);
-      if (total === count) return list;
-      // Every shape is KEPT and scaled to share the real total. Deleting a shape
-      // instead would leave the wiring plan and the zones pointing at something
-      // that no longer exists, and the card refuses the whole project over it.
-      const shares = list.map(strip => Math.max(1, Math.round(((Number(strip.pixelCount) || 1) / (total || list.length)) * count)));
-      let drift = count - shares.reduce((sum, share) => sum + share, 0);
-      for (let index = 0; drift !== 0 && index < shares.length; index += 1) {
-        const step = drift > 0 ? 1 : -1;
-        if (shares[index] + step >= 1) { shares[index] += step; drift -= step; }
-      }
-      return list.map((strip, index) => (strip.pixelCount === shares[index] ? strip : {
+      const shares = planStripCountShares(prev, count);
+      if (!shares) return prev;
+      return prev.map((strip, index) => (strip.pixelCount === shares[index] ? strip : {
         ...strip,
         pixelCount: shares[index],
         pixels: sampleStripPixels(strip.pathData, shares[index], strip.reversed, strip.x || 0, strip.y || 0),
@@ -613,7 +608,7 @@ export function SetupScreen({
               className="btn"
               data-testid="setup-install-match-drawing"
               onClick={() => {
-                resizePlaceholderStrip(install.needsRedraw.pixels);
+                resizePlaceholderStrip(install.needsRedraw.pixels, { force: true });
                 setInstall({ busy: false, message: '', failed: false, done: false });
               }}
             >
@@ -833,7 +828,6 @@ export function SetupScreen({
       <div className="card-workspace">
         <div className="card-workspace-body lw-setup-body">
           <header className="card-workspace-header">
-            <span className="card-workspace-kicker">Get started</span>
             <h1>Set up your Lightweaver</h1>
             <p className="lw-setup-intro">This takes you from unboxing to patterns playing on your strip. Each step tells you exactly what to do next.</p>
           </header>
@@ -900,7 +894,7 @@ export function SetupScreen({
                 return (
                   <li
                     key={step.id}
-                    className={`card-support-panel lw-setup-step is-${step.status}${open ? ' is-open' : ''}`}
+                    className={`lw-setup-step is-${step.status}${open ? ' is-open' : ''}`}
                     data-status={step.status}
                     data-open={open ? 'true' : 'false'}
                     data-testid={`setup-step-${step.id}`}
@@ -937,23 +931,21 @@ export function SetupScreen({
                 {optionalSteps.map((step) => {
                   const action = OPTIONAL_ACTIONS[step.id];
                   return (
-                    <div key={step.id} className={`card-support-panel lw-setup-step is-${step.status}`} data-status={step.status} data-testid={`setup-step-${step.id}`}>
-                      <div className="lw-setup-step-head">
-                        <div className="lw-setup-step-text">
-                          <strong>{step.title}</strong>
-                          <p>{step.detail}</p>
-                        </div>
-                        {action && (
-                          <button
-                            type="button"
-                            className="btn lw-setup-optional-action"
-                            data-testid={`setup-step-${step.id}-action`}
-                            onClick={() => (action.save ? onSaveProject?.() : go(action.hash))}
-                          >
-                            {action.label}
-                          </button>
-                        )}
+                    <div key={step.id} className="lw-setup-shelf-row" data-status={step.status} data-testid={`setup-step-${step.id}`}>
+                      <div className="lw-setup-step-text">
+                        <strong>{step.title}</strong>
+                        <p>{step.detail}</p>
                       </div>
+                      {action && (
+                        <button
+                          type="button"
+                          className="btn lw-setup-optional-action"
+                          data-testid={`setup-step-${step.id}-action`}
+                          onClick={() => (action.save ? onSaveProject?.() : go(action.hash))}
+                        >
+                          {action.label}
+                        </button>
+                      )}
                     </div>
                   );
                 })}
