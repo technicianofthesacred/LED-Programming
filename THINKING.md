@@ -216,3 +216,59 @@ rejected: merging a 10-commit PR would jump the number by 11 instead of 1.
 `fetch-depth: 0`. A shallow clone makes `git rev-list --count` return 1, which
 would have silently published "build 1" — a wrong number is worse than no
 number, because it reads as authoritative.
+
+---
+
+## 2026-08-07 — The URL is the only place the current screen lives
+
+**Topic:** The Studio navigation race that broke twice in one day and was
+patched twice. The second patch (in `694f250`) added a one-shot "claim" ref so
+the hash-sync effect could tell a real in-app navigation from a screen that had
+already moved the URL. Adrian's read — "I patched it but don't fully trust it"
+— was correct, and the diagnosis found two holes in it before any code moved.
+
+**Root cause, which is not timing.** `view` (React state) and
+`window.location.hash` were two stores of one fact, reconciled by an effect.
+Three kinds of code moved them: `navigateStudio`/`openCardSection` moved state
+and let the effect move the URL; twenty-odd screens navigate by assigning
+`window.location.hash` directly, which moves the URL immediately but delivers
+`hashchange` a task later; and three `setView` calls in the bridge-callback
+path moved state and wrote no URL at all. Between a direct hash assignment and
+its `hashchange`, the state is stale — and an effect reconciling from stale
+state stamps the old screen back over the destination. That is how the card's
+"continue to Patterns" handoff died.
+
+**Why the claim ref was not the fix:**
+
+1. *It leaked.* `navigateStudio` armed the ref and then called `setView(next)`.
+   Navigating to the screen you are already on is a React bail-out, so the
+   effect never ran and never consumed the claim. It stayed armed, and an armed
+   stale claim authorizes exactly the overwrite it was added to prevent.
+2. *It made three navigations silently lie.* The guard's other half —
+   "canonicalize only a hash that still names the screen we are on" — means any
+   `setView` that is not a claimed navigation now leaves the URL naming a
+   different screen. A Bridge result accepted in another tab does exactly that:
+   Layout renders under `#screen=card&section=setup`, and a reload, a bookmark
+   or the recovery support code all read the wrong screen. This was reproduced
+   in a browser before the fix and is now `tests/studio-route.spec.ts`.
+
+**What shipped instead.** `view` and `cardRoute` are derived from the hash via
+`useSyncExternalStore`; the hash is the only store. `src/lib/studioRoute.js`
+holds the route vocabulary and the canonicalization as pure functions of a hash
+string, so reconciliation is idempotent. There is one reconciler effect and it
+reads the *live* URL for both the route and the screen — never the rendered
+`view`, which is a snapshot of the route as it was when that render began. The
+first attempt at the refactor passed `view` in and reintroduced the same class
+of bug one layer down; the new test caught it. Net −51 lines in `app.jsx`.
+
+**Deliberately not done: converting the twenty-odd `window.location.hash = …`
+call sites to a navigate() helper.** Under the derived model they are already
+correct — they move the single source of truth, and the screen follows. Routing
+them through a helper would be tidier to read but would change no behaviour, so
+it stays a cleanup, not a fix. Future Claude: if you do it, it is a rename, not
+a race fix, and it must not reintroduce a second store of the current screen.
+
+**Open tension:** `history.replaceState` fires no `hashchange`, so the route
+store dispatches its own event. Anything that writes the hash *without* going
+through the store or a direct assignment (there is nothing today) would move
+the URL invisibly. The store is the place to enforce that if it ever comes up.
