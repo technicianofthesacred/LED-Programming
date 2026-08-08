@@ -216,3 +216,118 @@ rejected: merging a 10-commit PR would jump the number by 11 instead of 1.
 `fetch-depth: 0`. A shallow clone makes `git rev-list --count` return 1, which
 would have silently published "build 1" — a wrong number is worse than no
 number, because it reads as authoritative.
+
+---
+
+## 2026-08-07 — The URL is the only place the current screen lives
+
+**Topic:** The Studio navigation race that broke twice in one day and was
+patched twice. The second patch (in `694f250`) added a one-shot "claim" ref so
+the hash-sync effect could tell a real in-app navigation from a screen that had
+already moved the URL. Adrian's read — "I patched it but don't fully trust it"
+— was correct, and the diagnosis found two holes in it before any code moved.
+
+**Root cause, which is not timing.** `view` (React state) and
+`window.location.hash` were two stores of one fact, reconciled by an effect.
+Three kinds of code moved them: `navigateStudio`/`openCardSection` moved state
+and let the effect move the URL; twenty-odd screens navigate by assigning
+`window.location.hash` directly, which moves the URL immediately but delivers
+`hashchange` a task later; and three `setView` calls in the bridge-callback
+path moved state and wrote no URL at all. Between a direct hash assignment and
+its `hashchange`, the state is stale — and an effect reconciling from stale
+state stamps the old screen back over the destination. That is how the card's
+"continue to Patterns" handoff died.
+
+**Why the claim ref was not the fix:**
+
+1. *It leaked.* `navigateStudio` armed the ref and then called `setView(next)`.
+   Navigating to the screen you are already on is a React bail-out, so the
+   effect never ran and never consumed the claim. It stayed armed, and an armed
+   stale claim authorizes exactly the overwrite it was added to prevent.
+2. *It made three navigations silently lie.* The guard's other half —
+   "canonicalize only a hash that still names the screen we are on" — means any
+   `setView` that is not a claimed navigation now leaves the URL naming a
+   different screen. A Bridge result accepted in another tab does exactly that:
+   Layout renders under `#screen=card&section=setup`, and a reload, a bookmark
+   or the recovery support code all read the wrong screen. This was reproduced
+   in a browser before the fix and is now `tests/studio-route.spec.ts`.
+
+**What shipped instead.** `view` and `cardRoute` are derived from the hash via
+`useSyncExternalStore`; the hash is the only store. `src/lib/studioRoute.js`
+holds the route vocabulary and the canonicalization as pure functions of a hash
+string, so reconciliation is idempotent. There is one reconciler effect and it
+reads the *live* URL for both the route and the screen — never the rendered
+`view`, which is a snapshot of the route as it was when that render began. The
+first attempt at the refactor passed `view` in and reintroduced the same class
+of bug one layer down; the new test caught it. Net −51 lines in `app.jsx`.
+
+**Deliberately not done: converting the twenty-odd `window.location.hash = …`
+call sites to a navigate() helper.** Under the derived model they are already
+correct — they move the single source of truth, and the screen follows. Routing
+them through a helper would be tidier to read but would change no behaviour, so
+it stays a cleanup, not a fix. Future Claude: if you do it, it is a rename, not
+a race fix, and it must not reintroduce a second store of the current screen.
+
+**Open tension:** `history.replaceState` fires no `hashchange`, so the route
+store dispatches its own event. Anything that writes the hash *without* going
+through the store or a direct assignment (there is nothing today) would move
+the URL invisibly. The store is the place to enforce that if it ever comes up.
+
+---
+
+## 2026-08-07 — The handoff loop: a guard is only as durable as the thing that holds it
+
+**Topic:** Verifying the routing fix above turned up a second defect on the same
+journey — the one that actually looked like "the pattern link is broken" to an
+owner. It was not a hang. The card→Patterns handoff was a ping-pong running at
+~45 resolutions per second, six HTTP requests each, aimed at the ESP32 on the
+customer's shelf, while the screen sat on a disabled "Verifying project…".
+
+**Root cause, in two halves.** The card screen issued the pattern authorization
+with the installed project id read from `/api/firmware-info` (which carries
+`piece.id`); the Patterns screen re-derived that binding from the card-link
+readiness envelope, which is `/api/status`. Those are different payloads.
+Firmware only began sending `projectId` on `/api/status` in `f1ad74e`
+(2026-08-04) and has never sent `piece.id` there — so against any card flashed
+before that build, the card issued an authorization Patterns could not claim,
+every time, forever. That is the spark.
+
+The amplifier is what made it a flood. Patterns returns the owner to the card
+when it cannot claim, and the card auto-opens Patterns for as long as it can
+read an intent in the URL. Every hop unmounts and remounts both screens, and
+both screens' "only do this once" guards are component-scoped `useRef`s —
+`cardProjectProbeRef` on the card, `cardReturnConsumed` on Patterns. A remount
+resets them, so the guards defended nothing across exactly the transition that
+needed guarding.
+
+**Two things that look like the fix and are not.**
+
+*Stripping the intent from the URL on a failed claim.* This was written and
+then withdrawn: `patterns-v3.spec.ts` asserts the intent survives an
+unauthorized landing, and it is right to. `?editPattern=ocean` is still what
+the owner came for, and an explicit "Load this project" should honour it. The
+breaker belongs on the automatic hand-over, not on the owner's request — so a
+failed claim is now remembered at module scope in `src/lib/cardEditIntent.js`,
+where a remount cannot forget it, and the card offers the project instead of
+opening it.
+
+*Fixing the fixture.* `readyStatus()` in `card-workspace.spec.ts` omitted
+`projectId`, which is why `…auto-opens only with preserved edit intent` drove
+the loop on every run and then passed or failed on whether its URL poll
+happened to sample `#screen=pattern` mid-flip — a coin toss gating Deploy site
+and the signed firmware release. Correcting the fixture alone would have turned
+the gate green and left the loop shipping. It was corrected last, deliberately.
+
+**Deliberately not done: making `cardProjectProbeRef` module-scoped.** It is
+the other half of the amplifier and the change is two lines, but the guard's
+signature includes the project generation and the card boot id, and a
+module-scoped copy would outlive a genuine remount-to-retry that some other
+screen depends on. The intent breaker already makes the loop unreachable.
+Future Claude: if you do lift it, the question to answer first is which
+legitimate flows expect a remount to re-probe.
+
+**Left open:** the same omission is in most card-status fixtures across the
+suite — `card-link-state.mjs` (~39 sites), `cardReadiness.test.js` (~31),
+`playlist-storage`, `connection-center-quality`, `screen-smoke`. They model a
+ready card that reports no installed project, which no real card does. Harmless
+until someone writes an authorization test against one. Logged in `TODO.md`.

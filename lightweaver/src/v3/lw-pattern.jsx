@@ -51,7 +51,8 @@ import {
   writeStoredCardHost,
 } from '../lib/cardConnection.js';
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
-import { classifyCardReadiness } from '../lib/cardReadiness.js';
+import { classifyCardReadiness, installedProjectIdFromCardStatus } from '../lib/cardReadiness.js';
+import { markCardEditIntentAbandoned } from '../lib/cardEditIntent.js';
 import { isCardLinkPlaybackReady } from '../lib/cardConnectionFlow.js';
 import { evaluateCardInstallGate, readCardAccessLevel } from '../lib/cardInstallGate.js';
 import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
@@ -430,7 +431,7 @@ import { PatternPreview } from './PatternPreview.jsx';
         firmwareVersion: readiness.firmwareVersion || card.firmwareVersion || '',
         buildId: readiness.buildId || card.buildId || '',
         bootId: readiness.bootId || cardLink?.validatedBootId || '',
-        installedProjectId: readiness.projectId || readiness.piece?.id || '',
+        installedProjectId: installedProjectIdFromCardStatus(readiness),
         installedProjectFingerprint: readiness.projectFingerprint || '',
         studioProjectId: projectId,
         studioProjectFingerprint: cardProjectFingerprint(currentProject),
@@ -981,6 +982,14 @@ import { PatternPreview } from './PatternPreview.jsx';
       })) {
         cardReturnConsumed.current = true;
         invalidatePendingPreview();
+        // Record the failure where remounting cannot forget it. The card
+        // auto-opens Patterns for as long as it can read an intent, so without
+        // this the claim we just lost is retried the instant we land back
+        // there — and both screens remount on the way, resetting every
+        // once-only guard either of them owns. The intent itself stays in the
+        // URL: it is still what the owner asked for, and loading the matching
+        // project by hand can still honour it.
+        markCardEditIntentAbandoned(requestedIntent);
         if (go) go('card');
         else window.location.hash = '#screen=card&section=overview';
         return;

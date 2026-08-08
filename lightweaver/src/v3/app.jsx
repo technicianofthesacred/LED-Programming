@@ -1,7 +1,7 @@
 /* Studio shell (app.jsx), converted from the v3 mockup to an ES module and
    wired to the real ProjectProvider. The shell chrome (TopBar/Rail/StatusBar)
    keeps the mockup markup; data/handlers are threaded in from project state. */
-import React, { Component, lazy, Suspense, useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
+import React, { Component, lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from 'react';
 import { ProjectProvider, useProject } from '../state/ProjectContext.jsx';
 import { CloudLibraryProvider, useCloudLibrary } from '../state/CloudLibraryContext.jsx';
 import { useCardStatus } from '../hooks/useCardStatus.js';
@@ -48,7 +48,17 @@ import {
 } from '../lib/cardCommissioningFlow.js';
 import { readTestStrip, writeTestStrip, TEST_STRIP_CHANGED_EVENT } from '../lib/testStrip.js';
 import { LayoutScreen } from './lw-layout.jsx';
-import { cardRouteFromHash, DEFAULT_CARD_SECTION, FIRST_RUN_CARD_SECTION, isCardSection, markCardSectionNavigation } from './cardWorkspaceRoute.js';
+import { markCardSectionNavigation } from './cardWorkspaceRoute.js';
+import {
+  canonicalStudioHash,
+  cardRouteFromHash,
+  createStudioRouteStore,
+  DEFAULT_CARD_SECTION,
+  FIRST_RUN_CARD_SECTION,
+  isCardSection,
+  normalizeStudioView,
+  studioViewFromHash,
+} from '../lib/studioRoute.js';
 import { canonicalProjectFileName, PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
 import { clearScreenFailure, rememberScreenFailure } from '../lib/screenRecoveryDiagnostics.js';
 import { createStudioFreshnessMonitor } from '../lib/studioFreshness.js';
@@ -83,7 +93,6 @@ const SCREEN_BY_ID = {
   ...Object.fromEntries(STUDIO_SCREENS.map(screen => [screen.id, screen.Component])),
   ...OFF_RAIL_SCREENS,
 };
-const LEGACY_CARD_SCREENS = new Set(['flash', 'settings', 'installer', 'production', 'setup']);
 const PROTECTED_COMMISSIONING_STAGES = new Set(['install-safely', 'set-up-card', 'check-lights']);
 const SCREEN_RECOVERY_KEY = 'lw_screen_recovery_v1';
 
@@ -240,16 +249,8 @@ function defaultView() {
     return 'layout';
   }
 }
-function normalizeView(v) {
-  const s = String(v || '').trim().toLowerCase();
-  if (s === 'patterns') return 'pattern';
-  if (LEGACY_CARD_SCREENS.has(s)) return 'card';
-  return SCREEN_KEYS.includes(s) ? s : defaultView();
-}
-function viewFromHash() {
-  const hash = window.location.hash.slice(1);
-  const params = new URLSearchParams(hash.includes('=') ? hash : '');
-  return normalizeView(params.get('screen') || defaultView());
+function viewOptions() {
+  return { screenKeys: SCREEN_KEYS, fallbackView: defaultView() };
 }
 
 // A first-time owner typing the bare domain should meet the guided ladder.
@@ -327,9 +328,9 @@ function TopBar({ projectName, onNew, onLoad, onDownload, onSave, onPreferences 
 }
 
 /* ---------- Left rail ---------- */
-function Rail({ view, setView, openCard }) {
+function Rail({ view, navigate, openCard }) {
   const item = ({ id, label }) => (
-    <button key={id} aria-label={label} aria-current={view === id ? 'page' : undefined} className={"rail-item" + (view === id ? " active" : "")} onClick={() => id === 'card' ? openCard(FIRST_RUN_CARD_SECTION) : setView(id)}>
+    <button key={id} aria-label={label} aria-current={view === id ? 'page' : undefined} className={"rail-item" + (view === id ? " active" : "")} onClick={() => id === 'card' ? openCard(FIRST_RUN_CARD_SECTION) : navigate(id)}>
       <span className="ico">{I[id]}</span><span className="lbl">{label}</span>
     </button>
   );
@@ -458,8 +459,13 @@ function Shell() {
   const [bridgeBooting, setBridgeBooting] = useState(() => isBridgeCallbackLocation());
   const [bridgeResult, setBridgeResult] = useState(readStoredBridgeResult);
   const bridgeResultAcceptedRef = useRef(Boolean(bridgeResult));
-  const [view, setView] = useState(() => isBridgeCallbackLocation() ? 'layout' : viewFromHash());
-  const [cardRoute, setCardRoute] = useState(() => cardRouteFromHash());
+  // The URL is the only place the current screen is recorded. `view` and
+  // `cardRoute` are read out of it, never stored beside it — see
+  // ../lib/studioRoute.js for why the second copy had to go.
+  const routeStore = useMemo(() => createStudioRouteStore(window), []);
+  const routeHash = useSyncExternalStore(routeStore.subscribe, routeStore.read, routeStore.read);
+  const view = useMemo(() => studioViewFromHash(routeHash, viewOptions()), [routeHash]);
+  const cardRoute = useMemo(() => cardRouteFromHash(routeHash), [routeHash]);
   const [installActive, setInstallActive] = useState(false);
   const [hardwareOperationActive, setHardwareOperationActive] = useState(false);
   const [commissioningActive, setCommissioningActive] = useState(readCommissioningProtection);
@@ -467,12 +473,14 @@ function Shell() {
   const hardwareOperationActiveRef = useRef(false);
   const commissioningActiveRef = useRef(commissioningActive);
   const installRouteRef = useRef('#screen=card&section=install');
-  // A view that in-app navigation has asked the hash-sync effect below to
-  // write. Without it the effect cannot tell "code moved the view, the URL must
-  // follow" from "a screen moved the URL, the view is catching up" — and
-  // guessing wrong overwrites a real navigation.
-  const pendingViewWriteRef = useRef(null);
   const [connectionCenterOpen, setConnectionCenterOpen] = useState(false);
+  // Every navigation in the shell goes through here: it moves the URL, and the
+  // screen follows because it is derived from the URL. Nothing sets the screen
+  // on its own, so nothing can leave the two disagreeing.
+  const navigateToView = useCallback(nextView => {
+    const target = normalizeStudioView(nextView, viewOptions());
+    routeStore.replace(canonicalStudioHash(routeStore.read(), target));
+  }, [routeStore]);
   const {
     projectName, serializeProject, flushProjectAutosave, replaceProject, replaceWithNewProject, requestReplacementConfirmation,
     projectLifecycle, projectLifecycleLabel, markProjectPersisted,
@@ -543,7 +551,7 @@ function Shell() {
       onResult: result => {
         bridgeResultAcceptedRef.current = true;
         setBridgeResult(result);
-        setView('layout');
+        navigateToView('layout');
         setConnectionCenterOpen(true);
       },
     });
@@ -553,13 +561,15 @@ function Shell() {
       if (outcome.kind === 'failure') setBridgeResult(outcome);
       if (outcome.kind === 'handoff' && !bridgeResultAcceptedRef.current) setBridgeResult(outcome);
       if (outcome.kind !== 'none') {
-        setView('layout');
+        navigateToView('layout');
         setConnectionCenterOpen(true);
       }
       setBridgeBooting(false);
     });
     if (bridgeResultAcceptedRef.current) {
-      setView('layout');
+      // A callback location already reads as Layout, and bootstrapBridgeCallback
+      // is still reading it — the route is canonicalized above once it resolves.
+      if (!isBridgeCallbackLocation()) navigateToView('layout');
       setConnectionCenterOpen(true);
     }
     return () => { active = false; channel.close(); };
@@ -644,11 +654,7 @@ function Shell() {
         const legacyInstall = params.get('screen') === 'flash' && params.get('mode') === 'install';
         const canonicalInstall = params.get('screen') === 'card' && params.get('section') === 'install';
         installRouteRef.current = legacyInstall || canonicalInstall ? window.location.hash : '#screen=card&section=install';
-        setCardRoute(cardRouteFromHash(installRouteRef.current));
-        if (!legacyInstall && !canonicalInstall) {
-          window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${installRouteRef.current}`);
-          setView('card');
-        }
+        if (!legacyInstall && !canonicalInstall) routeStore.replace(installRouteRef.current);
       }
       setInstallActive(active);
     };
@@ -659,16 +665,14 @@ function Shell() {
     if (installActiveRef.current) return;
     markCardSectionNavigation();
     flushProjectAutosave();
-    const params = new URLSearchParams(window.location.hash.slice(1));
+    const params = new URLSearchParams(routeStore.read().slice(1));
     params.set('screen', 'card');
     params.set('section', isCardSection(section) ? section : DEFAULT_CARD_SECTION);
     params.delete('mode');
-    setCardRoute(cardRouteFromHash(`#${params.toString()}`));
-    setView('card');
-    // Match rail navigation's history policy (replace, not push) so Back
-    // behaves the same for screen and section changes.
-    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${params.toString()}`);
-  }, [flushProjectAutosave]);
+    // Replace, not push, so Back behaves the same for screen and section
+    // changes as it does for rail navigation.
+    routeStore.replace(`#${params.toString()}`);
+  }, [flushProjectAutosave, routeStore]);
   const navigateStudio = useCallback((nextView) => {
     if (installActiveRef.current) return;
     const requested = String(nextView || '').toLowerCase();
@@ -679,63 +683,28 @@ function Shell() {
     if (requested === 'setup') { openCardSection('setup'); return; }
     if (requested === 'card') { openCardSection(); return; }
     flushProjectAutosave();
-    const next = normalizeView(requested);
-    // Claim the hash write: this is a real in-app navigation, so the effect
-    // below must move the URL to match even if the URL currently names
-    // something else.
-    pendingViewWriteRef.current = next;
-    setView(next);
-  }, [flushProjectAutosave, openCardSection]);
+    navigateToView(requested);
+  }, [flushProjectAutosave, navigateToView, openCardSection]);
 
-  // navigation <-> URL hash. Preserve the layout screen's `mode` deep-link
-  // (#screen=layout&mode=draw | &mode=wire -- the only two modes, see
-  // ModeSwitch.jsx) so jumps like the Playlist "Adjust LED count" button land
-  // on the right Layout mode; other screens carry no mode.
+  // The one place the route is reconciled. It reads the live URL and derives
+  // the screen from that same string — deliberately NOT from the rendered
+  // `view`, which is a snapshot of the route as it was when this render began
+  // and may already be a navigation behind. Reading both ends from one place
+  // is what makes this idempotent and unable to resurrect a screen the owner
+  // has left. Layout's `mode` deep link (#screen=layout&mode=draw | &mode=wire,
+  // the only two modes — see ModeSwitch.jsx) survives it, so jumps like the
+  // Playlist "Adjust LED count" button still land on the right Layout mode.
   useEffect(() => {
     if (bridgeBooting) return;
-    const params = new URLSearchParams(window.location.hash.slice(1));
-    const hashScreen = String(params.get('screen') || '').toLowerCase();
-    if (view === 'card' && LEGACY_CARD_SCREENS.has(hashScreen)) return;
-    // `view` is authoritative only on the run where it actually changed — that
-    // is a real navigation, and the hash must follow it. When this effect fires
-    // for any other reason (the bridge-boot flip), the hash may instead be
-    // AHEAD of state: a screen that navigates by writing window.location.hash
-    // moves the URL a tick before the hashchange listener moves `view`, and
-    // rewriting from stale state threw that navigation away. Then only
-    // canonicalize a hash that still names the screen we are on.
-    const claimed = pendingViewWriteRef.current === view;
-    if (claimed) pendingViewWriteRef.current = null;
-    if (!claimed && hashScreen && normalizeView(hashScreen) !== view) return;
-    params.set('screen', view);
-    if (view === 'card') {
-      if (!isCardSection(params.get('section'))) params.set('section', DEFAULT_CARD_SECTION);
-      params.delete('mode');
-    } else {
-      params.delete('section');
+    // An install owns the route until it finishes: a route change mid-write
+    // would swap the screen out from under the card being flashed.
+    if (installActiveRef.current) {
+      routeStore.replace(installRouteRef.current);
+      return;
     }
-    if (view !== 'layout') params.delete('mode');
-    if (view === 'layout' && params.get('mode') === 'install') params.delete('mode');
-    const next = `#${params.toString()}`;
-    if (window.location.hash !== next) {
-      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${next}`);
-      if (view === 'card') setCardRoute(cardRouteFromHash(next));
-    }
-  }, [view, bridgeBooting]);
-  useEffect(() => {
-    const onHash = () => {
-      if (installActiveRef.current) {
-        window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${installRouteRef.current}`);
-        setView('card');
-        setCardRoute(cardRouteFromHash(installRouteRef.current));
-        return;
-      }
-      const nextView = viewFromHash();
-      setView(nextView);
-      if (nextView === 'card') setCardRoute(cardRouteFromHash());
-    };
-    window.addEventListener('hashchange', onHash);
-    return () => window.removeEventListener('hashchange', onHash);
-  }, [installActive]);
+    const current = routeStore.read();
+    routeStore.replace(canonicalStudioHash(current, studioViewFromHash(current, viewOptions())));
+  }, [routeHash, bridgeBooting, installActive, routeStore]);
 
   useEffect(() => {
     if (!workspaceEvent || workspaceEvent.persistent) return undefined;
@@ -1075,7 +1044,7 @@ function Shell() {
         onNew={onNew} onLoad={onLoad} onDownload={onDownload} onSave={onSave}
         onPreferences={() => openCardSection('preferences')}
       />
-      <Rail view={view} setView={navigateStudio} openCard={openCardSection} />
+      <Rail view={view} navigate={navigateStudio} openCard={openCardSection} />
 
       <ScreenErrorBoundary key={view} onBeforeReload={flushProjectAutosave} onRecover={() => navigateStudio('layout')}>
         <Suspense fallback={<div className="screen route-loading" role="status" aria-live="polite">Loading Studio screen…</div>}>
