@@ -3,6 +3,7 @@ import { createProjectId, migrateProject, PROJECT_VERSION } from './projectModel
 export const PROJECT_LIBRARY_STORAGE_KEY = 'lw_project_library_v1';
 export const PROJECT_LIBRARY_BACKUP_STORAGE_KEY = 'lw_project_library_v1_backup';
 export const PROJECT_ACTIVE_RECORD_STORAGE_KEY = 'lw_project_active_record_v1';
+export const PROJECT_ACTIVE_RECORD_OWNERSHIP_STORAGE_KEY = 'lw_project_active_record_ownership_v1';
 export const AUTOSAVE_QUARANTINE_STORAGE_KEY = 'lw_autosave_v3_quarantine';
 export const PROJECT_LIFECYCLE_STORAGE_KEY = 'lw_project_lifecycle_v1';
 export const PROJECT_LIBRARY_CHANGED_EVENT = 'lightweaver-project-library-changed';
@@ -29,6 +30,11 @@ function getDefaultStorage() {
 function makeId() {
   const random = Math.random().toString(36).slice(2, 8);
   return `project-${Date.now().toString(36)}-${random}`;
+}
+
+function makeAssociationOwnershipToken() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
 }
 
 function deepFreeze(value, seen = new WeakSet()) {
@@ -352,8 +358,25 @@ export function writeActiveProjectLibraryRecordId(id, options = {}) {
   const value = String(id || '');
   if (value) storage.setItem(PROJECT_ACTIVE_RECORD_STORAGE_KEY, value);
   else storage.removeItem(PROJECT_ACTIVE_RECORD_STORAGE_KEY);
+  storage.removeItem(PROJECT_ACTIVE_RECORD_OWNERSHIP_STORAGE_KEY);
   notifyProjectLibraryChanged({ action: 'active', id: value });
   return value;
+}
+
+function readProjectLibraryAssociationOwnership({ storage }) {
+  try {
+    const value = JSON.parse(storage.getItem(PROJECT_ACTIVE_RECORD_OWNERSHIP_STORAGE_KEY) || 'null');
+    if (!value || typeof value !== 'object') return null;
+    const recordId = String(value.recordId || '');
+    const ownershipToken = String(value.ownershipToken || '');
+    return recordId && ownershipToken ? { recordId, ownershipToken } : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeProjectLibraryAssociationOwnership(ownership, { storage }) {
+  storage.setItem(PROJECT_ACTIVE_RECORD_OWNERSHIP_STORAGE_KEY, JSON.stringify(ownership));
 }
 
 export function saveProjectLibraryRecord(record, options = {}) {
@@ -471,8 +494,13 @@ export async function associateProjectLibraryRecordGuarded(expectedAssociationSn
           return { ok: false, reason: 'browser-conflict' };
         }
 
+        const associationOwnershipToken = makeAssociationOwnershipToken();
         try {
           writeActiveProjectLibraryRecordId(expectedAssociation.recordId, { storage });
+          writeProjectLibraryAssociationOwnership({
+            recordId: expectedAssociation.recordId,
+            ownershipToken: associationOwnershipToken,
+          }, { storage });
         } catch {
           return { ok: false, reason: 'browser-library-failed' };
         }
@@ -493,11 +521,58 @@ export async function associateProjectLibraryRecordGuarded(expectedAssociationSn
           }
           return { ok: false, reason: 'browser-conflict' };
         }
-        if (readActiveProjectLibraryRecordId({ storage }) !== expectedAssociation.recordId) {
+        const ownership = readProjectLibraryAssociationOwnership({ storage });
+        if (readActiveProjectLibraryRecordId({ storage }) !== expectedAssociation.recordId
+          || ownership?.recordId !== expectedAssociation.recordId
+          || ownership?.ownershipToken !== associationOwnershipToken) {
           return { ok: false, reason: 'browser-readback-failed' };
         }
 
-        return { ok: true, associationSnapshot: afterAssociation };
+        return { ok: true, associationSnapshot: afterAssociation, associationOwnershipToken };
+      },
+    );
+    return result && typeof result === 'object'
+      ? result
+      : { ok: false, reason: 'locking-failed' };
+  } catch {
+    return { ok: false, reason: 'locking-failed' };
+  }
+}
+
+export async function clearProjectLibraryAssociationGuarded(expectedOwnership, options = {}) {
+  const recordId = String(expectedOwnership?.recordId || '');
+  const ownershipToken = String(expectedOwnership?.ownershipToken || '');
+  if (!recordId || !ownershipToken) return { ok: false, reason: 'ownership-invalid' };
+
+  const storage = storageFromOptions(options);
+  if (!storage) return { ok: false, reason: 'browser-library-failed' };
+  const lockManager = options.lockManager
+    ?? (typeof navigator !== 'undefined' ? navigator.locks : null);
+  if (!lockManager || typeof lockManager.request !== 'function') {
+    return { ok: false, reason: 'locking-unavailable' };
+  }
+
+  try {
+    const result = await lockManager.request(
+      PROJECT_LIBRARY_SAVE_LOCK,
+      { mode: 'exclusive' },
+      async () => {
+        const currentOwnership = readProjectLibraryAssociationOwnership({ storage });
+        if (readActiveProjectLibraryRecordId({ storage }) !== recordId
+          || currentOwnership?.recordId !== recordId
+          || currentOwnership?.ownershipToken !== ownershipToken) {
+          return { ok: false, reason: 'ownership-changed' };
+        }
+        try {
+          writeActiveProjectLibraryRecordId('', { storage });
+        } catch {
+          return { ok: false, reason: 'browser-library-failed' };
+        }
+        if (readActiveProjectLibraryRecordId({ storage }) !== ''
+          || readProjectLibraryAssociationOwnership({ storage }) !== null) {
+          return { ok: false, reason: 'browser-readback-failed' };
+        }
+        return { ok: true };
       },
     );
     return result && typeof result === 'object'

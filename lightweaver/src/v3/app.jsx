@@ -30,6 +30,7 @@ import {
 import { downloadJsonFile } from '../lib/downloadFile.js';
 import {
   associateProjectLibraryRecordGuarded,
+  clearProjectLibraryAssociationGuarded,
   isProjectLibrarySaveBlocked,
   listProjectLibraryRecords,
   readActiveProjectLibraryRecordId,
@@ -949,9 +950,11 @@ function Shell() {
         }
         const association = await associateProjectLibraryRecordGuarded(recordSnapshot);
         if (!associationIsCurrent()) {
-          if (association?.ok && !browserAssociationRef.current
-            && readActiveProjectLibraryRecordId() === recordId) {
-            try { writeActiveProjectLibraryRecordId(''); } catch { /* A newer flow owns any remaining recovery. */ }
+          if (association?.ok) {
+            await clearProjectLibraryAssociationGuarded({
+              recordId,
+              ownershipToken: association.associationOwnershipToken,
+            });
           }
           return { ok: false, reason: 'superseded' };
         }
@@ -972,7 +975,6 @@ function Shell() {
       if (!associationIsCurrent()) return { ok: false, reason: 'superseded' };
       cloudLibrary.detachProject();
       browserAssociationRef.current = null;
-      try { writeActiveProjectLibraryRecordId(''); } catch { /* Saving remains blocked below. */ }
       if (source === 'browser') markProjectEdited();
       setProjectAssociationSaveBlocked(true);
       return { ok: false, reason: 'association-handoff-failed' };
