@@ -2436,7 +2436,8 @@ void runtimeMarkRestartPending() {
 
 void runtimeArmConfigRestartFallback() {
   configRestartFallbackState =
-      lightweaver::armConfigRestartFallback(millis());
+      lightweaver::armConfigRestartFallback(
+          configRestartFallbackState, millis());
 }
 
 void runtimeSetWifiTransitionPending(bool pending) {

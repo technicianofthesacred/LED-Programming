@@ -15,8 +15,10 @@ struct RestartFallbackState {
       : armed(armedValue), armedAtMs(armedAtValue) {}
 };
 
-constexpr RestartFallbackState armConfigRestartFallback(std::uint32_t nowMs) {
-  return {true, nowMs};
+constexpr RestartFallbackState armConfigRestartFallback(
+    const RestartFallbackState& current,
+    std::uint32_t nowMs) {
+  return current.armed ? current : RestartFallbackState(true, nowMs);
 }
 
 constexpr bool configRestartFallbackDue(

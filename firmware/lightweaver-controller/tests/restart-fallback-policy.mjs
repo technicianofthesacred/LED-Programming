@@ -25,8 +25,8 @@ const main = readFileSync(resolve(root, 'src/main.cpp'), 'utf8');
 
 assert.match(runtimeApi, /void\s+runtimeArmConfigRestartFallback\(\s*\)\s*;/,
   'the config-save fallback must have an explicit runtime API');
-assert.match(main, /void\s+runtimeArmConfigRestartFallback\(\s*\)[\s\S]*armConfigRestartFallback\(millis\(\)\)/,
-  'the runtime API must arm the host-tested policy from the current millis timestamp');
+assert.match(main, /void\s+runtimeArmConfigRestartFallback\(\s*\)[\s\S]*armConfigRestartFallback\(\s*configRestartFallbackState,\s*millis\(\)\s*\)/,
+  'the runtime API must preserve an existing deadline when another config save tries to arm it');
 
 const loopStart = main.indexOf('void loop()');
 const loopEnd = main.indexOf('\n}', loopStart);

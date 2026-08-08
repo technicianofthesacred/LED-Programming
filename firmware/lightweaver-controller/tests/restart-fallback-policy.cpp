@@ -16,9 +16,15 @@ int main() {
   RestartFallbackState idle{};
   assert(!configRestartFallbackDue(idle, 5000));
 
-  const RestartFallbackState armed = armConfigRestartFallback(1000);
+  const RestartFallbackState armed = armConfigRestartFallback(idle, 1000);
   assert(armed.armed);
   assert(armed.armedAtMs == 1000);
+  const RestartFallbackState rearmed =
+      armConfigRestartFallback(armed, 2000);
+  assert(rearmed.armed);
+  assert(rearmed.armedAtMs == 1000);
+  assert(configRestartFallbackDue(
+      rearmed, 1000 + kConfigRestartFallbackMs));
   assert(!configRestartFallbackDue(
       armed, 1000 + kConfigRestartFallbackMs - 1));
   assert(configRestartFallbackDue(
@@ -28,7 +34,8 @@ int main() {
 
   const std::uint32_t nearWrap =
       std::numeric_limits<std::uint32_t>::max() - 1000;
-  const RestartFallbackState wrapped = armConfigRestartFallback(nearWrap);
+  const RestartFallbackState wrapped =
+      armConfigRestartFallback(RestartFallbackState{}, nearWrap);
   assert(!configRestartFallbackDue(
       wrapped, static_cast<std::uint32_t>(nearWrap + kConfigRestartFallbackMs - 1)));
   assert(configRestartFallbackDue(
