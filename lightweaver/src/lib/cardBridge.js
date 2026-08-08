@@ -1850,8 +1850,13 @@ export function acquireCardBridgeFromGesture(rawHost = '', {
   bootstrapCardBridgeFromOpener();
 
   const current = getCardBridgeState();
+  const hasExpectedIdentity = Boolean(readPersistedCardIdentity()?.id);
+  const currentExpectedIdentityFailed = hasExpectedIdentity
+    && Boolean(current.identityError)
+    && !current.identityVerified;
   const currentEvidenceReady = current.identityVerified || (
     acceptDiscovered
+    && !currentExpectedIdentityFailed
     && current.verified
     && Boolean(current.discoveredCard?.id)
   );
@@ -1877,6 +1882,11 @@ export function acquireCardBridgeFromGesture(rawHost = '', {
   };
   const resolveWhenVerified = (state = getCardBridgeState()) => {
     const hostMatches = normalizeCardHost(state?.host) === host;
+    if (hasExpectedIdentity && state?.identityError && !state?.identityVerified) {
+      cleanup();
+      settle.reject(bridgeError('The card page did not verify the paired Lightweaver identity.', state.identityError));
+      return true;
+    }
     const discoveryReady = acceptDiscovered
       && state?.verified
       && hostMatches

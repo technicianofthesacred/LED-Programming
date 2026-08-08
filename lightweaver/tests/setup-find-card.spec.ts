@@ -3,11 +3,11 @@ import { expect, test, type Page } from '@playwright/test';
 const FOUND_HOST = '192.168.77.17';
 
 async function installFindCardHarness(page: Page, {
-  verificationFails = false,
+  wrongCard = false,
   verificationTimeout = false,
   popupBlocked = false,
-}: { verificationFails?: boolean; verificationTimeout?: boolean; popupBlocked?: boolean } = {}) {
-  await page.addInitScript(({ foundHost, verificationFails, verificationTimeout, popupBlocked }) => {
+}: { wrongCard?: boolean; verificationTimeout?: boolean; popupBlocked?: boolean } = {}) {
+  await page.addInitScript(({ foundHost, wrongCard, verificationTimeout, popupBlocked }) => {
     const state = {
       opens: [] as Array<{ url: string; name: string }>,
       navigations: [] as string[],
@@ -30,12 +30,13 @@ async function installFindCardHarness(page: Page, {
       postMessage(message: any) {
         if (message.type !== 'firmware-info') return;
         if (verificationTimeout) return;
-        setTimeout(() => emit(proxy, `http://${foundHost}`, verificationFails
-          ? { app: 'LightweaverCardBridge', id: message.id, ok: false, reason: 'identity-missing', error: 'identity rejected' }
-          : {
-              app: 'LightweaverCardBridge', id: message.id, ok: true, version: 2,
-              response: { cardId: 'lw-find-card-test', firmwareVersion: '1.0.0', buildId: 'build-find-card' },
-            }), 0);
+        setTimeout(() => emit(proxy, `http://${foundHost}`, {
+          app: 'LightweaverCardBridge', id: message.id, ok: true, version: 2,
+          response: {
+            cardId: wrongCard ? 'lw-wrong-card-test' : 'lw-find-card-test',
+            firmwareVersion: '1.0.0', buildId: 'build-find-card',
+          },
+        }), 0);
       },
     };
     Object.defineProperty(proxy, 'location', {
@@ -66,11 +67,12 @@ async function installFindCardHarness(page: Page, {
       }
       return new Promise<Response>(resolve => {
         state.releaseSweep = () => resolve(new Response(JSON.stringify({
-          app: 'Lightweaver', cardId: 'lw-find-card-test', firmwareVersion: '1.0.0', buildId: 'build-find-card',
+          app: 'Lightweaver', cardId: wrongCard ? 'lw-expected-card-test' : 'lw-find-card-test',
+          firmwareVersion: '1.0.0', buildId: 'build-find-card',
         }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
       });
     }) as typeof window.fetch;
-  }, { foundHost: FOUND_HOST, verificationFails, verificationTimeout, popupBlocked });
+  }, { foundHost: FOUND_HOST, wrongCard, verificationTimeout, popupBlocked });
 
   await page.route('http://lightweaver.local/**', route => route.abort());
   await page.route('http://192.168.4.1/**', route => route.abort());
@@ -79,6 +81,9 @@ async function installFindCardHarness(page: Page, {
     localStorage.clear();
     localStorage.setItem('lw_chip_card_host', '192.168.77.1');
     localStorage.setItem('lw_chip_card_host_history', JSON.stringify(['192.168.77.1']));
+  });
+  if (wrongCard) await page.evaluate(() => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-expected-card-test' }));
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('setup-connect-card')).toBeVisible({ timeout: 15000 });
@@ -104,7 +109,7 @@ test('Find my card reserves the named window synchronously, then navigates that 
 });
 
 test('Find my card reports bridge verification separately from subnet scan failure', async ({ page }) => {
-  await installFindCardHarness(page, { verificationFails: true });
+  await installFindCardHarness(page, { wrongCard: true });
   await page.getByTestId('setup-connect-card').click();
   await expect.poll(() => page.evaluate(() => (window as any).__findCardHarness.sweepStarted)).toBe(true);
   await page.evaluate(() => (window as any).__findCardHarness.releaseSweep());

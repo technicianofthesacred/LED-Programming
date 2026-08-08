@@ -140,6 +140,40 @@ test('a gesture-reserved card window navigates to a discovered host without a se
   assert.equal(state.discoveredCard?.id, 'lw-discovered-83');
 });
 
+test('discovery acquisition rejects a valid wrong-card identity before accepting discovered evidence', async () => {
+  const host = '192.168.50.86';
+  const tab = fakeCardTab();
+  const { values, emitMessage } = stubWindow({ openResult: tab });
+  values.set('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-expected-86' }));
+  tab.postMessage = message => {
+    if (message.type !== 'firmware-info') return;
+    setTimeout(() => emitMessage({
+      origin: `http://${host}`,
+      source: tab,
+      data: {
+        app: 'LightweaverCardBridge', id: message.id, ok: true, version: 2,
+        response: { cardId: 'lw-wrong-86', firmwareVersion: '1.0.0', buildId: 'build-wrong-86' },
+      },
+    }), 0);
+  };
+
+  const reserved = reserveCardBridgeWindow();
+  const attempt = acquireCardBridgeFromGesture(host, {
+    reservedWindow: reserved,
+    acceptDiscovered: true,
+    timeoutMs: 100,
+  });
+  emitMessage({
+    origin: `http://${host}`,
+    source: tab,
+    data: { app: 'LightweaverCardBridge', type: 'ready', host, version: 2 },
+  });
+
+  await assert.rejects(attempt.ready, error => error?.reason === 'wrong-card');
+  assert.equal(getCardBridgeState().discoveredCard?.id, 'lw-wrong-86');
+  assert.equal(getCardBridgeState().identityVerified, false);
+});
+
 test('reserving the named card window revokes prior bridge command authority', async () => {
   const host = '192.168.50.84';
   const tab = fakeCardTab();
