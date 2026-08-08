@@ -53,6 +53,40 @@ export async function openAppPage() {
     // and its port — held for the rest of the run.
     await browser?.close();
     await server.close();
-    throw err;
+    throw explainBrowserLaunchFailure(err);
   }
+}
+
+// Two ways this fails that are not the mapper's fault, and both look exactly
+// like six broken tests unless someone reads the stack. Each has cost a day:
+// the missing binary took down a release on 2026-08-04, and the sandbox denial
+// was mistaken for a flaky test for months.
+export function explainBrowserLaunchFailure(err) {
+  const text = String(err?.message || err);
+
+  if (/bootstrap_check_in|mach_port_rendezvous|MachPortRendezvousServer/.test(text)) {
+    err.message = [
+      'Chromium could not start because the sandbox denied it a mach port.',
+      'This is the environment, NOT a failing test — the same command passes',
+      'with the sandbox disabled. Re-run it outside the sandbox before',
+      'concluding anything about the mapper.',
+      '',
+      text,
+    ].join('\n');
+    return err;
+  }
+
+  if (/Executable doesn't exist|playwright install/.test(text)) {
+    err.message = [
+      'Chromium is not installed for Playwright on this machine.',
+      'This package declares @playwright/test but installs no browser of its',
+      'own — it borrows the one lightweaver\'s CI lane installs. Run:',
+      '  npx playwright install chromium',
+      '',
+      text,
+    ].join('\n');
+    return err;
+  }
+
+  return err;
 }
