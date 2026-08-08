@@ -13,6 +13,7 @@ import { prepareCardDeployment } from '../lib/cardDeployment.js';
 import { getCardHostname, CardPushError } from '../lib/cardPushClient.js';
 import { deploySetupToCard } from '../lib/cardSetupDeploy.js';
 import { sweepKnownSubnetsForCard } from '../lib/cardConnection.js';
+import { acquireCardBridgeFromGesture, reserveCardBridgeWindow } from '../lib/cardBridge.js';
 import { sampleStripPixels } from '../lib/layoutGeometry.js';
 import { planStripCountShares, shouldRescaleDrawing } from '../lib/designCapacity.js';
 import { buildBenchConfig } from '../lib/benchConfig.js';
@@ -210,6 +211,14 @@ export function SetupScreen({
   // Home routers move addresses on a lease, so every remembered address can be
   // stale at once; this searches the networks the card has answered on before.
   const findMyCard = async () => {
+    // Chromium grants popup permission only for this synchronous click stack.
+    // Hold the named tab now, then move this exact WindowProxy to the verified
+    // address once the read-only subnet sweep returns.
+    const reservedWindow = reserveCardBridgeWindow();
+    if (!reservedWindow) {
+      setFinding({ busy: false, message: 'Allow the Lightweaver card window, then try again.' });
+      return;
+    }
     setFinding({ busy: true, message: 'Looking for your card on your network…' });
     try {
       const found = await sweepKnownSubnetsForCard({
@@ -217,6 +226,12 @@ export function SetupScreen({
       });
       if (found) {
         setFinding({ busy: false, message: `Found it at ${found.host}. Connecting…` });
+        const attempt = acquireCardBridgeFromGesture(found.host, {
+          reservedWindow,
+          acceptDiscovered: true,
+          timeoutMs: 15000,
+        });
+        await attempt.ready;
         onOpenConnectionCenter?.();
         return;
       }
@@ -224,8 +239,13 @@ export function SetupScreen({
         busy: false,
         message: 'No card answered on your network. Check it is powered on and on the same Wi-Fi as this computer.',
       });
-    } catch {
-      setFinding({ busy: false, message: 'Could not search your network from here. Connect by hand instead.' });
+    } catch (error) {
+      setFinding({
+        busy: false,
+        message: error?.reason === 'popup-blocked'
+          ? 'Allow the Lightweaver card window, then try again.'
+          : 'Could not search your network from here. Connect by hand instead.',
+      });
     }
   };
 

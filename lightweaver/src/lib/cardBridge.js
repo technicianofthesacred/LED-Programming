@@ -1800,10 +1800,48 @@ export function getCardBridgeVersion() {
   return bridgeVersion;
 }
 
+// Reserve the one stable card tab while the browser still considers the click
+// a user gesture. Discovery can then finish asynchronously and navigate this
+// exact WindowProxy without asking Chromium to create another popup.
+export function reserveCardBridgeWindow() {
+  const win = browserWindow();
+  if (!win?.open) return null;
+  try {
+    const opened = win.open('', CARD_BRIDGE_WINDOW_NAME);
+    // Opening a named target can replace a live card document with the blank
+    // reservation. Its old origin/identity must never retain authority during
+    // the subsequent asynchronous discovery gap.
+    if (opened) revokeBridgeForNavigation();
+    return opened;
+  } catch {
+    return null;
+  }
+}
+
+function navigateReservedCardBridgeWindow(target, host, studioUrl) {
+  if (!target || bridgeTargetClosed(target) || !isLocalCardHost(host)) return null;
+  const origin = cardHostToUrl(host);
+  const url = buildCardBridgeLaunchUrl(host, studioUrl);
+  revokeBridgeForNavigation({ host, origin });
+  trackNavigatedBridgeWindow(target, { host, origin, persistHost: false });
+  try {
+    target.location.href = url;
+  } catch {
+    try {
+      target.location = url;
+    } catch {
+      clearBridgeTarget({ host, origin });
+      return null;
+    }
+  }
+  return target;
+}
+
 export function acquireCardBridgeFromGesture(rawHost = '', {
   studioUrl = '',
   timeoutMs = 10000,
   acceptDiscovered = false,
+  reservedWindow = null,
 } = {}) {
   const win = browserWindow();
   const host = normalizeCardHost(rawHost || readStoredCardHost());
@@ -1876,7 +1914,9 @@ export function acquireCardBridgeFromGesture(rawHost = '', {
 
   // Keep this before any asynchronous boundary: popup permission is attached
   // to the user's pattern-click gesture, and the stable name reuses one tab.
-  const opened = openCardBridge(host, { autoOpenStudio: false, studioUrl });
+  const opened = reservedWindow
+    ? navigateReservedCardBridgeWindow(reservedWindow, host, studioUrl)
+    : openCardBridge(host, { autoOpenStudio: false, studioUrl });
   attempt.window = opened;
   if (!opened) {
     cleanup();
