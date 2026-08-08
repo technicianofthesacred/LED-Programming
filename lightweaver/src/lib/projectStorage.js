@@ -4,6 +4,7 @@ export const PROJECT_LIBRARY_STORAGE_KEY = 'lw_project_library_v1';
 export const PROJECT_LIBRARY_BACKUP_STORAGE_KEY = 'lw_project_library_v1_backup';
 export const PROJECT_ACTIVE_RECORD_STORAGE_KEY = 'lw_project_active_record_v1';
 export const PROJECT_ACTIVE_RECORD_OWNERSHIP_STORAGE_KEY = 'lw_project_active_record_ownership_v1';
+export const PROJECT_LIBRARY_SAVE_BLOCKED_SESSION_KEY = 'lw_project_library_save_blocked_v1';
 export const AUTOSAVE_QUARANTINE_STORAGE_KEY = 'lw_autosave_v3_quarantine';
 export const PROJECT_LIFECYCLE_STORAGE_KEY = 'lw_project_lifecycle_v1';
 export const PROJECT_LIBRARY_CHANGED_EVENT = 'lightweaver-project-library-changed';
@@ -15,10 +16,24 @@ let projectLibrarySaveBlocked = false;
 
 export function setProjectLibrarySaveBlocked(blocked) {
   projectLibrarySaveBlocked = blocked === true;
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      if (projectLibrarySaveBlocked) sessionStorage.setItem(PROJECT_LIBRARY_SAVE_BLOCKED_SESSION_KEY, 'true');
+      else sessionStorage.removeItem(PROJECT_LIBRARY_SAVE_BLOCKED_SESSION_KEY);
+    }
+  } catch {
+    // The in-memory block still protects this document.
+  }
 }
 
 export function isProjectLibrarySaveBlocked() {
-  return projectLibrarySaveBlocked;
+  if (projectLibrarySaveBlocked) return true;
+  try {
+    return typeof sessionStorage !== 'undefined'
+      && sessionStorage.getItem(PROJECT_LIBRARY_SAVE_BLOCKED_SESSION_KEY) === 'true';
+  } catch {
+    return false;
+  }
 }
 
 function getDefaultStorage() {
@@ -434,7 +449,7 @@ export function duplicateProjectLibraryRecord(id, options = {}) {
 // Interactive UI saves should use saveCurrentProjectToLibraryGuarded so every
 // participating tab shares one serialized read/validate/write boundary.
 export function saveCurrentProjectToLibrary(project, options = {}) {
-  if (projectLibrarySaveBlocked) {
+  if (isProjectLibrarySaveBlocked()) {
     throw new Error('Project library saving is blocked until a safe project destination is established');
   }
   const storage = storageFromOptions(options);
@@ -584,7 +599,7 @@ export async function clearProjectLibraryAssociationGuarded(expectedOwnership, o
 }
 
 export async function saveCurrentProjectToLibraryGuarded(project, options = {}) {
-  if (projectLibrarySaveBlocked) {
+  if (isProjectLibrarySaveBlocked()) {
     return { ok: false, reason: 'association-handoff-failed' };
   }
 
@@ -629,7 +644,7 @@ export async function saveCurrentProjectToLibraryGuarded(project, options = {}) 
       PROJECT_LIBRARY_SAVE_LOCK,
       { mode: 'exclusive' },
       async () => {
-        if (projectLibrarySaveBlocked) {
+        if (isProjectLibrarySaveBlocked()) {
           return { ok: false, reason: 'association-handoff-failed' };
         }
 

@@ -921,7 +921,12 @@ function Shell() {
   }, [markProjectPersisted, projectName, serializeProject, showWorkspaceEvent]);
   const onLoad = useCallback(() => setLoadDialogOpen(true), []);
   const onMatchedCardProjectLoaded = useCallback(async ({ source, recordId, recordSnapshot, expectedMarker }) => {
-    const associationIsCurrent = () => !expectedMarker || isProjectLifecycleMarkerCurrent(expectedMarker);
+    const markerPresent = Number.isSafeInteger(expectedMarker?.generation)
+      && Number.isSafeInteger(expectedMarker?.revision);
+    if (source === 'browser' && !markerPresent) {
+      return { ok: false, reason: 'lifecycle-marker-required' };
+    }
+    const associationIsCurrent = () => !markerPresent || isProjectLifecycleMarkerCurrent(expectedMarker);
     if (source === 'cloud') {
       if (!associationIsCurrent()) return { ok: false, reason: 'superseded' };
       try {
