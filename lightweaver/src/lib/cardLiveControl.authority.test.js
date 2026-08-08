@@ -199,3 +199,25 @@ test('id-different-from-preset startup recovers its runtime pattern and rejects 
     error => error?.reason === 'reset-readback-unconfirmed',
   );
 });
+
+test('Reset Live rejects an echoed startup id when the card reports that no visible frame rendered', async () => {
+  await assert.rejects(
+    resetLiveOutputOnCard({}, {
+      studioProject,
+      recoverImpl: async () => ({
+        ok: true,
+        recovered: true,
+        patternId: 'aurora',
+        diagnostics: {
+          rendered: false,
+          frameSubmitted: true,
+          nonBlackPixels: 24,
+          brightnessByte: 128,
+        },
+      }),
+      readStatusImpl: async () => readyStatus,
+    }),
+    error => error?.reason === 'recovery-unconfirmed'
+      && error?.message === 'The card answered, but it did not confirm a visible recovery frame. Restart the card, then try Recover lights again.',
+  );
+});

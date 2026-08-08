@@ -786,7 +786,11 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
         }
       }
       healthNoticeShownRef.current = false;
-      const stream = createCardFrameStream({ host: readStoredCardHost(), onHealth: handleStreamHealth });
+      const stream = createCardFrameStream({
+        host: readStoredCardHost(),
+        onHealth: handleStreamHealth,
+        canSendFrame: () => authorityGateRef.current.canSend(),
+      });
       stream.start();
       streamRef.current = stream;
       setNotice(null);

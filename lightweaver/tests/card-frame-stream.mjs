@@ -224,6 +224,66 @@ assert.equal(clampFrameFps('nope'), 18, 'garbage fps falls back to the default')
   assert.equal(record.cancels, 1, 'double-stop does not double-cancel');
 }
 
+// ── authority fence: cached/in-flight old-contract frames cannot land ──
+{
+  const clock = makeClock();
+  const events = [];
+  let authorized = true;
+  let holdNextFrame = false;
+  let releaseHeldFrame;
+  const heldFrame = new Promise(resolve => { releaseHeldFrame = resolve; });
+  const transport = {
+    kind: 'fenced-test-wire',
+    async sendFrame(_pixels, _seg, options = {}) {
+      events.push('frame-start');
+      if (!holdNextFrame) {
+        events.push('frame-landed');
+        return { ok: true };
+      }
+      await heldFrame;
+      if ((options.isCurrent || (() => true))()) events.push('stale-frame-landed');
+      else events.push('frame-fenced');
+      return { ok: true };
+    },
+    async sendCancel() { events.push('cancel'); },
+    close() { events.push('close'); },
+  };
+  const stream = createCardFrameStream({
+    transport,
+    canSendFrame: () => authorized,
+    setIntervalImpl: clock.setIntervalImpl,
+    clearIntervalImpl: clock.clearIntervalImpl,
+    now: clock.now,
+  });
+
+  stream.start();
+  stream.push(FRAME(1));
+  await clock.advance(60);
+  assert.deepEqual(events, ['frame-start', 'frame-landed']);
+
+  authorized = false;
+  await clock.advance(FRAME_KEEPALIVE_MS + 100);
+  assert.deepEqual(events, ['frame-start', 'frame-landed'],
+    'a revoked rendering contract fences the cached keepalive before passive cleanup runs');
+
+  authorized = true;
+  holdNextFrame = true;
+  stream.push(FRAME(2));
+  const pumpTick = clock.advance(60);
+  await Promise.resolve();
+  assert.equal(events.at(-1), 'frame-start', 'the real pump has an old-contract frame in flight');
+
+  authorized = false;
+  const stopping = stream.stop();
+  assert.equal(events.includes('cancel'), false, 'cancel waits for the in-flight send to drain');
+  releaseHeldFrame();
+  await pumpTick;
+  await stopping;
+  assert.deepEqual(events.slice(-3), ['frame-fenced', 'cancel', 'close'],
+    'the in-flight frame is fenced before the ordered cancel closes the stream');
+  assert.equal(events.includes('stale-frame-landed'), false);
+}
+
 // ── background tab: 1000ms-clamped ticks still beat the 2s watchdog ───────
 {
   assert.ok(FRAME_KEEPALIVE_MS <= 900,
@@ -986,7 +1046,23 @@ await assert.rejects(
     'each chunk waits for its ack before the next is posted');
 }
 
-// ── bridge v3: a failed chunk fails the WHOLE frame ───────────────────────
+// ── bridge v3: authority is rechecked between awaited chunks ─────────
+{
+  const transport = createBridgeFrameTransport('192.168.18.70');
+  let authorized = true;
+  relayFrame = () => {
+    authorized = false;
+    return { ok: true, relayed: true };
+  };
+  const before = posted.length;
+  const result = await transport.sendFrame(LONG_FRAME, 1, { isCurrent: () => authorized });
+  assert.equal(posted.length, before + 1,
+    'revocation while chunk 0 is awaiting acknowledgement fences every remaining chunk');
+  assert.equal(result.fenced, true);
+  relayFrame = () => ({ ok: true, relayed: true });
+}
+
+// A failed chunk makes the whole frame undelivered.
 {
   const transport = createBridgeFrameTransport('192.168.18.70');
   relayFrame = (payload) => (payload?.start === 416

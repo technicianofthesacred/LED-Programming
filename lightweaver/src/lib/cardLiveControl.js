@@ -403,7 +403,8 @@ function buildRecoverLightsPayload(look = {}) {
 function requireRecoveryAcknowledgement(response) {
   const diagnostics = response?.diagnostics;
   const commandAccepted = response?.ok === true && (response?.accepted === true || response?.recovered === true);
-  const visibleFramePrepared = diagnostics?.frameSubmitted !== false &&
+  const visibleFramePrepared = diagnostics?.rendered !== false &&
+    diagnostics?.frameSubmitted !== false &&
     Number(diagnostics?.nonBlackPixels) > 0 && Number(diagnostics?.brightnessByte) > 0;
   if (!commandAccepted || !visibleFramePrepared) {
     throw new CardPushError(
@@ -1237,6 +1238,12 @@ export async function resetLiveOutputOnCard(fallbackLook = {}, options = {}) {
       patternId: project.startupRuntimePatternId,
     };
     const response = await recoverImpl(startupLook, { ...options, host });
+    if (response?.diagnostics?.rendered === false) {
+      throw new CardPushError(
+        'recovery-unconfirmed',
+        'The card answered, but it did not confirm a visible recovery frame. Restart the card, then try Recover lights again.',
+      );
+    }
     const acknowledgedPatternId = String(response?.patternId || response?.appliedPatternId || '').trim();
     if (!acknowledgedPatternId || acknowledgedPatternId !== project.startupRuntimePatternId) {
       throw new CardPushError(
