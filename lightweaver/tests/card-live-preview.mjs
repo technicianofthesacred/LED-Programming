@@ -732,137 +732,34 @@ assert.deepEqual(retryRequests.map(item => item.url), [
   'http://192.168.4.1/api/control',
 ]);
 
-const resetRequests = [];
-globalThis.fetch = async (url, options = {}) => {
-  resetRequests.push({ url, options });
-  if (String(url).endsWith('/api/zones')) {
-    return {
-      ok: true,
-      json: async () => ({
-        syncZones: false,
-        zones: [
-          {
-            id: 'patch-default-outer-circle',
-            patternId: 'fire',
-            brightness: 0.8,
-            speed: 1.2,
-            hueShift: 4,
-            customHue: 34,
-            customSaturation: 220,
-            customBreathe: true,
-            customDrift: false,
-            blackout: true,
-          },
-          {
-            id: 'patch-default-inner-circle',
-            patternId: 'sparkle',
-            brightness: 1,
-            speed: 0.75,
-            hueShift: -2,
-            customHue: 160,
-            customSaturation: 190,
-            customBreathe: false,
-            customDrift: true,
-            blackout: false,
-          },
-        ],
-      }),
-    };
-  }
-  return {
-    ok: true,
-    json: async () => ({ ok: true, patternId: JSON.parse(options.body || '{}').patternId }),
-  };
+const resetRecoveries = [];
+const resetProject = {
+  projectId: 'piece-reset',
+  projectFingerprint: 'reset-fingerprint',
+  patternIds: ['fire', 'aurora'],
+  startupPatternId: 'aurora',
 };
-
-const resetResponse = await resetLiveOutputOnCard({
-  patternId: 'fire',
-}, {
+const resetResponse = await resetLiveOutputOnCard({ patternId: 'fire' }, {
   host: '192.168.18.70',
   timeoutMs: 1000,
-});
-
-assert.equal(resetResponse.source, 'zones');
-assert.equal(resetResponse.zonesPreviewed, 2);
-assert.deepEqual(resetRequests.map(item => item.url), [
-  'http://192.168.18.70/api/zones',
-  'http://192.168.18.70/api/control',
-  'http://192.168.18.70/api/control',
-]);
-assert.deepEqual(resetRequests.slice(1).map(item => {
-  const body = JSON.parse(item.options.body);
-  return {
-    zone: body.zone,
-    patternId: body.patternId,
-    syncZones: body.syncZones,
-    cancelStream: body.cancelStream,
-    blackout: body.blackout,
-    brightness: body.brightness,
-    speed: body.speed,
-  };
-}), [
-  {
-    zone: 'patch-default-outer-circle',
-    patternId: 'fire',
-    syncZones: false,
-    cancelStream: true,
-    blackout: false,
-    brightness: 0.8,
-    speed: 1.2,
+  studioProject: resetProject,
+  recoverImpl: async (look, options) => {
+    resetRecoveries.push({ look, host: options.host });
+    return { ok: true, recovered: true };
   },
-  {
-    zone: 'patch-default-inner-circle',
-    patternId: 'sparkle',
-    syncZones: false,
-    cancelStream: true,
-    blackout: false,
-    brightness: 1,
-    speed: 0.75,
-  },
-]);
-
-const resetFallbackRequests = [];
-globalThis.fetch = async (url, options = {}) => {
-  resetFallbackRequests.push({ url, options });
-  if (String(url).endsWith('/api/zones')) {
-    return { ok: false, json: async () => ({ ok: false }) };
-  }
-  return {
-    ok: true,
-    json: async () => ({ ok: true, fallback: true, patternId: JSON.parse(options.body || '{}').patternId }),
-  };
-};
-
-const resetFallbackResponse = await resetLiveOutputOnCard({
-  patternId: 'ocean',
-  brightness: 0.66,
-}, {
-  host: '192.168.18.70',
-  timeoutMs: 1000,
+  readStatusImpl: async () => ({
+    runtimePhase: 'ready', knownGoodProject: true, commandReady: true,
+    outputReady: true, playbackReady: true,
+    projectId: 'piece-reset', projectFingerprint: 'reset-fingerprint',
+    currentPatternId: 'aurora', startupPatternId: 'aurora',
+  }),
 });
 
-assert.equal(resetFallbackResponse.source, 'fallback');
-assert.equal(resetFallbackResponse.fallback, true);
-assert.deepEqual(resetFallbackRequests.map(item => item.url), [
-  'http://192.168.18.70/api/zones',
-  'http://192.168.18.70/api/control',
-]);
-assert.deepEqual(JSON.parse(resetFallbackRequests[1].options.body), {
-  cancelStream: true,
-  syncZones: true,
-  blackout: false,
-  patternId: 'ocean',
-  brightness: 0.66,
-  speed: 1,
-  hueShift: 0,
-  hue: 32,
-  saturation: 230,
-  breathe: false,
-  breatheLowerPct: 85,
-  breatheUpperPct: 100,
-  breatheCycleSeconds: 9,
-  drift: false,
-});
+assert.equal(resetResponse.source, 'startup-recovery');
+assert.equal(resetResponse.recovered, true);
+assert.equal(resetRecoveries.length, 1);
+assert.equal(resetRecoveries[0].look.patternId, 'aurora');
+assert.equal(resetRecoveries[0].host, '192.168.18.70');
 
 delete globalThis.window;
 let releaseStaleZoneProbe;

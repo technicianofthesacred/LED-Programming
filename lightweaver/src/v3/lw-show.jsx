@@ -26,6 +26,8 @@ import { createCardFrameStream, DEFAULT_FRAME_FPS } from '../lib/cardFrameStream
 import { applyBenchStripView, templateStripIds, templateStripLength } from '../lib/benchStripView.js';
 import { cardBridgeFeatureGap, hasCardBridge, pingCardBridge } from '../lib/cardBridge.js';
 import { canPushDirectlyToCard, readStoredCardHost } from '../lib/cardConnection.js';
+import { decideLiveControlProjectAuthority } from '../lib/cardLiveControl.js';
+import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
 
 const SLOW_MODES = MODE_LIBRARY.filter((m) => m.tier === 'slow');
 const LIVELY_MODES = MODE_LIBRARY.filter((m) => m.tier === 'lively');
@@ -197,7 +199,7 @@ function BandMeter({ label, value }) {
   );
 }
 
-function ShowScreen({ go }) {
+function ShowScreen({ connected, cardLink, currentProject, go }) {
   const { strips, hidden, patchBoard } = useProject();
   const mandalaTemplate = useMemo(() => createMandalaSpatialTemplate(), []);
   const connectedTemplate = useMemo(
@@ -717,6 +719,18 @@ function ShowScreen({ go }) {
     }
     setLightsBusy(true);
     try {
+      const authority = decideLiveControlProjectAuthority({
+        connected: connected || cardLink?.readiness?.playbackReady === true,
+        studioProject: {
+          ...currentProject,
+          projectFingerprint: cardProjectFingerprint(currentProject || {}),
+        },
+        cardStatus: cardLink?.readiness || {},
+      });
+      if (!authority.ok) {
+        setNotice({ kind: 'err', text: authority.message });
+        return;
+      }
       if (!canPushDirectlyToCard()) {
         if (!hasCardBridge()) {
           setNotice({
@@ -759,7 +773,7 @@ function ShowScreen({ go }) {
     } finally {
       setLightsBusy(false);
     }
-  }, [lightsBusy, stopLights, handleStreamHealth]);
+  }, [cardLink?.readiness, connected, currentProject, lightsBusy, stopLights, handleStreamHealth]);
 
   const listening = source !== 'quiet';
 

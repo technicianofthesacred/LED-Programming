@@ -67,7 +67,7 @@ import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
 import { prepareCardDeployment, waitForCardDeploymentVerification } from '../lib/cardDeployment.js';
 import { ensureCardSectionsForPreview } from '../lib/cardSectionSync.js';
 import { applyTestStripToRuntimePackage, readTestStrip } from '../lib/testStrip.js';
-import { pushLivePreviewToCard, recoverCardLights } from '../lib/cardLiveControl.js';
+import { decideLiveControlProjectAuthority, pushLivePreviewToCard, recoverCardLights } from '../lib/cardLiveControl.js';
 import {
   cardActionReducer,
   cardActionStatusLabel,
@@ -499,8 +499,26 @@ import { PatternPreview } from './PatternPreview.jsx';
     const currentPatternCardAccess = useCallback(() => {
       const access = patternAccessRef.current;
       if (access !== 'ready') return access;
-      return hasCurrentProjectAuthorization() ? 'ready' : 'project';
-    }, [hasCurrentProjectAuthorization]);
+      if (!hasCurrentProjectAuthorization()) return 'project';
+      const binding = patternAuthorizationRef.current;
+      const readiness = cardLink?.readiness || {};
+      const authority = decideLiveControlProjectAuthority({
+        connected: true,
+        studioProject: {
+          projectId: binding.studioProjectId,
+          projectFingerprint: binding.studioProjectFingerprint,
+        },
+        cardStatus: {
+          ...readiness,
+          runtimePhase: readiness.runtimePhase || 'ready',
+          playbackReady: readiness.playbackReady ?? true,
+          projectId: binding.installedProjectId,
+          projectFingerprint: binding.installedProjectFingerprint,
+        },
+      });
+      if (authority.ok) return 'ready';
+      return authority.state === 'project-mismatch' ? 'project' : 'recovery';
+    }, [cardLink?.readiness, hasCurrentProjectAuthorization]);
     const matchesCurrentCardProjectEvidence = useCallback((evidence = {}) => {
       const binding = patternAuthorizationRef.current;
       const matches = hasCurrentProjectAuthorization()
@@ -832,7 +850,7 @@ import { PatternPreview } from './PatternPreview.jsx';
 
     const scheduleLivePreview = useCallback((nextLook, target = selectedTarget, delayMs = 80, { bridgeAuthority = null } = {}) => {
       const hasCurrentAuthority = () => {
-        if (!hasCurrentProjectAuthorization()) return false;
+        if (currentPatternCardAccess() !== 'ready') return false;
         if (patternAccessRef.current === 'ready') return true;
         if (!bridgeAuthority) return false;
         const state = getCardBridgeState();
@@ -923,7 +941,7 @@ import { PatternPreview } from './PatternPreview.jsx';
           }
         }
       }, delayMs);
-    }, [blockPatternCardEffect, cardHost, cardLink?.transport, currentPatternCardAccess, hasCurrentProjectAuthorization, livePreview, localCard, markCardLookConfirmed, matchesCurrentCardProjectEvidence, runtimeBuild.error, runtimePackage, selectedTarget]);
+    }, [blockPatternCardEffect, cardHost, cardLink?.transport, currentPatternCardAccess, livePreview, localCard, markCardLookConfirmed, matchesCurrentCardProjectEvidence, runtimeBuild.error, runtimePackage, selectedTarget]);
 
     const retryLatestPreview = useCallback(() => {
       const latest = latestPreviewIntent.current;
