@@ -33,6 +33,14 @@ async function mockLocalCard(page: any, options: any = {}) {
         cardId: TEST_CARD_ID,
         firmwareVersion: '1.0.0',
         buildId: TEST_BUILD_ID,
+        runtimePhase: 'ready',
+        knownGoodProject: true,
+        commandReady: true,
+        outputReady: true,
+        playbackReady: true,
+        projectId: card.savedConfig?.piece?.id || '',
+        projectRevision: card.savedConfig?.projectRevision ?? 0,
+        projectFingerprint: card.savedConfig?.projectFingerprint ?? '',
         led: card.savedConfig?.led || {
           pixels: 44,
           maxMilliamps: 1500,
@@ -101,18 +109,45 @@ async function mockLocalCard(page: any, options: any = {}) {
     }
     if (pathname === '/api/wiring/status') {
       card.operations.push('status');
+      const hasCandidate = Boolean(card.candidateConfig);
+      const candidateState = hasCandidate
+        ? (card.testing ? 'awaiting-confirmation' : 'staged')
+        : 'none';
+      const state = hasCandidate
+        ? (card.testing ? 'testing' : 'staged')
+        : 'known-good';
+      const identity = hasCandidate ? card.candidateConfig : card.savedConfig;
       await route.fulfill({ json: {
         ok: true,
-        state: card.testing ? 'testing' : 'staged',
-        activationId: card.activationId,
+        state,
+        candidateState,
+        hasCandidate,
+        cardId: TEST_CARD_ID,
+        firmwareVersion: '1.0.0',
+        buildId: TEST_BUILD_ID,
+        ...(hasCandidate ? { activationId: card.activationId } : {}),
+        projectRevision: identity?.projectRevision ?? 0,
+        projectFingerprint: identity?.projectFingerprint ?? '',
+        productionJobId: identity?.productionJobId ?? '',
+        productionJobDigest: identity?.productionJobDigest ?? '',
+        wiringRevision: identity?.wiringRevision ?? 0,
+        wiringDigest: identity?.wiringDigest ?? '',
+        ledType: identity?.led?.type || 'WS2812B',
+        colorOrder: identity?.led?.colorOrder || 'RGB',
+        maxMilliamps: identity?.led?.maxMilliamps ?? 1500,
+        nextStep: hasCandidate
+          ? (card.testing ? 'confirm-or-rollback' : 'activate')
+          : 'stage-candidate',
         remainingProbationMs: card.testing ? 84000 : 0,
-        currentOutputs: card.candidateConfig?.led?.outputs || [],
+        currentOutputs: (card.savedConfig?.led?.outputs || options.currentOutputs || [{ id: 'out1', pin: 16, pixels: 44 }]),
+        ...(hasCandidate ? { candidateOutputs: card.candidateConfig?.led?.outputs || [] } : {}),
       } });
       return;
     }
     if (pathname === '/api/wiring/rollback') {
       card.operations.push('rollback');
       card.testing = false;
+      card.candidateConfig = null;
       await route.fulfill({ json: { ok: true, state: 'rolled-back', activationId: card.activationId } });
       return;
     }
@@ -120,6 +155,7 @@ async function mockLocalCard(page: any, options: any = {}) {
       card.operations.push('confirm');
       card.testing = false;
       card.savedConfig = card.candidateConfig;
+      card.candidateConfig = null;
       await route.fulfill({ json: { ok: true, state: 'known-good', activationId: card.activationId } });
       return;
     }
