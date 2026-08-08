@@ -264,6 +264,7 @@ async function mutateSavedLayout(page: any, mutate: (layout: any) => void) {
   await connectMatchingShowCard(page);
   await expect(page.getByTestId('show-stage')).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId('show-stage')).toHaveAttribute('data-frame-version', /\d+/, { timeout: 10_000 });
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/, { timeout: 10_000 });
 }
 
 async function loadSong(page: any, name = 'fixture.wav') {
