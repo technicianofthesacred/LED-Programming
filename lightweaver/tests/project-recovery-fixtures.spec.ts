@@ -14,6 +14,12 @@ const QUARANTINE_KEY = 'lw_autosave_v3_quarantine';
 const LEGACY_AUTOSAVE_KEY = 'lw_autosave_v1';
 const LIFECYCLE_KEY = 'lw_project_lifecycle_v1';
 
+// These fixtures are about what the app does with a stored project, so they
+// deep-link to Layout. A bare `/` is the guided setup ladder for an owner who
+// has not skipped it, and every test here clears localStorage first — see
+// tests/workflow.spec.ts, which moved for the same reason.
+const LAYOUT_ROUTE = '/#screen=layout';
+
 const MALFORMED_SENTINEL = 'LW-SENTINEL-MALFORMED';
 const FORWARD_SENTINEL = 'LW-SENTINEL-FORWARD';
 
@@ -37,7 +43,7 @@ test('malformed autosave JSON is quarantined, not destroyed by the autosave flus
   const malformed = `{"version":3,"name":"${MALFORMED_SENTINEL}`; // unterminated JSON
   await seedStorage(page, { [AUTOSAVE_KEY]: malformed });
 
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.goto(LAYOUT_ROUTE, { waitUntil: 'domcontentloaded' });
   await expectWorkingLayoutScreen(page);
 
   // The raw payload must land in quarantine…
@@ -61,7 +67,7 @@ test('forward-version autosave is quarantined with its payload intact', async ({
   const forward = JSON.stringify({ version: 99, name: 'From the future', sentinel: FORWARD_SENTINEL });
   await seedStorage(page, { [AUTOSAVE_KEY]: forward, [AUTOSAVE_BACKUP_KEY]: forward });
 
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.goto(LAYOUT_ROUTE, { waitUntil: 'domcontentloaded' });
   await expectWorkingLayoutScreen(page);
 
   await expect.poll(() => readKey(page, QUARANTINE_KEY)).toContain(FORWARD_SENTINEL);
@@ -89,7 +95,7 @@ test('valid legacy v1 project migrates and opens', async ({ page }) => {
   });
   await seedStorage(page, { [LEGACY_AUTOSAVE_KEY]: legacy });
 
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.goto(LAYOUT_ROUTE, { waitUntil: 'domcontentloaded' });
   await expectWorkingLayoutScreen(page);
 
   await expect(page.locator('.crumb .proj')).toHaveText('Legacy Piece');
@@ -102,7 +108,7 @@ test('valid v3 autosave restores without claiming Unsaved changes', async ({ pag
   const project = JSON.stringify({ version: 3, id: 'lwproj-fixture-v3', name: 'Fixture V3' });
   await seedStorage(page, { [AUTOSAVE_KEY]: project, [AUTOSAVE_BACKUP_KEY]: project });
 
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.goto(LAYOUT_ROUTE, { waitUntil: 'domcontentloaded' });
   await expectWorkingLayoutScreen(page);
 
   await expect(page.locator('.crumb .proj')).toHaveText('Fixture V3');
@@ -120,7 +126,7 @@ test('a browser-saved project stays clean after reload without an ambient lifecy
     [LIFECYCLE_KEY]: JSON.stringify({ version: 1, dirty: false, persistedDestination: 'browser', installed: false }),
   });
 
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.goto(LAYOUT_ROUTE, { waitUntil: 'domcontentloaded' });
   await expectWorkingLayoutScreen(page);
 
   await expect(page.locator('.crumb .proj')).toHaveText('Saved Fixture');
@@ -140,7 +146,7 @@ test('fresh boot is a clean New project and New project needs no discard confirm
     };
   });
 
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.goto(LAYOUT_ROUTE, { waitUntil: 'domcontentloaded' });
   await expectWorkingLayoutScreen(page);
 
   await expect(page.locator('.savechip')).toHaveCount(0);

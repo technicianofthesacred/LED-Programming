@@ -272,3 +272,62 @@ a race fix, and it must not reintroduce a second store of the current screen.
 store dispatches its own event. Anything that writes the hash *without* going
 through the store or a direct assignment (there is nothing today) would move
 the URL invisibly. The store is the place to enforce that if it ever comes up.
+
+---
+
+## 2026-08-07 — The handoff loop: a guard is only as durable as the thing that holds it
+
+**Topic:** Verifying the routing fix above turned up a second defect on the same
+journey — the one that actually looked like "the pattern link is broken" to an
+owner. It was not a hang. The card→Patterns handoff was a ping-pong running at
+~45 resolutions per second, six HTTP requests each, aimed at the ESP32 on the
+customer's shelf, while the screen sat on a disabled "Verifying project…".
+
+**Root cause, in two halves.** The card screen issued the pattern authorization
+with the installed project id read from `/api/firmware-info` (which carries
+`piece.id`); the Patterns screen re-derived that binding from the card-link
+readiness envelope, which is `/api/status`. Those are different payloads.
+Firmware only began sending `projectId` on `/api/status` in `f1ad74e`
+(2026-08-04) and has never sent `piece.id` there — so against any card flashed
+before that build, the card issued an authorization Patterns could not claim,
+every time, forever. That is the spark.
+
+The amplifier is what made it a flood. Patterns returns the owner to the card
+when it cannot claim, and the card auto-opens Patterns for as long as it can
+read an intent in the URL. Every hop unmounts and remounts both screens, and
+both screens' "only do this once" guards are component-scoped `useRef`s —
+`cardProjectProbeRef` on the card, `cardReturnConsumed` on Patterns. A remount
+resets them, so the guards defended nothing across exactly the transition that
+needed guarding.
+
+**Two things that look like the fix and are not.**
+
+*Stripping the intent from the URL on a failed claim.* This was written and
+then withdrawn: `patterns-v3.spec.ts` asserts the intent survives an
+unauthorized landing, and it is right to. `?editPattern=ocean` is still what
+the owner came for, and an explicit "Load this project" should honour it. The
+breaker belongs on the automatic hand-over, not on the owner's request — so a
+failed claim is now remembered at module scope in `src/lib/cardEditIntent.js`,
+where a remount cannot forget it, and the card offers the project instead of
+opening it.
+
+*Fixing the fixture.* `readyStatus()` in `card-workspace.spec.ts` omitted
+`projectId`, which is why `…auto-opens only with preserved edit intent` drove
+the loop on every run and then passed or failed on whether its URL poll
+happened to sample `#screen=pattern` mid-flip — a coin toss gating Deploy site
+and the signed firmware release. Correcting the fixture alone would have turned
+the gate green and left the loop shipping. It was corrected last, deliberately.
+
+**Deliberately not done: making `cardProjectProbeRef` module-scoped.** It is
+the other half of the amplifier and the change is two lines, but the guard's
+signature includes the project generation and the card boot id, and a
+module-scoped copy would outlive a genuine remount-to-retry that some other
+screen depends on. The intent breaker already makes the loop unreachable.
+Future Claude: if you do lift it, the question to answer first is which
+legitimate flows expect a remount to re-probe.
+
+**Left open:** the same omission is in most card-status fixtures across the
+suite — `card-link-state.mjs` (~39 sites), `cardReadiness.test.js` (~31),
+`playlist-storage`, `connection-center-quality`, `screen-smoke`. They model a
+ready card that reports no installed project, which no real card does. Harmless
+until someone writes an authorization test against one. Logged in `TODO.md`.

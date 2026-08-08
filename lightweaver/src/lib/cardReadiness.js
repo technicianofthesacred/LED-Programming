@@ -18,6 +18,20 @@ function hasBoundedText(value, maxLength) {
   return text.length > 0 && text.length <= maxLength;
 }
 
+// The one place the installed project id is read out of a card status
+// envelope. Both ends of a card-edit authorization must derive it the same
+// way: the card screen issues the binding, and Patterns re-derives it to claim
+// that binding. They used to read it from different payloads — the card from
+// /api/firmware-info, which carries `piece.id`, and Patterns from the status
+// envelope, which carries `projectId` and no `piece.id` at all. Firmware only
+// began sending `projectId` on /api/status in 2026-08, so against a card
+// flashed before that the card issued an authorization Patterns could never
+// claim, and the handoff looped instead of opening.
+export function installedProjectIdFromCardStatus(raw = {}) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  return cleanText(source.projectId ?? source.piece?.id, 128);
+}
+
 export function normalizeCardReadiness(raw = {}) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   const app = cleanText(source.app, 32);
@@ -28,7 +42,7 @@ export function normalizeCardReadiness(raw = {}) {
   const runtimePhase = cleanText(source.runtimePhase, 32).toLowerCase();
   const mode = cleanText(source.mode, 32).toLowerCase();
   const runtimeSource = cleanText(source.source ?? source.runtimeSource, 32).toLowerCase();
-  const projectId = cleanText(source.projectId ?? source.piece?.id, 128);
+  const projectId = installedProjectIdFromCardStatus(source);
   const projectFingerprint = cleanText(source.projectFingerprint, 64).toLowerCase();
   const contractVersion = Number.isSafeInteger(source.provisioningContractVersion)
     ? source.provisioningContractVersion

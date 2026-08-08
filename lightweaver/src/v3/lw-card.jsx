@@ -34,7 +34,12 @@ import { STRIP_DISCOVERY_LABEL } from '../lib/cardAction.js';
 // hash fragment that STRIP_DISCOVERY_ROUTE holds — passing the fragment fell
 // through normalizeView() and silently landed on Layout.
 const STRIP_DISCOVERY_VIEW = 'discovery';
-import { classifyCardReadiness } from '../lib/cardReadiness.js';
+import { classifyCardReadiness, installedProjectIdFromCardStatus } from '../lib/cardReadiness.js';
+import {
+  clearAbandonedCardEditIntent,
+  isCardEditIntentAbandoned,
+  readCardEditIntent,
+} from '../lib/cardEditIntent.js';
 import {
   clearCardEditAuthorization,
   issueCardEditAuthorization,
@@ -81,12 +86,7 @@ function resolvedMatchKey(match) {
 }
 
 function cardEditIntent() {
-  const params = new URLSearchParams(window.location.search);
-  const pattern = String(params.get('editPattern') || '').trim();
-  const look = String(params.get('editLook') || '').trim();
-  if (pattern) return `pattern:${pattern}`;
-  if (look) return `look:${look}`;
-  return '';
+  return readCardEditIntent(window.location.search);
 }
 
 function CardOverview({
@@ -444,13 +444,26 @@ function CardOverview({
       };
       const evidence = await readExactCardSnapshot();
       const authorizeResolvedProject = (project, generation, signedProductionProject = null) => {
+        // Bind the installed project id from the STATUS envelope, because that
+        // is the only payload Patterns can see when it claims this
+        // authorization. Binding it from /api/firmware-info instead — which
+        // carries the same id under `piece.id` — issued authorizations that
+        // Patterns could never claim on firmware that predates `projectId` on
+        // /api/status, and the handoff looped rather than opening.
+        const statusProjectId = installedProjectIdFromCardStatus(cardLink?.readiness);
+        if (!statusProjectId) {
+          throw new Error('This card’s firmware does not report which project is installed, so Studio cannot open Patterns against it. Update the card from Install or update, then try again.');
+        }
+        if (evidence.projectId && evidence.projectId !== statusProjectId) {
+          throw new Error('The card reported two different installed projects while Studio was resolving it. Nothing was opened in Patterns.');
+        }
         const binding = {
           intent: cardEditIntent(),
           cardId: evidence.cardId,
           firmwareVersion: evidence.firmwareVersion,
           buildId: evidence.buildId,
           bootId: requestContext.bootId,
-          installedProjectId: evidence.projectId,
+          installedProjectId: statusProjectId,
           installedProjectFingerprint: evidence.projectFingerprint,
           studioProjectId: project?.id,
           studioProjectFingerprint: cardProjectFingerprint(project),
@@ -462,6 +475,9 @@ function CardOverview({
         if (!issued) {
           throw new Error('Studio could not authorize this exact card and project for Pattern commands. Nothing was opened in Patterns.');
         }
+        // A fresh grant supersedes an earlier failed claim: whatever went
+        // wrong last time, this card and this project are authorized now.
+        clearAbandonedCardEditIntent();
       };
 
       const productionJobs = [];
@@ -736,7 +752,11 @@ function CardOverview({
       candidateSourceSignature,
     ].join('|');
     if (cardProjectProbeRef.current === signature) return;
-    const autoIntent = cardEditIntent();
+    // An intent Patterns already failed to claim must not be handed over
+    // again on our own initiative — that is the loop. It stays in the URL, so
+    // the offer below still opens the right thing when the owner asks for it.
+    const requestedIntent = cardEditIntent();
+    const autoIntent = isCardEditIntentAbandoned(requestedIntent) ? '' : requestedIntent;
     void loadMatchingCardProject({ probeOnly: !autoIntent, autoIntent, probeSignature: signature });
   }, [activeCloudProjects, browserProjects, cardHost, cardLink, cardProjectProbeRevision, loadMatchingCardProject, projectGeneration, ready]);
   const renderAction = (action, primary = false) => action && (

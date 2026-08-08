@@ -67,6 +67,10 @@ async function renderProjectSwitchCardHarness(page, mode: 'offline' | 'duplicate
       cardId: 'lw-project-switch-harness', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
       bootId: 'boot-harness', runtimePhase: 'ready', knownGoodProject: true,
       commandReady: true, outputReady: true,
+      // The firmware reports the installed project on /api/status as well as
+      // /api/firmware-info. Studio binds pattern authorization to the status
+      // value, because that is the payload the Patterns screen can see.
+      projectId: installed.id,
     };
     const evidence = {
       ...status,
@@ -1266,6 +1270,11 @@ test('Hardware offers an exact current project without intent and auto-opens onl
   const cardStatus = readyStatus('lw-ordinary-card', {
     projectRevision: 3,
     projectFingerprint: fingerprint,
+    // The firmware reports the installed project on /api/status as `projectId`
+    // (runtimeStatusJson, LightweaverStorage.cpp). Omitting it here modelled a
+    // card no Studio build can authorize, and the auto-open below then passed
+    // only by sampling a transient — see tests/card-edit-handoff.spec.ts.
+    projectId: 'ordinary-gallery-piece',
   });
   await page.route('http://lightweaver.local/api/status', route => route.fulfill({ json: cardStatus }));
   await page.route('http://lightweaver.local/api/firmware-info', route => route.fulfill({ json: {
