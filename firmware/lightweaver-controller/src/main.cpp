@@ -13,6 +13,7 @@
 #include "LightweaverRuntimeApi.h"
 #include "LightweaverFrameSource.h"
 #include "LightweaverOutputPolicy.h"
+#include "LightweaverRestartPolicy.h"
 #include "LightweaverSequenceActivationPolicy.h"
 #include "LightweaverSequencePlayback.h"
 #include "LightweaverWledRealtime.h"
@@ -194,6 +195,7 @@ uint32_t safeDiscoveryStartedAtMs = 0;
 bool runtimeSafeMode = false;
 bool webRuntimeServing = false;
 bool restartTransitionPending = false;
+lightweaver::RestartFallbackState configRestartFallbackState;
 bool wifiTransitionPending = false;
 String bootId;
 uint32_t cardStateRevision = 0;
@@ -495,6 +497,11 @@ void loop() {
   // still deciding whether it can reboot the card, and no old sequence or
   // stream may render against that newly accepted state.
   if (restartTransitionPending) {
+    if (lightweaver::configRestartFallbackDue(
+            configRestartFallbackState, millis())) {
+      delay(50);
+      ESP.restart();
+    }
     delay(10);
     return;
   }
@@ -2421,6 +2428,11 @@ bool runtimePlaybackReady() {
 void runtimeMarkRestartPending() {
   restartTransitionPending = true;
   if (ledOutputsReady) clearPhysicalLeds();
+}
+
+void runtimeArmConfigRestartFallback() {
+  configRestartFallbackState =
+      lightweaver::armConfigRestartFallback(millis());
 }
 
 void runtimeSetWifiTransitionPending(bool pending) {
