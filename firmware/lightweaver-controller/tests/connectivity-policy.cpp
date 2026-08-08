@@ -50,6 +50,17 @@ int main() {
   assert(state.lastAttemptMs == 0);
   assert(state.generation == 0);
 
+  // An untouched factory setup AP has no saved credentials to retry. Time
+  // alone must never trigger a blind hardware station attempt or disturb the
+  // usable setup hotspot.
+  ConnectivityState factorySetup = advanceConnectivity(
+      state, input(ConnectivityEvent::Tick, kReconnectCadenceMs + 1));
+  assert(factorySetup.phase == ConnectivityPhase::SetupAp);
+  assert(factorySetup.generation == 0);
+  assert(factorySetup.handoffRequired);
+  assert(!factorySetup.reconnectDue);
+  assert(factorySetup.apActive == state.apActive);
+
   state = advanceConnectivity(
       state, input(ConnectivityEvent::CredentialsAccepted, 100, 7));
   assert(state.phase == ConnectivityPhase::Joining);
