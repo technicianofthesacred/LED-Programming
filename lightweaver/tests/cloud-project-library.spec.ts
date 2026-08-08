@@ -1130,7 +1130,7 @@ test('browser Load keeps Save fail-closed when its guarded association goes stal
   await expect(confirmation).toBeVisible();
   await page.evaluate(() => {
     const library = JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}');
-    library.records[0].updatedAt += 1;
+    library.records = [];
     localStorage.setItem('lw_project_library_v1', JSON.stringify(library));
   });
   await confirmation.getByRole('button', { name: 'Replace project' }).click();
@@ -1141,8 +1141,68 @@ test('browser Load keeps Save fail-closed when its guarded association goes stal
     'Saving is blocked because Studio could not establish a safe destination',
   );
   await expect.poll(() => page.evaluate(() => (
-    JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records?.[0]?.updatedAt
-  ))).toBe(3);
+    JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records?.length
+  ))).toBe(0);
+
+  await page.getByRole('button', { name: 'New project' }).click();
+  const discard = page.getByRole('dialog', { name: 'Replace current project?' });
+  await expect(discard).toBeVisible();
+  await discard.getByRole('button', { name: 'Keep editing' }).click();
+  await expect.poll(() => page.evaluate(() => ({
+    name: JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}').name,
+    dirty: JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').dirty,
+  }))).toEqual({ name: 'Stale association target', dirty: true });
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.crumb .proj')).toHaveText('Stale association target');
+});
+
+test('late browser association cannot attach to a superseding New workspace', async ({ page }) => {
+  const fixture = new LibraryFixture(null);
+  const savedProject = portable('Held association target', 'lwproj-held-association');
+  await page.addInitScript((project) => {
+    localStorage.setItem('lw_project_library_v1', JSON.stringify({
+      version: 1,
+      records: [{
+        id: 'held-association-record',
+        name: project.name,
+        createdAt: 1,
+        updatedAt: 2,
+        projectVersion: project.version,
+        project,
+      }],
+    }));
+  }, savedProject);
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    let release;
+    (window as any).__heldProjectLockReady = false;
+    (window as any).__releaseHeldProjectLock = () => release?.();
+    (window as any).__heldProjectLock = navigator.locks.request(
+      'lightweaver-project-library-save-v1',
+      async () => {
+        (window as any).__heldProjectLockReady = true;
+        await new Promise(resolve => { release = resolve; });
+      },
+    );
+  });
+  await expect.poll(() => page.evaluate(() => (window as any).__heldProjectLockReady)).toBe(true);
+
+  await page.getByRole('button', { name: 'Load project' }).click();
+  await page.getByRole('dialog', { name: 'Load project' })
+    .getByRole('button', { name: 'Open Held association target' }).click();
+  await expect(page.locator('.crumb .proj')).toHaveText('Held association target');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await expect(page.locator('.crumb .proj')).not.toHaveText('Held association target');
+
+  await page.evaluate(() => (window as any).__releaseHeldProjectLock());
+  await page.evaluate(() => (window as any).__heldProjectLock);
+  await expect(page.locator('.crumb .proj')).not.toHaveText('Held association target');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_project_active_record_v1'))).toBeNull();
+
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  await expect(page.getByTestId('workspace-notice')).not.toContainText('Saving is blocked');
 });
 
 test('Load closes with Escape and restores focus to the top-bar action', async ({ page }) => {
