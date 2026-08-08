@@ -25,6 +25,7 @@ function functionBody(source, signature) {
 const http = functionBody(read('LightweaverWledJsonApi.cpp'), 'void handleStatePost()');
 const websocket = functionBody(read('LightweaverWledWebSocket.cpp'), 'void applyState(');
 const udp = functionBody(read('LightweaverWledRealtime.cpp'), 'void handleWledRealtime()');
+const artnet = functionBody(read('LightweaverArtnet.cpp'), 'void decodePacket(');
 
 const httpGate = http.indexOf('runtimePlaybackReady()');
 assert.ok(httpGate >= 0 && httpGate < http.indexOf('deserializeJson('),
@@ -50,5 +51,16 @@ assert.match(udp.slice(0, udp.indexOf('frameSourceClaim(')), /g_totalPixels\s*==
   'WLED UDP must explicitly reject a zero-pixel runtime');
 assert.match(udp.slice(udpGate, udp.indexOf('frameSourceClaim(')), /g_udp\.read\(/,
   'unready UDP packets must be drained so stale frames cannot take ownership after readiness changes');
+
+const artnetGate = artnet.indexOf('runtimePlaybackReady()');
+const artnetPixelValidation = artnet.indexOf('if (pixelsInPacket == 0) return;');
+const artnetClaim = artnet.indexOf('frameSourceClaim(');
+const artnetPixelWrite = artnet.indexOf('dst[i] = CRGB(');
+assert.ok(artnetGate > artnetPixelValidation,
+  'Art-Net frames must validate their packet and pixel range before checking playback readiness');
+assert.ok(artnetGate < artnetClaim,
+  'Art-Net frames must not claim output ownership while playback is unready');
+assert.ok(artnetGate < artnetPixelWrite,
+  'Art-Net frames must not write pixels while playback is unready');
 
 console.log('wled-command-readiness tests passed');

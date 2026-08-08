@@ -1,6 +1,7 @@
 #include "LightweaverArtnet.h"
 #include "LightweaverConnectivityPolicy.h"
 #include "LightweaverFrameSource.h"
+#include "LightweaverRuntimeApi.h"
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -102,6 +103,7 @@ void decodePacket(const uint8_t* buffer, size_t length) {
                        : 0;
   }
   if (pixelsInPacket == 0) return;
+  if (!runtimePlaybackReady()) return;
 
   // Don't fight a different live source (e.g. a designer preview stream) for
   // the canvas; whoever claimed it first holds it until they go quiet.
