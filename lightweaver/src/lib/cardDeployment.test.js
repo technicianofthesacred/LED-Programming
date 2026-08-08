@@ -199,6 +199,26 @@ test('the real candidate-free wiring status shape stages after the independent c
   assert.equal(classifyCardDeploymentResume(preparedResumeIdentity(), realKnownGoodStatus), 'stage-new');
 });
 
+test('candidate-free staging requires exact card and build identity from both independent preflight reads', async () => {
+  const { assertCardDeploymentPreflightIdentity } = await deploymentApi();
+  const firmwareInfo = { cardId: 'lw-aabbccddeeff', buildId: 'build-1123' };
+  const status = { cardId: 'lw-aabbccddeeff', buildId: 'build-1123' };
+  assert.equal(assertCardDeploymentPreflightIdentity(firmwareInfo, status), true);
+  for (const [left, right] of [
+    [{ ...firmwareInfo, buildId: '' }, status],
+    [firmwareInfo, { ...status, buildId: '' }],
+    [firmwareInfo, { ...status, buildId: 'build-other' }],
+    [{ ...firmwareInfo, cardId: '' }, status],
+    [firmwareInfo, { ...status, cardId: '' }],
+    [firmwareInfo, { ...status, cardId: 'lw-other' }],
+  ]) {
+    assert.throws(
+      () => assertCardDeploymentPreflightIdentity(left, right),
+      error => error?.reason === 'preflight-identity-mismatch',
+    );
+  }
+});
+
 test('conflicts on every exact candidate identity mismatch without mutating inputs', async () => {
   const { classifyCardDeploymentResume } = await deploymentApi();
   const prepared = preparedResumeIdentity();
@@ -244,6 +264,75 @@ test('optional production and wiring identity must match whenever either candida
     wiringRevision: 3,
     wiringDigest: 'c'.repeat(64),
   }), 'candidate-conflict');
+});
+
+test('resume and conflict orchestration perform no card mutation before explicit user action', async () => {
+  const { orchestrateCardDeploymentStart } = await deploymentApi();
+  const prepared = preparedResumeIdentity();
+  const mutationNames = ['stage', 'activate', 'confirm', 'rollback', 'config'];
+  const calls = Object.fromEntries(mutationNames.map(name => [name, 0]));
+  const mutations = Object.fromEntries(mutationNames.map(name => [name, async () => { calls[name] += 1; }]));
+  const statuses = [
+    matchingCandidate(),
+    matchingCandidate({ state: 'testing', candidateState: 'testing', nextStep: 'test-physical-lights' }),
+    matchingCandidate({ state: 'testing', candidateState: 'awaiting-confirmation', nextStep: 'confirm-or-rollback' }),
+    matchingCandidate({ projectFingerprint: 'd'.repeat(64) }),
+  ];
+
+  const actions = [];
+  for (const status of statuses) {
+    actions.push((await orchestrateCardDeploymentStart(prepared, {
+      readFirmwareInfo: async () => ({ cardId: prepared.cardId, buildId: prepared.buildId }),
+      readStatus: async () => ({ cardId: prepared.cardId, buildId: prepared.buildId }),
+      readWiringStatus: async () => status,
+      ...mutations,
+    })).action);
+  }
+  assert.deepEqual(actions, [
+    'resume-activation',
+    'resume-physical-test',
+    'resume-confirmation',
+    'candidate-conflict',
+  ]);
+  assert.deepEqual(calls, { stage: 0, activate: 0, confirm: 0, rollback: 0, config: 0 });
+});
+
+test('new deployment orchestration issues exactly one config mutation', async () => {
+  const { orchestrateCardDeploymentStart } = await deploymentApi();
+  let configCalls = 0;
+  const result = await orchestrateCardDeploymentStart(preparedResumeIdentity(), {
+    readFirmwareInfo: async () => ({ cardId: 'lw-aabbccddeeff', buildId: 'build-1123' }),
+    readStatus: async () => ({ cardId: 'lw-aabbccddeeff', buildId: 'build-1123' }),
+    readWiringStatus: async () => ({
+      state: 'known-good', candidateState: 'none', hasCandidate: false, nextStep: 'stage-candidate',
+    }),
+    config: async () => { configCalls += 1; return { ok: true, state: 'staged', activationId: 'candidate-new' }; },
+  });
+  assert.equal(configCalls, 1);
+  assert.equal(result.action, 'stage-new');
+  assert.equal(result.response.activationId, 'candidate-new');
+});
+
+test('new deployment orchestration rejects missing or changed build evidence before config mutation', async () => {
+  const { orchestrateCardDeploymentStart } = await deploymentApi();
+  let configCalls = 0;
+  for (const preflightStatus of [
+    { cardId: 'lw-aabbccddeeff' },
+    { cardId: 'lw-aabbccddeeff', buildId: 'build-other' },
+  ]) {
+    await assert.rejects(
+      orchestrateCardDeploymentStart(preparedResumeIdentity(), {
+        readFirmwareInfo: async () => ({ cardId: 'lw-aabbccddeeff', buildId: 'build-1123' }),
+        readStatus: async () => preflightStatus,
+        readWiringStatus: async () => ({
+          state: 'known-good', candidateState: 'none', hasCandidate: false, nextStep: 'stage-candidate',
+        }),
+        config: async () => { configCalls += 1; },
+      }),
+      error => error?.reason === 'preflight-identity-mismatch',
+    );
+  }
+  assert.equal(configCalls, 0);
 });
 
 test('does not report a deployment installed until exact-card read-back verifies it', async () => {

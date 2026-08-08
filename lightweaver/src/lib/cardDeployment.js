@@ -60,6 +60,36 @@ export function classifyCardDeploymentResume(prepared = {}, status = {}) {
   return 'resume-physical-test';
 }
 
+export function assertCardDeploymentPreflightIdentity(firmwareInfo = {}, status = {}) {
+  if (!exactText(firmwareInfo.cardId, status.cardId) || !exactText(firmwareInfo.buildId, status.buildId)) {
+    const error = new Error('Card identity or firmware build changed during install preflight. Nothing was sent.');
+    error.reason = 'preflight-identity-mismatch';
+    throw error;
+  }
+  return true;
+}
+
+export async function orchestrateCardDeploymentStart(prepared, operations = {}) {
+  if (typeof operations.readFirmwareInfo !== 'function' ||
+      typeof operations.readStatus !== 'function' ||
+      typeof operations.readWiringStatus !== 'function') {
+    throw new Error('All independent card preflight reads are required before deployment.');
+  }
+  const [firmwareInfo, status, wiringStatus] = await Promise.all([
+    operations.readFirmwareInfo(),
+    operations.readStatus(),
+    operations.readWiringStatus(),
+  ]);
+  assertCardDeploymentPreflightIdentity(prepared, firmwareInfo);
+  assertCardDeploymentPreflightIdentity(firmwareInfo, status);
+  const action = classifyCardDeploymentResume(prepared, wiringStatus);
+  if (action !== 'stage-new') return { action, status: wiringStatus, response: null };
+  if (typeof operations.config !== 'function') {
+    throw new Error('A config mutation is required to stage a new deployment.');
+  }
+  return { action, status: wiringStatus, response: await operations.config() };
+}
+
 export function correlateCardDeploymentReadinessEvidence(project = {}, status = {}) {
   const exactIdentity = exactText(project.cardId, status.cardId)
     && exactText(project.buildId, status.buildId)

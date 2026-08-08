@@ -13,8 +13,9 @@ import {
 import {
   prepareCardDeployment,
   cardStatusAsConfig,
-  classifyCardDeploymentResume,
+  assertCardDeploymentPreflightIdentity,
   correlateCardDeploymentReadinessEvidence,
+  orchestrateCardDeploymentStart,
   waitForCardDeploymentVerification,
 } from '../../../lib/cardDeployment.js';
 import {
@@ -95,16 +96,14 @@ export function CardPushControl({
         let before;
         let status;
         let wiringStatus;
+        let handoffOnly = false;
         try {
           [before, status, wiringStatus] = await Promise.all([
             readCardProjectEvidence({ host: cleanHost }),
             readCardStatusEnvelope({ host: cleanHost }),
             getCardWiringStatus({ host: cleanHost }),
           ]);
-          if ((status.cardId && status.cardId !== before.cardId) ||
-              (wiringStatus.cardId && wiringStatus.cardId !== before.cardId)) {
-            throw new CardPushError('wrong-card', 'Card identity changed during install preflight. Nothing was sent.');
-          }
+          assertCardDeploymentPreflightIdentity(before, status);
         } catch (preflightError) {
           if (!LOCAL_BRIDGE_RECOVERY_REASONS.has(preflightError?.reason)) throw preflightError;
           const rememberedCard = readPersistedCardIdentity();
@@ -117,6 +116,7 @@ export function CardPushControl({
           before = { cardId: rememberedCard.id };
           status = {};
           wiringStatus = null;
+          handoffOnly = true;
         }
         const prepared = prepareCardDeployment(project, {
           cardId: before.cardId,
@@ -131,20 +131,26 @@ export function CardPushControl({
           zoneCount: prepared.config.zones.length,
           pkg: prepared.runtimePackage,
           prepared,
-          wiringStatus,
-          resumeAction: wiringStatus
-            ? classifyCardDeploymentResume(prepared, wiringStatus)
-            : 'stage-new',
-        };
-      } else {
-        const wiringStatus = await getCardWiringStatus({ host: attempt.host });
-        attempt = {
-          ...attempt,
-          wiringStatus,
-          resumeAction: classifyCardDeploymentResume(attempt.prepared, wiringStatus),
+          handoffOnly,
         };
       }
       dispatchAction({ type: 'start', revision: attempt.revision });
+      if (attempt.handoffOnly) {
+        throw new CardPushError('bridge-missing', 'Open the paired card installer to continue. Nothing was sent.');
+      }
+      const deploymentStart = await orchestrateCardDeploymentStart(
+        attempt.prepared,
+        {
+          readFirmwareInfo: () => readCardProjectEvidence({ host: attempt.host }),
+          readStatus: () => readCardStatusEnvelope({ host: attempt.host }),
+          readWiringStatus: () => getCardWiringStatus({ host: attempt.host }),
+          config: async () => {
+            setPushStatus(`Sending revision ${attempt.revision} to ${cleanHost}...`);
+            return pushConfigToCard(attempt.pkg, { host: attempt.host, allowLayoutChange: true });
+          },
+        },
+      );
+      attempt = { ...attempt, wiringStatus: deploymentStart.status, resumeAction: deploymentStart.action };
       if (attempt.resumeAction === 'candidate-conflict') {
         throw new CardPushError(
           'candidate-conflict',
@@ -163,8 +169,7 @@ export function CardPushControl({
         failedAttemptRef.current = null;
         return;
       }
-      setPushStatus(`Sending revision ${attempt.revision} to ${cleanHost}...`);
-      const response = await pushConfigToCard(attempt.pkg, { host: attempt.host, allowLayoutChange: true });
+      const response = deploymentStart.response;
       if (response?.state === 'staged' && response.activationId) {
         setWiringCandidate({ activationId: response.activationId, attempt });
         setWiringTestState('staged');

@@ -10,12 +10,14 @@ async function source() {
 
 test('card install preflights wiring state and classifies it before any config mutation', async () => {
   const text = await source();
-  assert.match(text, /classifyCardDeploymentResume/);
+  assert.match(text, /assertCardDeploymentPreflightIdentity/);
+  assert.match(text, /orchestrateCardDeploymentStart/);
   assert.match(text, /getCardWiringStatus/);
   const preflight = text.indexOf('getCardWiringStatus({ host: cleanHost })');
-  const classify = text.indexOf('classifyCardDeploymentResume(');
+  const identity = text.indexOf('assertCardDeploymentPreflightIdentity(');
+  const classify = text.indexOf('orchestrateCardDeploymentStart(');
   const mutate = text.indexOf('pushConfigToCard(');
-  assert.ok(preflight >= 0 && classify > preflight && mutate > classify);
+  assert.ok(preflight >= 0 && identity > preflight && classify > identity && mutate > classify);
 });
 
 test('matching candidates resume in place and conflicts give non-mutating rollback or replace guidance', async () => {
