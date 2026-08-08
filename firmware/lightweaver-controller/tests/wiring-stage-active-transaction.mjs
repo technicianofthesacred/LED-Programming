@@ -5,6 +5,9 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const storage = readFileSync(resolve(here, '../src/LightweaverStorage.cpp'), 'utf8');
+const scripts = JSON.parse(
+  readFileSync(resolve(here, '../../../lightweaver/package.json'), 'utf8'),
+).scripts;
 
 const start = storage.indexOf('bool stageRuntimeConfigJson(');
 const end = storage.indexOf('bool activateStagedRuntimeConfig(', start);
@@ -28,6 +31,22 @@ assert.match(
   stage.slice(rejectAt, cleanupAt),
   /prefs\.end\(\);[\s\S]*message = "wiring transaction is active; confirm or roll back before staging another candidate";[\s\S]*return false;/,
   'a second staged POST should explain the active transaction and leave it untouched',
+);
+
+assert.match(
+  scripts['test:core'],
+  /node \.\.\/firmware\/lightweaver-controller\/tests\/wiring-stage-active-transaction\.mjs/,
+  'the source contract list should include the active-transaction regression wrapper',
+);
+assert.match(
+  scripts['test:core'],
+  /node \.\.\/firmware\/lightweaver-controller\/tests\/hash-config-install\.mjs/,
+  'the source contract list should include the reusable-window hash installer wrapper',
+);
+assert.match(
+  scripts['test:core:source'],
+  /node scripts\/run-core-source-tests\.mjs/,
+  'test:core:source should execute the configured source contract list',
 );
 
 console.log('wiring-stage-active-transaction tests passed');

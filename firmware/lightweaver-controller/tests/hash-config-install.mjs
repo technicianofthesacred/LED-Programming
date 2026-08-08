@@ -26,8 +26,12 @@ function encoded(value) {
 
 function deferred() {
   let resolvePromise;
-  const promise = new Promise(resolve => { resolvePromise = resolve; });
-  return { promise, resolve: resolvePromise };
+  let rejectPromise;
+  const promise = new Promise((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  return { promise, resolve: resolvePromise, reject: rejectPromise };
 }
 
 function harness() {
@@ -112,6 +116,70 @@ const secondHash = `#lwconfig=${encoded(secondConfig)}`;
   assert.equal(h.timers.length, 1, 'an explicitly requested reboot should remain deferred');
   assert.equal(h.timers[0].delay, 300, 'the existing reboot settle delay should remain exact');
   assert.equal(h.historyCalls.length, 1, 'the consumed hash should be cleared after success');
+}
+
+{
+  const h = harness();
+  const payload = encoded(firstConfig);
+  h.context.location.hash = `#lwconfig=${payload}`;
+  const first = h.context.runHashInstall();
+  await Promise.resolve();
+  h.context.location.hash = `#lwconfig=${payload}&reboot=1`;
+  const changedParams = h.context.runHashInstall();
+  assert.equal(changedParams, first,
+    'changed hash parameters should still deduplicate the same in-flight config');
+  h.fetches[0].response.resolve({ ok: true, json: async () => ({ ok: true, requiresReboot: true }) });
+  await first;
+  assert.equal(h.fetches.length, 1,
+    'changed parameters must not POST identical config bytes twice');
+  assert.equal(h.historyCalls.length, 1,
+    'success should consume the current hash when its lwconfig payload was accepted');
+  assert.equal(h.timers.length, 1,
+    'success should honor reboot intent from the current matching hash');
+}
+
+{
+  const h = harness();
+  h.context.location.hash = firstHash;
+  const rejected = h.context.runHashInstall();
+  await Promise.resolve();
+  h.fetches[0].response.resolve({
+    ok: false,
+    status: 409,
+    json: async () => ({ ok: false, error: 'transaction active', requiresReboot: true }),
+  });
+  await rejected;
+  assert.equal(h.context.location.hash, firstHash,
+    'a non-OK card response should retain the hash for retry');
+  assert.equal(h.historyCalls.length, 0,
+    'a non-OK card response must return before consuming the hash');
+  assert.equal(h.timers.length, 0,
+    'a non-OK card response must return before scheduling reboot');
+  await new Promise(resolve => setImmediate(resolve));
+  h.context.runHashInstall();
+  await Promise.resolve();
+  assert.equal(h.fetches.length, 2,
+    'a later invocation should retry after a non-OK response');
+}
+
+{
+  const h = harness();
+  h.context.location.hash = firstHash;
+  const failed = h.context.runHashInstall();
+  await Promise.resolve();
+  h.fetches[0].response.reject(new Error('network down'));
+  await failed;
+  assert.equal(h.context.location.hash, firstHash,
+    'a rejected fetch should retain the hash for retry');
+  assert.equal(h.historyCalls.length, 0,
+    'a rejected fetch should not consume the hash');
+  assert.equal(h.timers.length, 0,
+    'a rejected fetch should not schedule reboot');
+  await new Promise(resolve => setImmediate(resolve));
+  h.context.runHashInstall();
+  await Promise.resolve();
+  assert.equal(h.fetches.length, 2,
+    'a later invocation should retry after a rejected fetch');
 }
 
 assert.doesNotMatch(
