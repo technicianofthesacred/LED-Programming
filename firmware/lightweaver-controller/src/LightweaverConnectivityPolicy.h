@@ -208,7 +208,7 @@ inline ConnectivityState advanceConnectivity(
   }
 
   if (current.phase == ConnectivityPhase::SetupAp &&
-      current.generation != 0 &&
+      (current.generation != 0 || !current.handoffRequired) &&
       elapsed(input.nowMs, current.lastAttemptMs, kReconnectCadenceMs)) {
     next.phase = ConnectivityPhase::Joining;
     next.reconnectDue = true;

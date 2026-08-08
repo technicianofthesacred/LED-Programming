@@ -302,5 +302,84 @@ int main() {
       "station-associated", "force-bindings", "retire-setup-ap",
       "readiness-ready"}));
 
+  // A resumed boot whose saved network is offline keeps the setup AP usable
+  // and issues exactly one hardware station attempt on each retry cadence.
+  ConnectivityState resumedOffline{};
+  resumedOffline = advanceConnectivity(
+      resumedOffline,
+      {ConnectivityEvent::CredentialsResumed, 400000, 0});
+  resumedOffline = recordStationAttempt(resumedOffline, 400000);
+  const std::size_t attemptsBeforeResumedRetries =
+      hardware.stationAttempts.size();
+
+  hardware.actions.clear();
+  resumedOffline = run(
+      hardware, resumedOffline,
+      observation(400000 + kInitialJoinTimeoutMs, false, false, true));
+  assert(resumedOffline.phase == ConnectivityPhase::SetupAp);
+  assert(resumedOffline.apActive);
+  assert(hardware.stationAttempts.size() == attemptsBeforeResumedRetries);
+  assert((hardware.actions == std::vector<std::string>{
+      "initial-join-timeout", "readiness-ready"}));
+
+  hardware.actions.clear();
+  resumedOffline = run(
+      hardware, resumedOffline,
+      observation(400000 + kInitialJoinTimeoutMs + kReconnectCadenceMs,
+                  false, false, true));
+  assert(resumedOffline.phase == ConnectivityPhase::Joining);
+  assert(resumedOffline.apActive);
+  assert(resumedOffline.lastAttemptMs ==
+         400000 + kInitialJoinTimeoutMs + kReconnectCadenceMs);
+  assert(hardware.stationAttempts.size() ==
+         attemptsBeforeResumedRetries + 1);
+  assert((hardware.actions == std::vector<std::string>{
+      "readiness-pending", "station-begin"}));
+
+  hardware.actions.clear();
+  resumedOffline = run(
+      hardware, resumedOffline,
+      observation(400000 + 2 * kInitialJoinTimeoutMs + kReconnectCadenceMs,
+                  false, false, true));
+  assert(resumedOffline.phase == ConnectivityPhase::SetupAp);
+  assert(resumedOffline.apActive);
+  assert(hardware.stationAttempts.size() ==
+         attemptsBeforeResumedRetries + 1);
+  assert((hardware.actions == std::vector<std::string>{
+      "initial-join-timeout", "readiness-ready"}));
+
+  hardware.actions.clear();
+  resumedOffline = run(
+      hardware, resumedOffline,
+      observation(400000 + 2 * kInitialJoinTimeoutMs +
+                      2 * kReconnectCadenceMs,
+                  false, false, true));
+  assert(resumedOffline.phase == ConnectivityPhase::Joining);
+  assert(resumedOffline.apActive);
+  assert(resumedOffline.lastAttemptMs ==
+         400000 + 2 * kInitialJoinTimeoutMs +
+             2 * kReconnectCadenceMs);
+  assert(hardware.stationAttempts.size() ==
+         attemptsBeforeResumedRetries + 2);
+  assert((hardware.actions == std::vector<std::string>{
+      "readiness-pending", "station-begin"}));
+
+  // The AP is retired only after station association is observed and the
+  // listener binding attempt has run, even when one listener remains pending.
+  hardware.nextWledBind = true;
+  hardware.nextArtnetBind = false;
+  hardware.actions.clear();
+  resumedOffline = run(
+      hardware, resumedOffline,
+      observation(400000 + 2 * kInitialJoinTimeoutMs +
+                      2 * kReconnectCadenceMs + 250,
+                  true, false, true));
+  assert(resumedOffline.phase == ConnectivityPhase::Station);
+  assert(!resumedOffline.apActive);
+  assert(resumedOffline.networkBindingsPending);
+  assert((hardware.actions == std::vector<std::string>{
+      "station-associated", "force-bindings", "retire-setup-ap",
+      "readiness-pending"}));
+
   return 0;
 }

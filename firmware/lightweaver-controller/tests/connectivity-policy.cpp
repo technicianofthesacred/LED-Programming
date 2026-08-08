@@ -377,6 +377,37 @@ int main() {
   assert(resumed.generation == 0);
   assert(connectivityTransitionPending(resumed));
 
+  // If the proven network is offline during boot, the setup AP remains usable
+  // while the card keeps retrying those saved credentials on the normal
+  // cadence. Generation zero identifies this as a resumed join, not a factory
+  // setup AP that should blindly attempt station association.
+  ConnectivityState resumedOffline{};
+  resumedOffline = advanceConnectivity(
+      resumedOffline,
+      input(ConnectivityEvent::CredentialsResumed, 3000, 0));
+  resumedOffline = recordStationAttempt(resumedOffline, 3000);
+  resumedOffline = advanceConnectivity(
+      resumedOffline,
+      input(ConnectivityEvent::Tick, 3000 + kInitialJoinTimeoutMs));
+  assert(resumedOffline.phase == ConnectivityPhase::SetupAp);
+  assert(resumedOffline.apActive);
+  assert(!resumedOffline.handoffRequired);
+  assert(resumedOffline.generation == 0);
+  assert(!resumedOffline.reconnectDue);
+  resumedOffline = advanceConnectivity(
+      resumedOffline,
+      input(ConnectivityEvent::Tick,
+            3000 + kInitialJoinTimeoutMs + kReconnectCadenceMs - 1));
+  assert(resumedOffline.phase == ConnectivityPhase::SetupAp);
+  assert(!resumedOffline.reconnectDue);
+  resumedOffline = advanceConnectivity(
+      resumedOffline,
+      input(ConnectivityEvent::Tick,
+            3000 + kInitialJoinTimeoutMs + kReconnectCadenceMs));
+  assert(resumedOffline.phase == ConnectivityPhase::Joining);
+  assert(resumedOffline.apActive);
+  assert(resumedOffline.reconnectDue);
+
   resumed = recordStationAttempt(resumed, 100);
   resumed = advanceConnectivity(
       resumed, input(ConnectivityEvent::StationAssociated, 900, 0));
