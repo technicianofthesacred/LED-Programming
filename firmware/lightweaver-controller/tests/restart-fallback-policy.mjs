@@ -32,10 +32,17 @@ const loopStart = main.indexOf('void loop()');
 const loopEnd = main.indexOf('\n}', loopStart);
 assert.notEqual(loopStart, -1, 'firmware should define loop');
 const loopBody = main.slice(loopStart, loopEnd + 2);
-const restartHold = loopBody.slice(loopBody.indexOf('if (restartTransitionPending)'));
-assert.match(restartHold,
+const fallbackDueAt = loopBody.indexOf('if (lightweaver::configRestartFallbackDue(');
+const restartHoldAt = loopBody.indexOf('if (restartTransitionPending)');
+assert.ok(fallbackDueAt >= 0 && fallbackDueAt < restartHoldAt,
+  'the armed config fallback must be checked independently before the cancelable restart dark hold');
+const fallbackDue = loopBody.slice(fallbackDueAt, restartHoldAt);
+assert.doesNotMatch(fallbackDue, /restartTransitionPending/,
+  'unrelated transaction failure must not make the config-save deadline depend on restartTransitionPending');
+assert.match(fallbackDue,
   /configRestartFallbackDue\([\s\S]*configRestartFallbackState[\s\S]*millis\(\)[\s\S]*delay\(50\)[\s\S]*ESP\.restart\(\)/,
   'loop must reboot only after the wrap-safe config fallback policy is due');
+const restartHold = loopBody.slice(restartHoldAt);
 assert.match(restartHold, /delay\(10\)[\s\S]*return/,
   'a pending restart must keep its existing dark hold before the fallback is due');
 

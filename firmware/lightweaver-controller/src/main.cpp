@@ -492,16 +492,20 @@ void loop() {
   // overwrite the recovery frame before the user sees it.
   recoveryHoldActive = int32_t(recoveryHoldUntilMs - millis()) > 0;
 
+  // A successful config save owns this deadline. Other restart transactions
+  // may cancel their shared dark-hold flag on failure, but must not cancel a
+  // config save that has already replaced the active runtime state.
+  if (lightweaver::configRestartFallbackDue(
+          configRestartFallbackState, millis())) {
+    delay(50);
+    ESP.restart();
+  }
+
   // Every restart transition clears the physical LEDs. Keep subsequent loop
   // ticks dark too: config saves may replace RuntimeConfig while a browser is
   // still deciding whether it can reboot the card, and no old sequence or
   // stream may render against that newly accepted state.
   if (restartTransitionPending) {
-    if (lightweaver::configRestartFallbackDue(
-            configRestartFallbackState, millis())) {
-      delay(50);
-      ESP.restart();
-    }
     delay(10);
     return;
   }
