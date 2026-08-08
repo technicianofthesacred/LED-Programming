@@ -267,10 +267,14 @@ const SettingsFieldContext = createContext(null);
 
     const persistHost = (value) => { setCardHost(value); writeStoredCardHost(value); };
     const openLayoutWire = () => { window.location.hash = '#screen=layout&mode=wire'; };
+    // Setup owns every question this panel only reports on.
+    const openSetupLadder = () => { window.location.hash = '#screen=card&section=setup'; };
 
-    const loadMethod = cardLoadMethodForProtocol(typeof window !== 'undefined' ? window.location.protocol : 'https:');
-    const directPushAvailable = loadMethod.directPush;
-
+    // Setup asks which colour order this card is wired in, and proves it by
+    // painting three blocks on the strip. This is the other half of that: try
+    // an order against the card RIGHT NOW and refuse to claim it worked until
+    // the card reports the same order back. Keep both — asking and proving are
+    // different jobs, and only the asking was duplicated.
     const updateColorOrder = (value) => {
       const colorOrder = String(value || '').toUpperCase();
       updateController({ led: { colorOrder } });
@@ -293,7 +297,7 @@ const SettingsFieldContext = createContext(null);
           }
           if (seq !== liveHardwareSeq.current) return;
           setStatusKind('ok');
-          setStatus(`Color order ${colorOrder} was acknowledged and read back from the exact card. Check the real red, green, blue, and white appearance; Studio has not marked that visual test passed. Install on card to keep it after restart.`);
+          setStatus(`Color order ${colorOrder} was acknowledged and read back from the exact card. Check the real red, green, blue, and white appearance; Studio has not marked that visual test passed. Save to card to keep it after restart.`);
         })
         .catch(() => {
           if (seq !== liveHardwareSeq.current) return;
@@ -301,6 +305,9 @@ const SettingsFieldContext = createContext(null);
           setStatus(`Color order changed in Studio, but ${cardHostToUrl(cardHost)} did not answer.`);
         });
     };
+
+    const loadMethod = cardLoadMethodForProtocol(typeof window !== 'undefined' ? window.location.protocol : 'https:');
+    const directPushAvailable = loadMethod.directPush;
 
     const pushDirect = async () => {
       const requestedRevision = projectLifecycle.editedRevision;
@@ -441,10 +448,24 @@ const SettingsFieldContext = createContext(null);
               <div className="set-col">
                 <section className="card set-card">
                   <div className="sec-h"><span className="t">Card connection</span><span className="m">{directPushAvailable ? 'local card write' : 'copy or download'}</span></div>
-                  <Row label="Card address" hint="The card's name on your WiFi">
-                    <FieldInput className="pm-input" value={cardHost} onChange={(e) => persistHost(e.target.value)} spellCheck={false} autoCapitalize="off" autoCorrect="off" placeholder="lightweaver.local" />
+                  {/* Setup gets the card onto the WiFi. This is where Studio
+                      LOOKS for it afterwards — the escape hatch when the name
+                      will not resolve and only a raw IP will do, which is the
+                      recovery path in card-workspace's "reachable recovering
+                      factory card uses URL IP". Same words, different jobs, so
+                      the hint says which job this one is. */}
+                  <Row label="Card address" hint="The card's name on your WiFi — where Studio looks for it">
+                    <div data-testid="card-address-summary">
+                      <FieldInput className="pm-input" value={cardHost} onChange={(e) => persistHost(e.target.value)} spellCheck={false} autoCapitalize="off" autoCorrect="off" placeholder="lightweaver.local" />
+                    </div>
                   </Row>
-                  <Row label="Install on card" hint="Install and verify this setup on the chip" stack>
+                  {/* Setup installs a piece for the first time. The same verb
+                      earns its place here because this is also the recovery
+                      surface — see card-workspace's "reachable recovering
+                      factory card uses URL IP", which reaches a card by raw IP
+                      and installs from this page. The hint is what stops the
+                      two reading as two setups. */}
+                  <Row label="Install on card" hint="Sends what this page changed. First-time setup lives in Setup." stack>
                     <div className="set-actions">
                       {directPushAvailable && <button className="btn" onClick={pushDirect} disabled={cardWrite.conflictsDisabled}>{cardWrite.status === 'pending' ? 'Sending…' : cardWrite.status === 'failed' ? 'Retry install' : 'Install on card'}</button>}
                       {!directPushAvailable && <button className="btn" onClick={openCardInstaller}>{I.open}Open card installer</button>}
@@ -506,7 +527,9 @@ const SettingsFieldContext = createContext(null);
                 {showCard && <section className="card set-card">
                   <div className="sec-h"><span className="t">Card &amp; hardware</span></div>
                   <Row label="Runtime mode" hint="What the card plays from on boot"><Seg opts={RUNTIME_LABELS} val={runtimeLabel} set={(o) => updateController({ runtimeMode: RUNTIME_VALUE[o] })} /></Row>
-                  <Row label="Color order" hint="This card is calibrated to RGB"><Seg opts={COLOR_ORDER_LABELS} val={colorOrderLabel} set={updateColorOrder} /></Row>
+                  <Row label="Color order" hint="Setup asks this. Change it here to try an order on the strip right now.">
+                    <div data-testid="color-order-summary"><Seg opts={COLOR_ORDER_LABELS} val={colorOrderLabel} set={updateColorOrder} /></div>
+                  </Row>
                   <StripColorOrderCheck
                     cardHost={cardHost}
                     controller={standaloneController}
