@@ -1,30 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
-import { createServer } from 'vite';
+import { openAppPage } from './helpers/app-page.js';
 
-const appRoot = fileURLToPath(new URL('..', import.meta.url));
-let server;
-let browser;
+let app;
 let page;
 
 test.before(async () => {
-  server = await createServer({
-    root: appRoot,
-    logLevel: 'silent',
-    server: { host: '127.0.0.1', port: 0, strictPort: false },
-  });
-  await server.listen();
-  const address = server.httpServer.address();
-  browser = await chromium.launch({ headless: true });
-  page = await browser.newPage();
-  await page.goto(`http://127.0.0.1:${address.port}/`);
+  app = await openAppPage();
+  page = app.page;
 });
 
 test.after(async () => {
-  await browser?.close();
-  await server?.close();
+  await app?.close();
 });
 
 async function inspectSelection(runInteraction) {
