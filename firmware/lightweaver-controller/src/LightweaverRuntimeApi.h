@@ -119,6 +119,7 @@ void runtimeBeaconReleasePort();
 bool runtimeBeaconPortsAvailable(uint8_t* gpios, uint8_t capacity, uint8_t& count);
 void runtimeApplySavedConfig();
 void runtimeMarkRestartPending();
+void runtimeArmConfigRestartFallback();
 void runtimeSetWifiTransitionPending(bool pending);
 String runtimeFirmwareInfo();
 void serializeKaleidoscopeMappings(JsonArray target, const RuntimeConfig& config);

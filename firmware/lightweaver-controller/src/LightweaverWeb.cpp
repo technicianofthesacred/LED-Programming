@@ -1255,6 +1255,7 @@ void handleConfigPost() {
   }
   runtimeApplySavedConfig();
   runtimeMarkRestartPending();
+  runtimeArmConfigRestartFallback();
   server.send(200, "application/json", String("{\"ok\":true,\"message\":\"") + message + "\",\"requiresReboot\":true}");
 }
 

@@ -50,6 +50,17 @@ int main() {
   assert(state.lastAttemptMs == 0);
   assert(state.generation == 0);
 
+  // An untouched factory setup AP has no saved credentials to retry. Time
+  // alone must never trigger a blind hardware station attempt or disturb the
+  // usable setup hotspot.
+  ConnectivityState factorySetup = advanceConnectivity(
+      state, input(ConnectivityEvent::Tick, kReconnectCadenceMs + 1));
+  assert(factorySetup.phase == ConnectivityPhase::SetupAp);
+  assert(factorySetup.generation == 0);
+  assert(factorySetup.handoffRequired);
+  assert(!factorySetup.reconnectDue);
+  assert(factorySetup.apActive == state.apActive);
+
   state = advanceConnectivity(
       state, input(ConnectivityEvent::CredentialsAccepted, 100, 7));
   assert(state.phase == ConnectivityPhase::Joining);
@@ -376,6 +387,37 @@ int main() {
   assert(!resumed.handoffRequired);
   assert(resumed.generation == 0);
   assert(connectivityTransitionPending(resumed));
+
+  // If the proven network is offline during boot, the setup AP remains usable
+  // while the card keeps retrying those saved credentials on the normal
+  // cadence. Generation zero identifies this as a resumed join, not a factory
+  // setup AP that should blindly attempt station association.
+  ConnectivityState resumedOffline{};
+  resumedOffline = advanceConnectivity(
+      resumedOffline,
+      input(ConnectivityEvent::CredentialsResumed, 3000, 0));
+  resumedOffline = recordStationAttempt(resumedOffline, 3000);
+  resumedOffline = advanceConnectivity(
+      resumedOffline,
+      input(ConnectivityEvent::Tick, 3000 + kInitialJoinTimeoutMs));
+  assert(resumedOffline.phase == ConnectivityPhase::SetupAp);
+  assert(resumedOffline.apActive);
+  assert(!resumedOffline.handoffRequired);
+  assert(resumedOffline.generation == 0);
+  assert(!resumedOffline.reconnectDue);
+  resumedOffline = advanceConnectivity(
+      resumedOffline,
+      input(ConnectivityEvent::Tick,
+            3000 + kInitialJoinTimeoutMs + kReconnectCadenceMs - 1));
+  assert(resumedOffline.phase == ConnectivityPhase::SetupAp);
+  assert(!resumedOffline.reconnectDue);
+  resumedOffline = advanceConnectivity(
+      resumedOffline,
+      input(ConnectivityEvent::Tick,
+            3000 + kInitialJoinTimeoutMs + kReconnectCadenceMs));
+  assert(resumedOffline.phase == ConnectivityPhase::Joining);
+  assert(resumedOffline.apActive);
+  assert(resumedOffline.reconnectDue);
 
   resumed = recordStationAttempt(resumed, 100);
   resumed = advanceConnectivity(

@@ -8,6 +8,52 @@ import { resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
 const read = name => readFileSync(resolve(root, 'src', name), 'utf8');
 
+function maskCommentsAndStrings(source) {
+  const masked = [...source];
+  let state = 'code';
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    const next = source[index + 1];
+
+    if (state === 'code') {
+      if (char === '/' && next === '/') {
+        masked[index] = masked[index + 1] = ' ';
+        state = 'line-comment';
+        index += 1;
+      } else if (char === '/' && next === '*') {
+        masked[index] = masked[index + 1] = ' ';
+        state = 'block-comment';
+        index += 1;
+      } else if (char === '"' || char === "'") {
+        masked[index] = ' ';
+        state = char === '"' ? 'string' : 'char';
+      }
+      continue;
+    }
+
+    if (state === 'line-comment') {
+      if (char === '\n') state = 'code';
+      else masked[index] = ' ';
+    } else if (state === 'block-comment') {
+      masked[index] = char === '\n' ? '\n' : ' ';
+      if (char === '*' && next === '/') {
+        masked[index + 1] = ' ';
+        state = 'code';
+        index += 1;
+      }
+    } else {
+      masked[index] = char === '\n' ? '\n' : ' ';
+      if (char === '\\') {
+        if (index + 1 < source.length) masked[index + 1] = ' ';
+        index += 1;
+      } else if ((state === 'string' && char === '"') || (state === 'char' && char === "'")) {
+        state = 'code';
+      }
+    }
+  }
+  return masked.join('');
+}
+
 function functionBody(source, signature) {
   const start = source.indexOf(signature);
   assert.notEqual(start, -1, `missing ${signature}`);
@@ -25,6 +71,7 @@ function functionBody(source, signature) {
 const http = functionBody(read('LightweaverWledJsonApi.cpp'), 'void handleStatePost()');
 const websocket = functionBody(read('LightweaverWledWebSocket.cpp'), 'void applyState(');
 const udp = functionBody(read('LightweaverWledRealtime.cpp'), 'void handleWledRealtime()');
+const artnet = functionBody(read('LightweaverArtnet.cpp'), 'void decodePacket(');
 
 const httpGate = http.indexOf('runtimePlaybackReady()');
 assert.ok(httpGate >= 0 && httpGate < http.indexOf('deserializeJson('),
@@ -50,5 +97,75 @@ assert.match(udp.slice(0, udp.indexOf('frameSourceClaim(')), /g_totalPixels\s*==
   'WLED UDP must explicitly reject a zero-pixel runtime');
 assert.match(udp.slice(udpGate, udp.indexOf('frameSourceClaim(')), /g_udp\.read\(/,
   'unready UDP packets must be drained so stale frames cannot take ownership after readiness changes');
+
+function assertArtnetReadinessContract(source) {
+  const executableSource = maskCommentsAndStrings(source);
+  const artnetGateMatch = /if\s*\(\s*!\s*runtimePlaybackReady\s*\(\s*\)\s*\)\s*return\s*;/.exec(
+    executableSource,
+  );
+  const artnetGate = artnetGateMatch?.index ?? -1;
+  const artnetPixelValidation = executableSource.indexOf('if (pixelsInPacket == 0) return;');
+  const artnetClaim = executableSource.indexOf('frameSourceClaim(');
+  const artnetPixelWrite = executableSource.indexOf('dst[i] = CRGB(');
+  assert.notEqual(artnetPixelValidation, -1,
+    'Art-Net frames must retain packet and pixel range validation');
+  assert.notEqual(artnetGate, -1,
+    'Art-Net frames must reject while playback readiness is unavailable');
+  assert.notEqual(artnetClaim, -1,
+    'Art-Net frames must retain their frame ownership claim');
+  assert.notEqual(artnetPixelWrite, -1,
+    'Art-Net frames must retain their pixel write');
+  assert.ok(artnetGate > artnetPixelValidation,
+    'Art-Net frames must validate their packet and pixel range before checking playback readiness');
+  assert.ok(artnetGate < artnetClaim,
+    'Art-Net frames must not claim output ownership while playback is unready');
+  assert.ok(artnetGate < artnetPixelWrite,
+    'Art-Net frames must not write pixels while playback is unready');
+}
+
+assertArtnetReadinessContract(artnet);
+
+const commentedArtnetGate = artnet.replace(
+  'if (!runtimePlaybackReady()) return;',
+  '// if (!runtimePlaybackReady()) return;',
+);
+assert.notEqual(commentedArtnetGate, artnet, 'Art-Net gate mutation fixture must change the source');
+assert.throws(
+  () => assertArtnetReadinessContract(commentedArtnetGate),
+  /playback readiness/,
+  'a commented-out Art-Net readiness gate must not satisfy the source contract',
+);
+
+const wrongPolarityArtnetGate = artnet.replace(
+  'if (!runtimePlaybackReady()) return;',
+  'if (runtimePlaybackReady()) return;',
+);
+assert.notEqual(wrongPolarityArtnetGate, artnet,
+  'Art-Net wrong-polarity mutation fixture must change the source');
+assert.throws(
+  () => assertArtnetReadinessContract(wrongPolarityArtnetGate),
+  /reject while playback readiness is unavailable/,
+  'an inverted Art-Net readiness gate must not satisfy the source contract',
+);
+
+const noOpArtnetGate = artnet.replace(
+  'if (!runtimePlaybackReady()) return;',
+  'runtimePlaybackReady();',
+);
+assert.notEqual(noOpArtnetGate, artnet, 'Art-Net no-op mutation fixture must change the source');
+assert.throws(
+  () => assertArtnetReadinessContract(noOpArtnetGate),
+  /reject while playback readiness is unavailable/,
+  'a no-op Art-Net readiness call must not satisfy the source contract',
+);
+
+const missingArtnetPixelValidation = artnet.replace('if (pixelsInPacket == 0) return;', '');
+assert.notEqual(missingArtnetPixelValidation, artnet,
+  'Art-Net pixel-validation mutation fixture must change the source');
+assert.throws(
+  () => assertArtnetReadinessContract(missingArtnetPixelValidation),
+  /packet and pixel range/,
+  'a missing Art-Net pixel-validation marker must not satisfy the source contract',
+);
 
 console.log('wled-command-readiness tests passed');

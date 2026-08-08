@@ -13,6 +13,7 @@
 #include "LightweaverRuntimeApi.h"
 #include "LightweaverFrameSource.h"
 #include "LightweaverOutputPolicy.h"
+#include "LightweaverRestartPolicy.h"
 #include "LightweaverSequenceActivationPolicy.h"
 #include "LightweaverSequencePlayback.h"
 #include "LightweaverWledRealtime.h"
@@ -194,6 +195,7 @@ uint32_t safeDiscoveryStartedAtMs = 0;
 bool runtimeSafeMode = false;
 bool webRuntimeServing = false;
 bool restartTransitionPending = false;
+lightweaver::RestartFallbackState configRestartFallbackState;
 bool wifiTransitionPending = false;
 String bootId;
 uint32_t cardStateRevision = 0;
@@ -489,6 +491,15 @@ void loop() {
   // deadline in this same loop tick so no stale stream/error/AP frame can
   // overwrite the recovery frame before the user sees it.
   recoveryHoldActive = int32_t(recoveryHoldUntilMs - millis()) > 0;
+
+  // A successful config save owns this deadline. Other restart transactions
+  // may cancel their shared dark-hold flag on failure, but must not cancel a
+  // config save that has already replaced the active runtime state.
+  if (lightweaver::configRestartFallbackDue(
+          configRestartFallbackState, millis())) {
+    delay(50);
+    ESP.restart();
+  }
 
   // Every restart transition clears the physical LEDs. Keep subsequent loop
   // ticks dark too: config saves may replace RuntimeConfig while a browser is
@@ -2421,6 +2432,12 @@ bool runtimePlaybackReady() {
 void runtimeMarkRestartPending() {
   restartTransitionPending = true;
   if (ledOutputsReady) clearPhysicalLeds();
+}
+
+void runtimeArmConfigRestartFallback() {
+  configRestartFallbackState =
+      lightweaver::armConfigRestartFallback(
+          configRestartFallbackState, millis());
 }
 
 void runtimeSetWifiTransitionPending(bool pending) {
