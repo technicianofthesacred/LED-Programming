@@ -26,7 +26,7 @@ import { createCardFrameStream, DEFAULT_FRAME_FPS } from '../lib/cardFrameStream
 import { applyBenchStripView, templateStripIds, templateStripLength } from '../lib/benchStripView.js';
 import { cardBridgeFeatureGap, hasCardBridge, pingCardBridge } from '../lib/cardBridge.js';
 import { canPushDirectlyToCard, readStoredCardHost } from '../lib/cardConnection.js';
-import { decideLiveControlProjectAuthority } from '../lib/cardLiveControl.js';
+import { createLiveControlAuthorityGate } from '../lib/cardLiveControl.js';
 import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
 
 const SLOW_MODES = MODE_LIBRARY.filter((m) => m.tier === 'slow');
@@ -263,6 +263,7 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
   const playerRef = useRef(null);
   const fileInputRef = useRef(null);
   const streamRef = useRef(null);
+  const authorityGateRef = useRef(null);
   const rgbBufRef = useRef(null);
   const colorBufRef = useRef(null);
   const hexBufRef = useRef(null);
@@ -271,6 +272,18 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
   const pausedRef = useRef(false);
   const resetTimingRef = useRef(false);
   const sourceRequestGenerationRef = useRef(0);
+  const showAuthorityInput = {
+    connected: connected || cardLink?.readiness?.playbackReady === true,
+    studioProject: {
+      ...currentProject,
+      projectFingerprint: cardProjectFingerprint(currentProject || {}),
+    },
+    cardStatus: cardLink?.readiness || {},
+  };
+  if (!authorityGateRef.current) {
+    authorityGateRef.current = createLiveControlAuthorityGate(showAuthorityInput);
+  }
+  const showAuthority = authorityGateRef.current.update(showAuthorityInput);
 
   // ── UI state ──────────────────────────────────────────────────────────────
   const [modeKey, setModeKey] = useState('strata');
@@ -368,6 +381,7 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
     let paintAt = 0;
     let frameVersion = 0;
     const encodeFrame = () => {
+      if (!authorityGateRef.current.canSend()) return;
       const stream = streamRef.current;
       if (!stream) return;
       rgbBufRef.current = engineRef.current.frameRGB(rgbBufRef.current, colorBufRef.current);
@@ -680,6 +694,11 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
     try { await stream.stop(); } catch { /* the card reverts on its own after 2s */ }
   }, []);
 
+  useEffect(() => {
+    if (!streamRef.current || showAuthority.ok) return;
+    void stopLights({ kind: 'err', text: showAuthority.message });
+  }, [activeTemplateKind, outputOrder, showAuthority.message, showAuthority.ok, stopLights]);
+
   // Delivery health from the streamer: warn when frames stop reaching the
   // lights, and auto-stop (button back to its off state) when the path is
   // clearly gone — the card page popup closed, or ~15s of sustained failure.
@@ -719,14 +738,7 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
     }
     setLightsBusy(true);
     try {
-      const authority = decideLiveControlProjectAuthority({
-        connected: connected || cardLink?.readiness?.playbackReady === true,
-        studioProject: {
-          ...currentProject,
-          projectFingerprint: cardProjectFingerprint(currentProject || {}),
-        },
-        cardStatus: cardLink?.readiness || {},
-      });
+      const authority = authorityGateRef.current.update(showAuthorityInput);
       if (!authority.ok) {
         setNotice({ kind: 'err', text: authority.message });
         return;
@@ -773,7 +785,7 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
     } finally {
       setLightsBusy(false);
     }
-  }, [cardLink?.readiness, connected, currentProject, lightsBusy, stopLights, handleStreamHealth]);
+  }, [handleStreamHealth, lightsBusy, showAuthorityInput, stopLights]);
 
   const listening = source !== 'quiet';
 

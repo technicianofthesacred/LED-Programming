@@ -44,6 +44,13 @@ export const LIVE_CONTROL_AUTHORITY_MESSAGES = Object.freeze({
 function liveProjectIdentity(project = {}) {
   const config = project?.config || project;
   const startupPatternId = String(config?.startupPatternId || config?.startupLook || project?.startupPatternId || '').trim();
+  const startupLook = Array.isArray(config?.looks)
+    ? config.looks.find(look => {
+        const id = String(look?.id || '').trim();
+        const preset = String(look?.preset || '').trim();
+        return startupPatternId === id || startupPatternId === preset;
+      }) || null
+    : null;
   const patternIds = project?.patternIds || [
     ...(Array.isArray(config?.patterns) ? config.patterns.map(pattern => pattern?.id) : []),
     ...(Array.isArray(config?.looks) ? config.looks.flatMap(look => [look?.id, look?.preset]) : []),
@@ -53,9 +60,8 @@ function liveProjectIdentity(project = {}) {
     projectFingerprint: String(config?.projectFingerprint || project?.fingerprint || '').trim().toLowerCase(),
     patternIds: new Set((patternIds || []).map(String).map(id => id.trim()).filter(Boolean)),
     startupPatternId,
-    startupLook: Array.isArray(config?.looks)
-      ? config.looks.find(look => String(look?.id || '').trim() === startupPatternId) || null
-      : null,
+    startupLookId: String(startupLook?.id || startupPatternId).trim(),
+    startupLook,
   };
 }
 
@@ -94,13 +100,41 @@ export function decideLiveControlProjectAuthority({
   return { ok: true, state: 'ready', message: '' };
 }
 
+export function createLiveControlAuthorityGate(initialInput = {}) {
+  let authority = decideLiveControlProjectAuthority(initialInput);
+  return Object.freeze({
+    update(nextInput = {}) {
+      authority = decideLiveControlProjectAuthority(nextInput);
+      return authority;
+    },
+    canSend() {
+      return authority.ok;
+    },
+    decision() {
+      return authority;
+    },
+  });
+}
+
 export function requireResetLiveOutputReadback(cardStatus = {}, studioProject = {}) {
   const authority = decideLiveControlProjectAuthority({ connected: true, studioProject, cardStatus });
   if (!authority.ok) throw new CardPushError(authority.state, authority.message);
   const project = liveProjectIdentity(studioProject);
   const currentPatternId = String(cardStatus?.currentPatternId || cardStatus?.currentLookId || '').trim();
-  const startupPatternId = String(cardStatus?.startupPatternId || project.startupPatternId || '').trim();
-  if (!currentPatternId || !startupPatternId || currentPatternId !== startupPatternId || !project.patternIds.has(currentPatternId)) {
+  const expectedStartupLookId = project.startupLookId;
+  const reportedStartupPatternId = String(cardStatus?.startupPatternId || '').trim();
+  const acceptedStartupClaims = new Set([
+    project.startupPatternId,
+    project.startupLookId,
+    String(project.startupLook?.preset || '').trim(),
+  ].filter(Boolean));
+  if (
+    !currentPatternId
+    || !expectedStartupLookId
+    || currentPatternId !== expectedStartupLookId
+    || !project.patternIds.has(currentPatternId)
+    || (reportedStartupPatternId && !acceptedStartupClaims.has(reportedStartupPatternId))
+  ) {
     throw new CardPushError(
       'reset-readback-unconfirmed',
       'The card answered, but did not restore the installed startup look.',
@@ -1177,7 +1211,7 @@ export async function resetLiveOutputOnCard(fallbackLook = {}, options = {}) {
     const startupLook = {
       ...normalizeCardVisualLook(fallbackLook),
       ...(project.startupLook ? normalizeCardVisualLook(project.startupLook) : {}),
-      patternId: project.startupPatternId,
+      patternId: project.startupLookId,
     };
     const response = await recoverImpl(startupLook, { ...options, host });
     const status = await readStatusImpl({

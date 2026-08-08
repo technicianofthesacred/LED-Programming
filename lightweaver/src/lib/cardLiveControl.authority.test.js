@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   LIVE_CONTROL_AUTHORITY_MESSAGES,
+  createLiveControlAuthorityGate,
   decideLiveControlProjectAuthority,
   requireResetLiveOutputReadback,
   resetLiveOutputOnCard,
@@ -59,6 +60,30 @@ test('a live pattern absent from the installed matching Studio project is refuse
   });
 });
 
+test('an active frame sender stops admitting frames after project mismatch or readiness loss', () => {
+  const gate = createLiveControlAuthorityGate({ connected: true, studioProject, cardStatus: readyStatus });
+  const frames = [];
+  const send = frame => {
+    if (gate.canSend()) frames.push(frame);
+  };
+
+  send('authorized');
+  assert.equal(gate.update({
+    connected: true,
+    studioProject,
+    cardStatus: { ...readyStatus, projectFingerprint: 'different-project' },
+  }).state, 'project-mismatch');
+  send('mismatched');
+  assert.equal(gate.update({
+    connected: true,
+    studioProject,
+    cardStatus: { ...readyStatus, playbackReady: false, commandReady: false },
+  }).state, 'not-ready');
+  send('not-ready');
+
+  assert.deepEqual(frames, ['authorized']);
+});
+
 test('reset readback accepts only the installed startup look on the matching ready project', () => {
   assert.equal(requireResetLiveOutputReadback(readyStatus, studioProject).currentPatternId, 'aurora');
   assert.throws(
@@ -97,6 +122,44 @@ test('Reset Live recovers the installed startup look and succeeds only after fre
       recoverImpl: async () => ({ ok: true }),
       readStatusImpl: async () => ({ ...readyStatus, currentPatternId: 'blackout' }),
     }),
+    error => error?.reason === 'reset-readback-unconfirmed',
+  );
+});
+
+test('preset-named startup resolves to its exact installed look identity and rejects card-selected alternatives', async () => {
+  const presetProject = {
+    projectId: 'piece-a',
+    projectFingerprint: 'fingerprint-a',
+    startupPatternId: 'aurora',
+    looks: [
+      { id: 'look-dawn', preset: 'aurora', brightness: 0.31, speed: 0.8 },
+      { id: 'look-fire', preset: 'fire', brightness: 0.7 },
+    ],
+  };
+  const recoveries = [];
+  const correctStatus = {
+    ...readyStatus,
+    currentPatternId: 'look-dawn',
+    startupPatternId: 'aurora',
+  };
+  await resetLiveOutputOnCard({}, {
+    studioProject: presetProject,
+    recoverImpl: async look => {
+      recoveries.push(look);
+      return { ok: true };
+    },
+    readStatusImpl: async () => correctStatus,
+  });
+
+  assert.equal(recoveries[0].patternId, 'look-dawn');
+  assert.equal(recoveries[0].brightness, 0.31);
+  assert.equal(requireResetLiveOutputReadback(correctStatus, presetProject).currentPatternId, 'look-dawn');
+  assert.throws(
+    () => requireResetLiveOutputReadback({
+      ...correctStatus,
+      currentPatternId: 'look-fire',
+      startupPatternId: 'fire',
+    }, presetProject),
     error => error?.reason === 'reset-readback-unconfirmed',
   );
 });
