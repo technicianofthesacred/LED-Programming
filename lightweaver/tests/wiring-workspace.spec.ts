@@ -13,7 +13,10 @@ async function installStableCardIdentity(page: any) {
     app: 'Lightweaver', cardId: TEST_CARD_ID, firmwareVersion: '1.0.0', buildId: 'b'.repeat(40),
   } }));
   await page.route('**/api/status', route => route.fulfill({ json: {
-    app: 'Lightweaver', ok: true, cardId: TEST_CARD_ID, firmwareVersion: '1.0.0', buildId: 'b'.repeat(40),
+    app: 'Lightweaver', provisioningContractVersion: 1, ok: true,
+    cardId: TEST_CARD_ID, firmwareVersion: '1.0.0', buildId: 'b'.repeat(40),
+    bootId: 'boot-wiring-tests', runtimePhase: 'ready', knownGoodProject: true,
+    commandReady: true, outputReady: true, playbackReady: true,
   } }));
 }
 
@@ -188,7 +191,7 @@ async function installFrameCard(page: any) {
     }
     const recovery = route.request().url().includes('/api/recover-lights');
     return route.fulfill({ json: recovery
-      ? { ok: true, accepted: true, diagnostics: { frameSubmitted: true, nonBlackPixels: 1, brightnessByte: 255 } }
+      ? { ok: true, accepted: true, diagnostics: { rendered: true, frameSubmitted: true, nonBlackPixels: 1, brightnessByte: 255 } }
       : { ok: true } });
   });
   return controls;
@@ -442,7 +445,7 @@ test('the color quiz chains in as the final part of the LED check and sends real
     await route.fulfill({ json: {
       ok: true,
       accepted: true,
-      diagnostics: { frameSubmitted: true, nonBlackPixels: 1, brightnessByte: 255 },
+      diagnostics: { rendered: true, frameSubmitted: true, nonBlackPixels: 1, brightnessByte: 255 },
     } });
   });
   await gotoWire(page);
@@ -510,7 +513,7 @@ test('Stop lights confirms the blackout command and fresh zero-output readback',
       ok: true,
       accepted: true,
       patternId: body.patternId,
-      diagnostics: { frameSubmitted: true, nonBlackPixels: 44, brightnessByte: 160 },
+      diagnostics: { rendered: true, frameSubmitted: true, nonBlackPixels: 44, brightnessByte: 160 },
     } });
   });
   await page.route('**/api/control', async route => {
@@ -549,7 +552,7 @@ test('confirming the color auto-locks verified wiring and a Draw GPIO edit reope
   await page.route('**/api/recover-lights', route => route.fulfill({ json: {
     ok: true,
     accepted: true,
-    diagnostics: { frameSubmitted: true, nonBlackPixels: 1, brightnessByte: 255 },
+    diagnostics: { rendered: true, frameSubmitted: true, nonBlackPixels: 1, brightnessByte: 255 },
   } }));
   await gotoWire(page);
   await seedBenchVerified(page);
@@ -635,7 +638,7 @@ test('color confirmation requires a successful live test for the current order',
       ? route.fulfill({ json: {
           ok: true,
           accepted: true,
-          diagnostics: { frameSubmitted: true, nonBlackPixels: 1, brightnessByte: 255 },
+          diagnostics: { rendered: true, frameSubmitted: true, nonBlackPixels: 1, brightnessByte: 255 },
         } })
       : route.fulfill({ status: 503, json: { error: 'Card unreachable' } });
   });

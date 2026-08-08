@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { cardProjectFingerprint } from '../src/lib/cardProjectResolver.js';
 
 const capturedPageErrors = new WeakMap<object, string[]>();
 
@@ -30,11 +31,23 @@ async function installShowStubs(page: any) {
     window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (/^http:\/\/lightweaver\.local\/api\/(?:firmware-info|status)$/.test(url)) {
+        const project = JSON.parse(localStorage.getItem('lw_show_test_card_project_v1') || '{}');
         return Promise.resolve(new Response(JSON.stringify({
+          app: 'Lightweaver',
+          provisioningContractVersion: 1,
           cardId: 'lw-show-test',
           cardName: 'Show test card',
           firmwareVersion: '1.0.0',
           buildId: 'show-test',
+          bootId: 'show-test-boot',
+          runtimePhase: 'ready',
+          knownGoodProject: true,
+          commandReady: true,
+          outputReady: true,
+          playbackReady: true,
+          projectId: project.projectId,
+          projectRevision: project.projectRevision,
+          projectFingerprint: project.projectFingerprint,
           led: { pixels: 44 },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
       }
@@ -151,6 +164,74 @@ async function installShowStubs(page: any) {
   });
 }
 
+async function installMatchingShowCardProject(page: any, project: any) {
+  const evidence = {
+    projectId: project.id,
+    projectRevision: Number.isSafeInteger(project.revision) ? project.revision : 0,
+    projectFingerprint: cardProjectFingerprint(project),
+  };
+  expect(evidence.projectId).toBeTruthy();
+  expect(evidence.projectFingerprint).toMatch(/^[a-f0-9]{16,64}$/);
+  await page.evaluate((nextEvidence) => {
+    localStorage.setItem('lw_show_test_card_project_v1', JSON.stringify(nextEvidence));
+  }, evidence);
+}
+
+async function connectMatchingShowCard(page: any) {
+  // ProjectContext normalizes restored layout state and flushes its canonical
+  // serialization after a 500ms debounce. Linux CI can finish that work later
+  // than one fixed sleep, so require the serialized snapshot to remain
+  // unchanged across a full debounce window before authorizing the card.
+  let stableSnapshot = '';
+  await expect.poll(async () => {
+    const next = await page.evaluate(() => localStorage.getItem('lw_autosave_v3') || '');
+    const stable = Boolean(next) && next === stableSnapshot;
+    stableSnapshot = next;
+    return stable;
+  }, { intervals: [600], timeout: 10_000 }).toBe(true);
+  await page.evaluate(async () => {
+    const activeProject = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
+    const { cardProjectFingerprint } = await import('/src/lib/cardProjectResolver.js');
+    const project = {
+      projectId: activeProject.id,
+      projectRevision: Number.isSafeInteger(activeProject.revision) ? activeProject.revision : 0,
+      projectFingerprint: cardProjectFingerprint(activeProject),
+    };
+    localStorage.setItem('lw_show_test_card_project_v1', JSON.stringify(project));
+    const readiness = {
+      app: 'Lightweaver',
+      provisioningContractVersion: 1,
+      cardId: 'lw-show-test',
+      firmwareVersion: '1.0.0',
+      buildId: 'show-test',
+      bootId: 'show-test-boot',
+      runtimePhase: 'ready',
+      knownGoodProject: true,
+      commandReady: true,
+      outputReady: true,
+      playbackReady: true,
+      projectId: project.projectId,
+      projectRevision: project.projectRevision,
+      projectFingerprint: project.projectFingerprint,
+    };
+    const event = {
+      type: 'card-verified',
+      via: 'direct',
+      host: 'lightweaver.local',
+      card: {
+        id: readiness.cardId,
+        firmwareVersion: readiness.firmwareVersion,
+        buildId: readiness.buildId,
+      },
+      readiness,
+    };
+    const { getSharedCardLink } = await import('/src/lib/cardLink.js');
+    const link = getSharedCardLink();
+    link.dispatch(event);
+    link.dispatch(event);
+  });
+}
+
 async function openShow(page: any) {
   const pageErrors: string[] = [];
   capturedPageErrors.set(page, pageErrors);
@@ -160,21 +241,37 @@ async function openShow(page: any) {
   const stage = page.getByTestId('show-stage');
   await expect(stage).toBeVisible({ timeout: 10_000 });
   await expect(stage).toHaveAttribute('data-frame-version', /\d+/, { timeout: 10_000 });
+  await expect.poll(async () => page.evaluate(() => localStorage.getItem('lw_autosave_v3'))).not.toBeNull();
+  const project = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}'));
+  await installMatchingShowCardProject(page, project);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await connectMatchingShowCard(page);
+  await expect(stage).toBeVisible({ timeout: 10_000 });
+  await expect(stage).toHaveAttribute('data-frame-version', /\d+/, { timeout: 10_000 });
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/, { timeout: 10_000 });
   expect(pageErrors, `Show page errors:\n${pageErrors.join('\n')}`).toEqual([]);
 }
 
 async function mutateSavedLayout(page: any, mutate: (layout: any) => void) {
   await expect.poll(async () => page.evaluate(() => localStorage.getItem('lw_autosave_v3'))).not.toBeNull();
-  await page.evaluate((source) => {
+  const project = await page.evaluate((source) => {
     const project = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
     // eslint-disable-next-line no-eval
     const apply = (0, eval)(`(${source})`);
     apply(project.layout);
+    // These Show fixtures author their physical order through patchBoard.
+    // Discard the default project's now-stale compiled wiring after resizing
+    // strips so the active project remains installable and fingerprintable.
+    project.layout.wiring = null;
     localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
+    return project;
   }, mutate.toString());
+  await installMatchingShowCardProject(page, project);
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await connectMatchingShowCard(page);
   await expect(page.getByTestId('show-stage')).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId('show-stage')).toHaveAttribute('data-frame-version', /\d+/, { timeout: 10_000 });
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/, { timeout: 10_000 });
 }
 
 async function loadSong(page: any, name = 'fixture.wav') {
@@ -321,7 +418,7 @@ test('a late microphone result cannot leave Quiet mode', async ({ page }) => {
   await expect.poll(async () => page.evaluate(() => (window as any).__stoppedMicTracks)).toBe(1);
 });
 
-test('switching templates while paused renders and streams exactly one new-size frame', async ({ page }) => {
+test('switching templates stops the old stream and requires an explicit restart before new-size frames', async ({ page }) => {
   await openShow(page);
   await loadSong(page);
   await page.getByRole('button', { name: 'Play on the lights' }).click();
@@ -338,36 +435,28 @@ test('switching templates while paused renders and streams exactly one new-size 
 
   await expect(page.getByTestId('show-stage')).toHaveAttribute('data-template', 'mandala');
   await expect.poll(async () => page.getByTestId('show-stage').getAttribute('data-frame-version')).toBe(String(before.version + 1));
-  await expect.poll(async () => page.evaluate(() => (window as any).__distinctFrames().length)).toBe(before.frames + 1);
-  const latest = await page.evaluate(() => (window as any).__distinctFrames().at(-1));
-  // The WHOLE new-size frame has to reach the card, not just its head: this
-  // reads the reassembled frame, so a dropped or misplaced tail chunk fails
-  // here rather than passing as a 416-pixel "frame".
-  expect(latest, 'the new-size frame reassembles from its chunks').toHaveLength(675);
+  await expect(page.getByRole('button', { name: 'Play on the lights' })).toBeVisible();
 
-  // Hold it across more than two keepalive windows. A frozen show must keep
-  // RE-SENDING this one frame — going quiet for 2s hands the canvas back to
-  // the card's frame-source watchdog mid-show — while never rendering again,
-  // never reading the audio again, and never putting a DIFFERENT frame on the
-  // wire. The old 200ms sample could only ever have caught the last of those.
-  const settledFrames = await page.evaluate(() => (window as any).__streamedFrames().length);
-  await page.waitForTimeout(2000);
-  expect(await page.evaluate(() => (window as any).__distinctFrames().length)).toBe(before.frames + 1);
+  // A template/output-order transition changes the rendering contract. The
+  // old stream must stop rather than sending even one frame of the new shape
+  // through its stale contract, and its cached keepalive must stay fenced.
+  const stoppedFrames = await page.evaluate(() => (window as any).__streamedFrames().length);
+  await page.waitForTimeout(1000);
+  expect(await page.evaluate(() => (window as any).__streamedFrames().length)).toBe(stoppedFrames);
+  expect(await page.evaluate(() => (window as any).__distinctFrames().length)).toBe(before.frames);
   await expect(page.getByTestId('show-stage')).toHaveAttribute('data-frame-version', String(before.version + 1));
   expect(await page.evaluate(() => (window as any).__audioReads)).toBe(before.reads);
 
-  // The frozen frame must go out at the KEEPALIVE rhythm and no faster. Those
-  // resends are byte-identical, so the distinct-frame count above cannot see
-  // them at all — this is what catches a pump that re-streams the same frame
-  // every tick, which would flood the card at 18fps for no visible change.
-  // FRAME_KEEPALIVE_MS is 850ms, so a 2s freeze allows 2 resends plus one for
-  // where the window falls, and one more of slack for a loaded machine
-  // overshooting the wait. A starved pump can only ever resend LESS often, and
-  // the 18fps pump this guards against puts ~36 here — the bound has room to
-  // be generous without losing its teeth.
-  const resends = await page.evaluate(() => (window as any).__streamedFrames().length) - settledFrames;
-  expect(resends, 'the keepalive keeps the frozen frame on the wire').toBeGreaterThan(0);
-  expect(resends, 'the frozen frame is re-sent by the keepalive, not re-streamed by the pump').toBeLessThanOrEqual(4);
+  // The operator explicitly starts a fresh stream for the new contract. Since
+  // the song is paused, no frame moves until they also resume playback.
+  await page.getByRole('button', { name: 'Play on the lights' }).click();
+  await page.waitForTimeout(250);
+  expect(await page.evaluate(() => (window as any).__distinctFrames().length)).toBe(before.frames);
+  await page.getByTestId('show-pause').click();
+  await expect(page.getByTestId('show-transport-state')).toHaveText('playing');
+  await expect.poll(async () => page.evaluate(() => (window as any).__distinctFrames().length)).toBeGreaterThan(before.frames);
+  const latest = await page.evaluate(() => (window as any).__distinctFrames().at(-1));
+  expect(latest, 'the restarted stream reassembles the new rendering contract').toHaveLength(675);
 });
 
 test('pausing with lights active atomically pushes the displayed frame and freezes it', async ({ page }) => {

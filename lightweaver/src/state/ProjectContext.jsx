@@ -221,6 +221,18 @@ function layoutRootReducer(state, action) {
   }
 }
 
+function projectLifecycleReducer(state, action) {
+  if (action.type === 'edited') return markEdited(state);
+  if (action.type === 'persisted') {
+    if (Number.isSafeInteger(action.generation) && action.generation !== state.generation) return state;
+    return markPersisted(state, action.destination, action.revision);
+  }
+  if (action.type === 'installed') return markInstalled(state, action.installation);
+  if (action.type === 'replaced') return replaceProjectLifecycle(state);
+  if (action.type === 'boot') return action.lifecycle;
+  return state;
+}
+
 // ── Interpolate automation lane value at a given time ─────────────────────
 export function sampleLane(lane, t) {
   const keys = lane.keys;
@@ -362,19 +374,18 @@ export function ProjectProvider({ children }) {
   const [layout, dispatchLayout] = useReducer(layoutRootReducer, defaults.layout, makeInitialLayoutState);
   const [projectRevision,   setProjectRevision]   = useState(0);
   const [confirmedCardLook, setConfirmedCardLook] = useState(null);
-  const [projectLifecycle, dispatchProjectLifecycle] = useReducer((state, action) => {
-    if (action.type === 'edited') return markEdited(state);
-    if (action.type === 'persisted') {
-      if (Number.isSafeInteger(action.generation) && action.generation !== state.generation) return state;
-      return markPersisted(state, action.destination, action.revision);
-    }
-    if (action.type === 'installed') return markInstalled(state, action.installation);
-    if (action.type === 'replaced') return replaceProjectLifecycle(state);
-    // Startup restore sets the whole lifecycle at once (New project vs
-    // Restored from recovery copy vs Saved in browser) — see the boot effect.
-    if (action.type === 'boot') return action.lifecycle;
-    return state;
-  }, undefined, createProjectLifecycle);
+  const projectLifecycleRef = useRef(null);
+  if (!projectLifecycleRef.current) projectLifecycleRef.current = createProjectLifecycle();
+  const [projectLifecycle, dispatchProjectLifecycleState] = useReducer(
+    projectLifecycleReducer,
+    projectLifecycleRef.current,
+  );
+  const dispatchProjectLifecycle = useCallback(action => {
+    const next = projectLifecycleReducer(projectLifecycleRef.current, action);
+    projectLifecycleRef.current = next;
+    dispatchProjectLifecycleState(action);
+    return next;
+  }, []);
   const projectFingerprintRef = useRef('');
   const suppressNextLifecycleEditRef = useRef(true);
 
@@ -969,10 +980,11 @@ export function ProjectProvider({ children }) {
   }, [applyProject]);
 
   const replaceProject = useCallback(async (candidate, options = {}) => {
-    return replaceProjectSafely({
+    let replacementMarker = null;
+    const result = await replaceProjectSafely({
       candidate,
       validate: value => migrateProject(value),
-      dirty: hasUnsavedChanges(projectLifecycle),
+      dirty: hasUnsavedChanges(projectLifecycleRef.current),
       confirmDiscard: options.confirmDiscard || (validated => requestReplacementConfirmation({
         currentName: projectName,
         incomingName: validated?.name,
@@ -980,10 +992,15 @@ export function ProjectProvider({ children }) {
       apply: validated => {
         suppressNextLifecycleEditRef.current = true;
         applyProject(validated);
-        dispatchProjectLifecycle({ type: 'replaced' });
+        const nextLifecycle = dispatchProjectLifecycle({ type: 'replaced' });
+        replacementMarker = {
+          generation: nextLifecycle.generation,
+          revision: nextLifecycle.editedRevision,
+        };
       },
     });
-  }, [applyProject, projectLifecycle, projectName, requestReplacementConfirmation]);
+    return result.ok ? { ...result, marker: replacementMarker } : result;
+  }, [applyProject, dispatchProjectLifecycle, projectName, requestReplacementConfirmation]);
 
   const replaceWithNewProject = useCallback(options => replaceProject(createDefaultProject(), options), [replaceProject]);
   const dismissQuarantine = useCallback(() => {
@@ -1006,6 +1023,12 @@ export function ProjectProvider({ children }) {
     revision: marker?.revision,
   }), []);
   const markProjectEdited = useCallback(() => dispatchProjectLifecycle({ type: 'edited' }), []);
+  const isProjectLifecycleMarkerCurrent = useCallback(marker => (
+    Number.isSafeInteger(marker?.generation)
+      && marker.generation === projectLifecycleRef.current.generation
+      && Number.isSafeInteger(marker?.revision)
+      && marker.revision === projectLifecycleRef.current.editedRevision
+  ), []);
   const markProjectInstalled = useCallback(installation => dispatchProjectLifecycle({ type: 'installed', installation }), []);
   const commitProjectStateWithoutEdit = useCallback(commit => {
     suppressNextLifecycleEditRef.current = true;
@@ -1117,6 +1140,7 @@ export function ProjectProvider({ children }) {
       requestReplacementConfirmation,
       markProjectPersisted,
       markProjectEdited,
+      isProjectLifecycleMarkerCurrent,
       markProjectInstalled,
       commitProjectStateWithoutEdit,
       markCardLookConfirmed,

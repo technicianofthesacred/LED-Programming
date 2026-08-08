@@ -34,6 +34,138 @@ const MIRRORED_REPAIR_LOOK_IDS = ['fire', 'ripple', 'warm-white', 'aurora', 'pla
 const MAX_CONTROL_RESPONSE_BYTES = 8192;
 const latestPreviewQueues = new Map();
 
+export const LIVE_CONTROL_AUTHORITY_MESSAGES = Object.freeze({
+  disconnected: 'Connect this Lightweaver card before sending live control.',
+  'not-ready': 'The card is connected, but its runtime is not ready for live control.',
+  'project-mismatch': 'Install this exact Studio project on the card before sending live control.',
+  'pattern-not-installed': 'This pattern is not installed in the matching project on the card.',
+});
+
+function liveProjectIdentity(project = {}) {
+  const config = project?.config || project;
+  const startupPatternId = String(config?.startupPatternId || config?.startupLook || project?.startupPatternId || '').trim();
+  const startupLook = Array.isArray(config?.looks)
+    ? config.looks.find(look => {
+        const id = String(look?.id || '').trim();
+        const preset = String(look?.preset || '').trim();
+        return startupPatternId === id || startupPatternId === preset;
+      }) || null
+    : null;
+  const patternIds = project?.patternIds || [
+    ...(Array.isArray(config?.patterns) ? config.patterns.map(pattern => pattern?.id) : []),
+    ...(Array.isArray(config?.looks) ? config.looks.flatMap(look => [look?.id, look?.preset]) : []),
+  ];
+  return {
+    projectId: String(config?.projectId || config?.piece?.id || project?.id || '').trim(),
+    projectFingerprint: String(config?.projectFingerprint || project?.fingerprint || '').trim().toLowerCase(),
+    patternIds: new Set((patternIds || []).map(String).map(id => id.trim()).filter(Boolean)),
+    startupPatternId,
+    startupLookId: String(startupLook?.id || startupPatternId).trim(),
+    startupRuntimePatternId: (() => {
+      const configuredRuntimeId = String(startupLook?.preset || startupLook?.patternId || startupPatternId).trim();
+      return getCardPatternRuntimeId(configuredRuntimeId) || configuredRuntimeId;
+    })(),
+    startupLook,
+  };
+}
+
+export function decideLiveControlProjectAuthority({
+  connected = false,
+  studioProject = {},
+  cardStatus = {},
+  patternId = '',
+} = {}) {
+  if (!connected) return { ok: false, state: 'disconnected', message: LIVE_CONTROL_AUTHORITY_MESSAGES.disconnected };
+  const runtimeReady = cardStatus?.playbackReady === true || (
+    cardStatus?.runtimePhase === 'ready'
+    && cardStatus?.knownGoodProject !== false
+    && cardStatus?.outputReady !== false
+    && cardStatus?.commandReady === true
+  );
+  if (!runtimeReady) return { ok: false, state: 'not-ready', message: LIVE_CONTROL_AUTHORITY_MESSAGES['not-ready'] };
+
+  const studio = liveProjectIdentity(studioProject);
+  const cardProjectId = String(cardStatus?.projectId || cardStatus?.piece?.id || '').trim();
+  const cardFingerprint = String(cardStatus?.projectFingerprint || '').trim().toLowerCase();
+  const exactProject = Boolean(studio.projectId && cardProjectId && studio.projectId === cardProjectId)
+    && (!studio.projectFingerprint || Boolean(cardFingerprint && studio.projectFingerprint === cardFingerprint));
+  if (!exactProject) {
+    return { ok: false, state: 'project-mismatch', message: LIVE_CONTROL_AUTHORITY_MESSAGES['project-mismatch'] };
+  }
+  const requestedPatternId = String(patternId || '').trim();
+  if (requestedPatternId && !studio.patternIds.has(requestedPatternId)) {
+    return {
+      ok: false,
+      state: 'project-mismatch',
+      reason: 'pattern-not-installed',
+      message: LIVE_CONTROL_AUTHORITY_MESSAGES['pattern-not-installed'],
+    };
+  }
+  return { ok: true, state: 'ready', message: '' };
+}
+
+export function createLiveControlAuthorityGate(initialInput = {}) {
+  let authority = decideLiveControlProjectAuthority(initialInput);
+  let contractKey = '';
+  let contractInvalidated = false;
+  return Object.freeze({
+    update(nextInput = {}, transition = {}) {
+      authority = decideLiveControlProjectAuthority(nextInput);
+      const tracksContract = Object.hasOwn(transition, 'contractKey');
+      const nextContractKey = tracksContract ? String(transition.contractKey || '') : contractKey;
+      const streamActive = transition.streamActive === true;
+      const contractChanged = Boolean(
+        tracksContract
+        && streamActive
+        && contractKey
+        && nextContractKey !== contractKey
+      );
+      if (tracksContract && !streamActive) contractInvalidated = false;
+      if (contractChanged) contractInvalidated = true;
+      if (tracksContract) contractKey = nextContractKey;
+      return {
+        ...authority,
+        contractChanged,
+        requiresStop: streamActive && (!authority.ok || contractInvalidated),
+      };
+    },
+    canSend() {
+      return authority.ok && !contractInvalidated;
+    },
+    decision() {
+      return authority;
+    },
+  });
+}
+
+export function requireResetLiveOutputReadback(cardStatus = {}, studioProject = {}) {
+  const authority = decideLiveControlProjectAuthority({ connected: true, studioProject, cardStatus });
+  if (!authority.ok) throw new CardPushError(authority.state, authority.message);
+  const project = liveProjectIdentity(studioProject);
+  const currentPatternId = String(cardStatus?.currentPatternId || cardStatus?.currentLookId || '').trim();
+  const expectedRuntimePatternId = project.startupRuntimePatternId;
+  const reportedStartupPatternId = String(cardStatus?.startupPatternId || '').trim();
+  const acceptedStartupClaims = new Set([
+    project.startupPatternId,
+    project.startupLookId,
+    project.startupRuntimePatternId,
+    String(project.startupLook?.preset || '').trim(),
+  ].filter(Boolean));
+  if (
+    !currentPatternId
+    || !expectedRuntimePatternId
+    || currentPatternId !== expectedRuntimePatternId
+    || !project.patternIds.has(currentPatternId)
+    || (reportedStartupPatternId && !acceptedStartupClaims.has(reportedStartupPatternId))
+  ) {
+    throw new CardPushError(
+      'reset-readback-unconfirmed',
+      'The card answered, but did not restore the installed startup look.',
+    );
+  }
+  return cardStatus;
+}
+
 function supersededPreviewError() {
   return new CardPushError('superseded', 'Superseded by a newer live preview request.');
 }
@@ -271,7 +403,8 @@ function buildRecoverLightsPayload(look = {}) {
 function requireRecoveryAcknowledgement(response) {
   const diagnostics = response?.diagnostics;
   const commandAccepted = response?.ok === true && (response?.accepted === true || response?.recovered === true);
-  const visibleFramePrepared = diagnostics?.frameSubmitted !== false &&
+  const visibleFramePrepared = diagnostics?.rendered !== false &&
+    diagnostics?.frameSubmitted !== false &&
     Number(diagnostics?.nonBlackPixels) > 0 && Number(diagnostics?.brightnessByte) > 0;
   if (!commandAccepted || !visibleFramePrepared) {
     throw new CardPushError(
@@ -1095,57 +1228,42 @@ export async function pushSectionPreviewToCard(targets, options = {}) {
 
 export async function resetLiveOutputOnCard(fallbackLook = {}, options = {}) {
   const host = options.host || readStoredCardHost();
-  if (!isMixedContentBlocked()) {
-    await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs || 3000 });
-  }
   try {
-    const zonesPayload = await readCardZones(host, Math.min(options.timeoutMs || 3000, 1400)).catch(() => null);
-    const targets = liveTargetsFromZones(zonesPayload, fallbackLook);
-    if (targets.length) {
-      const results = [];
-      for (const target of targets) {
-        results.push(await pushLivePreviewToHost(host, {
-          ...target.look,
-          zone: target.zone,
-          syncZones: false,
-          blackout: false,
-        }, options));
-      }
-      return {
-        ok: true,
-        source: 'zones',
-        zonesPreviewed: targets.length,
-        results,
-      };
-    }
-
-    const response = await pushLivePreviewToHost(host, {
+    const project = liveProjectIdentity(options.studioProject);
+    const recoverImpl = options.recoverImpl || recoverCardLights;
+    const readStatusImpl = options.readStatusImpl || readCardStatusEnvelope;
+    const startupLook = {
       ...normalizeCardVisualLook(fallbackLook),
-      syncZones: true,
-      blackout: false,
-    }, options);
+      ...(project.startupLook ? normalizeCardVisualLook(project.startupLook) : {}),
+      patternId: project.startupRuntimePatternId,
+    };
+    const response = await recoverImpl(startupLook, { ...options, host });
+    if (response?.diagnostics?.rendered === false) {
+      throw new CardPushError(
+        'recovery-unconfirmed',
+        'The card answered, but it did not confirm a visible recovery frame. Restart the card, then try Recover lights again.',
+      );
+    }
+    const acknowledgedPatternId = String(response?.patternId || response?.appliedPatternId || '').trim();
+    if (!acknowledgedPatternId || acknowledgedPatternId !== project.startupRuntimePatternId) {
+      throw new CardPushError(
+        'reset-readback-unconfirmed',
+        'The card answered, but did not restore the installed startup look.',
+      );
+    }
+    const status = await readStatusImpl({
+      host,
+      timeoutMs: Math.min(options.timeoutMs || 3000, 1400),
+      transport: options.transport,
+      fetchImpl: options.fetchImpl,
+    });
+    requireResetLiveOutputReadback(status, options.studioProject);
     return {
       ...response,
-      source: 'fallback',
+      source: 'startup-recovery',
+      status,
     };
   } catch (error) {
-    if (!isMixedContentBlocked() && options.autoDiscover !== false) {
-      const found = await discoverCardStatus({
-        preferredHost: host,
-        timeoutMs: Math.min(options.timeoutMs || 3000, 900),
-      });
-      if (found.connected && normalizeCardHost(found.host) !== normalizeCardHost(host)) {
-        try {
-          return await resetLiveOutputOnCard(fallbackLook, {
-            ...options,
-            host: found.host,
-            autoDiscover: false,
-          });
-        } catch (retryError) {
-          throw normalizePreviewError(found.host, retryError);
-        }
-      }
-    }
     throw normalizePreviewError(host, error);
   }
 }

@@ -13,11 +13,15 @@ import {
 import {
   prepareCardDeployment,
   cardStatusAsConfig,
+  assertCardDeploymentPreflightIdentity,
+  correlateCardDeploymentReadinessEvidence,
+  orchestrateCardDeploymentStart,
   waitForCardDeploymentVerification,
 } from '../../../lib/cardDeployment.js';
 import {
   activateAndWaitForCardWiring,
   confirmCardWiringCandidate,
+  getCardWiringStatus,
   rollbackCardWiringCandidate,
 } from '../../../lib/cardWiringSafety.js';
 import { openLocalCardPage } from '../../../lib/cardBridge.js';
@@ -31,6 +35,14 @@ const LOCAL_BRIDGE_RECOVERY_REASONS = new Set([
   'bridge-timeout',
   'bridge-post-failed',
 ]);
+
+async function readReadyDeploymentEvidence(host) {
+  const [project, status] = await Promise.all([
+    readCardProjectEvidence({ host }),
+    readCardStatusEnvelope({ host }),
+  ]);
+  return correlateCardDeploymentReadinessEvidence(project, status);
+}
 
 // Send-to-card control (Wire mode, Phase 2 step 9 / plan Phase 3). Extracted
 // from PatchBoardScreen.pushToCard + its push* state. The `connected` prop
@@ -83,14 +95,15 @@ export function CardPushControl({
         prepareCardStoragePayload(prepareCardDeployment(project).runtimePackage);
         let before;
         let status;
+        let wiringStatus;
+        let handoffOnly = false;
         try {
-          [before, status] = await Promise.all([
+          [before, status, wiringStatus] = await Promise.all([
             readCardProjectEvidence({ host: cleanHost }),
             readCardStatusEnvelope({ host: cleanHost }),
+            getCardWiringStatus({ host: cleanHost }),
           ]);
-          if (status.cardId && status.cardId !== before.cardId) {
-            throw new CardPushError('wrong-card', 'Card identity changed during install preflight. Nothing was sent.');
-          }
+          assertCardDeploymentPreflightIdentity(before, status);
         } catch (preflightError) {
           if (!LOCAL_BRIDGE_RECOVERY_REASONS.has(preflightError?.reason)) throw preflightError;
           const rememberedCard = readPersistedCardIdentity();
@@ -102,9 +115,13 @@ export function CardPushControl({
           // card, but do not mark it installed until later read-back succeeds.
           before = { cardId: rememberedCard.id };
           status = {};
+          wiringStatus = null;
+          handoffOnly = true;
         }
         const prepared = prepareCardDeployment(project, {
           cardId: before.cardId,
+          buildId: before.buildId,
+          activationId: wiringStatus?.activationId,
           previousConfig: cardStatusAsConfig(status),
         });
         attempt = {
@@ -114,11 +131,45 @@ export function CardPushControl({
           zoneCount: prepared.config.zones.length,
           pkg: prepared.runtimePackage,
           prepared,
+          handoffOnly,
         };
       }
       dispatchAction({ type: 'start', revision: attempt.revision });
-      setPushStatus(`Sending revision ${attempt.revision} to ${cleanHost}...`);
-      const response = await pushConfigToCard(attempt.pkg, { host: attempt.host, allowLayoutChange: true });
+      if (attempt.handoffOnly) {
+        throw new CardPushError('bridge-missing', 'Open the paired card installer to continue. Nothing was sent.');
+      }
+      const deploymentStart = await orchestrateCardDeploymentStart(
+        attempt.prepared,
+        {
+          readFirmwareInfo: () => readCardProjectEvidence({ host: attempt.host }),
+          readStatus: () => readCardStatusEnvelope({ host: attempt.host }),
+          readWiringStatus: () => getCardWiringStatus({ host: attempt.host }),
+          config: async () => {
+            setPushStatus(`Sending revision ${attempt.revision} to ${cleanHost}...`);
+            return pushConfigToCard(attempt.pkg, { host: attempt.host, allowLayoutChange: true });
+          },
+        },
+      );
+      attempt = { ...attempt, wiringStatus: deploymentStart.status, resumeAction: deploymentStart.action };
+      if (attempt.resumeAction === 'candidate-conflict') {
+        throw new CardPushError(
+          'candidate-conflict',
+          'This card already has a different staged installation. Roll back that candidate or intentionally replace it, then retry. Nothing was sent.',
+        );
+      }
+      if (attempt.resumeAction !== 'stage-new') {
+        setWiringCandidate({ activationId: attempt.wiringStatus.activationId, attempt });
+        if (attempt.resumeAction === 'resume-activation') {
+          setWiringTestState('staged');
+          setPushStatus('This exact wiring installation is already staged. Continue with its light test; nothing was sent again.');
+        } else if (attempt.resumeAction === 'resume-physical-test' || attempt.resumeAction === 'resume-confirmation') {
+          setWiringTestState('testing');
+          setPushStatus('This exact wiring installation is already in its physical test. Confirm it only after checking the real LEDs.');
+        }
+        failedAttemptRef.current = null;
+        return;
+      }
+      const response = deploymentStart.response;
       if (response?.state === 'staged' && response.activationId) {
         setWiringCandidate({ activationId: response.activationId, attempt });
         setWiringTestState('staged');
@@ -128,7 +179,8 @@ export function CardPushControl({
       }
       setPushStatus('Verifying the exact project on the card…');
       const verification = await waitForCardDeploymentVerification(attempt.prepared, {
-        readEvidence: () => readCardProjectEvidence({ host: attempt.host }),
+        readEvidence: () => readReadyDeploymentEvidence(attempt.host),
+        requireReady: true,
       });
       dispatchAction({ type: 'confirm' });
       markProjectInstalled({
@@ -182,7 +234,8 @@ export function CardPushControl({
         await confirmCardWiringCandidate(wiringCandidate.activationId, { host: wiringCandidate.attempt.host });
         setPushStatus('Verifying the confirmed wiring on the card…');
         const verification = await waitForCardDeploymentVerification(wiringCandidate.attempt.prepared, {
-          readEvidence: () => readCardProjectEvidence({ host: wiringCandidate.attempt.host }),
+          readEvidence: () => readReadyDeploymentEvidence(wiringCandidate.attempt.host),
+          requireReady: true,
         });
         dispatchAction({ type: 'confirm' });
         markProjectInstalled({

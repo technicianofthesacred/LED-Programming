@@ -16,10 +16,96 @@ export function prepareCardDeployment(project = {}, cardEvidence = {}) {
     config,
     fingerprint: semanticFingerprint(config),
     cardId: String(cardEvidence.cardId || '').trim(),
+    buildId: String(cardEvidence.buildId || '').trim(),
+    activationId: String(cardEvidence.activationId || '').trim(),
     revision: Number(config.projectRevision || project.projectRevision || 0),
     previousConfig: cardEvidence.previousConfig || null,
     changes: classifyCardChanges(cardEvidence.previousConfig, config),
   });
+}
+
+export function classifyCardDeploymentResume(prepared = {}, status = {}) {
+  const state = String(status.state || '').trim().toLowerCase();
+  const candidateState = String(status.candidateState || '').trim().toLowerCase();
+  const nextStep = String(status.nextStep || '').trim().toLowerCase();
+  const hasCandidate = Boolean(status.hasCandidate) || ['staged', 'testing'].includes(state)
+    || !['', 'none', 'known-good', 'rolled-back', 'safe-mode'].includes(candidateState);
+
+  if (!hasCandidate) {
+    if (!status.cardId && !status.buildId) return 'stage-new';
+    return exactText(prepared.cardId, status.cardId) && exactText(prepared.buildId, status.buildId)
+      ? 'stage-new'
+      : 'candidate-conflict';
+  }
+
+  const config = prepared.config || {};
+  const exactCandidate = exactText(prepared.cardId, status.cardId)
+    && exactText(prepared.buildId, status.buildId)
+    && exactNumber(config.projectRevision, status.projectRevision)
+    && exactText(config.projectFingerprint, status.projectFingerprint)
+    && Boolean(String(status.activationId || '').trim())
+    && (!prepared.activationId || exactText(prepared.activationId, status.activationId))
+    && optionalIdentityMatches(
+      [config.productionJobId, config.productionJobDigest],
+      [status.productionJobId, status.productionJobDigest],
+    )
+    && optionalWiringIdentityMatches(config, status);
+  if (!exactCandidate) return 'candidate-conflict';
+
+  if (state === 'staged' || candidateState === 'staged') return 'resume-activation';
+  if (candidateState === 'awaiting-confirmation' || /confirm|rollback/.test(nextStep)) {
+    return 'resume-confirmation';
+  }
+  if (nextStep === 'activate') return 'resume-activation';
+  return 'resume-physical-test';
+}
+
+export function assertCardDeploymentPreflightIdentity(firmwareInfo = {}, status = {}) {
+  if (!exactText(firmwareInfo.cardId, status.cardId) || !exactText(firmwareInfo.buildId, status.buildId)) {
+    const error = new Error('Card identity or firmware build changed during install preflight. Nothing was sent.');
+    error.reason = 'preflight-identity-mismatch';
+    throw error;
+  }
+  return true;
+}
+
+export async function orchestrateCardDeploymentStart(prepared, operations = {}) {
+  if (typeof operations.readFirmwareInfo !== 'function' ||
+      typeof operations.readStatus !== 'function' ||
+      typeof operations.readWiringStatus !== 'function') {
+    throw new Error('All independent card preflight reads are required before deployment.');
+  }
+  const [firmwareInfo, status, wiringStatus] = await Promise.all([
+    operations.readFirmwareInfo(),
+    operations.readStatus(),
+    operations.readWiringStatus(),
+  ]);
+  assertCardDeploymentPreflightIdentity(prepared, firmwareInfo);
+  assertCardDeploymentPreflightIdentity(firmwareInfo, status);
+  const action = classifyCardDeploymentResume(prepared, wiringStatus);
+  if (action !== 'stage-new') return { action, status: wiringStatus, response: null };
+  if (typeof operations.config !== 'function') {
+    throw new Error('A config mutation is required to stage a new deployment.');
+  }
+  return { action, status: wiringStatus, response: await operations.config() };
+}
+
+export function correlateCardDeploymentReadinessEvidence(project = {}, status = {}) {
+  const exactIdentity = exactText(project.cardId, status.cardId)
+    && exactText(project.buildId, status.buildId)
+    && exactNumber(project.projectRevision, status.projectRevision)
+    && exactText(project.projectFingerprint, status.projectFingerprint);
+  if (!exactIdentity) {
+    const error = new Error('Card readiness did not carry the exact card, build, and project identity.');
+    error.reason = 'readiness-identity-mismatch';
+    throw error;
+  }
+  return {
+    ...project,
+    knownGoodProject: status.knownGoodProject,
+    commandReady: status.commandReady,
+    playbackReady: status.playbackReady,
+  };
 }
 
 export function classifyCardChanges(previousConfig, nextConfig) {
@@ -81,7 +167,7 @@ export async function runCardDeployment(prepared, transport = {}, callbacks = {}
   }
   state('Verifying card');
   const readBack = await transport.readBack?.();
-  const verification = verifyCardDeployment(prepared, readBack);
+  const verification = verifyCardDeployment(prepared, readBack, { requireReady: true });
   if (!verification.ok) {
     callbacks.onVerificationFailed?.(verification);
     return { installed: false, reason: verification.reason };
@@ -91,13 +177,18 @@ export async function runCardDeployment(prepared, transport = {}, callbacks = {}
   return { installed: true, verification };
 }
 
-export function verifyCardDeployment(prepared, readBack = {}) {
+export function verifyCardDeployment(prepared, readBack = {}, { requireReady = false } = {}) {
   if (!readBack || readBack.cardId !== prepared.cardId) return { ok: false, reason: 'card-mismatch' };
   if (readBack.config && semanticFingerprint(readBack.config) !== prepared.fingerprint) return { ok: false, reason: 'read-back-mismatch' };
   if (!readBack.config && (
     readBack.projectRevision !== prepared.config.projectRevision ||
     readBack.projectFingerprint !== prepared.config.projectFingerprint
   )) return { ok: false, reason: 'read-back-mismatch' };
+  if (requireReady && (
+    readBack.knownGoodProject !== true ||
+    readBack.commandReady !== true ||
+    readBack.playbackReady !== true
+  )) return { ok: false, reason: 'card-not-ready' };
   if (runtimeConfigUsesKaleidoscope(prepared.config)) {
     const appliedMappings = readBack.config?.kaleidoscopeMappings ?? readBack.kaleidoscopeMappings;
     if (!Array.isArray(appliedMappings)) return { ok: false, reason: 'read-back-mismatch' };
@@ -120,6 +211,7 @@ export async function waitForCardDeploymentVerification(prepared, {
   readEvidence,
   attempts = 20,
   intervalMs = 600,
+  requireReady = false,
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
 } = {}) {
   if (!prepared?.cardId) throw new Error('Exact card identity is required before installation.');
@@ -129,7 +221,7 @@ export async function waitForCardDeploymentVerification(prepared, {
     if (attempt > 0) await sleep(intervalMs);
     try {
       const evidence = await readEvidence();
-      last = verifyCardDeployment(prepared, evidence);
+      last = verifyCardDeployment(prepared, evidence, { requireReady });
       if (last.ok) return last;
       if (last.reason === 'card-mismatch') {
         throw new Error(`Wrong card answered during verification. Expected ${prepared.cardId}.`);
@@ -142,6 +234,34 @@ export async function waitForCardDeploymentVerification(prepared, {
   const error = new Error('The card did not verify the exact installed project. Studio still shows the previous installed state.');
   error.reason = last.reason;
   throw error;
+}
+
+function exactText(left, right) {
+  const a = String(left ?? '').trim();
+  const b = String(right ?? '').trim();
+  return Boolean(a) && a === b;
+}
+
+function exactNumber(left, right) {
+  const a = Number(left);
+  const b = Number(right);
+  return Number.isFinite(a) && Number.isFinite(b) && a === b;
+}
+
+function optionalIdentityMatches(left, right) {
+  const a = left.map(value => String(value ?? '').trim().toLowerCase());
+  const b = right.map(value => String(value ?? '').trim().toLowerCase());
+  if (![...a, ...b].some(Boolean)) return true;
+  return a.every((value, index) => Boolean(value) && value === b[index]);
+}
+
+function optionalWiringIdentityMatches(config, status) {
+  const leftRevision = Number(config.wiringRevision || 0);
+  const rightRevision = Number(status.wiringRevision || 0);
+  const leftDigest = String(config.wiringDigest || '').trim().toLowerCase();
+  const rightDigest = String(status.wiringDigest || '').trim().toLowerCase();
+  if (!leftRevision && !rightRevision && !leftDigest && !rightDigest) return true;
+  return leftRevision > 0 && leftRevision === rightRevision && Boolean(leftDigest) && leftDigest === rightDigest;
 }
 
 function hardwareFacts(config = {}) {

@@ -670,6 +670,7 @@ function CardOverview({
       replacementCommitted = true;
       const associationResult = await onMatchedProjectLoaded?.({
         source: resolved.source,
+        expectedMarker: result.marker,
         recordId: resolved.recordId,
         recordSnapshot: resolved.source === 'browser'
           ? { recordId: resolved.recordId, record: resolved.candidate }

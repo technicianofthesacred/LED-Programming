@@ -93,12 +93,13 @@ function bridgeReplyFailed(reply) {
 export function createBridgeFrameTransport(host = '') {
   return {
     kind: 'bridge',
-    async sendFrame(pixels, seg) {
+    async sendFrame(pixels, seg, { isCurrent = () => true } = {}) {
       const chunks = chunkFramePixels(pixels);
       if (!chunks.length) return { ok: true };
       const segField = Number.isInteger(seg) ? { seg } : {};
 
       if (chunks.length > 1 && getCardBridgeVersion() < FRAME_CHUNK_BRIDGE_VERSION) {
+        if (!isCurrent()) return { ok: true, fenced: true };
         // Shipped firmware (relay v≤2) drops 'start', so only the head of the
         // strip can be driven. Send that head — the owner still sees living
         // light — and report the truncation. Never silently drop the tail,
@@ -120,6 +121,7 @@ export function createBridgeFrameTransport(host = '') {
 
       let lastReply = null;
       for (const chunk of chunks) {
+        if (!isCurrent()) return { ok: true, fenced: true };
         // Sequential and AWAITED. The relay holds a single pending-frame slot
         // and only replies relayed:true after WebSocket.send returns, so
         // waiting for each ack is what guarantees the slot is empty before the
@@ -228,8 +230,9 @@ export function createDirectFrameTransport(host = '', { WebSocketImpl, fetchImpl
 
   return {
     kind: 'direct',
-    async sendFrame(pixels, seg) {
+    async sendFrame(pixels, seg, { isCurrent = () => true } = {}) {
       const socket = await openSocket();
+      if (!isCurrent()) return { ok: true, fenced: true };
       // Congestion is judged ONCE per frame, before chunk 0 — never between
       // chunks. A frame that has begun must finish, or the card would render
       // the head of one frame spliced onto the tail of another.
@@ -241,6 +244,7 @@ export function createDirectFrameTransport(host = '', { WebSocketImpl, fetchImpl
       // offset (LightweaverWledWebSocket.cpp:76), so direct chunking needs no
       // firmware update.
       for (const chunk of chunkFramePixels(pixels)) {
+        if (!isCurrent()) return { ok: true, fenced: true };
         socket.send(JSON.stringify(frameChunkPayload(chunk, seg)));
       }
       return { ok: true };
@@ -403,6 +407,7 @@ export function createCardFrameStream({
   seg = undefined,
   transport = null,
   keepaliveMs = FRAME_KEEPALIVE_MS,
+  canSendFrame = () => true,
   onHealth = null,
   ownershipCoordinator = defaultFrameOwnershipCoordinator,
   setIntervalImpl = (...args) => setInterval(...args),
@@ -423,7 +428,9 @@ export function createCardFrameStream({
   let transportClosed = false;
   let latest = null;
   let latestDirty = false;
-  let inflight = false;
+  let inflightPromise = null;
+  let sendGeneration = 0;
+  let stoppingPromise = null;
   let lastSentAt = 0;
   let lastDeliveredAt = 0;
   let sentFrames = 0;
@@ -498,6 +505,7 @@ export function createCardFrameStream({
     if (yielded) return;
     yielded = true;
     active = false;
+    sendGeneration += 1;
     if (timer !== null) { clearIntervalImpl(timer); timer = null; }
     latest = null;
     latestDirty = false;
@@ -515,48 +523,59 @@ export function createCardFrameStream({
   }
 
   async function pump() {
-    if (!active || inflight) return;
+    if (!active || inflightPromise || !canSendFrame()) return;
     const idleTooLong = latest && (now() - lastSentAt) >= keepaliveMs;
     if (!latestDirty && !idleTooLong) return;
     const frame = latest;
     latestDirty = false;
-    inflight = true;
-    try {
-      const result = await wire.sendFrame(frame, seg);
-      // A newer same-host stream may claim ownership while this send is in
-      // flight. Its acknowledgement must not revive or mark this stream
-      // healthy after it has yielded.
-      if (!active || yielded || (ownership && !ownership.isOwner())) return;
-      if (result?.dropped === true) {
-        droppedFrames += 1;
-        const error = new Error('The newest frame was dropped because the card connection is congested.');
-        error.reason = result.reason || 'transport-congested';
-        noteFailure(error);
-      } else if (result && (result.ok === false || result.relayed === false || result.delivered === false)) {
-        const error = new Error(result.error || 'The card page did not relay the frame to the LEDs.');
-        error.reason = result.reason || (result.wsOpen === false ? 'relay-socket-closed' : 'relay-send-failed');
-        noteFailure(error);
-      } else if (result && result.wsOpen === false) {
-        // F1 contract: the relay accepted the postMessage but its socket to
-        // the card was closed — the frame did NOT reach the LEDs.
-        const error = new Error('The card page could not reach the card (its socket to the card is closed).');
-        error.reason = 'relay-socket-closed';
-        noteFailure(error);
-      } else {
-        lastSentAt = now();
-        lastDeliveredAt = lastSentAt;
-        sentFrames += 1;
-        lastError = null;
-        consecutiveFailures = 0;
-        failingSince = 0;
-        noteTruncation(result);
+    const generation = sendGeneration;
+    const isCurrent = () => active
+      && !yielded
+      && generation === sendGeneration
+      && canSendFrame()
+      && (!ownership || ownership.isOwner());
+    const send = (async () => {
+      try {
+        const result = await wire.sendFrame(frame, seg, { isCurrent });
+        // A newer same-host stream may claim ownership while this send is in
+        // flight. Its acknowledgement must not revive or mark this stream
+        // healthy after it has yielded.
+        if (!isCurrent() || result?.fenced === true) return;
+        if (result?.dropped === true) {
+          droppedFrames += 1;
+          const error = new Error('The newest frame was dropped because the card connection is congested.');
+          error.reason = result.reason || 'transport-congested';
+          noteFailure(error);
+        } else if (result && (result.ok === false || result.relayed === false || result.delivered === false)) {
+          const error = new Error(result.error || 'The card page did not relay the frame to the LEDs.');
+          error.reason = result.reason || (result.wsOpen === false ? 'relay-socket-closed' : 'relay-send-failed');
+          noteFailure(error);
+        } else if (result && result.wsOpen === false) {
+          // F1 contract: the relay accepted the postMessage but its socket to
+          // the card was closed — the frame did NOT reach the LEDs.
+          const error = new Error('The card page could not reach the card (its socket to the card is closed).');
+          error.reason = 'relay-socket-closed';
+          noteFailure(error);
+        } else {
+          lastSentAt = now();
+          lastDeliveredAt = lastSentAt;
+          sentFrames += 1;
+          lastError = null;
+          consecutiveFailures = 0;
+          failingSince = 0;
+          noteTruncation(result);
+        }
+      } catch (error) {
+        if (isCurrent()) noteFailure(error);
       }
-    } catch (error) {
-      noteFailure(error);
+      if (isCurrent()) emitHealth();
+    })();
+    inflightPromise = send;
+    try {
+      await send;
     } finally {
-      inflight = false;
+      if (inflightPromise === send) inflightPromise = null;
     }
-    emitHealth();
   }
 
   function start() {
@@ -583,15 +602,18 @@ export function createCardFrameStream({
     return true;
   }
 
-  async function stop() {
+  function stop() {
+    if (stoppingPromise) return stoppingPromise;
     if (!active) {
       ownership?.release?.();
       ownership = null;
       closeTransport();
-      return;
+      return Promise.resolve();
     }
     const ownsCard = ownership?.isOwner?.() ?? true;
+    const pendingSend = inflightPromise;
     active = false;
+    sendGeneration += 1;
     if (timer !== null) { clearIntervalImpl(timer); timer = null; }
     latest = null;
     latestDirty = false;
@@ -599,13 +621,20 @@ export function createCardFrameStream({
     ownership = null;
     // Release the card's frame-source claim so its own pattern resumes —
     // the existing control path, never a bespoke stop message.
-    try {
-      if (ownsCard) await wire.sendCancel();
-    } catch (error) {
-      lastError = error;
-    } finally {
-      closeTransport();
-    }
+    stoppingPromise = (async () => {
+      try {
+        // Anything already posted to the wire must settle before cancel. The
+        // generation/authority fence prevents later chunks from following it,
+        // and this ordering guarantees cancel is the last command to land.
+        if (pendingSend) await pendingSend;
+        if (ownsCard) await wire.sendCancel();
+      } catch (error) {
+        lastError = error;
+      } finally {
+        closeTransport();
+      }
+    })();
+    return stoppingPromise;
   }
 
   return {

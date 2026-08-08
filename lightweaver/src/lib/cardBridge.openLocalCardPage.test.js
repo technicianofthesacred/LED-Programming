@@ -5,8 +5,10 @@ import {
   CARD_BRIDGE_WINDOW_NAME,
   bootstrapCardBridgeFromOpener,
   getCardBridgeState,
+  acquireCardBridgeFromGesture,
   openCardBridge,
   openLocalCardPage,
+  reserveCardBridgeWindow,
   retargetCardBridge,
   sendCardBridgeRequest,
 } from './cardBridge.js';
@@ -31,7 +33,7 @@ function stubWindow({ openResult } = {}) {
     removeEventListener(type, listener) {
       if (listeners.get(type) === listener) listeners.delete(type);
     },
-    dispatchEvent() {},
+    dispatchEvent(event) { listeners.get(event.type)?.(event); },
     open(url, name) {
       opened.push({ url, name });
       return openResult;
@@ -97,6 +99,163 @@ test('a blocked popup reports popup-blocked so callers can show the visible copy
   assert.deepEqual(openLocalCardPage('192.168.50.3'), { ok: false, reason: 'popup-blocked' });
   assert.equal(opened.length, 1);
   assert.equal(opened[0].name, CARD_BRIDGE_WINDOW_NAME);
+});
+
+test('a gesture-reserved card window navigates to a discovered host without a second popup and waits for verification', async () => {
+  const host = '192.168.50.83';
+  const tab = fakeCardTab();
+  const { opened, emitMessage } = stubWindow({ openResult: tab });
+  tab.postMessage = message => {
+    if (message.type !== 'firmware-info') return;
+    setTimeout(() => emitMessage({
+      origin: `http://${host}`,
+      source: tab,
+      data: {
+        app: 'LightweaverCardBridge', id: message.id, ok: true, version: 2,
+        response: { cardId: 'lw-discovered-83', firmwareVersion: '1.0.0', buildId: 'build-83' },
+      },
+    }), 0);
+  };
+
+  const reserved = reserveCardBridgeWindow();
+  assert.equal(reserved, tab, 'the user gesture reserves the stable named tab');
+  assert.deepEqual(opened, [{ url: '', name: CARD_BRIDGE_WINDOW_NAME }]);
+
+  const attempt = acquireCardBridgeFromGesture(host, {
+    reservedWindow: reserved,
+    acceptDiscovered: true,
+    timeoutMs: 100,
+  });
+  assert.equal(attempt.window, tab);
+  assert.equal(opened.length, 1, 'the verified target reuses the gesture-reserved WindowProxy');
+  assert.equal(new URL(tab.location.href).origin, `http://${host}`);
+
+  emitMessage({
+    origin: `http://${host}`,
+    source: tab,
+    data: { app: 'LightweaverCardBridge', type: 'ready', host, version: 2 },
+  });
+  const state = await attempt.ready;
+  assert.equal(state.verified, true);
+  assert.equal(state.discoveredCard?.id, 'lw-discovered-83');
+});
+
+test('discovery acquisition rejects a valid wrong-card identity before accepting discovered evidence', async () => {
+  const host = '192.168.50.86';
+  const tab = fakeCardTab();
+  const { values, emitMessage } = stubWindow({ openResult: tab });
+  values.set('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-expected-86' }));
+  tab.postMessage = message => {
+    if (message.type !== 'firmware-info') return;
+    setTimeout(() => emitMessage({
+      origin: `http://${host}`,
+      source: tab,
+      data: {
+        app: 'LightweaverCardBridge', id: message.id, ok: true, version: 2,
+        response: { cardId: 'lw-wrong-86', firmwareVersion: '1.0.0', buildId: 'build-wrong-86' },
+      },
+    }), 0);
+  };
+
+  const reserved = reserveCardBridgeWindow();
+  const attempt = acquireCardBridgeFromGesture(host, {
+    reservedWindow: reserved,
+    acceptDiscovered: true,
+    timeoutMs: 100,
+  });
+  emitMessage({
+    origin: `http://${host}`,
+    source: tab,
+    data: { app: 'LightweaverCardBridge', type: 'ready', host, version: 2 },
+  });
+
+  await assert.rejects(attempt.ready, error => error?.reason === 'wrong-card');
+  assert.equal(getCardBridgeState().discoveredCard?.id, 'lw-wrong-86');
+  assert.equal(getCardBridgeState().identityVerified, false);
+});
+
+test('discovery acquisition re-reads identity paired after reservation before accepting the ready card', async () => {
+  const host = '192.168.50.87';
+  const tab = fakeCardTab();
+  const { values, emitMessage } = stubWindow({ openResult: tab });
+  tab.postMessage = message => {
+    if (message.type !== 'firmware-info') return;
+    setTimeout(() => emitMessage({
+      origin: `http://${host}`,
+      source: tab,
+      data: {
+        app: 'LightweaverCardBridge', id: message.id, ok: true, version: 2,
+        response: { cardId: 'lw-found-87', firmwareVersion: '1.0.0', buildId: 'build-found-87' },
+      },
+    }), 0);
+  };
+
+  const reserved = reserveCardBridgeWindow();
+  const attempt = acquireCardBridgeFromGesture(host, {
+    reservedWindow: reserved,
+    acceptDiscovered: true,
+    timeoutMs: 100,
+  });
+  values.set('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-newly-paired-elsewhere' }));
+  emitMessage({
+    origin: `http://${host}`,
+    source: tab,
+    data: { app: 'LightweaverCardBridge', type: 'ready', host, version: 2 },
+  });
+
+  await assert.rejects(attempt.ready, error => error?.reason === 'wrong-card');
+  assert.equal(getCardBridgeState().discoveredCard?.id, 'lw-found-87');
+});
+
+test('reserving the named card window revokes prior bridge command authority', async () => {
+  const host = '192.168.50.84';
+  const tab = fakeCardTab();
+  const { values, emitMessage } = stubWindow({ openResult: tab });
+  values.set('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-reserved-84' }));
+  tab.postMessage = message => {
+    if (message.type !== 'firmware-info') return;
+    setTimeout(() => emitMessage({
+      origin: `http://${host}`,
+      source: tab,
+      data: {
+        app: 'LightweaverCardBridge', id: message.id, ok: true, version: 2,
+        response: { cardId: 'lw-reserved-84', firmwareVersion: '1.0.0', buildId: 'build-84' },
+      },
+    }), 0);
+  };
+  openLocalCardPage(host);
+  emitMessage({
+    origin: `http://${host}`,
+    source: tab,
+    data: { app: 'LightweaverCardBridge', type: 'ready', host, version: 2 },
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(getCardBridgeState().identityVerified, true);
+
+  reserveCardBridgeWindow();
+  assert.equal(getCardBridgeState().identityVerified, false);
+  assert.equal(getCardBridgeState().verified, false);
+
+  emitMessage({
+    origin: `http://${host}`,
+    source: tab,
+    data: { app: 'LightweaverCardBridge', type: 'ready', host, version: 2 },
+  });
+  assert.equal(getCardBridgeState().verified, false,
+    'a late ready from the outgoing page cannot reauthorize the blank reservation');
+});
+
+test('a reserved window closed during discovery reports bridge-closed instead of popup-blocked', async () => {
+  const tab = fakeCardTab();
+  stubWindow({ openResult: tab });
+  const reserved = reserveCardBridgeWindow();
+  tab.closed = true;
+  const attempt = acquireCardBridgeFromGesture('192.168.50.85', {
+    reservedWindow: reserved,
+    acceptDiscovered: true,
+    timeoutMs: 25,
+  });
+  await assert.rejects(attempt.ready, error => error?.reason === 'bridge-closed');
 });
 
 test('an ordinary card-page click opens the visible page in bridge mode for the current Studio origin', () => {

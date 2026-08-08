@@ -388,6 +388,43 @@ test('guarded association stores only the exact caller-held record revision', as
   );
 });
 
+test('stale tab cleanup cannot clear a newer guarded association to the same record', async () => {
+  const storage = memoryStorage();
+  const project = { ...createDefaultProject(), id: 'shared-association-project', name: 'Shared target' };
+  saveCurrentProjectToLibrary(project, { storage, id: 'shared-association-record', now: 1000 });
+  writeActiveProjectLibraryRecordId('', { storage });
+  const expectedAssociationSnapshot = projectStorageApi.readProjectLibraryRecordSnapshot(
+    'shared-association-record',
+    { storage },
+  );
+  const lockManager = controlledLockManager();
+
+  const firstPending = projectStorageApi.associateProjectLibraryRecordGuarded(
+    expectedAssociationSnapshot,
+    { storage, lockManager },
+  );
+  await lockManager.runNext();
+  const first = await firstPending;
+
+  const secondPending = projectStorageApi.associateProjectLibraryRecordGuarded(
+    expectedAssociationSnapshot,
+    { storage, lockManager },
+  );
+  await lockManager.runNext();
+  const second = await secondPending;
+  assert.equal(second.ok, true);
+  assert.notEqual(second.associationOwnershipToken, first.associationOwnershipToken);
+
+  const staleCleanup = projectStorageApi.clearProjectLibraryAssociationGuarded({
+    recordId: first.associationSnapshot.recordId,
+    ownershipToken: first.associationOwnershipToken,
+  }, { storage, lockManager });
+  await lockManager.runNext();
+
+  assert.deepEqual(await staleCleanup, { ok: false, reason: 'ownership-changed' });
+  assert.equal(readActiveProjectLibraryRecordId({ storage }), 'shared-association-record');
+});
+
 test('guarded association rejects a record changed while its lock request is queued', async () => {
   const storage = memoryStorage();
   const project = { ...createDefaultProject(), id: 'queued-association-project', name: 'Before queue' };

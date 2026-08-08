@@ -1001,6 +1001,270 @@ test('signed-out Load shows guidance and routes to Preferences without exposing 
   await expect(page.getByTestId('project-library-panel')).toBeVisible();
 });
 
+test('top-bar Load keeps browser saves recoverable after New while signed out', async ({ page }) => {
+  const fixture = new LibraryFixture(null);
+  const savedProject = portable('Browser recovery piece', 'lwproj-browser-recovery');
+  await page.addInitScript((project) => {
+    localStorage.setItem('lw_project_library_v1', JSON.stringify({
+      version: 1,
+      records: [{
+        id: 'browser-recovery-record',
+        name: project.name,
+        createdAt: 1,
+        updatedAt: 2,
+        projectVersion: project.version,
+        project,
+      }],
+    }));
+    localStorage.setItem('lw_project_active_record_v1', 'browser-recovery-record');
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
+    localStorage.setItem('lw_autosave_v3_backup', JSON.stringify(project));
+    localStorage.setItem('lw_project_lifecycle_v1', JSON.stringify({
+      version: 2,
+      dirty: false,
+      persistedDestination: 'browser',
+      installation: {
+        cardId: 'lw-prior-card',
+        projectRevision: 0,
+        projectFingerprint: '0123456789abcdef',
+      },
+    }));
+  }, savedProject);
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'New project' }).click();
+  await page.getByRole('button', { name: 'Load project' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Load project' });
+  await expect(dialog.getByText('Browser recovery piece', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Open Browser recovery piece' }).click();
+
+  await page.getByRole('button', { name: 'Preferences' }).first().click();
+  await expect(page.getByLabel('Project name')).toHaveValue('Browser recovery piece');
+  await expect.poll(() => page.evaluate(() => ({
+    activeRecordId: localStorage.getItem('lw_project_active_record_v1'),
+    lifecycle: JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}'),
+  }))).toEqual({
+    activeRecordId: 'browser-recovery-record',
+    lifecycle: {
+      version: 2,
+      dirty: false,
+      persistedDestination: 'browser',
+      installation: null,
+    },
+  });
+});
+
+test('claimed browser records remain available to signed-out Save, New, and Load', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  const savedProject = portable('Claimed browser piece', 'lwproj-claimed-browser');
+  await page.addInitScript((project) => {
+    const record = {
+      id: 'claimed-browser-record',
+      name: project.name,
+      createdAt: 1,
+      updatedAt: 2,
+      projectVersion: project.version,
+      project,
+    };
+    localStorage.setItem('lw_project_library_v1', JSON.stringify({ version: 1, records: [record] }));
+    localStorage.setItem('lw_project_active_record_v1', record.id);
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
+    localStorage.setItem('lw_autosave_v3_backup', JSON.stringify(project));
+    localStorage.setItem('lw_project_lifecycle_v1', JSON.stringify({
+      version: 2,
+      dirty: false,
+      persistedDestination: 'browser',
+      installation: null,
+    }));
+  }, savedProject);
+  await fixture.install(page);
+  await openLibrary(page);
+
+  await page.getByRole('button', { name: 'Bring browser projects online' }).click();
+  await expect(page.getByText('1 browser project brought online')).toBeVisible();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
+
+  await page.getByLabel('Project name').fill('Claimed browser piece revised');
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (
+    JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records?.[0]?.name
+  ))).toBe('Claimed browser piece revised');
+
+  await page.getByRole('button', { name: 'New project' }).click();
+  await page.getByRole('button', { name: 'Load project' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Load project' });
+  await expect(dialog.getByText('Claimed browser piece revised', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Open Claimed browser piece revised' }).click();
+
+  await expect(page.locator('.crumb .proj')).toHaveText('Claimed browser piece revised');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_project_active_record_v1')))
+    .toBe('claimed-browser-record');
+});
+
+test('browser Load keeps Save fail-closed when its guarded association goes stale', async ({ page }) => {
+  const fixture = new LibraryFixture(null);
+  const savedProject = portable('Stale association target', 'lwproj-stale-association');
+  await page.addInitScript((project) => {
+    localStorage.setItem('lw_project_library_v1', JSON.stringify({
+      version: 1,
+      records: [{
+        id: 'stale-association-record',
+        name: project.name,
+        createdAt: 1,
+        updatedAt: 2,
+        projectVersion: project.version,
+        project,
+      }],
+    }));
+  }, savedProject);
+  await fixture.install(page);
+  await page.goto('/#screen=card&section=preferences', { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('Project name').fill('Unsaved current work');
+
+  await page.getByRole('button', { name: 'Load project' }).click();
+  await page.getByRole('dialog', { name: 'Load project' })
+    .getByRole('button', { name: 'Open Stale association target' }).click();
+  const confirmation = page.getByRole('dialog', { name: 'Replace current project?' });
+  await expect(confirmation).toBeVisible();
+  await page.evaluate(() => {
+    const library = JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}');
+    library.records = [];
+    localStorage.setItem('lw_project_library_v1', JSON.stringify(library));
+  });
+  await confirmation.getByRole('button', { name: 'Replace project' }).click();
+  await expect(page.locator('.crumb .proj')).toHaveText('Stale association target');
+
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  await expect(page.getByTestId('workspace-notice')).toContainText(
+    'Saving is blocked because Studio could not establish a safe destination',
+  );
+  await expect.poll(() => page.evaluate(() => (
+    JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records?.length
+  ))).toBe(0);
+
+  await page.getByRole('button', { name: 'New project' }).click();
+  const discard = page.getByRole('dialog', { name: 'Replace current project?' });
+  await expect(discard).toBeVisible();
+  await discard.getByRole('button', { name: 'Keep editing' }).click();
+  await expect.poll(() => page.evaluate(() => ({
+    name: JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}').name,
+    dirty: JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').dirty,
+  }))).toEqual({ name: 'Stale association target', dirty: true });
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.crumb .proj')).toHaveText('Stale association target');
+});
+
+test('association failure remains fail-closed after reload and cannot overwrite a newer same-project record', async ({ page }) => {
+  const fixture = new LibraryFixture(null);
+  const savedProject = portable('Recovery before association', 'lwproj-reload-association');
+  await page.addInitScript((project) => {
+    if (sessionStorage.getItem('reload-association-seeded') === 'true') return;
+    sessionStorage.setItem('reload-association-seeded', 'true');
+    localStorage.setItem('lw_project_library_v1', JSON.stringify({
+      version: 1,
+      records: [{
+        id: 'reload-association-record',
+        name: project.name,
+        createdAt: 1,
+        updatedAt: 2,
+        projectVersion: project.version,
+        project,
+      }],
+    }));
+    localStorage.setItem('lw_project_active_record_v1', 'reload-association-record');
+  }, savedProject);
+  await fixture.install(page);
+  await page.goto('/#screen=card&section=preferences', { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('Project name').fill('Unsaved workspace before recovery');
+
+  await page.getByRole('button', { name: 'Load project' }).click();
+  await page.getByRole('dialog', { name: 'Load project' })
+    .getByRole('button', { name: 'Open Recovery before association' }).click();
+  const confirmation = page.getByRole('dialog', { name: 'Replace current project?' });
+  await expect(confirmation).toBeVisible();
+  await page.evaluate(() => {
+    const library = JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}');
+    const record = library.records[0];
+    record.name = 'Newer cross-tab revision';
+    record.project.name = record.name;
+    record.updatedAt = 3;
+    localStorage.setItem('lw_project_library_v1', JSON.stringify(library));
+  });
+  await expect.poll(() => page.evaluate(() => {
+    const record = JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records?.[0];
+    return { name: record?.name, updatedAt: record?.updatedAt };
+  })).toEqual({ name: 'Newer cross-tab revision', updatedAt: 3 });
+  await confirmation.getByRole('button', { name: 'Replace project' }).click();
+  await expect.poll(() => page.evaluate(() => ({
+    name: JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}').name,
+    dirty: JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}').dirty,
+  }))).toEqual({ name: 'Recovery before association', dirty: true });
+  await expect.poll(() => page.evaluate(() => {
+    const record = JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records?.[0];
+    return { name: record?.name, updatedAt: record?.updatedAt };
+  })).toEqual({ name: 'Newer cross-tab revision', updatedAt: 3 });
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.crumb .proj')).toHaveText('Recovery before association');
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  await expect(page.getByTestId('workspace-notice')).toContainText('Saving is blocked');
+  await expect.poll(() => page.evaluate(() => {
+    const record = JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records?.[0];
+    return { name: record?.name, updatedAt: record?.updatedAt };
+  })).toEqual({ name: 'Newer cross-tab revision', updatedAt: 3 });
+});
+
+test('late browser association cannot attach to a superseding New workspace', async ({ page }) => {
+  const fixture = new LibraryFixture(null);
+  const savedProject = portable('Held association target', 'lwproj-held-association');
+  await page.addInitScript((project) => {
+    localStorage.setItem('lw_project_library_v1', JSON.stringify({
+      version: 1,
+      records: [{
+        id: 'held-association-record',
+        name: project.name,
+        createdAt: 1,
+        updatedAt: 2,
+        projectVersion: project.version,
+        project,
+      }],
+    }));
+  }, savedProject);
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    let release;
+    (window as any).__heldProjectLockReady = false;
+    (window as any).__releaseHeldProjectLock = () => release?.();
+    (window as any).__heldProjectLock = navigator.locks.request(
+      'lightweaver-project-library-save-v1',
+      async () => {
+        (window as any).__heldProjectLockReady = true;
+        await new Promise(resolve => { release = resolve; });
+      },
+    );
+  });
+  await expect.poll(() => page.evaluate(() => (window as any).__heldProjectLockReady)).toBe(true);
+
+  await page.getByRole('button', { name: 'Load project' }).click();
+  await page.getByRole('dialog', { name: 'Load project' })
+    .getByRole('button', { name: 'Open Held association target' }).click();
+  await expect(page.locator('.crumb .proj')).toHaveText('Held association target');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await expect(page.locator('.crumb .proj')).not.toHaveText('Held association target');
+
+  await page.evaluate(() => (window as any).__releaseHeldProjectLock());
+  await page.evaluate(() => (window as any).__heldProjectLock);
+  await expect(page.locator('.crumb .proj')).not.toHaveText('Held association target');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_project_active_record_v1'))).toBeNull();
+
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  await expect(page.getByTestId('workspace-notice')).not.toContainText('Saving is blocked');
+});
+
 test('Load closes with Escape and restores focus to the top-bar action', async ({ page }) => {
   const fixture = new LibraryFixture('worker');
   fixture.seed('Focus Study');

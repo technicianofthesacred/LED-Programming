@@ -83,7 +83,7 @@ async function renderProjectSwitchCardHarness(page, mode: 'offline' | 'duplicate
     let releaseInitialEvidence;
     let initialEvidenceHeld = false;
     let shouldHoldInitialEvidence = scenario === 'cloud-late';
-    const calls = { save: 0, replace: 0, open: 0, association: 0, openOptions: null };
+    const calls = { save: 0, replace: 0, open: 0, association: 0, associationMarker: null, openOptions: null };
     const originalFetch = window.fetch.bind(window);
     window.fetch = async (input, init) => {
       const url = String(input instanceof Request ? input.url : input);
@@ -174,7 +174,10 @@ async function renderProjectSwitchCardHarness(page, mode: 'offline' | 'duplicate
       cardLink,
       onConnectCard: () => {},
       onOpenSection: () => {},
-      replaceProject: async () => { calls.replace += 1; return { ok: true }; },
+      replaceProject: async () => {
+        calls.replace += 1;
+        return { ok: true, marker: { generation: 8, revision: 0 } };
+      },
       currentProject: current,
       projectGeneration: 7,
       activeCloudProjects: cloudScenario && scenario !== 'cloud-late' ? [cloudRecord] : [],
@@ -186,8 +189,9 @@ async function renderProjectSwitchCardHarness(page, mode: 'offline' | 'duplicate
       openMatchingCardProject,
       saveBeforeCardProjectSwitch,
       isProjectSwitchSnapshotCurrent: () => scenario !== 'changed',
-      onMatchedProjectLoaded: () => {
+      onMatchedProjectLoaded: input => {
         calls.association += 1;
+        calls.associationMarker = input?.expectedMarker || null;
         return scenario === 'association-failure'
           ? { ok: false, reason: 'association-handoff-failed' }
           : { ok: true };
@@ -1139,7 +1143,7 @@ test('Card project switch hands off persistence association before post-replacem
   await region.getByRole('button', { name: /^Load / }).click();
 
   await expect.poll(() => page.evaluate(() => (window as any).__projectSwitchHarness.calls)).toMatchObject({
-    save: 1, replace: 1, association: 1,
+    save: 1, replace: 1, association: 1, associationMarker: { generation: 8, revision: 0 },
   });
   await expect(page).toHaveURL(/#screen=card&section=overview$/);
   await page.evaluate(() => (window as any).__projectSwitchHarness.releasePostReplaceRead());
@@ -1186,7 +1190,8 @@ test('duplicate project switch activation runs one save and one replacement', as
   });
   await page.evaluate(() => (window as any).__projectSwitchHarness.releaseSave());
   await expect.poll(() => page.evaluate(() => (window as any).__projectSwitchHarness.calls)).toEqual({
-    save: 1, replace: 1, open: 0, association: 1, openOptions: null,
+    save: 1, replace: 1, open: 0, association: 1,
+    associationMarker: { generation: 8, revision: 0 }, openOptions: null,
   });
   await expect(page).toHaveURL(/#screen=pattern$/);
 });

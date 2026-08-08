@@ -13,6 +13,7 @@ import { prepareCardDeployment } from '../lib/cardDeployment.js';
 import { getCardHostname, CardPushError } from '../lib/cardPushClient.js';
 import { deploySetupToCard } from '../lib/cardSetupDeploy.js';
 import { sweepKnownSubnetsForCard } from '../lib/cardConnection.js';
+import { acquireCardBridgeFromGesture, cancelReservedCardBridgeWindow, reserveCardBridgeWindow } from '../lib/cardBridge.js';
 import { sampleStripPixels } from '../lib/layoutGeometry.js';
 import { planStripCountShares, shouldRescaleDrawing } from '../lib/designCapacity.js';
 import { buildBenchConfig } from '../lib/benchConfig.js';
@@ -81,6 +82,7 @@ export function SetupScreen({
   // the only expanded row is the one they still have to do.
   const [openStepId, setOpenStepId] = useState('');
   const [finding, setFinding] = useState({ busy: false, message: '' });
+  const findRequestRef = useRef({ generation: 0, reservedWindow: null });
   const [colourProbe, setColourProbe] = useState({ busy: false, lit: false, message: '' });
   const [seenOrder, setSeenOrder] = useState(() => COLOUR_PROBE_BLOCKS.map(block => block.id));
   const resolveInputsRef = useRef({ currentProject, activeCloudProjects, browserProjects });
@@ -94,6 +96,12 @@ export function SetupScreen({
       window.removeEventListener('storage', sync);
       window.removeEventListener(CARD_COMMISSIONING_CHANGED_EVENT, sync);
     };
+  }, []);
+
+  useEffect(() => () => {
+    const active = findRequestRef.current;
+    findRequestRef.current = { generation: active.generation + 1, reservedWindow: null };
+    cancelReservedCardBridgeWindow(active.reservedWindow);
   }, []);
 
   // Read the card's evidence once it is connected, then classify it: bench
@@ -210,22 +218,76 @@ export function SetupScreen({
   // Home routers move addresses on a lease, so every remembered address can be
   // stale at once; this searches the networks the card has answered on before.
   const findMyCard = async () => {
+    const previous = findRequestRef.current;
+    cancelReservedCardBridgeWindow(previous.reservedWindow);
+    const generation = previous.generation + 1;
+    // Chromium grants popup permission only for this synchronous click stack.
+    // Hold the named tab now, then move this exact WindowProxy to the verified
+    // address once the read-only subnet sweep returns.
+    const reservedWindow = reserveCardBridgeWindow();
+    findRequestRef.current = { generation, reservedWindow };
+    const isCurrent = () => findRequestRef.current.generation === generation;
+    const releaseReservation = () => {
+      cancelReservedCardBridgeWindow(reservedWindow);
+      if (isCurrent()) findRequestRef.current = { generation, reservedWindow: null };
+    };
+    if (!reservedWindow) {
+      if (isCurrent()) setFinding({ busy: false, message: 'Allow the Lightweaver card window, then try again.' });
+      return;
+    }
     setFinding({ busy: true, message: 'Looking for your card on your network…' });
+    let found = null;
     try {
-      const found = await sweepKnownSubnetsForCard({
-        onProgress: message => setFinding({ busy: true, message }),
+      found = await sweepKnownSubnetsForCard({
+        onProgress: message => {
+          if (isCurrent()) setFinding({ busy: true, message });
+        },
       });
-      if (found) {
-        setFinding({ busy: false, message: `Found it at ${found.host}. Connecting…` });
-        onOpenConnectionCenter?.();
-        return;
-      }
+    } catch {
+      if (!isCurrent()) return;
+      releaseReservation();
+      setFinding({
+        busy: false,
+        message: 'Could not search your network from here. Connect by hand instead.',
+      });
+      return;
+    }
+    if (!isCurrent()) {
+      releaseReservation();
+      return;
+    }
+    if (!found) {
+      releaseReservation();
       setFinding({
         busy: false,
         message: 'No card answered on your network. Check it is powered on and on the same Wi-Fi as this computer.',
       });
-    } catch {
-      setFinding({ busy: false, message: 'Could not search your network from here. Connect by hand instead.' });
+      return;
+    }
+    setFinding({ busy: true, message: `Found it at ${found.host}. Connecting…` });
+    try {
+      const attempt = acquireCardBridgeFromGesture(found.host, {
+        reservedWindow,
+        acceptDiscovered: true,
+        timeoutMs: 15000,
+      });
+      findRequestRef.current = { generation, reservedWindow: null };
+      await attempt.ready;
+      if (!isCurrent()) return;
+      setFinding({ busy: false, message: `Found it at ${found.host}. Connected.` });
+      onOpenConnectionCenter?.();
+    } catch (error) {
+      if (!isCurrent()) return;
+      releaseReservation();
+      const reason = String(error?.reason || '');
+      const message = reason === 'popup-blocked'
+        ? 'Allow the Lightweaver card window, then try again.'
+        : reason === 'bridge-closed'
+          ? 'The card was found, but its reserved window was closed. Try Find my card again.'
+          : reason === 'bridge-timeout'
+            ? 'The card was found, but its page did not answer Studio. Check the card window and try again.'
+            : 'The card was found, but Studio could not verify its identity. Connect by hand instead.';
+      setFinding({ busy: false, message });
     }
   };
 
