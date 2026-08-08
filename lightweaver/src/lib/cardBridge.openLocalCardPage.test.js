@@ -170,6 +170,19 @@ test('reserving the named card window revokes prior bridge command authority', a
   assert.equal(getCardBridgeState().verified, false);
 });
 
+test('a reserved window closed during discovery reports bridge-closed instead of popup-blocked', async () => {
+  const tab = fakeCardTab();
+  stubWindow({ openResult: tab });
+  const reserved = reserveCardBridgeWindow();
+  tab.closed = true;
+  const attempt = acquireCardBridgeFromGesture('192.168.50.85', {
+    reservedWindow: reserved,
+    acceptDiscovered: true,
+    timeoutMs: 25,
+  });
+  await assert.rejects(attempt.ready, error => error?.reason === 'bridge-closed');
+});
+
 test('an ordinary card-page click opens the visible page in bridge mode for the current Studio origin', () => {
   const tab = fakeCardTab();
   const { win, opened } = stubWindow({ openResult: tab });

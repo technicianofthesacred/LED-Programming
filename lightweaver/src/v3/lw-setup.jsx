@@ -220,32 +220,45 @@ export function SetupScreen({
       return;
     }
     setFinding({ busy: true, message: 'Looking for your card on your network…' });
+    let found = null;
     try {
-      const found = await sweepKnownSubnetsForCard({
+      found = await sweepKnownSubnetsForCard({
         onProgress: message => setFinding({ busy: true, message }),
       });
-      if (found) {
-        setFinding({ busy: false, message: `Found it at ${found.host}. Connecting…` });
-        const attempt = acquireCardBridgeFromGesture(found.host, {
-          reservedWindow,
-          acceptDiscovered: true,
-          timeoutMs: 15000,
-        });
-        await attempt.ready;
-        onOpenConnectionCenter?.();
-        return;
-      }
+    } catch {
+      setFinding({
+        busy: false,
+        message: 'Could not search your network from here. Connect by hand instead.',
+      });
+      return;
+    }
+    if (!found) {
       setFinding({
         busy: false,
         message: 'No card answered on your network. Check it is powered on and on the same Wi-Fi as this computer.',
       });
-    } catch (error) {
-      setFinding({
-        busy: false,
-        message: error?.reason === 'popup-blocked'
-          ? 'Allow the Lightweaver card window, then try again.'
-          : 'Could not search your network from here. Connect by hand instead.',
+      return;
+    }
+    setFinding({ busy: true, message: `Found it at ${found.host}. Connecting…` });
+    try {
+      const attempt = acquireCardBridgeFromGesture(found.host, {
+        reservedWindow,
+        acceptDiscovered: true,
+        timeoutMs: 15000,
       });
+      await attempt.ready;
+      setFinding({ busy: false, message: `Found it at ${found.host}. Connected.` });
+      onOpenConnectionCenter?.();
+    } catch (error) {
+      const reason = String(error?.reason || '');
+      const message = reason === 'popup-blocked'
+        ? 'Allow the Lightweaver card window, then try again.'
+        : reason === 'bridge-closed'
+          ? 'The card was found, but its reserved window was closed. Try Find my card again.'
+          : reason === 'bridge-timeout'
+            ? 'The card was found, but its page did not answer Studio. Check the card window and try again.'
+            : 'The card was found, but Studio could not verify its identity. Connect by hand instead.';
+      setFinding({ busy: false, message });
     }
   };
 

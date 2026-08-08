@@ -1920,9 +1920,14 @@ export function acquireCardBridgeFromGesture(rawHost = '', {
   attempt.window = opened;
   if (!opened) {
     cleanup();
+    const reservationClosed = Boolean(reservedWindow && bridgeTargetClosed(reservedWindow));
     settle.reject(bridgeError(
-      'Allow the Lightweaver card window, then try the pattern again.',
-      'popup-blocked',
+      reservationClosed
+        ? 'The reserved Lightweaver card window was closed before it could connect.'
+        : reservedWindow
+          ? 'The reserved Lightweaver card window could not navigate to the card.'
+          : 'Allow the Lightweaver card window, then try the pattern again.',
+      reservationClosed ? 'bridge-closed' : reservedWindow ? 'bridge-navigation-failed' : 'popup-blocked',
     ));
     return attempt;
   }
