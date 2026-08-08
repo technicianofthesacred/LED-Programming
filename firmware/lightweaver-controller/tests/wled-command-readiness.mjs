@@ -100,14 +100,17 @@ assert.match(udp.slice(udpGate, udp.indexOf('frameSourceClaim(')), /g_udp\.read\
 
 function assertArtnetReadinessContract(source) {
   const executableSource = maskCommentsAndStrings(source);
-  const artnetGate = executableSource.indexOf('runtimePlaybackReady()');
+  const artnetGateMatch = /if\s*\(\s*!\s*runtimePlaybackReady\s*\(\s*\)\s*\)\s*return\s*;/.exec(
+    executableSource,
+  );
+  const artnetGate = artnetGateMatch?.index ?? -1;
   const artnetPixelValidation = executableSource.indexOf('if (pixelsInPacket == 0) return;');
   const artnetClaim = executableSource.indexOf('frameSourceClaim(');
   const artnetPixelWrite = executableSource.indexOf('dst[i] = CRGB(');
   assert.notEqual(artnetPixelValidation, -1,
     'Art-Net frames must retain packet and pixel range validation');
   assert.notEqual(artnetGate, -1,
-    'Art-Net frames must retain the playback readiness gate');
+    'Art-Net frames must reject while playback readiness is unavailable');
   assert.notEqual(artnetClaim, -1,
     'Art-Net frames must retain their frame ownership claim');
   assert.notEqual(artnetPixelWrite, -1,
@@ -131,6 +134,29 @@ assert.throws(
   () => assertArtnetReadinessContract(commentedArtnetGate),
   /playback readiness/,
   'a commented-out Art-Net readiness gate must not satisfy the source contract',
+);
+
+const wrongPolarityArtnetGate = artnet.replace(
+  'if (!runtimePlaybackReady()) return;',
+  'if (runtimePlaybackReady()) return;',
+);
+assert.notEqual(wrongPolarityArtnetGate, artnet,
+  'Art-Net wrong-polarity mutation fixture must change the source');
+assert.throws(
+  () => assertArtnetReadinessContract(wrongPolarityArtnetGate),
+  /reject while playback readiness is unavailable/,
+  'an inverted Art-Net readiness gate must not satisfy the source contract',
+);
+
+const noOpArtnetGate = artnet.replace(
+  'if (!runtimePlaybackReady()) return;',
+  'runtimePlaybackReady();',
+);
+assert.notEqual(noOpArtnetGate, artnet, 'Art-Net no-op mutation fixture must change the source');
+assert.throws(
+  () => assertArtnetReadinessContract(noOpArtnetGate),
+  /reject while playback readiness is unavailable/,
+  'a no-op Art-Net readiness call must not satisfy the source contract',
 );
 
 const missingArtnetPixelValidation = artnet.replace('if (pixelsInPacket == 0) return;', '');
