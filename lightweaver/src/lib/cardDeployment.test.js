@@ -60,6 +60,42 @@ function mappedProjectFixture() {
   return project;
 }
 
+function preparedResumeIdentity(overrides = {}) {
+  return {
+    cardId: 'lw-aabbccddeeff',
+    buildId: 'build-1123',
+    activationId: 'candidate-7',
+    config: {
+      projectRevision: 7,
+      projectFingerprint: 'a'.repeat(64),
+      productionJobId: 'job-7',
+      productionJobDigest: 'b'.repeat(64),
+      wiringRevision: 3,
+      wiringDigest: 'c'.repeat(64),
+    },
+    ...overrides,
+  };
+}
+
+function matchingCandidate(overrides = {}) {
+  return {
+    app: 'Lightweaver',
+    state: 'staged',
+    candidateState: 'staged',
+    nextStep: 'activate',
+    cardId: 'lw-aabbccddeeff',
+    buildId: 'build-1123',
+    activationId: 'candidate-7',
+    projectRevision: 7,
+    projectFingerprint: 'a'.repeat(64),
+    productionJobId: 'job-7',
+    productionJobDigest: 'b'.repeat(64),
+    wiringRevision: 3,
+    wiringDigest: 'c'.repeat(64),
+    ...overrides,
+  };
+}
+
 test('prepares one canonical package that preserves wiring, playback, power, and calibration', async () => {
   const { prepareCardDeployment } = await deploymentApi();
   const prepared = prepareCardDeployment(projectFixture(), { cardId: 'lw-aabbccddeeff' });
@@ -121,6 +157,81 @@ test('normalizes card status into the same hardware comparison shape', async () 
   assert.equal(classifyCardChanges(previous, prepared).requiresPhysicalTest, false);
 });
 
+test('classifies new, activation, physical-test, and confirmation deployment steps', async () => {
+  const { classifyCardDeploymentResume } = await deploymentApi();
+  const prepared = preparedResumeIdentity();
+
+  assert.equal(classifyCardDeploymentResume(prepared, matchingCandidate({
+    state: 'known-good', candidateState: 'none', activationId: '', nextStep: 'stage-candidate',
+  })), 'stage-new');
+  assert.equal(classifyCardDeploymentResume(prepared, matchingCandidate()), 'resume-activation');
+  assert.equal(classifyCardDeploymentResume(prepared, matchingCandidate({
+    state: 'testing', candidateState: 'testing', nextStep: 'test-physical-lights',
+  })), 'resume-physical-test');
+  assert.equal(classifyCardDeploymentResume(prepared, matchingCandidate({
+    state: 'testing', candidateState: 'booting', nextStep: 'wait-for-card',
+  })), 'resume-physical-test');
+  assert.equal(classifyCardDeploymentResume(prepared, matchingCandidate({
+    state: 'testing', candidateState: 'awaiting-confirmation', nextStep: 'confirm-or-rollback',
+  })), 'resume-confirmation');
+});
+
+test('a candidate-free card must still match the exact card and firmware build before staging', async () => {
+  const { classifyCardDeploymentResume } = await deploymentApi();
+  const status = matchingCandidate({
+    state: 'known-good', candidateState: 'none', activationId: '', nextStep: 'stage-candidate',
+  });
+  assert.equal(classifyCardDeploymentResume(preparedResumeIdentity(), { ...status, cardId: 'lw-other' }), 'candidate-conflict');
+  assert.equal(classifyCardDeploymentResume(preparedResumeIdentity(), { ...status, buildId: 'build-other' }), 'candidate-conflict');
+});
+
+test('conflicts on every exact candidate identity mismatch without mutating inputs', async () => {
+  const { classifyCardDeploymentResume } = await deploymentApi();
+  const prepared = preparedResumeIdentity();
+  const status = matchingCandidate();
+  const before = structuredClone(status);
+  const mismatches = [
+    { cardId: 'lw-other' },
+    { buildId: 'build-other' },
+    { activationId: 'candidate-other' },
+    { projectRevision: 8 },
+    { projectFingerprint: 'd'.repeat(64) },
+    { productionJobId: 'job-other' },
+    { productionJobDigest: 'd'.repeat(64) },
+    { wiringRevision: 4 },
+    { wiringDigest: 'd'.repeat(64) },
+  ];
+  for (const mismatch of mismatches) {
+    assert.equal(
+      classifyCardDeploymentResume(prepared, { ...status, ...mismatch }),
+      'candidate-conflict',
+      `must reject ${Object.keys(mismatch)[0]} mismatch`,
+    );
+  }
+  assert.equal(classifyCardDeploymentResume(prepared, { ...status, activationId: '' }), 'candidate-conflict');
+  assert.deepEqual(status, before, 'classification must remain pure');
+});
+
+test('optional production and wiring identity must match whenever either candidate declares it', async () => {
+  const { classifyCardDeploymentResume } = await deploymentApi();
+  const prepared = preparedResumeIdentity({
+    activationId: '',
+    config: { projectRevision: 7, projectFingerprint: 'a'.repeat(64) },
+  });
+  const ordinary = matchingCandidate({
+    productionJobId: undefined,
+    productionJobDigest: undefined,
+    wiringRevision: 0,
+    wiringDigest: undefined,
+  });
+  assert.equal(classifyCardDeploymentResume(prepared, ordinary), 'resume-activation');
+  assert.equal(classifyCardDeploymentResume(prepared, {
+    ...ordinary,
+    wiringRevision: 3,
+    wiringDigest: 'c'.repeat(64),
+  }), 'candidate-conflict');
+});
+
 test('does not report a deployment installed until exact-card read-back verifies it', async () => {
   const { prepareCardDeployment, runCardDeployment, verifyCardDeployment } = await deploymentApi();
   const initial = prepareCardDeployment(projectFixture(), { cardId: 'lw-aabbccddeeff' });
@@ -132,7 +243,7 @@ test('does not report a deployment installed until exact-card read-back verifies
   let installed = 0;
   const transport = {
     async install() { return { ok: true }; },
-    async readBack() { return { cardId: 'lw-aabbccddeeff', config: structuredClone(prepared.config) }; },
+    async readBack() { return { cardId: 'lw-aabbccddeeff', config: structuredClone(prepared.config), knownGoodProject: true, commandReady: true, playbackReady: true }; },
   };
 
   const result = await runCardDeployment(prepared, transport, {
@@ -149,7 +260,36 @@ test('does not report a deployment installed until exact-card read-back verifies
     cardId: 'lw-aabbccddeeff',
     projectRevision: 7,
     projectFingerprint: 'a'.repeat(64),
+    knownGoodProject: true,
+    commandReady: true,
+    playbackReady: true,
   }).ok, true);
+});
+
+test('installed verification requires exact known-good command and playback readiness', async () => {
+  const { prepareCardDeployment, verifyCardDeployment } = await deploymentApi();
+  const prepared = prepareCardDeployment(projectFixture(), { cardId: 'lw-aabbccddeeff' });
+  const ready = {
+    cardId: prepared.cardId,
+    projectRevision: prepared.config.projectRevision,
+    projectFingerprint: prepared.config.projectFingerprint,
+    knownGoodProject: true,
+    commandReady: true,
+    playbackReady: true,
+  };
+  assert.equal(verifyCardDeployment(prepared, ready, { requireReady: true }).ok, true);
+  for (const field of ['knownGoodProject', 'commandReady', 'playbackReady']) {
+    assert.deepEqual(verifyCardDeployment(prepared, { ...ready, [field]: false }, { requireReady: true }), {
+      ok: false,
+      reason: 'card-not-ready',
+    });
+    const missing = { ...ready };
+    delete missing[field];
+    assert.deepEqual(verifyCardDeployment(prepared, missing, { requireReady: true }), {
+      ok: false,
+      reason: 'card-not-ready',
+    });
+  }
 });
 
 test('requires an explicit hardware confirmation and rolls back when it is declined', async () => {
@@ -177,6 +317,9 @@ test('requires exact applied Kaleidoscope mapping read-back before reporting ins
     cardId: 'lw-aabbccddeeff',
     projectRevision: prepared.config.projectRevision,
     projectFingerprint: prepared.config.projectFingerprint,
+    knownGoodProject: true,
+    commandReady: true,
+    playbackReady: true,
   };
 
   assert.deepEqual(verifyCardDeployment(prepared, identity), { ok: false, reason: 'read-back-mismatch' });
@@ -216,6 +359,9 @@ test('rejects Kaleidoscope read-back whose pixels moved outside the declared zon
     projectRevision: 9,
     projectFingerprint: 'f'.repeat(64),
     kaleidoscopeMappings: [structuredClone(expectedMapping)],
+    knownGoodProject: true,
+    commandReady: true,
+    playbackReady: true,
   };
 
   assert.deepEqual(verifyCardDeployment(prepared, evidence), {
@@ -236,7 +382,7 @@ test('starts the candidate test before asking and confirms only after the user s
     async confirm() { order.push('confirm'); },
     async readBack() {
       order.push('read-back');
-      return { cardId: 'lw-aabbccddeeff', config: structuredClone(prepared.config) };
+      return { cardId: 'lw-aabbccddeeff', config: structuredClone(prepared.config), knownGoodProject: true, commandReady: true, playbackReady: true };
     },
   }, {
     confirmHardware: async () => { order.push('ask-user'); return true; },
@@ -260,6 +406,9 @@ test('retries reboot read-back but fails immediately if a different card answers
         cardId: 'lw-aabbccddeeff',
         projectRevision: prepared.config.projectRevision,
         projectFingerprint: prepared.config.projectFingerprint,
+        knownGoodProject: true,
+        commandReady: true,
+        playbackReady: true,
       };
     },
   });
