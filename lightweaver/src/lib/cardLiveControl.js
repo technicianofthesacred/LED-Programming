@@ -61,6 +61,10 @@ function liveProjectIdentity(project = {}) {
     patternIds: new Set((patternIds || []).map(String).map(id => id.trim()).filter(Boolean)),
     startupPatternId,
     startupLookId: String(startupLook?.id || startupPatternId).trim(),
+    startupRuntimePatternId: (() => {
+      const configuredRuntimeId = String(startupLook?.preset || startupLook?.patternId || startupPatternId).trim();
+      return getCardPatternRuntimeId(configuredRuntimeId) || configuredRuntimeId;
+    })(),
     startupLook,
   };
 }
@@ -102,13 +106,31 @@ export function decideLiveControlProjectAuthority({
 
 export function createLiveControlAuthorityGate(initialInput = {}) {
   let authority = decideLiveControlProjectAuthority(initialInput);
+  let contractKey = '';
+  let contractInvalidated = false;
   return Object.freeze({
-    update(nextInput = {}) {
+    update(nextInput = {}, transition = {}) {
       authority = decideLiveControlProjectAuthority(nextInput);
-      return authority;
+      const tracksContract = Object.hasOwn(transition, 'contractKey');
+      const nextContractKey = tracksContract ? String(transition.contractKey || '') : contractKey;
+      const streamActive = transition.streamActive === true;
+      const contractChanged = Boolean(
+        tracksContract
+        && streamActive
+        && contractKey
+        && nextContractKey !== contractKey
+      );
+      if (tracksContract && !streamActive) contractInvalidated = false;
+      if (contractChanged) contractInvalidated = true;
+      if (tracksContract) contractKey = nextContractKey;
+      return {
+        ...authority,
+        contractChanged,
+        requiresStop: streamActive && (!authority.ok || contractInvalidated),
+      };
     },
     canSend() {
-      return authority.ok;
+      return authority.ok && !contractInvalidated;
     },
     decision() {
       return authority;
@@ -121,17 +143,18 @@ export function requireResetLiveOutputReadback(cardStatus = {}, studioProject = 
   if (!authority.ok) throw new CardPushError(authority.state, authority.message);
   const project = liveProjectIdentity(studioProject);
   const currentPatternId = String(cardStatus?.currentPatternId || cardStatus?.currentLookId || '').trim();
-  const expectedStartupLookId = project.startupLookId;
+  const expectedRuntimePatternId = project.startupRuntimePatternId;
   const reportedStartupPatternId = String(cardStatus?.startupPatternId || '').trim();
   const acceptedStartupClaims = new Set([
     project.startupPatternId,
     project.startupLookId,
+    project.startupRuntimePatternId,
     String(project.startupLook?.preset || '').trim(),
   ].filter(Boolean));
   if (
     !currentPatternId
-    || !expectedStartupLookId
-    || currentPatternId !== expectedStartupLookId
+    || !expectedRuntimePatternId
+    || currentPatternId !== expectedRuntimePatternId
     || !project.patternIds.has(currentPatternId)
     || (reportedStartupPatternId && !acceptedStartupClaims.has(reportedStartupPatternId))
   ) {
@@ -1211,9 +1234,16 @@ export async function resetLiveOutputOnCard(fallbackLook = {}, options = {}) {
     const startupLook = {
       ...normalizeCardVisualLook(fallbackLook),
       ...(project.startupLook ? normalizeCardVisualLook(project.startupLook) : {}),
-      patternId: project.startupLookId,
+      patternId: project.startupRuntimePatternId,
     };
     const response = await recoverImpl(startupLook, { ...options, host });
+    const acknowledgedPatternId = String(response?.patternId || response?.appliedPatternId || '').trim();
+    if (!acknowledgedPatternId || acknowledgedPatternId !== project.startupRuntimePatternId) {
+      throw new CardPushError(
+        'reset-readback-unconfirmed',
+        'The card answered, but did not restore the installed startup look.',
+      );
+    }
     const status = await readStatusImpl({
       host,
       timeoutMs: Math.min(options.timeoutMs || 3000, 1400),

@@ -745,7 +745,7 @@ const resetResponse = await resetLiveOutputOnCard({ patternId: 'fire' }, {
   studioProject: resetProject,
   recoverImpl: async (look, options) => {
     resetRecoveries.push({ look, host: options.host });
-    return { ok: true, recovered: true };
+    return { ok: true, recovered: true, patternId: 'aurora' };
   },
   readStatusImpl: async () => ({
     runtimePhase: 'ready', knownGoodProject: true, commandReady: true,

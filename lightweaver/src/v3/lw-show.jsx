@@ -272,18 +272,23 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
   const pausedRef = useRef(false);
   const resetTimingRef = useRef(false);
   const sourceRequestGenerationRef = useRef(0);
+  const showProjectFingerprint = cardProjectFingerprint(currentProject || {});
+  const showRenderingContract = `${currentProject?.id || ''}:${showProjectFingerprint}:${activeTemplateKind}:${outputOrder}`;
   const showAuthorityInput = {
     connected: connected || cardLink?.readiness?.playbackReady === true,
     studioProject: {
       ...currentProject,
-      projectFingerprint: cardProjectFingerprint(currentProject || {}),
+      projectFingerprint: showProjectFingerprint,
     },
     cardStatus: cardLink?.readiness || {},
   };
   if (!authorityGateRef.current) {
     authorityGateRef.current = createLiveControlAuthorityGate(showAuthorityInput);
   }
-  const showAuthority = authorityGateRef.current.update(showAuthorityInput);
+  const showTransition = authorityGateRef.current.update(showAuthorityInput, {
+    contractKey: showRenderingContract,
+    streamActive: Boolean(streamRef.current),
+  });
 
   // ── UI state ──────────────────────────────────────────────────────────────
   const [modeKey, setModeKey] = useState('strata');
@@ -695,9 +700,9 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
   }, []);
 
   useEffect(() => {
-    if (!streamRef.current || showAuthority.ok) return;
-    void stopLights({ kind: 'err', text: showAuthority.message });
-  }, [activeTemplateKind, outputOrder, showAuthority.message, showAuthority.ok, stopLights]);
+    if (!streamRef.current || !showTransition.requiresStop) return;
+    void stopLights(showTransition.ok ? undefined : { kind: 'err', text: showTransition.message });
+  }, [showTransition.message, showTransition.ok, showTransition.requiresStop, stopLights]);
 
   // Delivery health from the streamer: warn when frames stop reaching the
   // lights, and auto-stop (button back to its off state) when the path is
@@ -738,7 +743,10 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
     }
     setLightsBusy(true);
     try {
-      const authority = authorityGateRef.current.update(showAuthorityInput);
+      const authority = authorityGateRef.current.update(showAuthorityInput, {
+        contractKey: showRenderingContract,
+        streamActive: false,
+      });
       if (!authority.ok) {
         setNotice({ kind: 'err', text: authority.message });
         return;
@@ -785,7 +793,7 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
     } finally {
       setLightsBusy(false);
     }
-  }, [handleStreamHealth, lightsBusy, showAuthorityInput, stopLights]);
+  }, [handleStreamHealth, lightsBusy, showAuthorityInput, showRenderingContract, stopLights]);
 
   const listening = source !== 'quiet';
 

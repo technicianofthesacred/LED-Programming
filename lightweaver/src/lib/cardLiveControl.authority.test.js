@@ -84,6 +84,34 @@ test('an active frame sender stops admitting frames after project mismatch or re
   assert.deepEqual(frames, ['authorized']);
 });
 
+test('an active Show rendering contract transition stops its stream before any old-contract frame', async () => {
+  const gate = createLiveControlAuthorityGate({ connected: true, studioProject, cardStatus: readyStatus });
+  const frames = [];
+  let stops = 0;
+  const stream = {
+    push(frame) { frames.push(frame); },
+    async stop() { stops += 1; },
+  };
+  const send = frame => {
+    if (gate.canSend()) stream.push(frame);
+  };
+
+  gate.update(
+    { connected: true, studioProject, cardStatus: readyStatus },
+    { contractKey: 'connected:strip-a,strip-b', streamActive: true },
+  );
+  send('connected-frame');
+  const transition = gate.update(
+    { connected: true, studioProject, cardStatus: readyStatus },
+    { contractKey: 'mandala:675', streamActive: true },
+  );
+  if (transition.requiresStop) await stream.stop();
+  send('stale-connected-frame');
+
+  assert.equal(stops, 1);
+  assert.deepEqual(frames, ['connected-frame']);
+});
+
 test('reset readback accepts only the installed startup look on the matching ready project', () => {
   assert.equal(requireResetLiveOutputReadback(readyStatus, studioProject).currentPatternId, 'aurora');
   assert.throws(
@@ -103,7 +131,7 @@ test('Reset Live recovers the installed startup look and succeeds only after fre
     studioProject,
     recoverImpl: async (look, options) => {
       recoveries.push({ look, host: options.host });
-      return { ok: true, recovered: true };
+      return { ok: true, recovered: true, patternId: 'aurora' };
     },
     readStatusImpl: async () => readyStatus,
   });
@@ -126,7 +154,7 @@ test('Reset Live recovers the installed startup look and succeeds only after fre
   );
 });
 
-test('preset-named startup resolves to its exact installed look identity and rejects card-selected alternatives', async () => {
+test('id-different-from-preset startup recovers its runtime pattern and rejects alias or card-selected alternatives', async () => {
   const presetProject = {
     projectId: 'piece-a',
     projectFingerprint: 'fingerprint-a',
@@ -139,27 +167,35 @@ test('preset-named startup resolves to its exact installed look identity and rej
   const recoveries = [];
   const correctStatus = {
     ...readyStatus,
-    currentPatternId: 'look-dawn',
+    currentPatternId: 'aurora',
     startupPatternId: 'aurora',
   };
   await resetLiveOutputOnCard({}, {
     studioProject: presetProject,
     recoverImpl: async look => {
       recoveries.push(look);
-      return { ok: true };
+      return { ok: true, patternId: 'aurora' };
     },
     readStatusImpl: async () => correctStatus,
   });
 
-  assert.equal(recoveries[0].patternId, 'look-dawn');
+  assert.equal(recoveries[0].patternId, 'aurora');
   assert.equal(recoveries[0].brightness, 0.31);
-  assert.equal(requireResetLiveOutputReadback(correctStatus, presetProject).currentPatternId, 'look-dawn');
+  assert.equal(requireResetLiveOutputReadback(correctStatus, presetProject).currentPatternId, 'aurora');
   assert.throws(
     () => requireResetLiveOutputReadback({
       ...correctStatus,
       currentPatternId: 'look-fire',
       startupPatternId: 'fire',
     }, presetProject),
+    error => error?.reason === 'reset-readback-unconfirmed',
+  );
+  await assert.rejects(
+    resetLiveOutputOnCard({}, {
+      studioProject: presetProject,
+      recoverImpl: async () => ({ ok: true, patternId: 'look-dawn' }),
+      readStatusImpl: async () => correctStatus,
+    }),
     error => error?.reason === 'reset-readback-unconfirmed',
   );
 });

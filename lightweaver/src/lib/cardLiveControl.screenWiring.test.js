@@ -30,5 +30,7 @@ test('Show keeps its active animation stream behind the transition-aware authori
   const show = screenSources.find(item => item.file.includes('show')).source;
   assert.match(show, /createLiveControlAuthorityGate/);
   assert.match(show, /authorityGateRef\.current\.canSend\(\)/);
-  assert.match(show, /authorityGateRef\.current\.update/);
+  assert.match(show, /contractKey:\s*showRenderingContract/);
+  assert.match(show, /streamActive:\s*Boolean\(streamRef\.current\)/);
+  assert.match(show, /showTransition\.requiresStop/);
 });
