@@ -32,6 +32,7 @@ export function classifyCardDeploymentResume(prepared = {}, status = {}) {
     || !['', 'none', 'known-good', 'rolled-back', 'safe-mode'].includes(candidateState);
 
   if (!hasCandidate) {
+    if (!status.cardId && !status.buildId) return 'stage-new';
     return exactText(prepared.cardId, status.cardId) && exactText(prepared.buildId, status.buildId)
       ? 'stage-new'
       : 'candidate-conflict';
@@ -57,6 +58,24 @@ export function classifyCardDeploymentResume(prepared = {}, status = {}) {
   }
   if (nextStep === 'activate') return 'resume-activation';
   return 'resume-physical-test';
+}
+
+export function correlateCardDeploymentReadinessEvidence(project = {}, status = {}) {
+  const exactIdentity = exactText(project.cardId, status.cardId)
+    && exactText(project.buildId, status.buildId)
+    && exactNumber(project.projectRevision, status.projectRevision)
+    && exactText(project.projectFingerprint, status.projectFingerprint);
+  if (!exactIdentity) {
+    const error = new Error('Card readiness did not carry the exact card, build, and project identity.');
+    error.reason = 'readiness-identity-mismatch';
+    throw error;
+  }
+  return {
+    ...project,
+    knownGoodProject: status.knownGoodProject,
+    commandReady: status.commandReady,
+    playbackReady: status.playbackReady,
+  };
 }
 
 export function classifyCardChanges(previousConfig, nextConfig) {

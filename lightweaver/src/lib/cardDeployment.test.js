@@ -185,6 +185,20 @@ test('a candidate-free card must still match the exact card and firmware build b
   assert.equal(classifyCardDeploymentResume(preparedResumeIdentity(), { ...status, buildId: 'build-other' }), 'candidate-conflict');
 });
 
+test('the real candidate-free wiring status shape stages after the independent card preflight', async () => {
+  const { classifyCardDeploymentResume } = await deploymentApi();
+  const realKnownGoodStatus = {
+    ok: true,
+    state: 'known-good',
+    candidateState: 'none',
+    hasCandidate: false,
+    activationId: '',
+    outputs: [{ pin: 16, pixels: 8 }],
+    nextStep: 'stage-candidate',
+  };
+  assert.equal(classifyCardDeploymentResume(preparedResumeIdentity(), realKnownGoodStatus), 'stage-new');
+});
+
 test('conflicts on every exact candidate identity mismatch without mutating inputs', async () => {
   const { classifyCardDeploymentResume } = await deploymentApi();
   const prepared = preparedResumeIdentity();
@@ -289,6 +303,46 @@ test('installed verification requires exact known-good command and playback read
       ok: false,
       reason: 'card-not-ready',
     });
+  }
+});
+
+test('readiness evidence must carry its own exact card build and project identity', async () => {
+  const { correlateCardDeploymentReadinessEvidence } = await deploymentApi();
+  const project = {
+    cardId: 'lw-aabbccddeeff',
+    buildId: 'build-1123',
+    projectRevision: 7,
+    projectFingerprint: 'a'.repeat(64),
+  };
+  const readiness = {
+    cardId: project.cardId,
+    buildId: project.buildId,
+    projectRevision: project.projectRevision,
+    projectFingerprint: project.projectFingerprint,
+    knownGoodProject: true,
+    commandReady: true,
+    playbackReady: true,
+  };
+  assert.deepEqual(correlateCardDeploymentReadinessEvidence(project, readiness), {
+    ...project,
+    knownGoodProject: true,
+    commandReady: true,
+    playbackReady: true,
+  });
+  assert.throws(
+    () => correlateCardDeploymentReadinessEvidence(project, {
+      knownGoodProject: true,
+      commandReady: true,
+      playbackReady: true,
+    }),
+    error => error?.reason === 'readiness-identity-mismatch',
+  );
+  for (const field of ['cardId', 'buildId', 'projectRevision', 'projectFingerprint']) {
+    assert.throws(
+      () => correlateCardDeploymentReadinessEvidence(project, { ...readiness, [field]: undefined }),
+      error => error?.reason === 'readiness-identity-mismatch',
+      `missing readiness ${field} must fail closed`,
+    );
   }
 });
 

@@ -30,8 +30,6 @@ test('matching candidates resume in place and conflicts give non-mutating rollba
 test('installed state requires combined exact project and readiness readback', async () => {
   const text = await source();
   assert.match(text, /readCardProjectEvidence[\s\S]{0,500}readCardStatusEnvelope/);
-  assert.match(text, /knownGoodProject:\s*status\.knownGoodProject/);
-  assert.match(text, /commandReady:\s*status\.commandReady/);
-  assert.match(text, /playbackReady:\s*status\.playbackReady/);
+  assert.match(text, /correlateCardDeploymentReadinessEvidence\(project, status\)/);
   assert.match(text, /requireReady:\s*true/);
 });

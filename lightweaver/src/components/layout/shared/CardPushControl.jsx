@@ -14,6 +14,7 @@ import {
   prepareCardDeployment,
   cardStatusAsConfig,
   classifyCardDeploymentResume,
+  correlateCardDeploymentReadinessEvidence,
   waitForCardDeploymentVerification,
 } from '../../../lib/cardDeployment.js';
 import {
@@ -39,21 +40,7 @@ async function readReadyDeploymentEvidence(host) {
     readCardProjectEvidence({ host }),
     readCardStatusEnvelope({ host }),
   ]);
-  const identityChanged = status.cardId && status.cardId !== project.cardId;
-  const projectChanged = (
-    status.projectRevision !== undefined && status.projectRevision !== project.projectRevision
-  ) || (
-    status.projectFingerprint && status.projectFingerprint !== project.projectFingerprint
-  );
-  if (identityChanged || projectChanged) {
-    throw new CardPushError('wrong-card', 'Card identity changed during final installation read-back. Studio did not mark it installed.');
-  }
-  return {
-    ...project,
-    knownGoodProject: status.knownGoodProject,
-    commandReady: status.commandReady,
-    playbackReady: status.playbackReady,
-  };
+  return correlateCardDeploymentReadinessEvidence(project, status);
 }
 
 // Send-to-card control (Wire mode, Phase 2 step 9 / plan Phase 3). Extracted
