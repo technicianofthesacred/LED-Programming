@@ -179,9 +179,16 @@ async function installMatchingShowCardProject(page: any, project: any) {
 
 async function connectMatchingShowCard(page: any) {
   // ProjectContext normalizes restored layout state and flushes its canonical
-  // serialization after a 500ms debounce. Read that exact active snapshot,
-  // not the pre-normalization payload that initiated the reload.
-  await page.waitForTimeout(650);
+  // serialization after a 500ms debounce. Linux CI can finish that work later
+  // than one fixed sleep, so require the serialized snapshot to remain
+  // unchanged across a full debounce window before authorizing the card.
+  let stableSnapshot = '';
+  await expect.poll(async () => {
+    const next = await page.evaluate(() => localStorage.getItem('lw_autosave_v3') || '');
+    const stable = Boolean(next) && next === stableSnapshot;
+    stableSnapshot = next;
+    return stable;
+  }, { intervals: [600], timeout: 10_000 }).toBe(true);
   await page.evaluate(async () => {
     const activeProject = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
     const { cardProjectFingerprint } = await import('/src/lib/cardProjectResolver.js');
