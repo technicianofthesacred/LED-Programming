@@ -11,6 +11,7 @@ async function installFindCardHarness(page: Page, {
     const state = {
       opens: [] as Array<{ url: string; name: string }>,
       navigations: [] as string[],
+      closeCalls: 0,
       captureSweep: false,
       sweepStarted: false,
       releaseSweep: null as null | (() => void),
@@ -27,6 +28,7 @@ async function installFindCardHarness(page: Page, {
     const proxy: any = {
       closed: false,
       focus() {},
+      close() { state.closeCalls += 1; proxy.closed = true; },
       postMessage(message: any) {
         if (message.type !== 'firmware-info') return;
         if (verificationTimeout) return;
@@ -130,4 +132,19 @@ test('Find my card labels an unresponsive verified target as a bridge timeout', 
   await expect.poll(() => page.evaluate(() => (window as any).__findCardHarness.sweepStarted)).toBe(true);
   await page.evaluate(() => (window as any).__findCardHarness.releaseSweep());
   await expect(page.getByTestId('setup-find-status')).toContainText('did not answer Studio', { timeout: 6000 });
+});
+
+test('leaving Setup during a held scan closes the reservation and cannot navigate or open the center', async ({ page }) => {
+  await installFindCardHarness(page);
+  await page.getByTestId('setup-connect-card').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__findCardHarness.sweepStarted)).toBe(true);
+  await page.evaluate(() => { window.location.hash = '#screen=patterns'; });
+  await expect(page.getByTestId('setup-connect-card')).toHaveCount(0);
+
+  await page.evaluate(() => (window as any).__findCardHarness.releaseSweep());
+  await page.waitForTimeout(100);
+  const result = await page.evaluate(() => (window as any).__findCardHarness);
+  expect(result.closeCalls).toBe(1);
+  expect(result.navigations).toEqual([]);
+  await expect(page.getByRole('dialog', { name: 'Connect Lightweaver' })).toHaveCount(0);
 });

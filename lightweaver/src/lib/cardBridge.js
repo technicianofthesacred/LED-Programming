@@ -127,6 +127,10 @@ let bridgeIdentityError = '';
 let bridgeLastSeenAt = 0;
 let bridgeSeq = 0;
 let bridgeLifecycle = 0;
+// Non-null only while a user-gesture-acquired named window is intentionally
+// blank and waiting for asynchronous discovery to choose its card origin.
+// Messages from the outgoing document carry no authority during this gap.
+let bridgeReservedWindow = null;
 // Exact AP evidence retained across the origin switch. It remains present when
 // the first station navigation fails, allowing the caller to retry the same
 // WindowProxy without accepting a new/stale generation. While this is set,
@@ -295,6 +299,7 @@ function clearBridgeTarget({
   preserveHandoff = false,
 } = {}) {
   invalidateBridgeHandoffNavigationContext();
+  bridgeReservedWindow = null;
   bridgeWindow = null;
   bridgeOrigin = origin || '';
   bridgeHost = normalizeCardHost(host || bridgeHost || readStoredCardHost());
@@ -339,8 +344,10 @@ function revokeBridgeForNavigation({
   reason = 'bridge-navigated',
   message = 'The tracked card page started a new navigation.',
   preserveHandoff = false,
+  preserveReservation = false,
 } = {}) {
   rejectPendingBridgeRequests(reason, message);
+  if (!preserveReservation) bridgeReservedWindow = null;
   bridgeLifecycle += 1;
   clearBlankDiscoveryAuthority();
   bridgeConnected = false;
@@ -805,6 +812,7 @@ export function cardBridgeAutoPreviewEnabled() {
 function handleBridgeMessage(event) {
   const data = event?.data || {};
   if (data.app !== CARD_BRIDGE_APP) return;
+  if (bridgeReservedWindow) return;
 
   if (data.type === 'ready') {
     // Verify the handshake comes from a local card origin before trusting it.
@@ -1811,18 +1819,37 @@ export function reserveCardBridgeWindow() {
     // Opening a named target can replace a live card document with the blank
     // reservation. Its old origin/identity must never retain authority during
     // the subsequent asynchronous discovery gap.
-    if (opened) revokeBridgeForNavigation();
+    if (opened) {
+      revokeBridgeForNavigation();
+      bridgeReservedWindow = opened;
+    }
     return opened;
   } catch {
     return null;
   }
 }
 
+export function cancelReservedCardBridgeWindow(target) {
+  if (!target || bridgeReservedWindow !== target) return false;
+  bridgeReservedWindow = null;
+  try {
+    target.close?.();
+  } catch {
+    /* Closing a script-opened reservation is best-effort. */
+  }
+  clearBridgeTarget();
+  return true;
+}
+
 function navigateReservedCardBridgeWindow(target, host, studioUrl) {
-  if (!target || bridgeTargetClosed(target) || !isLocalCardHost(host)) return null;
+  if (!target || bridgeReservedWindow !== target) return null;
+  if (bridgeTargetClosed(target) || !isLocalCardHost(host)) {
+    cancelReservedCardBridgeWindow(target);
+    return null;
+  }
   const origin = cardHostToUrl(host);
   const url = buildCardBridgeLaunchUrl(host, studioUrl);
-  revokeBridgeForNavigation({ host, origin });
+  revokeBridgeForNavigation({ host, origin, preserveReservation: true });
   trackNavigatedBridgeWindow(target, { host, origin, persistHost: false });
   try {
     target.location.href = url;
@@ -1834,6 +1861,10 @@ function navigateReservedCardBridgeWindow(target, host, studioUrl) {
       return null;
     }
   }
+  // Navigation has now been initiated with the new origin already installed.
+  // Keep the gate closed through the assignment itself so synchronous straggler
+  // events from the outgoing document cannot regain authority in that gap.
+  bridgeReservedWindow = null;
   return target;
 }
 
@@ -1850,10 +1881,10 @@ export function acquireCardBridgeFromGesture(rawHost = '', {
   bootstrapCardBridgeFromOpener();
 
   const current = getCardBridgeState();
-  const hasExpectedIdentity = Boolean(readPersistedCardIdentity()?.id);
-  const currentExpectedIdentityFailed = hasExpectedIdentity
-    && Boolean(current.identityError)
-    && !current.identityVerified;
+  const expectedIdentityFailed = state => Boolean(readPersistedCardIdentity()?.id)
+    && Boolean(state?.identityError)
+    && !state?.identityVerified;
+  const currentExpectedIdentityFailed = expectedIdentityFailed(current);
   const currentEvidenceReady = current.identityVerified || (
     acceptDiscovered
     && !currentExpectedIdentityFailed
@@ -1882,7 +1913,7 @@ export function acquireCardBridgeFromGesture(rawHost = '', {
   };
   const resolveWhenVerified = (state = getCardBridgeState()) => {
     const hostMatches = normalizeCardHost(state?.host) === host;
-    if (hasExpectedIdentity && state?.identityError && !state?.identityVerified) {
+    if (expectedIdentityFailed(state)) {
       cleanup();
       settle.reject(bridgeError('The card page did not verify the paired Lightweaver identity.', state.identityError));
       return true;

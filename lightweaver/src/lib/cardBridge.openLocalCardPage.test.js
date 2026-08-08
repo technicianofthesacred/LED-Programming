@@ -174,6 +174,39 @@ test('discovery acquisition rejects a valid wrong-card identity before accepting
   assert.equal(getCardBridgeState().identityVerified, false);
 });
 
+test('discovery acquisition re-reads identity paired after reservation before accepting the ready card', async () => {
+  const host = '192.168.50.87';
+  const tab = fakeCardTab();
+  const { values, emitMessage } = stubWindow({ openResult: tab });
+  tab.postMessage = message => {
+    if (message.type !== 'firmware-info') return;
+    setTimeout(() => emitMessage({
+      origin: `http://${host}`,
+      source: tab,
+      data: {
+        app: 'LightweaverCardBridge', id: message.id, ok: true, version: 2,
+        response: { cardId: 'lw-found-87', firmwareVersion: '1.0.0', buildId: 'build-found-87' },
+      },
+    }), 0);
+  };
+
+  const reserved = reserveCardBridgeWindow();
+  const attempt = acquireCardBridgeFromGesture(host, {
+    reservedWindow: reserved,
+    acceptDiscovered: true,
+    timeoutMs: 100,
+  });
+  values.set('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-newly-paired-elsewhere' }));
+  emitMessage({
+    origin: `http://${host}`,
+    source: tab,
+    data: { app: 'LightweaverCardBridge', type: 'ready', host, version: 2 },
+  });
+
+  await assert.rejects(attempt.ready, error => error?.reason === 'wrong-card');
+  assert.equal(getCardBridgeState().discoveredCard?.id, 'lw-found-87');
+});
+
 test('reserving the named card window revokes prior bridge command authority', async () => {
   const host = '192.168.50.84';
   const tab = fakeCardTab();
@@ -202,6 +235,14 @@ test('reserving the named card window revokes prior bridge command authority', a
   reserveCardBridgeWindow();
   assert.equal(getCardBridgeState().identityVerified, false);
   assert.equal(getCardBridgeState().verified, false);
+
+  emitMessage({
+    origin: `http://${host}`,
+    source: tab,
+    data: { app: 'LightweaverCardBridge', type: 'ready', host, version: 2 },
+  });
+  assert.equal(getCardBridgeState().verified, false,
+    'a late ready from the outgoing page cannot reauthorize the blank reservation');
 });
 
 test('a reserved window closed during discovery reports bridge-closed instead of popup-blocked', async () => {
