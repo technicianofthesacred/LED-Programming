@@ -966,6 +966,17 @@ function Shell() {
       return { ok: false, reason: 'association-handoff-failed' };
     }
   }, [cloudLibrary, markProjectPersisted]);
+  const openBrowserProject = useCallback(async project => {
+    const recordId = String(project?.id || '');
+    const recordSnapshot = readProjectLibraryRecordSnapshot(recordId);
+    if (!recordSnapshot.record || recordSnapshot.record.project?.id !== project?.project?.id) {
+      return { ok: false, reason: 'browser-conflict' };
+    }
+    const replacement = await replaceProject(recordSnapshot.record.project);
+    if (!replacement.ok) return replacement;
+    const association = await onMatchedCardProjectLoaded({ source: 'browser', recordId, recordSnapshot });
+    return association.ok ? replacement : { ...association, replacementCommitted: true };
+  }, [onMatchedCardProjectLoaded, replaceProject]);
   const onImport = useCallback(() => fileInputRef.current?.click(), []);
   const onNew = useCallback(async () => {
     const result = await replaceWithNewProject();
@@ -1120,6 +1131,7 @@ function Shell() {
         <ProjectLoadDialog
           onClose={() => setLoadDialogOpen(false)}
           onImport={onImport}
+          onOpenBrowserProject={openBrowserProject}
           onOpenFailure={result => showWorkspaceEvent(
             result?.error?.message || (result?.reason === 'stale-session'
               ? 'Your session changed. Sign in again from Preferences.'

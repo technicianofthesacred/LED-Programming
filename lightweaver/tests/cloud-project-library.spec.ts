@@ -1001,6 +1001,60 @@ test('signed-out Load shows guidance and routes to Preferences without exposing 
   await expect(page.getByTestId('project-library-panel')).toBeVisible();
 });
 
+test('top-bar Load keeps browser saves recoverable after New while signed out', async ({ page }) => {
+  const fixture = new LibraryFixture(null);
+  const savedProject = portable('Browser recovery piece', 'lwproj-browser-recovery');
+  await page.addInitScript((project) => {
+    localStorage.setItem('lw_project_library_v1', JSON.stringify({
+      version: 1,
+      records: [{
+        id: 'browser-recovery-record',
+        name: project.name,
+        createdAt: 1,
+        updatedAt: 2,
+        projectVersion: project.version,
+        project,
+      }],
+    }));
+    localStorage.setItem('lw_project_active_record_v1', 'browser-recovery-record');
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
+    localStorage.setItem('lw_autosave_v3_backup', JSON.stringify(project));
+    localStorage.setItem('lw_project_lifecycle_v1', JSON.stringify({
+      version: 2,
+      dirty: false,
+      persistedDestination: 'browser',
+      installation: {
+        cardId: 'lw-prior-card',
+        projectRevision: 0,
+        projectFingerprint: '0123456789abcdef',
+      },
+    }));
+  }, savedProject);
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'New project' }).click();
+  await page.getByRole('button', { name: 'Load project' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Load project' });
+  await expect(dialog.getByText('Browser recovery piece', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Open Browser recovery piece' }).click();
+
+  await page.getByRole('button', { name: 'Preferences' }).first().click();
+  await expect(page.getByLabel('Project name')).toHaveValue('Browser recovery piece');
+  await expect.poll(() => page.evaluate(() => ({
+    activeRecordId: localStorage.getItem('lw_project_active_record_v1'),
+    lifecycle: JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || '{}'),
+  }))).toEqual({
+    activeRecordId: 'browser-recovery-record',
+    lifecycle: {
+      version: 2,
+      dirty: false,
+      persistedDestination: 'browser',
+      installation: null,
+    },
+  });
+});
+
 test('Load closes with Escape and restores focus to the top-bar action', async ({ page }) => {
   const fixture = new LibraryFixture('worker');
   fixture.seed('Focus Study');
