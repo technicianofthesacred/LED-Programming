@@ -60,7 +60,7 @@ function harness() {
   };
   vm.createContext(context);
   vm.runInContext(
-    `let hashInstallTail=Promise.resolve();const hashInstallFlights=new Map();${installLiterals[0]};globalThis.runHashInstall=installFromHash`,
+    `let hashInstallTail=Promise.resolve(),hashInstallGeneration=0;const hashInstallFlights=new Map();${installLiterals[0]};globalThis.runHashInstall=installFromHash`,
     context,
   );
   return { context, fetches, handoffs, historyCalls, timers };
@@ -156,6 +156,36 @@ const secondHash = `#lwconfig=${encoded(secondConfig)}`;
     'success should consume the current hash when its lwconfig payload was accepted');
   assert.equal(h.timers.length, 1,
     'success should honor reboot intent from the current matching hash');
+}
+
+{
+  const h = harness();
+  const firstPayload = encoded(firstConfig);
+  h.context.location.hash = `#lwconfig=${firstPayload}`;
+  const firstA = h.context.runHashInstall();
+  await Promise.resolve();
+
+  h.context.location.hash = secondHash;
+  const queuedB = h.context.runHashInstall();
+  h.context.location.hash = `#lwconfig=${firstPayload}&reboot=1`;
+  const finalA = h.context.runHashInstall();
+  assert.equal(finalA, firstA,
+    'the final A intent must share the already in-flight A request');
+  assert.equal(h.fetches.length, 1,
+    'A, B, A must never issue concurrent duplicate A requests');
+
+  h.fetches[0].response.resolve({ ok: true, json: async () => ({ ok: true, requiresReboot: true }) });
+  await firstA;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.fetches.length, 1,
+    'queued B must be cancelled when the latest visible hash returns to A');
+  await queuedB;
+  assert.equal(h.fetches.at(-1).args[1].body, firstConfig,
+    'the final accepted config must match the latest visible A hash');
+  assert.equal(h.historyCalls.length, 1,
+    'the latest accepted A hash should be consumed');
+  assert.equal(h.timers.length, 1,
+    'the latest A reboot intent should be honored after acceptance');
 }
 
 {
