@@ -120,6 +120,26 @@ const secondHash = `#lwconfig=${encoded(secondConfig)}`;
 
 {
   const h = harness();
+  h.context.location.hash = firstHash;
+  const install = h.context.runHashInstall();
+  await Promise.resolve();
+  h.fetches[0].response.resolve({
+    ok: true,
+    json: async () => ({ ok: true, state: 'staged', requiresReboot: true }),
+  });
+  await install;
+  assert.equal(h.historyCalls.length, 1,
+    'a successful staged install should consume its current hash');
+  assert.deepEqual(h.handoffs, [
+    ['Saving Studio package to this card...'],
+    ['New wiring is staged. Return to Studio to run the safe physical test. Your working setup is unchanged.', 'ok'],
+  ], 'staged success should stop after the staged-only acknowledgement');
+  assert.equal(h.timers.length, 0,
+    'staged success must ignore reboot=1 and leave activation to Studio');
+}
+
+{
+  const h = harness();
   const payload = encoded(firstConfig);
   h.context.location.hash = `#lwconfig=${payload}`;
   const first = h.context.runHashInstall();
