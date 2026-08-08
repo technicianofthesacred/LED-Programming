@@ -1055,6 +1055,96 @@ test('top-bar Load keeps browser saves recoverable after New while signed out', 
   });
 });
 
+test('claimed browser records remain available to signed-out Save, New, and Load', async ({ page }) => {
+  const fixture = new LibraryFixture('worker');
+  const savedProject = portable('Claimed browser piece', 'lwproj-claimed-browser');
+  await page.addInitScript((project) => {
+    const record = {
+      id: 'claimed-browser-record',
+      name: project.name,
+      createdAt: 1,
+      updatedAt: 2,
+      projectVersion: project.version,
+      project,
+    };
+    localStorage.setItem('lw_project_library_v1', JSON.stringify({ version: 1, records: [record] }));
+    localStorage.setItem('lw_project_active_record_v1', record.id);
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
+    localStorage.setItem('lw_autosave_v3_backup', JSON.stringify(project));
+    localStorage.setItem('lw_project_lifecycle_v1', JSON.stringify({
+      version: 2,
+      dirty: false,
+      persistedDestination: 'browser',
+      installation: null,
+    }));
+  }, savedProject);
+  await fixture.install(page);
+  await openLibrary(page);
+
+  await page.getByRole('button', { name: 'Bring browser projects online' }).click();
+  await expect(page.getByText('1 browser project brought online')).toBeVisible();
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
+
+  await page.getByLabel('Project name').fill('Claimed browser piece revised');
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (
+    JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records?.[0]?.name
+  ))).toBe('Claimed browser piece revised');
+
+  await page.getByRole('button', { name: 'New project' }).click();
+  await page.getByRole('button', { name: 'Load project' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Load project' });
+  await expect(dialog.getByText('Claimed browser piece revised', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Open Claimed browser piece revised' }).click();
+
+  await expect(page.locator('.crumb .proj')).toHaveText('Claimed browser piece revised');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_project_active_record_v1')))
+    .toBe('claimed-browser-record');
+});
+
+test('browser Load keeps Save fail-closed when its guarded association goes stale', async ({ page }) => {
+  const fixture = new LibraryFixture(null);
+  const savedProject = portable('Stale association target', 'lwproj-stale-association');
+  await page.addInitScript((project) => {
+    localStorage.setItem('lw_project_library_v1', JSON.stringify({
+      version: 1,
+      records: [{
+        id: 'stale-association-record',
+        name: project.name,
+        createdAt: 1,
+        updatedAt: 2,
+        projectVersion: project.version,
+        project,
+      }],
+    }));
+  }, savedProject);
+  await fixture.install(page);
+  await page.goto('/#screen=card&section=preferences', { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('Project name').fill('Unsaved current work');
+
+  await page.getByRole('button', { name: 'Load project' }).click();
+  await page.getByRole('dialog', { name: 'Load project' })
+    .getByRole('button', { name: 'Open Stale association target' }).click();
+  const confirmation = page.getByRole('dialog', { name: 'Replace current project?' });
+  await expect(confirmation).toBeVisible();
+  await page.evaluate(() => {
+    const library = JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}');
+    library.records[0].updatedAt += 1;
+    localStorage.setItem('lw_project_library_v1', JSON.stringify(library));
+  });
+  await confirmation.getByRole('button', { name: 'Replace project' }).click();
+  await expect(page.locator('.crumb .proj')).toHaveText('Stale association target');
+
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  await expect(page.getByTestId('workspace-notice')).toContainText(
+    'Saving is blocked because Studio could not establish a safe destination',
+  );
+  await expect.poll(() => page.evaluate(() => (
+    JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records?.[0]?.updatedAt
+  ))).toBe(3);
+});
+
 test('Load closes with Escape and restores focus to the top-bar action', async ({ page }) => {
   const fixture = new LibraryFixture('worker');
   fixture.seed('Focus Study');

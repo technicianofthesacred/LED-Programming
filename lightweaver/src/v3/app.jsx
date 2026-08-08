@@ -1129,6 +1129,7 @@ function Shell() {
       />
       {loadDialogOpen && (
         <ProjectLoadDialog
+          browserProjects={listProjectLibraryRecords()}
           onClose={() => setLoadDialogOpen(false)}
           onImport={onImport}
           onOpenBrowserProject={openBrowserProject}

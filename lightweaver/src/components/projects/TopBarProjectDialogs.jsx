@@ -2,14 +2,13 @@ import { useMemo, useRef, useState } from 'react';
 import { useCloudLibrary } from '../../state/CloudLibraryContext.jsx';
 import { CloudLibraryDialogPortal } from './ProjectHistoryDialog.jsx';
 
-export function ProjectLoadDialog({ onClose, onImport, onOpenBrowserProject, onOpenFailure, onOpenPreferences }) {
+export function ProjectLoadDialog({ browserProjects, onClose, onImport, onOpenBrowserProject, onOpenFailure, onOpenPreferences }) {
   const library = useCloudLibrary();
   const [query, setQuery] = useState('');
   const dialogRef = useRef(null);
   const searchRef = useRef(null);
   const closeRef = useRef(null);
   const signedIn = library.session.status === 'authenticated';
-  const { browserProjects } = library;
   const projects = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     if (!needle) return library.activeProjects;
