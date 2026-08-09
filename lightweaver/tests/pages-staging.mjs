@@ -402,7 +402,7 @@ assert.doesNotMatch(runtimeRootReferences, /led\.mandalacodes\.com\/design|\/des
 assert.doesNotMatch(runtimeRootReferences, /\/api\/library/, 'card command and flashing paths must never traverse the cloud library API');
 assert.deepEqual(routes, {
   version: 1,
-  include: ['/api/account', '/api/account/*', '/api/library', '/api/library/*'],
+  include: ['/api/account', '/api/account/*', '/api/library', '/api/library/*', '/api/handoff', '/api/handoff/*'],
   exclude: [],
 });
 assert.match(freshness, /LIGHTWEAVER_NATIVE_AUTH_READY/);

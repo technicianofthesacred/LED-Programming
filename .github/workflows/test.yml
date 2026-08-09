@@ -119,7 +119,9 @@ jobs:
         working-directory: lightweaver
       - name: Run focused critical-workflow smoke tests
         working-directory: lightweaver
-        run: npm run ci:browser-smoke
+        run: |
+          npm run ci:browser-smoke
+          npm run test:windowless:browser
 
   cloud:
     needs: classify
@@ -205,8 +207,10 @@ jobs:
           LW_BUILD_ID: ${{ github.sha }}
           LW_BUILD_NUMBER: ${{ steps.buildnumber.outputs.value }}
         run: |
+          npm run build:card --prefix lightweaver
           pio run -d firmware/lightweaver-controller -e esp32-s3-n16r8
           node firmware/lightweaver-controller/tests/card-identity-capabilities.mjs
+          node firmware/lightweaver-controller/tests/windowless-card-studio.mjs
 
   artifact:
     needs: classify

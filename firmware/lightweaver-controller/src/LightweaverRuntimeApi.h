@@ -139,6 +139,15 @@ bool runtimeRename(const String& pieceName, const String& hostname, String& mess
 bool runtimeIsStreaming();
 uint8_t runtimeFrameSource();
 void runtimeCancelStream();
+// Writes a bounded RGB chunk into the one canonical logical LED canvas. The
+// implementation claims FRAME_HTTP through the existing source arbiter; it
+// does not create a second renderer or bypass Stop/timeout recovery.
+bool runtimeWriteHttpFrame(uint16_t startPixel, const uint8_t* rgb,
+                           size_t pixelCount);
+String runtimeNetworkIdentity();
+// Existing blank-card commissioning authority, or a recent deliberate action
+// on a physical card control. Same-origin HTTP reachability is never enough.
+bool runtimeOwnerPairingAuthorized();
 
 uint8_t runtimeOutputRequestedBrightnessByte();
 uint8_t runtimeOutputBrightnessByte();

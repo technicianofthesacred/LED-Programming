@@ -104,8 +104,10 @@ jobs:
           LW_BUILD_NUMBER: ${{ needs.classify.outputs.build_number }}
           LW_FIRMWARE_VERSION: ${{ needs.classify.outputs.firmware_version }}
         run: |
+          npm run build:card --prefix lightweaver
           pio run -d firmware/lightweaver-controller -e esp32-s3-n16r8
           node firmware/lightweaver-controller/tests/card-identity-capabilities.mjs
+          node firmware/lightweaver-controller/tests/windowless-card-studio.mjs
 
   build:
     needs: [classify, verify]
@@ -137,13 +139,20 @@ jobs:
             ~/.cache/pip
           key: pio-${{ runner.os }}-${{ hashFiles('firmware/lightweaver-controller/platformio.ini') }}
           restore-keys: pio-${{ runner.os }}-
-      - name: Install PlatformIO
-        run: pip install platformio==6.1.19
+      - name: Install PlatformIO and pinned Studio build dependencies
+        run: |
+          pip install platformio==6.1.19
+          npm ci --prefix lightweaver
       - name: Recheck firmware version before protected signing
         run: |
           test "$(tr -d '\r\n' < firmware/lightweaver-controller/VERSION)" = "$FW_VERSION"
           npm run firmware:version:check --prefix lightweaver -- --previous-production
-      - name: Rebuild tested factory binary
+      - name: Build the exact card-local Studio into the firmware source table
+        env:
+          LIGHTWEAVER_SOURCE_REVISION: ${{ env.SOURCE_REVISION }}
+          LIGHTWEAVER_BUILD_NUMBER: ${{ env.BUILD_NUMBER }}
+        run: npm run build:card --prefix lightweaver
+      - name: Rebuild tested factory binary with the generated card-local Studio
         env:
           LW_BUILD_ID: ${{ env.SOURCE_REVISION }}
           LW_BUILD_NUMBER: ${{ env.BUILD_NUMBER }}
@@ -183,6 +192,7 @@ jobs:
             lightweaver/public/firmware/releases
             lightweaver/public/production/jobs
             release/job-sources
+            firmware/lightweaver-controller/src/LightweaverCardStudioBundle.h
           )
           RELEASE_INPUTS=(
             'firmware/lightweaver-controller/src/**'
@@ -193,7 +203,12 @@ jobs:
             'scripts/build-production-job.mjs'
             'scripts/rebuild-production-jobs.mjs'
             'scripts/sign-release-artifacts.mjs'
-            'lightweaver/src/lib/**'
+            'lightweaver/src/**'
+            'lightweaver/card.html'
+            'lightweaver/vite.config.js'
+            'lightweaver/scripts/build-card-studio.mjs'
+            'lightweaver/scripts/prepare-local-fonts.mjs'
+            'lightweaver/public/fonts/**'
             'packages/installer-core/**'
             'release/firmware-manifest.schema.json'
             'release/production-job.schema.json'
@@ -244,4 +259,5 @@ jobs:
             lightweaver/public/firmware/release-manifest.sig
             lightweaver/public/firmware/release-provenance.json
             lightweaver/public/firmware/releases/
+            firmware/lightweaver-controller/src/LightweaverCardStudioBundle.h
           if-no-files-found: error

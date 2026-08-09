@@ -42,6 +42,9 @@ import { writeActiveProjectLibraryRecordId } from '../lib/projectStorage.js';
 import { cardActionReducer, createCardActionState } from '../lib/cardAction.js';
 import { canonicalProjectFileName, PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
 import { openLocalCardPage } from '../lib/cardBridge.js';
+import { getActiveCardTransportAuthority } from '../lib/cardTransport.js';
+import { saveProjectToCardFromGesture } from '../lib/cardProjectSave.js';
+import { createProjectEnvelope } from '../lib/projectRepository.js';
 import { StripColorOrderCheck } from '../components/layout/wire/StripColorOrderCheck.jsx';
 
 const SettingsFieldContext = createContext(null);
@@ -172,6 +175,7 @@ const SettingsFieldContext = createContext(null);
       markProjectPersisted, markProjectInstalled, markCardLookConfirmed,
       lastSaved,
       autosaveStatus,
+      projectRepositorySource,
     } = useProject();
     const cloudLibrary = useCloudLibrary();
     const { tweaks, set: setTweak } = useTweaks();
@@ -185,6 +189,9 @@ const SettingsFieldContext = createContext(null);
     const [statusKind, setStatusKind] = useState('');
     const [cardWrite, dispatchCardWrite] = useReducer(cardActionReducer, undefined, createCardActionState);
     const [advancedOpen, setAdvancedOpen] = useState(false);
+    const [projectCopySource, setProjectCopySource] = useState(projectRepositorySource?.label || 'This browser');
+    const [cardProjectSave, setCardProjectSave] = useState({ status: 'idle', progress: '' });
+    const cardProjectSaveAbortRef = useRef(null);
     const liveHardwareSeq = useRef(0);
 
     // ── Derived card / hardware data (mirrors the old ChipScreen) ──────
@@ -420,6 +427,71 @@ const SettingsFieldContext = createContext(null);
       event.target.value = '';
     };
 
+    const saveProjectToCard = async () => {
+      const authority = getActiveCardTransportAuthority(cardHost);
+      if (!authority) {
+        setStatusKind('err');
+        setStatus('Connect this exact card before saving an editable project copy.');
+        return;
+      }
+      const confirmed = window.confirm(
+        'Touch a physical control on the Lightweaver card now. Then choose Continue to request a short-lived save permission from that exact card.',
+      );
+      if (!confirmed) return;
+
+      const expectedHead = cardLink?.readiness?.projectHead || null;
+      const envelope = createProjectEnvelope(serializeProject(), {
+        parentHash: expectedHead,
+        localRevision: Math.max(1, Number(projectLifecycle.editedRevision || 0) + 1),
+        source: { kind: 'browser' },
+      });
+      const controller = new AbortController();
+      cardProjectSaveAbortRef.current = controller;
+      setCardProjectSave({ status: 'pending', progress: 'pairing' });
+      setStatusKind('');
+      setStatus('Waiting for the card to confirm the physical pairing gesture…');
+
+      const result = await saveProjectToCardFromGesture({
+        authority,
+        envelope,
+        expectedHead,
+        commissioningProof: 'owner-confirmed-physical-control',
+        signal: controller.signal,
+        onProgress: progress => {
+          setCardProjectSave({ status: 'pending', progress });
+          if (progress === 'uploading') setStatus('Saving the complete editable project to the card…');
+          if (progress === 'verifying') setStatus('Reading the project back from the card to verify it…');
+        },
+      });
+      cardProjectSaveAbortRef.current = null;
+
+      if (result.ok) {
+        const sourceLabel = result.source?.label || `Lightweaver ${authority.cardId || 'card'}`;
+        setProjectCopySource(sourceLabel);
+        markProjectPersisted('card', { cardId: authority.cardId, contentHash: result.envelope?.contentHash });
+        setCardProjectSave({ status: 'complete', progress: 'complete' });
+        setStatusKind('ok');
+        setStatus(`Editable project saved and verified. Open copy: ${sourceLabel}. Installed configuration remains separate.`);
+        return;
+      }
+
+      setCardProjectSave({ status: result.reason, progress: '' });
+      setStatusKind(result.reason === 'cancelled' ? '' : 'err');
+      if (result.reason === 'pairing-required') {
+        setStatus('Pairing required. Touch a physical control on the card, then choose Save project to this card again.');
+      } else if (result.reason === 'head-conflict') {
+        setStatus('The project on the card changed. Nothing was overwritten. Compare or export first, keep both copies, or deliberately replace after reopening the current card copy.');
+      } else if (result.reason === 'quota-exceeded') {
+        setStatus('The card does not have enough space for this editable project. Remove another card project or Export project to keep this copy.');
+      } else if (result.reason === 'cancelled') {
+        setStatus('Card project save cancelled.');
+      } else if (result.reason === 'disconnected') {
+        setStatus('The verified card connection ended before saving. Connect this exact card and try again.');
+      } else {
+        setStatus('The editable project was not saved to the card. The browser recovery copy is unchanged.');
+      }
+    };
+
     // ── Mockup-card live values ─────────────────────────────────────────
     const themeLabel = THEME_LABEL[tweaks.theme] || 'Studio';
     const smoothLabel = SMOOTH_LABEL[motionSmoothing] || 'Soft';
@@ -473,6 +545,26 @@ const SettingsFieldContext = createContext(null);
                       <button className="btn ghost-sm" onClick={() => { const result = openLocalCardPage(cardHost); if (!result.ok && result.reason === 'popup-blocked') { setStatusKind('err'); setStatus('The browser blocked the card window. Allow popups for Studio, then try again.'); } }}>{I.open}Open card page</button>
                       <button className="btn ghost-sm" onClick={() => { window.location.hash = '#screen=card&section=install'; }}>{I.bolt}Flash chip</button>
                       <button className="btn ghost-sm" onClick={() => { window.location.hash = '#screen=card&section=support'; }}>{I.info}Installer guide</button>
+                    </div>
+                  </Row>
+                  <Row label="Editable project" hint="A full project copy; separate from the installed configuration" stack>
+                    <div>
+                      <div className="set-actions">
+                        <button
+                          className="btn"
+                          type="button"
+                          onClick={saveProjectToCard}
+                          disabled={cardProjectSave.status === 'pending'}
+                          data-testid="save-project-to-card"
+                        >
+                          {cardProjectSave.status === 'pending' ? 'Saving project…' : 'Save project to this card'}
+                        </button>
+                        {cardProjectSave.status === 'pending' && (
+                          <button className="btn ghost-sm" type="button" onClick={() => cardProjectSaveAbortRef.current?.abort()}>Cancel</button>
+                        )}
+                      </div>
+                      <p className="hh">When prompted, touch a physical control on the card. The card must confirm that gesture before Studio can save.</p>
+                      <p className="hh">Open copy: <strong>{projectCopySource}</strong>{cardProjectSave.progress ? ` · ${cardProjectSave.progress}` : ''}</p>
                     </div>
                   </Row>
                   {status && (

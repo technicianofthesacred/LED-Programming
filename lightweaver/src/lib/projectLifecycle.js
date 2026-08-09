@@ -24,6 +24,17 @@ export function markPersisted(state, destination, revision = state.editedRevisio
   return { ...state, persistence: { destination, revision } };
 }
 
+export function repositoryPersistenceMarker(repository, lifecycle) {
+  const destination = repository?.source?.kind;
+  if (destination !== 'browser' && destination !== 'card') return null;
+  if (!Number.isSafeInteger(lifecycle?.generation) || !Number.isSafeInteger(lifecycle?.editedRevision)) return null;
+  return {
+    destination,
+    generation: lifecycle.generation,
+    revision: lifecycle.editedRevision,
+  };
+}
+
 export function markInstalled(state, revision = state.editedRevision) {
   const source = revision && typeof revision === 'object'
     ? revision
@@ -72,6 +83,7 @@ export function lifecycleLabel(state) {
   if (state.persistence?.revision === revision) {
     if (state.persistence.destination === 'browser') return 'Saved in browser';
     if (state.persistence.destination === 'file') return 'File downloaded';
+    if (state.persistence.destination === 'card') return 'Saved on card';
   }
   if (revision > 0) return 'Unsaved changes';
   if (state.restored) return 'Restored from recovery copy';

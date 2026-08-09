@@ -393,7 +393,30 @@ function FirmwareStatusControl({ status, installedBuildId, releaseBuildId, relea
     : <span {...common}>{status.label}</span>;
 }
 
-function StatusBar({ link, connectionCenterOpen, cardControlOpen, onOpenCardControl, firmwareStatus, firmwareRelease, firmwareReleaseError, onOpenFirmwareUpdate, testStrip, onToggleTestStrip, onTestStripLengthChange, runningStudioRelease, freshness }) {
+function OfflineStatusControl({ state, onActivate }) {
+  if (!state || state.status === 'disabled') return null;
+  if (state.status === 'update-waiting') {
+    return (
+      <button
+        type="button"
+        className="sb-firmware is-update-available"
+        data-testid="offline-update-status"
+        title={state.reason ? `Update waits for safety: ${state.reason}.` : 'A verified Studio update is ready.'}
+        onClick={onActivate}
+      >
+        Update ready
+      </button>
+    );
+  }
+  const label = state.status === 'ready' ? 'Ready offline'
+    : state.status === 'error' ? 'Offline unavailable'
+      : state.status === 'reloading' ? 'Reopening Studio…'
+        : state.status === 'activating' ? 'Applying update…'
+          : 'Preparing offline…';
+  return <span className={`sb-firmware is-${state.status}`} data-testid="offline-update-status" role="status">{label}</span>;
+}
+
+function StatusBar({ link, connectionCenterOpen, cardControlOpen, onOpenCardControl, firmwareStatus, firmwareRelease, firmwareReleaseError, onOpenFirmwareUpdate, offlineUpdateState, onActivateOfflineUpdate, testStrip, onToggleTestStrip, onTestStripLengthChange, runningStudioRelease, freshness }) {
   return (
     <footer className="status-bar">
       <div className="sb-card">
@@ -406,6 +429,8 @@ function StatusBar({ link, connectionCenterOpen, cardControlOpen, onOpenCardCont
       </div>
 
       <span className="sb-spring" aria-hidden="true" />
+
+      <OfflineStatusControl state={offlineUpdateState} onActivate={onActivateOfflineUpdate} />
 
       <FirmwareStatusControl
         status={firmwareStatus}
@@ -471,7 +496,10 @@ function applyStoredStudioTheme() {
   }
 }
 
-function Shell() {
+const DISABLED_OFFLINE_UPDATE_STATE = Object.freeze({ status: 'disabled', registration: null });
+const subscribeDisabledOfflineUpdate = () => () => {};
+
+function Shell({ offlineUpdateController = null }) {
   const [bridgeBooting, setBridgeBooting] = useState(() => isBridgeCallbackLocation());
   const [bridgeResult, setBridgeResult] = useState(readStoredBridgeResult);
   const bridgeResultAcceptedRef = useRef(Boolean(bridgeResult));
@@ -505,7 +533,21 @@ function Shell() {
   const {
     projectName, serializeProject, flushProjectAutosave, replaceProject, replaceWithNewProject, requestReplacementConfirmation,
     projectLifecycle, projectLifecycleLabel, markProjectPersisted, markProjectEdited, isProjectLifecycleMarkerCurrent,
+    projectHasUnsavedChanges,
   } = useProject();
+  const offlineUpdateState = useSyncExternalStore(
+    offlineUpdateController?.subscribe || subscribeDisabledOfflineUpdate,
+    offlineUpdateController?.getState || (() => DISABLED_OFFLINE_UPDATE_STATE),
+    offlineUpdateController?.getState || (() => DISABLED_OFFLINE_UPDATE_STATE),
+  );
+  const projectUnsavedRef = useRef(projectHasUnsavedChanges);
+  projectUnsavedRef.current = projectHasUnsavedChanges;
+  useEffect(() => {
+    offlineUpdateController?.setGuards?.({
+      hasActiveMutation: () => installActiveRef.current || hardwareOperationActiveRef.current || commissioningActiveRef.current,
+      hasUnsavedTransition: () => projectUnsavedRef.current,
+    });
+  }, [offlineUpdateController]);
   const runningStudioReleaseRef = useRef(null);
   if (!runningStudioReleaseRef.current) runningStudioReleaseRef.current = getRunningStudioRelease();
   const [freshness, setFreshness] = useState(() => ({
@@ -1207,6 +1249,8 @@ function Shell() {
         firmwareRelease={firmwareReleaseIdentity.manifest}
         firmwareReleaseError={firmwareReleaseIdentity.error}
         onOpenFirmwareUpdate={() => openCardSection('install')}
+        offlineUpdateState={offlineUpdateState}
+        onActivateOfflineUpdate={() => offlineUpdateController?.activateUpdate?.()}
         testStrip={testStrip}
         onToggleTestStrip={onToggleTestStrip}
         onTestStripLengthChange={onTestStripLengthChange}
@@ -1270,11 +1314,11 @@ function Shell() {
   );
 }
 
-function App() {
+function App({ projectRepository = null, initialProjectEnvelope = null, offlineUpdateController = null }) {
   return (
-    <ProjectProvider>
+    <ProjectProvider repository={projectRepository} initialProjectEnvelope={initialProjectEnvelope}>
       <CloudLibraryProvider>
-        <Shell />
+        <Shell offlineUpdateController={offlineUpdateController} />
       </CloudLibraryProvider>
     </ProjectProvider>
   );

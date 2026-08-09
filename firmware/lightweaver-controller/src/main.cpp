@@ -19,6 +19,7 @@
 #include "LightweaverWledRealtime.h"
 #include "LightweaverArtnet.h"
 #include "LightweaverWledWebSocket.h"
+#include "LightweaverProjectRepository.h"
 #include <Preferences.h>
 #include <esp_task_wdt.h>
 #include <esp_system.h>
@@ -384,6 +385,11 @@ void setup() {
   safeDiscoveryMode = wiringSafety.discoveryActive;
   safeDiscoveryBatchIndex = wiringSafety.discoveryBatchIndex;
   setupLightweaverControls(controls, controlState);
+  String projectRepositoryMessage;
+  if (!lightweaverProjectRepository().begin(projectRepositoryMessage) && Serial) {
+    Serial.print("Card project repository disabled: ");
+    Serial.println(projectRepositoryMessage);
+  }
   setupLightweaverWeb(runtimeConfig, errorCode, totalPixels, currentLookIndex);
   webRuntimeServing = true;
 
@@ -2290,6 +2296,37 @@ float runtimeGetBrightnessZ(const String& targetId) {
 float runtimeGetSpeed() { return manualSpeed; }
 int16_t runtimeGetHueShift() { return manualHueShift; }
 bool runtimeIsBlackedOut() { return blackedOut; }
+
+bool runtimeWriteHttpFrame(uint16_t startPixel, const uint8_t* rgb,
+                           size_t pixelCount) {
+  if (!rgb || !pixelCount || !leds || startPixel >= allocatedPixels ||
+      pixelCount > static_cast<size_t>(allocatedPixels - startPixel)) return false;
+  if (!frameSourceClaim(FRAME_HTTP)) return false;
+  for (size_t index = 0; index < pixelCount; index++) {
+    const size_t source = index * 3;
+    leds[startPixel + index] = CRGB(rgb[source], rgb[source + 1], rgb[source + 2]);
+  }
+  frameSourceMarkExternal(FRAME_HTTP);
+  return true;
+}
+
+String runtimeNetworkIdentity() {
+  String identity = runtimeConfig.activeTransport == WIFI_TRANSPORT_STATION
+      ? "station:" : "access-point:";
+  identity += runtimeConfig.activeIp;
+  identity += ":";
+  identity += runtimeConfig.activeHostname;
+  identity += ":";
+  identity += String(runtimeConfig.wifiRuntime.connectivity.generation);
+  return identity;
+}
+
+bool runtimeOwnerPairingAuthorized() {
+  if (!runtimeConfig.knownGoodProject || factoryBeaconMode || safeDiscoveryMode)
+    return true;
+  if (lastControlEvent == CONTROL_NONE || lastControlEventAt == 0) return false;
+  return millis() - lastControlEventAt <= 30000;
+}
 
 uint32_t runtimeWiringProbationRemainingMs() {
   if (!wiringProbationActive) return 0;

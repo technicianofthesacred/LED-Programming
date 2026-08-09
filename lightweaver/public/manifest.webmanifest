@@ -1,0 +1,19 @@
+{
+  "id": "/",
+  "name": "Lightweaver Studio",
+  "short_name": "Lightweaver",
+  "description": "Design and control Lightweaver LED installations, online or offline.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#1a1814",
+  "theme_color": "#1a1814",
+  "icons": [
+    {
+      "src": "/lightweaver-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

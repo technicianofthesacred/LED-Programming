@@ -36,7 +36,7 @@ const MANIFEST_KEYS = [
 // LW_BUILD_NUMBER so a card, this manifest, and GitHub all agree. Optional only so the one already-signed
 // release that predates it still verifies; the builder always emits it, and
 // `assertFirmwareManifestBuildNumber` enforces that for anything it produces.
-const OPTIONAL_MANIFEST_KEYS = ['buildNumber'];
+const OPTIONAL_MANIFEST_KEYS = ['buildNumber', 'cardStudio'];
 
 function sortForCanonicalJson(value) {
   if (Array.isArray(value)) return value.map(sortForCanonicalJson);
@@ -89,7 +89,7 @@ export function validateFirmwareManifest(
   } = {},
 ) {
   assertExactKeys(manifest, MANIFEST_KEYS, 'firmware manifest', OPTIONAL_MANIFEST_KEYS);
-  assertExactKeys(manifest.image, ['sha256', 'size', 'url'], 'firmware image');
+  assertExactKeys(manifest.image, ['sha256', 'size', 'url'], 'firmware image', ['cardStudioReadback']);
   assertExactKeys(manifest.configSchema, ['max', 'min'], 'config schema range');
 
   if (manifest.schemaVersion !== 1) throw new Error('Unsupported firmware manifest schema');
@@ -117,6 +117,17 @@ export function validateFirmwareManifest(
     throw new Error(`Firmware exceeds the maximum safe factory image size (${MAX_FACTORY_IMAGE_SIZE} bytes)`);
   }
   if (!/^[a-f0-9]{64}$/.test(manifest.image.sha256)) throw new Error('Firmware image SHA-256 is invalid');
+  if ((manifest.cardStudio == null) !== (manifest.image.cardStudioReadback == null)) {
+    throw new Error('Firmware card Studio identity and readback must be present together');
+  }
+  if (manifest.image.cardStudioReadback != null) {
+    assertExactKeys(manifest.image.cardStudioReadback, ['offset', 'sha256', 'size'], 'card Studio readback');
+    if (manifest.image.cardStudioReadback.offset !== 0
+      || manifest.image.cardStudioReadback.size !== manifest.image.size
+      || manifest.image.cardStudioReadback.sha256 !== manifest.image.sha256) {
+      throw new Error('Card Studio readback must cover the exact combined factory image');
+    }
+  }
   const version = manifest.firmwareVersion.replaceAll('.', '\\.');
   const build = manifest.buildId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const immutablePath = new RegExp(
@@ -129,6 +140,44 @@ export function validateFirmwareManifest(
   const { min, max } = manifest.configSchema;
   if (!isPositiveSafeInteger(min) || !isPositiveSafeInteger(max) || min > max) {
     throw new Error('Config schema range is invalid');
+  }
+  if (manifest.cardStudio != null) {
+    assertExactKeys(manifest.cardStudio, [
+      'assets', 'buildId', 'buildNumber', 'bundleSha256', 'firmwareApi',
+      'projectSchema', 'releaseMetadata', 'totalSize',
+    ], 'card Studio release');
+    if (manifest.cardStudio.buildId !== manifest.buildId) throw new Error('Card Studio buildId must equal firmware buildId');
+    if (manifest.cardStudio.buildNumber !== manifest.buildNumber) throw new Error('Card Studio buildNumber must equal firmware buildNumber');
+    if (!isPositiveSafeInteger(manifest.cardStudio.totalSize)) throw new Error('Card Studio total size is invalid');
+    if (!/^[a-f0-9]{64}$/.test(manifest.cardStudio.bundleSha256)) throw new Error('Card Studio bundle SHA-256 is invalid');
+    for (const [label, range] of Object.entries({ projectSchema: manifest.cardStudio.projectSchema, firmwareApi: manifest.cardStudio.firmwareApi })) {
+      assertExactKeys(range, ['max', 'min'], `card Studio ${label} range`);
+      if (!isPositiveSafeInteger(range.min) || !isPositiveSafeInteger(range.max) || range.min > range.max) {
+        throw new Error(`Card Studio ${label} range is invalid`);
+      }
+    }
+    assertExactKeys(manifest.cardStudio.releaseMetadata, ['sha256', 'size'], 'card Studio release metadata');
+    if (!isPositiveSafeInteger(manifest.cardStudio.releaseMetadata.size)
+      || !/^[a-f0-9]{64}$/.test(manifest.cardStudio.releaseMetadata.sha256)) {
+      throw new Error('Card Studio release metadata is invalid');
+    }
+    if (!Array.isArray(manifest.cardStudio.assets) || manifest.cardStudio.assets.length === 0) {
+      throw new Error('Card Studio assets must be a non-empty array');
+    }
+    const paths = new Set();
+    let assetBytes = 0;
+    for (const asset of manifest.cardStudio.assets) {
+      assertExactKeys(asset, ['path', 'sha256', 'size'], 'card Studio asset');
+      if (typeof asset.path !== 'string' || !asset.path.startsWith('/studio/') || paths.has(asset.path)) {
+        throw new Error('Card Studio asset path is invalid or duplicated');
+      }
+      paths.add(asset.path);
+      if (!isPositiveSafeInteger(asset.size) || !/^[a-f0-9]{64}$/.test(asset.sha256)) {
+        throw new Error('Card Studio asset identity is invalid');
+      }
+      assetBytes += asset.size;
+    }
+    if (assetBytes !== manifest.cardStudio.totalSize) throw new Error('Card Studio asset sizes must equal totalSize');
   }
   assertExactKeys(
     manifest.provenance,
@@ -157,6 +206,16 @@ export function validateFirmwareManifest(
 export function assertFirmwareManifestBuildNumber(manifest) {
   if (!isPositiveSafeInteger(manifest?.buildNumber)) {
     throw new Error('A newly built firmware manifest must carry a positive integer buildNumber');
+  }
+  return manifest;
+}
+
+// Legacy signed schema-1 manifests remain readable. Everything built after the
+// card-local Studio was introduced must carry the embedded bundle and exact
+// combined-image readback identities before it can be signed.
+export function assertFirmwareManifestCardStudio(manifest) {
+  if (!manifest?.cardStudio || !manifest?.image?.cardStudioReadback) {
+    throw new Error('A newly built firmware manifest must carry the card Studio and combined-image readback identities');
   }
   return manifest;
 }

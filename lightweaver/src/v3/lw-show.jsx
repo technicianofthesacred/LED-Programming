@@ -28,6 +28,7 @@ import { cardBridgeFeatureGap, hasCardBridge, pingCardBridge } from '../lib/card
 import { canPushDirectlyToCard, readStoredCardHost } from '../lib/cardConnection.js';
 import { createLiveControlAuthorityGate } from '../lib/cardLiveControl.js';
 import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
+import { handBackToOnlineStudio } from '../lib/runtimeMode.js';
 
 const SLOW_MODES = MODE_LIBRARY.filter((m) => m.tier === 'slow');
 const LIVELY_MODES = MODE_LIBRARY.filter((m) => m.tier === 'lively');
@@ -556,6 +557,10 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
   }, [stopMicTracks]);
 
   const startMic = useCallback(async () => {
+    if (globalThis.__LW_RUNTIME_MODE__?.secureTools === false) {
+      handBackToOnlineStudio('microphone');
+      return;
+    }
     // iOS: the AudioContext must be created/resumed synchronously inside the
     // tap — any await first (like getUserMedia's permission prompt) consumes
     // the user-gesture activation and the context stays suspended forever.

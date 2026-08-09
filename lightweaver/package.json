@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "fonts:prepare": "node scripts/prepare-local-fonts.mjs",
+    "build": "npm run fonts:prepare && vite build && node scripts/generate-service-worker.mjs",
+    "build:card": "npm run fonts:prepare && node scripts/build-card-studio.mjs",
     "build:functions": "mkdir -p .pages/functions-build && wrangler pages functions build functions --outdir .pages/functions-build --project-directory . --output-routes-path .pages/functions-build/_routes.json",
     "stage:pages": "npm run build:functions && rm -rf .pages/lightweaver && mkdir -p .pages/lightweaver && cp -R dist/. .pages/lightweaver/ && node scripts/generate-studio-build-graph.mjs .pages/lightweaver",
     "verify:pages": "node tests/pages-staging.mjs --artifact",
@@ -21,7 +23,7 @@
     "ci:browser-smoke": "npm run test:show && npm run test:screen-recovery && playwright test tests/workflow.spec.ts tests/screen-smoke.spec.ts tests/card-workspace.spec.ts --project=chromium --workers=1 --grep \"imports SVG|every primary screen|Hardware loads the verified production project|Hardware offers an exact current project|reachable recovering factory card uses URL IP\" && playwright test tests/layout-led-chipset.spec.ts tests/strip-discovery.spec.ts --project=chromium --workers=1",
     "ci:cloud": "npm run test:projects:browser",
     "ci:production": "npm run test:production",
-    "ci:firmware-sensitive": "node ../firmware/lightweaver-controller/tests/firmware-version-policy.mjs && npm run test:production-jobs && npm run test:core:source",
+    "ci:firmware-sensitive": "node ../firmware/lightweaver-controller/tests/firmware-version-policy.mjs && npm run test:production-jobs && npm run test:core:source && npm run test:windowless:tooling",
     "ci:artifact:contracts": "npm run test:production-jobs && node --test src/lib/firmwareRelease.test.js && node ../firmware/lightweaver-controller/tests/release-build-identity.mjs",
     "ci:artifact": "npm run ci:artifact:contracts && npm run firmware:check-bin",
     "test:prod-deploy": "node --test src/lib/productionDeploymentCheck.test.js src/lib/productionReleaseGate.test.js",
@@ -40,6 +42,8 @@
     "firmware:version:check": "node ../firmware/lightweaver-controller/scripts/firmware-version.mjs check",
     "check:prod": "node scripts/check-prod-freshness.mjs",
     "test:unit": "node --test src/lib/*.test.js",
+    "test:windowless:tooling": "node --test tests/windowless-*.test.mjs",
+    "test:windowless:browser": "playwright test --config tests/windowless-playwright.config.ts",
     "test:projects": "node --test functions/api/library/_shared/accountAuth.test.js functions/api/library/library-api.test.js tests/cloud-bindings.mjs src/lib/cloudLibraryClient.test.js src/lib/libraryBackup.test.js src/lib/workspaceAssets.test.js",
     "test:projects:browser": "playwright test tests/cloud-project-library.spec.ts --project=chromium --workers=1",
     "test:cloud-bindings": "node tests/cloud-bindings.mjs",
@@ -66,6 +70,8 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@fontsource-variable/dm-sans": "^5.3.0",
+    "@fontsource/spline-sans-mono": "^5.3.0",
     "@playwright/test": "^1.59.1",
     "@vitejs/plugin-react": "^4.3.4",
     "miniflare": "4.20260708.1",

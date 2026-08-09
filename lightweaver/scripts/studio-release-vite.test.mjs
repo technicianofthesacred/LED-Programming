@@ -17,7 +17,10 @@ test('Vite embeds and emits one exact Studio release identity', async t => {
     else process.env.LIGHTWEAVER_BUILD_NUMBER = priorBuildNumber;
   });
 
-  const { default: config } = await import(`../vite.config.js?studio-release-test=${Date.now()}`);
+  const { default: configFactory } = await import(`../vite.config.js?studio-release-test=${Date.now()}`);
+  const config = typeof configFactory === 'function'
+    ? configFactory({ command: 'build', mode: 'production' })
+    : configFactory;
   const embedded = parseStudioRelease(JSON.parse(config.define.__LIGHTWEAVER_STUDIO_RELEASE__));
   assert.equal(embedded.sourceRevision, REVISION);
   assert.equal(embedded.buildNumber, 214);

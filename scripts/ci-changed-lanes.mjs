@@ -16,6 +16,7 @@ const GENERATED_RELEASE_PATHS = Object.freeze([
   'lightweaver/public/firmware',
   'lightweaver/public/production/jobs',
   'release/job-sources',
+  'firmware/lightweaver-controller/src/LightweaverCardStudioBundle.h',
 ]);
 
 const isPath = (path, prefix) => path === prefix || path.startsWith(`${prefix}/`);
@@ -99,6 +100,7 @@ export function classifyChangedPaths(paths, { conservative = false, generatedRel
     if (isPath(path, 'lightweaver/src')) {
       lanes.source = true;
       lanes.browser = true;
+      lanes.firmware = true;
       continue;
     }
 
@@ -129,10 +131,14 @@ export function classifyChangedPaths(paths, { conservative = false, generatedRel
     ]) || isAnyPath(path, [
       'lightweaver/vite.config.js',
       'lightweaver/index.html',
+      'lightweaver/card.html',
       'lightweaver/wrangler.toml',
       'lightweaver/wrangler.local.toml',
     ])) {
       lanes.source = true;
+      if (isPath(path, 'lightweaver/scripts') || path === 'lightweaver/vite.config.js' || path === 'lightweaver/card.html') {
+        lanes.firmware = true;
+      }
       continue;
     }
 

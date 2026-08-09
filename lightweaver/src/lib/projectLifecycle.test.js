@@ -12,7 +12,23 @@ import {
   markRestored,
   replaceProjectLifecycle,
   replaceProjectSafely,
+  repositoryPersistenceMarker,
 } from './projectLifecycle.js';
+
+test('repository saves preserve the exact lifecycle revision and destination', () => {
+  assert.deepEqual(repositoryPersistenceMarker(
+    { source: { kind: 'card' } },
+    { generation: 4, editedRevision: 7 },
+  ), {
+    destination: 'card',
+    generation: 4,
+    revision: 7,
+  });
+  assert.equal(repositoryPersistenceMarker(
+    { source: { kind: 'recovery' } },
+    { generation: 4, editedRevision: 7 },
+  ), null);
+});
 
 function exactInstallation(revision) {
   return {
@@ -38,6 +54,8 @@ test('edits are distinct from browser, file, card, and recovery persistence', ()
   assert.equal(lifecycleLabel(state), 'Unsaved changes');
   state = markPersisted(state, 'file');
   assert.equal(lifecycleLabel(state), 'File downloaded');
+  state = markPersisted(state, 'card');
+  assert.equal(lifecycleLabel(state), 'Saved on card');
 
   state = markInstalled(state, exactInstallation(state.editedRevision));
   assert.equal(lifecycleLabel(state), 'Installed on card');

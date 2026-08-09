@@ -4,9 +4,15 @@ import assert from 'node:assert/strict';
 import {
   CANONICAL_PROJECT_EXTENSION,
   PROJECT_IMPORT_ACCEPT,
+  COMPLETE_EDITABLE_PROJECT_LABEL,
+  INSTALLED_CONFIGURATION_LABEL,
   canonicalProjectFileName,
+  parseProjectFile,
+  serializeProjectFile,
   slugifyProjectName,
 } from './projectFiles.js';
+import { createDefaultProject } from './projectModel.js';
+import { createProjectEnvelope } from './projectRepository.js';
 
 test('canonical extension and import accept list stay stable', () => {
   assert.equal(CANONICAL_PROJECT_EXTENSION, '.lw.json');
@@ -31,4 +37,12 @@ test('empty or symbol-only names fall back to lightweaver.lw.json', () => {
 test('slugify collapses runs and trims edge separators', () => {
   assert.equal(slugifyProjectName('--A  b--'), 'a-b');
   assert.equal(slugifyProjectName(42), '42');
+});
+
+test('project files round-trip envelope metadata and distinguish installed configuration', () => {
+  const envelope = createProjectEnvelope({ ...createDefaultProject(), id: 'file-p1' });
+  assert.deepEqual(parseProjectFile(serializeProjectFile(envelope)), envelope);
+  assert.equal(COMPLETE_EDITABLE_PROJECT_LABEL, 'Complete editable project');
+  assert.equal(INSTALLED_CONFIGURATION_LABEL, 'Installed configuration');
+  assert.notEqual(COMPLETE_EDITABLE_PROJECT_LABEL, INSTALLED_CONFIGURATION_LABEL);
 });

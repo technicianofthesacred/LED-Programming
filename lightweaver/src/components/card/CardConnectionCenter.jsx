@@ -18,6 +18,7 @@ import {
 import { nextCardConnectionAction } from '../../lib/cardConnectionFlow.js';
 import { cardBuildLabel, readPersistedCardIdentity, setupNetworkLabelForCardId } from '../../lib/cardIdentity.js';
 import { adoptDiscoveredDirectCard, connectCardLink } from '../../lib/cardLink.js';
+import { connectCardTransport, getActiveCardTransportAuthority } from '../../lib/cardTransport.js';
 import {
   SECURE_INSTALLER_URL,
   detectPlatformCapabilities,
@@ -74,6 +75,10 @@ export function CardConnectionCenter({
   const [bridgeReturnCode, setBridgeReturnCode] = useState('');
   const [takeoverHost, setTakeoverHost] = useState('');
   const [pairingBusy, setPairingBusy] = useState(false);
+  const [directAttempt, setDirectAttempt] = useState(null);
+  const [directBusy, setDirectBusy] = useState(false);
+  const [capabilityBusy, setCapabilityBusy] = useState(false);
+  const [capabilityReady, setCapabilityReady] = useState(false);
   const capabilities = useMemo(platformCapabilities, [open]);
   const rememberedCard = readPersistedCardIdentity();
   const hasKnownCard = Boolean(link.card?.id || link.expectedCard?.id || rememberedCard?.id);
@@ -114,6 +119,11 @@ export function CardConnectionCenter({
     setFailure('');
     setIntent('');
     setBridgeLaunchState('idle');
+    const activeAuthority = getActiveCardTransportAuthority();
+    setDirectAttempt(activeAuthority);
+    setDirectBusy(false);
+    setCapabilityBusy(false);
+    setCapabilityReady(Boolean(activeAuthority?.ownerCapability));
     const timer = window.setTimeout(() => panelRef.current?.focus(), 0);
     const onKeyDown = (event) => {
       if (event.key === 'Escape') {
@@ -178,15 +188,56 @@ export function CardConnectionCenter({
     goToStripDiscovery();
   };
 
-  const connect = (rawHost = '', { bridge = false } = {}) => {
+  const connect = async (rawHost = '', { bridge = false } = {}) => {
     setFailure('');
     const targetHost = normalizeCardHost(rawHost || readStoredCardHost());
     if (!isLocalCardHost(targetHost)) {
       setFailure('Enter a valid local Lightweaver hostname before connecting.');
       return;
     }
-    const result = bridge ? connectCardLink(targetHost) : onConnectCard(targetHost);
-    if (!result) setFailure('The browser could not open the card page. Allow popups, then try again.');
+    if (bridge) {
+      const result = connectCardLink(targetHost);
+      if (!result) setFailure('The browser could not open the legacy card page. Allow popups, then try again.');
+      return result;
+    }
+    setDirectBusy(true);
+    try {
+      const result = await connectCardTransport({
+        host: targetHost,
+        expectedCardId: rememberedCard?.id || link.expectedCard?.id || '',
+      });
+      setDirectAttempt(result);
+      if (result.connected) {
+        setCapabilityReady(Boolean(result.ownerCapability));
+        setFailure('');
+        return result;
+      }
+      if (result.reason === 'wrong-card') {
+        setFailure(`Wrong card: expected ${result.expectedCardId || 'the paired card'}, but found ${result.observedCardId || 'another Lightweaver'}. Writes remain blocked.`);
+      } else {
+        setFailure('Studio could not reach the card directly. Check that this device is on the same Wi-Fi and that local-network access is allowed.');
+      }
+      return result;
+    } finally {
+      setDirectBusy(false);
+    }
+  };
+
+  const enableLiveControl = async () => {
+    if (!directAttempt?.connected || capabilityBusy) return;
+    setCapabilityBusy(true);
+    setFailure('');
+    try {
+      await directAttempt.issueOwnerCapability({ commissioningProof: 'owner-confirmed-physical-control' });
+      setCapabilityReady(true);
+    } catch (error) {
+      setCapabilityReady(false);
+      setFailure(error?.status === 403
+        ? 'Pairing was not confirmed. Touch a physical control on this card, then choose Enable live control again.'
+        : (error?.message || 'The card could not authorize live control.'));
+    } finally {
+      setCapabilityBusy(false);
+    }
   };
 
   const chooseWorkingCard = () => {
@@ -420,6 +471,38 @@ export function CardConnectionCenter({
         <button type="button" className="card-connection-close" onClick={closeAndRestore} aria-label="Close connection center">×</button>
       </header>
 
+      {(!['connected-direct', 'connected-bridge'].includes(link.state) || directAttempt?.connected) && (
+        <div className="card-windowless-connect" data-testid="windowless-card-connect">
+          <h3>{directAttempt?.connected ? 'Live control permission' : 'Connect this card'}</h3>
+          <p>{directAttempt?.connected
+            ? 'Touch a physical card control, then enable a short-lived permission for live previews and Stop on this exact card.'
+            : 'Your browser may ask whether Lightweaver Studio can find devices on your local network. Choose Allow so Studio can verify this exact card.'}</p>
+          <div className="card-connection-actions">
+            {directAttempt?.connected ? (
+              <button type="button" className="btn primary" onClick={enableLiveControl} disabled={capabilityBusy || capabilityReady}>
+                {capabilityBusy ? 'Confirming…' : capabilityReady ? 'Live control enabled' : 'Enable live control'}
+              </button>
+            ) : (
+              <button type="button" className="btn primary" onClick={() => connect()} disabled={directBusy}>
+                {directBusy ? 'Connecting…' : directAttempt ? 'Try again' : 'Connect this card'}
+              </button>
+            )}
+            {directAttempt?.connected === false && directAttempt.reason !== 'wrong-card' && (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => window.location.assign(directAttempt.recovery.localStudioUrl)}
+              >
+                Open local Studio
+              </button>
+            )}
+          </div>
+          {directAttempt?.reason === 'wrong-card' && (
+            <p role="alert">Expected {directAttempt.expectedCardId || 'the paired card'}; found {directAttempt.observedCardId || 'a different card'}. No card changes are available.</p>
+          )}
+        </div>
+      )}
+
       {bridgeResult ? (
         <BridgeResumePanel
           result={bridgeResult}
@@ -542,6 +625,8 @@ export function CardConnectionCenter({
             <button type="submit" className="btn">Save</button>
           </div>
         </form>
+        <p>The card-page bridge is retained temporarily as a rollout fallback.</p>
+        <button type="button" className="btn" onClick={() => connect(host, { bridge: true })}>Use legacy card-page bridge</button>
       </details>
     </section>
   );

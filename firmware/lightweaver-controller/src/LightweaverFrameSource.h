@@ -10,6 +10,7 @@ enum FrameSource : uint8_t {
   FRAME_INTERNAL = 0,
   FRAME_WLED_REALTIME = 1,
   FRAME_ARTNET = 2,
+  FRAME_HTTP = 3,
 };
 
 // Streaming is considered "active" when an external source has delivered a
