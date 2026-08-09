@@ -69,7 +69,8 @@ assert.match(
 
 // Ordering: the deferred reboot is scheduled, then the success reply is sent.
 const rebootAt = script.search(/setTimeout\([^;]*\/api\/reboot/);
-const replyAt = script.search(/lwBridgeReply\(ev,\s*\{[^}]*ok:\s*true/);
+const replyOffset = script.slice(configBranchStart).search(/lwBridgeReply\(ev,\s*\{[^}]*ok:\s*true/);
+const replyAt = replyOffset < 0 ? -1 : configBranchStart + replyOffset;
 assert.ok(rebootAt > -1, 'bridge config handler should schedule the deferred reboot');
 assert.ok(replyAt > -1, 'bridge script should send a success reply to Studio');
 assert.ok(

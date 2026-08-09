@@ -97,8 +97,12 @@ const RETRYABLE_BRIDGE_TYPES = new Set([
 // feature first shipped in. Cards report their version in the 'ready'
 // handshake (and on every relay reply); firmware older than the versioned
 // bridge reports nothing, which we treat as 0 (legacy).
-export const CARD_BRIDGE_PROTOCOL_VERSION = 2;
-export const CARD_BRIDGE_FEATURE_VERSIONS = { frame: 1, 'wifi-handoff-ack': 2 };
+export const CARD_BRIDGE_PROTOCOL_VERSION = 6;
+export const CARD_BRIDGE_FEATURE_VERSIONS = {
+  frame: 1,
+  'wifi-handoff-ack': 2,
+  'release-bridge': 6,
+};
 
 export const CARD_BRIDGE_CHANGED_EVENT = 'lightweaver-card-bridge-changed';
 export const STUDIO_BRIDGE_APP = 'LightweaverStudioBridge';
@@ -108,7 +112,10 @@ export const CARD_BRIDGE_APP = 'LightweaverCardBridge';
 // card tab ever exists; unnamed '_blank' opens spawn extra tabs that race the
 // tracked bridge window.
 export const CARD_BRIDGE_WINDOW_NAME = 'lightweaver-card-bridge';
+export const CARD_BRIDGE_UTILITY_WINDOW_FEATURES = 'popup=yes,width=360,height=180';
 export const LOCAL_CHIP_DEFAULT_KEY = 'lw_local_chip_default';
+
+const CARD_BRIDGE_RELEASE_REASONS = new Set(['disconnected']);
 
 let bridgeWindow = null;
 let bridgeOrigin = '';
@@ -1012,7 +1019,7 @@ export function bootstrapCardBridgeFromOpener() {
 export function buildCardBridgeLaunchUrl(rawHost = '', studioUrl = '') {
   const host = normalizeCardHost(rawHost || readStoredCardHost());
   const url = new URL(`${cardHostToUrl(host)}/`);
-  const fragment = new URLSearchParams({ studioBridge: '1' });
+  const fragment = new URLSearchParams({ studioBridge: '1', bridgeUtility: '1' });
   const studioOrigin = currentStudioOrigin(studioUrl);
   if (studioOrigin) fragment.set('studioOrigin', studioOrigin);
   url.hash = fragment.toString();
@@ -1029,7 +1036,7 @@ export function openCardBridge(rawHost = '', {
   const host = normalizeCardHost(rawHost || readStoredCardHost());
   const origin = cardHostToUrl(host);
   const bridgeUrl = buildCardBridgeLaunchUrl(host, studioUrl);
-  const opened = win.open(bridgeUrl, CARD_BRIDGE_WINDOW_NAME);
+  const opened = win.open(bridgeUrl, CARD_BRIDGE_WINDOW_NAME, CARD_BRIDGE_UTILITY_WINDOW_FEATURES);
   if (!opened) return reuseActiveBridgeWindow(host, origin);
   // window.open runs synchronously inside the user gesture. Revoke only after
   // it returns a real target: a blocked popup did not navigate anything and
@@ -1069,6 +1076,7 @@ export function openLocalCardPage(rawHost = '', { path = '/', reason = 'open-car
   // non-card origin.
   if (url.origin !== origin) return { ok: false, reason: 'invalid-host' };
   const fragment = new URLSearchParams(url.hash.slice(1));
+  fragment.delete('bridgeUtility');
   fragment.set('studioBridge', '1');
   const studioOrigin = currentStudioOrigin();
   if (studioOrigin) fragment.set('studioOrigin', studioOrigin);
@@ -2102,7 +2110,20 @@ export function sendCardBridgeRequest(type, payload = {}, {
     ));
   }
 
-  if (type === 'wifi-handoff-ack') {
+  if (type === 'release-bridge') {
+    if (!bridgeConnected
+      || !bridgeReady
+      || !bridgeWindow
+      || bridgeTargetClosed()
+      || normalizeCardHost(bridgeHost) !== resolvedHost
+      || bridgeOrigin !== targetOrigin
+      || bridgeVersion < CARD_BRIDGE_FEATURE_VERSIONS['release-bridge']) {
+      return Promise.reject(bridgeError(
+        'The card bridge utility is no longer the active verified session.',
+        'bridge-missing',
+      ));
+    }
+  } else if (type === 'wifi-handoff-ack') {
     if (
       !bridgeReady
       || !bridgeConnected
@@ -2255,4 +2276,40 @@ export function sendCardBridgeRequest(type, payload = {}, {
 
 export function pingCardBridge(options = {}) {
   return sendCardBridgeRequest('status', {}, options);
+}
+
+// Panel dismissal and Setup completion intentionally do not call this. The
+// passive card page remains the HTTPS-to-HTTP command bridge for Layout,
+// Patterns, and later live control until the owner explicitly disconnects.
+export async function releaseCardBridge(reason, { timeoutMs = 1500 } = {}) {
+  const normalizedReason = String(reason || '').trim();
+  if (!CARD_BRIDGE_RELEASE_REASONS.has(normalizedReason)) {
+    throw bridgeError('A supported card bridge release reason is required.', 'invalid-release-reason');
+  }
+
+  const target = bridgeWindow;
+  const host = normalizeCardHost(bridgeHost || readStoredCardHost());
+  const origin = bridgeOrigin || cardHostToUrl(host);
+  const lifecycle = bridgeLifecycle;
+  if (!target || bridgeTargetClosed(target)) {
+    clearBridgeTarget({ host, origin });
+    return { released: true, reason: normalizedReason, fallback: true };
+  }
+
+  if (bridgeVersion < CARD_BRIDGE_FEATURE_VERSIONS['release-bridge']) {
+    try { target.close?.(); } catch { /* Explicit disconnect still revokes Studio's handle. */ }
+    if (bridgeWindow === target && bridgeLifecycle === lifecycle) clearBridgeTarget({ host, origin });
+    return { released: true, reason: normalizedReason, fallback: true };
+  }
+
+  const response = await sendCardBridgeRequest('release-bridge', { reason: normalizedReason }, {
+    host,
+    timeoutMs,
+    retryOnTimeout: false,
+  });
+  if (response?.released !== true) {
+    throw bridgeError('The card bridge did not confirm that the utility window was released.', 'bridge-release-unconfirmed');
+  }
+  if (bridgeWindow === target && bridgeLifecycle === lifecycle) clearBridgeTarget({ host, origin });
+  return { released: true, reason: normalizedReason };
 }

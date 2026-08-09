@@ -110,8 +110,9 @@ void scheduleApTeardown(uint32_t generation);
 // Studio ask ONE named port to light instead of making the owner wait for the
 // sweep to reach it. Studio feature-detects, so a v3 card simply offers no grid.
 // v5 adds the 'clear-project' relay — the non-destructive "clear temporary
-// setup" for a card stranded on a bench-discovery project.
-constexpr int LW_BRIDGE_VERSION = 5;
+// setup" for a card stranded on a bench-discovery project. v6 adds explicit
+// release of the passive bridge utility; Setup completion itself keeps it live.
+constexpr int LW_BRIDGE_VERSION = 6;
 
 String apSsid() {
   uint64_t mac = ESP.getEfuseMac();
@@ -232,14 +233,30 @@ String studioBridgeUrl(const RuntimeConfig& cfg) {
 String studioSetupUrl(const RuntimeConfig& cfg) {
   String url = "https://led.mandalacodes.com/?cardBridge=1&cardHost=";
   url += cardBridgeHost(cfg);
-  url += "#screen=layout";
+  url += "#screen=card&section=setup";
   return url;
 }
 
 String studioOpenScript() {
   String script;
-  script.reserve(1100);
-  script += F("function lwOpenStudio(event,url){"
+  script.reserve(2400);
+  script += F("let lwBridgeUtilityActive=false;"
+           "const lwActivateBridgeUtility=()=>{"
+             "const wrap=document.querySelector('.wrap'),utility=$('bridge-utility');"
+             "if(!lwBridgeLaunch||!window.opener||window.opener.closed||!wrap||!utility)return false;"
+             "lwBridgeUtilityActive=true;wrap.hidden=true;utility.hidden=false;document.body.classList.add('bridge-utility-mode');"
+             "try{sessionStorage.setItem('lwBridgeUtility','1')}catch(_){}"
+             "try{window.resizeTo(360,180)}catch(_){}"
+             "return true"
+           "};"
+           "const lwShowVisibleCardPage=()=>{"
+             "const wrap=document.querySelector('.wrap'),utility=$('bridge-utility');"
+             "lwBridgeUtilityActive=false;if(wrap)wrap.hidden=false;if(utility)utility.hidden=true;document.body.classList.remove('bridge-utility-mode');"
+             "try{sessionStorage.removeItem('lwBridgeUtility')}catch(_){}"
+             "return false"
+           "};"
+           "const lwRestoreBridgeUtility=()=>lwBridgeUtilityIntent()?lwActivateBridgeUtility():lwShowVisibleCardPage();"
+           "function lwOpenStudio(event,url){"
            "if(event)event.preventDefault();"
            "try{"
              "const requested=new URL(url,'https://led.mandalacodes.com/');"
@@ -247,7 +264,7 @@ String studioOpenScript() {
              "u.searchParams.set('cardBridge','1');"
              "u.searchParams.set('cardHost',location.host);"
              "let editing=false;for(const key of ['editPattern','editLook']){const value=requested.searchParams.get(key)||'';if(/^[a-z0-9_-]{1,64}$/i.test(value)){u.searchParams.set(key,value);editing=true}}"
-             "u.hash=!editing&&requested.hash==='#screen=layout'?'#screen=layout':'#screen=card&section=overview';url=u.href"
+             "u.hash=!editing&&requested.hash==='#screen=layout'?'#screen=layout':!editing&&requested.hash==='#screen=card&section=setup'?'#screen=card&section=setup':'#screen=card&section=overview';url=u.href"
            "}catch(_){url='https://led.mandalacodes.com/?cardBridge=1&cardHost='+encodeURIComponent(location.host)+'#screen=card&section=overview'}"
            "let opener=null;try{if(lwBridgeLaunch&&window.opener&&!window.opener.closed)opener=window.opener}catch(_){}"
            "if(opener){try{opener.location.href=url}catch(_){}try{opener.focus()}catch(_){}return false}"
@@ -261,7 +278,7 @@ String studioOpenScript() {
 
 String studioBridgeScript() {
   String script;
-  script.reserve(7600);
+  script.reserve(9200);
   const String bridgeVersion = String(LW_BRIDGE_VERSION);
   // Keep in sync with corsOriginAllowed(): production Studio, the exact
   // primary Pages deployment, and local dev.
@@ -276,8 +293,15 @@ String studioBridgeScript() {
                 "const p=new URLSearchParams(raw);if(p.getAll('studioBridge').length!==1||p.get('studioBridge')!=='1')return null;"
                 "return p"
               "};"
-              "const lwBridgeParams=()=>{const p=lwBridgeRawParams(),o=p&&p.get('studioOrigin')||'';return p&&p.getAll('studioOrigin').length===1&&lwBridgeAllowed(o)?p:null};"
+              "const lwBridgeParams=()=>{"
+                "const p=lwBridgeRawParams(),o=p&&p.get('studioOrigin')||'',utility=p&&p.getAll('bridgeUtility')||[];"
+                "return p&&p.getAll('studioOrigin').length===1&&lwBridgeAllowed(o)&&utility.length<=1&&(!utility.length||utility[0]==='1')?p:null"
+              "};"
               "const lwBridgeLaunch=lwBridgeParams();"
+              "const lwBridgeUtilityIntent=()=>{"
+                "const p=lwBridgeLaunch;if(!p)return false;const allowed=['studioBridge','studioOrigin','bridgeUtility'];"
+                "return [...p.keys()].every(k=>allowed.includes(k))&&allowed.every(k=>p.getAll(k).length===1)&&p.get('bridgeUtility')==='1'"
+              "};"
               "const lwBridgeReadyOrigin=()=>{"
                 "if(lwBridgeLaunch)return lwBridgeLaunch.get('studioOrigin');"
                 "const p=lwBridgeRawParams();return p&&[...p.keys()].every(k=>k==='studioBridge')?'https://led.mandalacodes.com':''"
@@ -316,10 +340,19 @@ String studioBridgeScript() {
               "const lwBridgeReply=(ev,msg)=>{try{ev.source&&ev.source.postMessage(Object.assign({app:'LightweaverCardBridge',version:");
   script += bridgeVersion;
   script += F("},msg),ev.origin)}catch(_){}};"
+              "const lwBridgeReleaseReasons=['disconnected'];"
+              "const lwBridgeReleaseAllowed=(ev,m)=>lwBridgeUtilityActive&&lwBridgeLaunch&&ev.source===window.opener&&ev.origin===lwBridgeLaunch.get('studioOrigin')&&m.payload&&lwBridgeReleaseReasons.includes(m.payload.reason);"
+              "const lwCloseBridgeUtility=reason=>{"
+                "const utility=$('bridge-utility');if(utility)utility.textContent=reason==='opener-teardown'?'Studio closed — you can close this card window.':'Connection ended — you can close this card window.';"
+                "try{sessionStorage.removeItem('lwBridgeUtility')}catch(_){}"
+                "try{window.close()}catch(_){}"
+              "};"
               "const lwBridgeError=(reason,message)=>Object.assign(new Error(message),{reason});"
               "if(window.opener&&lwReadyOrigin){try{window.opener.postMessage({app:'LightweaverCardBridge',type:'ready',version:");
   script += bridgeVersion;
   script += F(",href:location.href,host:location.host},lwReadyOrigin)}catch(_){}};"
+              "if(typeof lwRestoreBridgeUtility==='function')lwRestoreBridgeUtility();"
+              "if(typeof window.setInterval==='function')window.setInterval(()=>{if(lwBridgeUtilityActive&&(!window.opener||window.opener.closed))lwCloseBridgeUtility('opener-teardown')},1000);"
               // Frame relay (bridge v1; +start in v3): Studio posts
               // {type:'frame',payload:{pixels:['RRGGBB',...],seg?:n,start?:n>=1}}
               // and this page forwards it into ONE persistent same-origin WebSocket
@@ -367,6 +400,12 @@ String studioBridgeScript() {
               "window.addEventListener('message',async ev=>{"
                 "const m=ev.data||{};"
                 "if(m.app!=='LightweaverStudioBridge'||!lwBridgeAllowed(ev.origin))return;"
+                "if(m.type==='release-bridge'){"
+                  "if(!lwBridgeReleaseAllowed(ev,m))return;"
+                  "lwBridgeUtilityActive=false;"
+                  "lwBridgeReply(ev,{id:m.id,type:m.type,ok:true,response:{released:true}});"
+                  "setTimeout(()=>lwCloseBridgeUtility('disconnected'),0);return"
+                "}"
                 "try{let response=null;"
                   "if(m.type==='status'||m.type==='ping'){response=await get('/api/status')}"
                   "else if(m.type==='zones'){response=await get('/api/zones')}"
@@ -900,8 +939,12 @@ void handleAdvancedRoot() {
             ".handoff{background:#141414;border:1px solid #c89b5c;border-radius:14px;padding:16px 18px;color:#f4ede0;font-size:14px;line-height:1.45;margin-bottom:14px}"
             ".handoff.ok{border-color:#7fb069;color:#7fb069}.handoff.err{border-color:#e07856;color:#e07856}"
             ".link{display:block;text-align:center;color:#c89b5c;text-decoration:none;font-size:14px;padding:18px;margin-top:8px;border:1px solid #c89b5c;border-radius:10px}"
+            ".link[hidden]{display:none}"
             ".link:active{background:rgba(200,155,92,0.1)}"
             ".foot{text-align:center;color:#5a5247;font-size:11px;margin-top:32px;font-family:ui-monospace,SF Mono,monospace}"
+            ".bridge-utility{min-height:100vh;margin:0;display:grid;place-items:center;padding:24px;color:#c9b99f;font-size:14px;line-height:1.55;text-align:center}"
+            ".bridge-utility[hidden]{display:none}"
+            "body.bridge-utility-mode{overflow:hidden}"
             ".setup-mode .wrap{max-width:520px;padding:max(12px,env(safe-area-inset-top)) max(14px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left))}"
             ".setup-mode .head{margin-bottom:10px}"
             ".setup-mode .card{padding:14px;border-radius:10px;margin-bottom:0}"
@@ -1081,7 +1124,8 @@ void handleAdvancedRoot() {
 
   page += F("<div class='foot' id='foot'>");
   page += escapeHtml(stationActive ? cfg.activeHostname + ".local" : cfg.activeIp);
-  page += F("</div></div>");
+  page += F("</div></div>"
+            "<p class='bridge-utility' id='bridge-utility' hidden role='status' aria-live='polite'>Connection active — keep this window open while Studio uses the card.</p>");
 
   // Script
   page += F("<script>"

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  CARD_BRIDGE_UTILITY_WINDOW_FEATURES,
   CARD_BRIDGE_WINDOW_NAME,
   bootstrapCardBridgeFromOpener,
   getCardBridgeState,
@@ -9,6 +10,7 @@ import {
   openCardBridge,
   openLocalCardPage,
   reserveCardBridgeWindow,
+  releaseCardBridge,
   retargetCardBridge,
   sendCardBridgeRequest,
 } from './cardBridge.js';
@@ -34,8 +36,10 @@ function stubWindow({ openResult } = {}) {
       if (listeners.get(type) === listener) listeners.delete(type);
     },
     dispatchEvent(event) { listeners.get(event.type)?.(event); },
-    open(url, name) {
-      opened.push({ url, name });
+    focusCalls: 0,
+    focus() { this.focusCalls += 1; },
+    open(url, name, features) {
+      opened.push({ url, name, features });
       return openResult;
     },
   };
@@ -99,6 +103,19 @@ test('a blocked popup reports popup-blocked so callers can show the visible copy
   assert.deepEqual(openLocalCardPage('192.168.50.3'), { ok: false, reason: 'popup-blocked' });
   assert.equal(opened.length, 1);
   assert.equal(opened[0].name, CARD_BRIDGE_WINDOW_NAME);
+  assert.equal(opened[0].features, undefined);
+});
+
+test('bridge-only acquisition requests a compact passive utility window', () => {
+  const tab = fakeCardTab();
+  const { opened } = stubWindow({ openResult: tab });
+
+  assert.equal(openCardBridge('192.168.50.28'), tab);
+  assert.deepEqual(opened[0], {
+    url: 'http://192.168.50.28/#studioBridge=1&bridgeUtility=1',
+    name: CARD_BRIDGE_WINDOW_NAME,
+    features: CARD_BRIDGE_UTILITY_WINDOW_FEATURES,
+  });
 });
 
 test('a gesture-reserved card window navigates to a discovered host without a second popup and waits for verification', async () => {
@@ -119,7 +136,7 @@ test('a gesture-reserved card window navigates to a discovered host without a se
 
   const reserved = reserveCardBridgeWindow();
   assert.equal(reserved, tab, 'the user gesture reserves the stable named tab');
-  assert.deepEqual(opened, [{ url: '', name: CARD_BRIDGE_WINDOW_NAME }]);
+  assert.deepEqual(opened, [{ url: '', name: CARD_BRIDGE_WINDOW_NAME, features: undefined }]);
 
   const attempt = acquireCardBridgeFromGesture(host, {
     reservedWindow: reserved,
@@ -271,6 +288,75 @@ test('an ordinary card-page click opens the visible page in bridge mode for the 
   const fragment = new URLSearchParams(url.hash.slice(1));
   assert.equal(fragment.get('studioBridge'), '1');
   assert.equal(fragment.get('studioOrigin'), 'https://led.mandalacodes.com');
+  assert.equal(fragment.has('bridgeUtility'), false);
+  assert.equal(opened[0].features, undefined);
+});
+
+test('ordinary card-page navigation strips a supplied bridge utility intent', () => {
+  const tab = fakeCardTab();
+  const { opened } = stubWindow({ openResult: tab });
+
+  assert.equal(openLocalCardPage('192.168.50.30', {
+    path: '/settings#bridgeUtility=1&section=network',
+  }).ok, true);
+  const fragment = new URLSearchParams(new URL(opened[0].url).hash.slice(1));
+  assert.equal(fragment.has('bridgeUtility'), false);
+  assert.equal(fragment.get('section'), 'network');
+});
+
+test('explicit disconnect keeps the bridge live until the exact card acknowledges release', async () => {
+  const tab = fakeCardTab();
+  const otherTab = fakeCardTab();
+  const { emitMessage } = stubWindow({ openResult: tab });
+
+  openCardBridge('192.168.50.37');
+  const ping = sendCardBridgeRequest('ping', {}, { host: '192.168.50.37', timeoutMs: 100 });
+  const pingRequest = tab.postMessages.at(-1).message;
+  emitMessage({
+    origin: 'http://192.168.50.37', source: tab,
+    data: { app: 'LightweaverCardBridge', id: pingRequest.id, ok: true, version: 6 },
+  });
+  await ping;
+
+  await assert.rejects(() => releaseCardBridge('setup-complete'), /release reason/i);
+  const release = releaseCardBridge('disconnected', { timeoutMs: 100 });
+  const releaseRequest = tab.postMessages.at(-1).message;
+  assert.equal(releaseRequest.type, 'release-bridge');
+  assert.deepEqual(releaseRequest.payload, { reason: 'disconnected' });
+  assert.equal(getCardBridgeState().open, true);
+
+  emitMessage({
+    origin: 'http://192.168.50.37', source: otherTab,
+    data: { app: 'LightweaverCardBridge', version: 6, id: releaseRequest.id, ok: true, response: { released: true } },
+  });
+  assert.equal(getCardBridgeState().open, true);
+
+  emitMessage({
+    origin: 'http://192.168.50.37', source: tab,
+    data: { app: 'LightweaverCardBridge', version: 6, id: releaseRequest.id, ok: true, response: { released: true } },
+  });
+  assert.deepEqual(await release, { released: true, reason: 'disconnected' });
+  assert.equal(getCardBridgeState().open, false);
+});
+
+test('timed-out explicit disconnect preserves the recoverable bridge target', async () => {
+  const tab = fakeCardTab();
+  const { emitMessage } = stubWindow({ openResult: tab });
+
+  openCardBridge('192.168.50.38');
+  const ping = sendCardBridgeRequest('ping', {}, { host: '192.168.50.38', timeoutMs: 100 });
+  const pingRequest = tab.postMessages.at(-1).message;
+  emitMessage({
+    origin: 'http://192.168.50.38', source: tab,
+    data: { app: 'LightweaverCardBridge', id: pingRequest.id, ok: true, version: 6 },
+  });
+  await ping;
+
+  await assert.rejects(
+    () => releaseCardBridge('disconnected', { timeoutMs: 5 }),
+    error => error?.reason === 'bridge-timeout',
+  );
+  assert.equal(getCardBridgeState().open, true);
 });
 
 test('ordinary navigation persists only after paired identity and readiness are accepted', async () => {
@@ -391,14 +477,14 @@ test('repeat visits reuse the one named card tab, same handle, and focus it', ()
   assert.equal(first.ok, true);
   assert.equal(first.window, tab);
   assert.equal(opened.length, 1);
-  assert.deepEqual(opened[0], { url: 'http://192.168.50.4/#studioBridge=1', name: CARD_BRIDGE_WINDOW_NAME });
+  assert.deepEqual(opened[0], { url: 'http://192.168.50.4/#studioBridge=1', name: CARD_BRIDGE_WINDOW_NAME, features: undefined });
   const firstLifecycle = getCardBridgeState().lifecycle;
 
   const second = openLocalCardPage('192.168.50.4', { path: '/settings', reason: 'open-card-page' });
   assert.equal(second.ok, true);
   assert.equal(second.window, first.window, 'the same named window handle is reused');
   assert.equal(opened.length, 2);
-  assert.deepEqual(opened[1], { url: 'http://192.168.50.4/settings#studioBridge=1', name: CARD_BRIDGE_WINDOW_NAME });
+  assert.deepEqual(opened[1], { url: 'http://192.168.50.4/settings#studioBridge=1', name: CARD_BRIDGE_WINDOW_NAME, features: undefined });
   assert.equal(tab.focusCalls, 2, 'an already-open tab is focused');
   assert.ok(getCardBridgeState().lifecycle > firstLifecycle,
     'same-window same-host navigation starts a new revoked lifecycle');
@@ -428,7 +514,7 @@ test('an empty host falls back to the stored local card host', () => {
   const { opened, values } = stubWindow({ openResult: tab });
   values.set('lw_chip_card_host', '192.168.50.6');
   assert.equal(openLocalCardPage().ok, true);
-  assert.deepEqual(opened[0], { url: 'http://192.168.50.6/#studioBridge=1', name: CARD_BRIDGE_WINDOW_NAME });
+  assert.deepEqual(opened[0], { url: 'http://192.168.50.6/#studioBridge=1', name: CARD_BRIDGE_WINDOW_NAME, features: undefined });
 });
 
 const handoffCorrelation = Object.freeze({

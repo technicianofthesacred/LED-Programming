@@ -192,7 +192,14 @@ async function stopCardPlayback(host) {
   } catch { /* a card that will not take the request will show the probe or not on its own */ }
 }
 
-export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null }) {
+export function StripDiscoveryPanel({
+  cardHost = '',
+  cardLink = null,
+  go = null,
+  embedded = false,
+  onLifecycleChange = null,
+  onComplete = null,
+}) {
   const host = normalizeCardHost(cardHost || cardLink?.host || readStoredCardHost());
   const flowIdRef = useRef('');
   const committedPartsRef = useRef(null);
@@ -698,7 +705,13 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
     setProjectPortRoles(parts.portRoles);
     setProjectStandaloneController(previous => ({
       ...previous,
-      ...(parts.colorOrder ? { led: { ...(previous?.led || {}), colorOrder: parts.colorOrder } } : {}),
+      ...(parts.colorOrder ? {
+        led: {
+          ...(previous?.led || {}),
+          colorOrder: parts.colorOrder,
+          colorOrderConfirmed: true,
+        },
+      } : {}),
       outputs: parts.outputs,
     }));
     setRecorded(true);
@@ -785,6 +798,10 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
   const activePort = session?.ports.find(port => port.pin === session.activePin) || null;
   const phase = session?.phase || 'idle';
 
+  useEffect(() => {
+    onLifecycleChange?.({ phase, busy, lighting });
+  }, [busy, lighting, onLifecycleChange, phase]);
+
   // Abandoning discovery mid-run leaves the card holding the temporary bench
   // setup with no project of the owner's on it (findings 2026-08-06, #1).
   // The browser cannot stop that, but it can make closing the tab deliberate.
@@ -799,10 +816,10 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
   }, [phaseIsPastIdle, phase]);
 
   return (
-    <div className="screen strip-discovery" data-testid="strip-discovery">
+    <div className={`${embedded ? '' : 'screen '}strip-discovery${embedded ? ' is-embedded' : ''}`} data-testid="strip-discovery">
       <header className="panel-head">
-        <span className="ttl">Find my strips</span>
-        <span className="meta">{host || 'no card host'} · one-time card setup, then lights only</span>
+        {!embedded && <span className="ttl">Find my strips</span>}
+        <span className="meta">{host || 'no card host'} · physical light setup · outputs use GPIO labels</span>
       </header>
 
       {maxMilliampsSource === 'default' && (
@@ -872,11 +889,11 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
               </button>
             </div>
           )}
-          <h3>Which ports should Studio look at?</h3>
+          <h3>Which outputs should Studio check?</h3>
           <p>
-            A port can carry a strip, a knob or slider, or nothing. Studio only lights the ports you
-            leave set to a strip. Pick up to {CARD_HARDWARE_CONTRACT.maxOutputs} — that is how many
-            strip outputs this card can drive at once.
+            An output can carry lights, a knob or slider, or nothing. Studio checks only the outputs you
+            leave set to lights. Pick up to {CARD_HARDWARE_CONTRACT.maxOutputs} — that is how many
+            light outputs this card can drive at once. GPIO is the small technical label on the card.
           </p>
           {probePorts?.available && (
             <p className="strip-discovery-note" data-testid="discovery-probe-hint">
@@ -921,7 +938,7 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
           </div>
           {portRoles.some(entry => BENCH_RESERVED_CONTROL_PINS.includes(entry.pin)) && (
             <p className="strip-discovery-note" data-testid="discovery-control-pins">
-              The other ports are held by the knobs and buttons.
+              The other outputs are held by the knobs and buttons.
             </p>
           )}
           {selectedPort !== null && (
@@ -966,11 +983,11 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
             onClick={startDiscovery}
             disabled={busy || probeTargets.length === 0 || overOutputLimit || !bench.config}
           >
-            {busy ? 'Setting the card up…' : 'Start finding strips'}
+            {busy ? 'Setting the card up…' : 'Start finding lights'}
           </button>
           <p className="strip-discovery-note" data-testid="discovery-start-note">
-            This writes one temporary setup to the card — {DISCOVERY_BENCH_HEADROOM} LEDs per chosen
-            port — so it can light LEDs at all. The card keeps playing that setup, even after a
+            This writes one temporary setup to the card — {DISCOVERY_BENCH_HEADROOM} lights per chosen
+            output — so it can light the connected run at all. The card keeps playing that setup, even after a
             restart, until your own project replaces it at the end.
           </p>
         </section>
@@ -1139,7 +1156,23 @@ export function StripDiscoveryPanel({ cardHost = '', cardLink = null, go = null 
 
       {phase === 'done' && (
         <section className="strip-discovery-step" data-testid="discovery-done">
-          {installed ? (
+          {embedded ? (
+            <>
+              <h3>The lights are measured</h3>
+              <p>
+                Studio saved the output, color order, light count, and final-light boundary in this project.
+                The card is still running a temporary low-power setup; place the lights in the artwork before the final test and card install.
+              </p>
+              <button
+                type="button"
+                className="btn primary"
+                data-testid="discovery-continue-layout"
+                onClick={() => onComplete?.()}
+              >
+                Continue to Layout
+              </button>
+            </>
+          ) : installed ? (
             <div data-testid="discovery-installed">
               <h3>On the card</h3>
               <p>Your setup is saved on the card and the lights are running. Open Patterns to start the show.</p>
