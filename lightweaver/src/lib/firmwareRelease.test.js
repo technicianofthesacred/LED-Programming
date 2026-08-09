@@ -505,6 +505,16 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
   assert.doesNotMatch(verifyJob, /LIGHTWEAVER_RELEASE_SIGNING_KEY|environment:/);
   assert.match(verifyJob, /permissions:\s*\n\s*contents: read/);
   assert.match(verifyJob, /npm run ci:firmware-sensitive --prefix lightweaver/);
+  assert.match(
+    workflow,
+    /--previous-source "\$SOURCE_REVISION"/,
+    'version progression must use the immutable tested revision predecessor, never candidate-owned release metadata',
+  );
+  assert.doesNotMatch(
+    workflow,
+    /require\('\.\/lightweaver\/public\/firmware\/release-manifest\.json'\)/,
+    'candidate checkout metadata must not define the previous trusted firmware version',
+  );
   assert.match(verifyJob, /pio run/);
   assert.ok(
     verifyJob.indexOf('npm run ci:firmware-sensitive') < verifyJob.indexOf('pio run'),
@@ -512,7 +522,7 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
   );
   assert.equal(
     packageJson.scripts['ci:firmware-sensitive'],
-    'npm run test:production-jobs && npm run test:core:source',
+    'node ../firmware/lightweaver-controller/tests/firmware-version-policy.mjs && npm run test:production-jobs && npm run test:core:source',
   );
   assert.equal(
     packageJson.scripts['test:core:source'],

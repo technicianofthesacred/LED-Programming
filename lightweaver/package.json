@@ -21,7 +21,7 @@
     "ci:browser-smoke": "npm run test:show && npm run test:screen-recovery && playwright test tests/workflow.spec.ts tests/screen-smoke.spec.ts tests/card-workspace.spec.ts --project=chromium --workers=1 --grep \"imports SVG|every primary screen|Hardware loads the verified production project|Hardware offers an exact current project|reachable recovering factory card uses URL IP\" && playwright test tests/layout-led-chipset.spec.ts tests/strip-discovery.spec.ts --project=chromium --workers=1",
     "ci:cloud": "npm run test:projects:browser",
     "ci:production": "npm run test:production",
-    "ci:firmware-sensitive": "npm run test:production-jobs && npm run test:core:source",
+    "ci:firmware-sensitive": "node ../firmware/lightweaver-controller/tests/firmware-version-policy.mjs && npm run test:production-jobs && npm run test:core:source",
     "ci:artifact:contracts": "npm run test:production-jobs && node --test src/lib/firmwareRelease.test.js && node ../firmware/lightweaver-controller/tests/release-build-identity.mjs",
     "ci:artifact": "npm run ci:artifact:contracts && npm run firmware:check-bin",
     "test:prod-deploy": "node --test src/lib/productionDeploymentCheck.test.js src/lib/productionReleaseGate.test.js",

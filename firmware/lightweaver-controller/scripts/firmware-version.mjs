@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { execFileSync } from 'node:child_process';
+import { verify as verifySignature } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -39,6 +41,56 @@ export function bumpVersion(version, level) {
   return parts.join('.');
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalJson(value[key])]));
+  }
+  return value;
+}
+
+function gitFileAtSourceParent(sourceRevision, path, cwd) {
+  return execFileSync('git', ['show', `${sourceRevision}^:${path}`], {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
+}
+
+export function previousSignedVersionFromSource(sourceRevision, cwd = process.cwd()) {
+  if (!/^[0-9a-f]{40}$/.test(String(sourceRevision))) {
+    throw new Error('Previous source lookup requires an exact 40-character revision');
+  }
+  const manifest = JSON.parse(gitFileAtSourceParent(
+    sourceRevision,
+    'lightweaver/public/firmware/release-manifest.json',
+    cwd,
+  ));
+  const signatureText = gitFileAtSourceParent(
+    sourceRevision,
+    'lightweaver/public/firmware/release-manifest.sig',
+    cwd,
+  ).trim();
+  const publicKey = gitFileAtSourceParent(
+    sourceRevision,
+    'release/keys/lightweaver-release-public.pem',
+    cwd,
+  );
+  if (!/^[A-Za-z0-9_-]{86}$/.test(signatureText)) {
+    throw new Error('Previous firmware manifest signature is malformed');
+  }
+  const signatureValid = verifySignature(
+    'sha256',
+    Buffer.from(JSON.stringify(canonicalJson(manifest))),
+    { key: publicKey, dsaEncoding: 'ieee-p1363' },
+    Buffer.from(signatureText, 'base64url'),
+  );
+  if (!signatureValid) throw new Error('Previous firmware manifest signature verification failed');
+  const previous = manifest.firmwareVersion;
+  parseVersion(previous);
+  return previous;
+}
+
 function readVersion(versionPath) {
   const raw = readFileSync(versionPath, 'utf8');
   const version = raw.endsWith('\r\n') ? raw.slice(0, -2) : raw.endsWith('\n') ? raw.slice(0, -1) : raw;
@@ -47,6 +99,7 @@ function readVersion(versionPath) {
 }
 
 export function main(argv, {
+  cwd = process.cwd(),
   versionPath = canonicalVersionPath,
   write = value => process.stdout.write(value),
 } = {}) {
@@ -69,7 +122,16 @@ export function main(argv, {
     return current;
   }
 
-  throw new Error('Usage: firmware-version.mjs bump <patch|minor|major> | check --previous <version>');
+  if (command === 'check' && argument === '--previous-source' && previous !== undefined && extra.length === 0) {
+    const trustedPrevious = previousSignedVersionFromSource(previous, cwd);
+    if (compareVersions(current, trustedPrevious) <= 0) {
+      throw new Error(`Firmware version ${current} must be greater than previous signed version ${trustedPrevious}`);
+    }
+    write(`${current}\n`);
+    return current;
+  }
+
+  throw new Error('Usage: firmware-version.mjs bump <patch|minor|major> | check --previous <version> | check --previous-source <revision>');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

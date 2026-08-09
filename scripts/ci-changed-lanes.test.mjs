@@ -52,6 +52,17 @@ test('firmware source selects firmware and production contracts without browser 
   });
 });
 
+test('canonical firmware VERSION changes select firmware and production contracts', () => {
+  assert.deepEqual(classifyChangedPaths(['firmware/lightweaver-controller/VERSION']), {
+    source: false,
+    browser: false,
+    cloud: false,
+    production: true,
+    firmware: true,
+    artifact: false,
+  });
+});
+
 test('signed generated releases select only the artifact lane', () => {
   assert.deepEqual(classifyChangedPaths([
     'lightweaver/public/firmware/release-manifest.json',
