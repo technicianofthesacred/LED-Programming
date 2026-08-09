@@ -11,6 +11,10 @@
 #include "LightweaverConnectivityOrchestrator.h"
 #include "LightweaverHardwareContract.h"
 #include "LightweaverWifiChannelPolicy.h"
+#include "LightweaverOwnerCapability.h"
+#include "LightweaverHttpFrameStream.h"
+#include "LightweaverProjectRepository.h"
+#include "LightweaverCardStudio.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
@@ -1259,6 +1263,7 @@ void handleStatus() {
     // to 1500 mA. Reported, never enforced — nothing refuses a config for it.
     String tail = String(",\"streaming\":") + (runtimeIsStreaming() ? "true" : "false") +
                   ",\"frameSource\":\"" + srcLabel + "\"" +
+                  ",\"projectHead\":\"" + lightweaverProjectRepository().currentHead() + "\"" +
                   ",\"maxMilliamps\":" + String(runtimeConfigPtr->maxMilliamps) +
                   ",\"maxMilliampsSource\":\"" +
                   (runtimeConfigPtr->maxMilliampsExplicit ? "config" : "default") + "\"}";
@@ -2999,6 +3004,11 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
   server.on("/api/beacon/port", HTTP_GET, handleBeaconPort);
   server.on("/api/beacon/port", HTTP_POST, handleBeaconPort);
 
+  registerLightweaverOwnerCapability(server);
+  registerLightweaverHttpFrameStream(server);
+  registerLightweaverProjectRepository(server);
+  registerLightweaverCardStudio(server);
+
   // Pretend-WLED JSON API — lets the existing designer's WLED bar +
   // DevicesPanel + live-frame push path talk to the card without changes.
   lw_wled::registerEndpoints(server);
@@ -3015,8 +3025,13 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
 
   // WebServer only exposes request headers registered here; sendCors() needs
   // Origin to echo the allowlisted caller instead of a wildcard.
-  static const char* kCollectedHeaders[] = {"Origin"};
-  server.collectHeaders(kCollectedHeaders, 1);
+  static const char* kCollectedHeaders[] = {
+    "Origin", "X-Lightweaver-Card-Id", "X-Lightweaver-Boot-Id",
+    "X-Lightweaver-Owner-Session", "X-Lightweaver-Operation-Generation",
+    "X-Lightweaver-Expected-Head", "X-Lightweaver-Capability"
+  };
+  server.collectHeaders(kCollectedHeaders,
+      sizeof(kCollectedHeaders) / sizeof(kCollectedHeaders[0]));
 
   server.begin();
   // No speculative boot scan: it parked the radio off-channel during the exact
@@ -3037,6 +3052,7 @@ static uint32_t lastMdnsAnnounceMs = 0;
 void handleLightweaverWeb() {
   if (dnsServerActive) dnsServer.processNextRequest();
   maintainConnectivity();
+  handleLightweaverHttpFrameStream();
   const uint32_t nowMs = millis();
   if (WiFi.status() == WL_CONNECTED
       && (lastMdnsAnnounceMs == 0 || nowMs - lastMdnsAnnounceMs >= lightweaver::LW_MDNS_REANNOUNCE_MS)) {

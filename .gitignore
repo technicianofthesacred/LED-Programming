@@ -1,5 +1,8 @@
 node_modules
 dist/
+lightweaver/.card-dist-raw/
+lightweaver/card-dist/
+lightweaver/public/fonts/*.woff2
 .pages/
 .pio/
 firmware/**/.pio/

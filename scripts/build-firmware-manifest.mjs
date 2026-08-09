@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import {
   EXPECTED_FIRMWARE_TARGET,
   FIRMWARE_INSTALLER_VERSION,
+  assertFirmwareManifestCardStudio,
   assertFirmwareManifestBuildNumber,
   canonicalFirmwareManifestBytes,
   validateFirmwareManifest,
@@ -37,6 +38,11 @@ const imagePath = resolve(required(
   'image',
   resolve(repoRoot, 'lightweaver/public/firmware/lightweaver-controller-esp32s3-factory.bin'),
 ));
+const cardStudioReleasePath = resolve(required(
+  args,
+  'card-studio-release',
+  resolve(repoRoot, 'lightweaver/card-dist/card-studio-release.json'),
+));
 const publicRoot = resolve(required(args, 'public-root', resolve(repoRoot, 'lightweaver/public')));
 const firmwareVersion = required(args, 'firmware-version', process.env.LW_FIRMWARE_VERSION);
 const buildId = required(args, 'build-id', process.env.LW_BUILD_ID ?? process.env.GITHUB_SHA);
@@ -59,6 +65,15 @@ const sourceRevision = required(args, 'source-revision', process.env.GITHUB_SHA 
 if (sourceRevision !== buildId) throw new Error('source revision must exactly match build ID');
 
 const imageBytes = await readFile(imagePath);
+const cardStudioReleaseBytes = await readFile(cardStudioReleasePath);
+const cardStudioRelease = JSON.parse(cardStudioReleaseBytes.toString('utf8'));
+if (cardStudioRelease.buildId !== buildId || cardStudioRelease.buildNumber !== buildNumber) {
+  throw new Error('Card Studio release identity must exactly match the compiled firmware identity');
+}
+if (!Array.isArray(cardStudioRelease.assets) || cardStudioRelease.assets.length === 0) {
+  throw new Error('Card Studio release must contain compressed asset identities');
+}
+const imageSha256 = createHash('sha256').update(imageBytes).digest('hex');
 const imageName = 'lightweaver-controller-esp32s3-factory.bin';
 const releaseDirectory = resolve(publicRoot, 'firmware/releases', firmwareVersion, buildId);
 const immutableImagePath = resolve(releaseDirectory, imageName);
@@ -72,7 +87,25 @@ const manifest = {
   image: {
     url: imageUrl,
     size: imageBytes.byteLength,
-    sha256: createHash('sha256').update(imageBytes).digest('hex'),
+    sha256: imageSha256,
+    cardStudioReadback: { offset: 0, size: imageBytes.byteLength, sha256: imageSha256 },
+  },
+  cardStudio: {
+    buildId: cardStudioRelease.buildId,
+    buildNumber: cardStudioRelease.buildNumber,
+    projectSchema: cardStudioRelease.projectSchema,
+    firmwareApi: cardStudioRelease.firmwareApi,
+    totalSize: cardStudioRelease.totalSize,
+    bundleSha256: cardStudioRelease.bundleSha256,
+    releaseMetadata: {
+      size: cardStudioReleaseBytes.byteLength,
+      sha256: createHash('sha256').update(cardStudioReleaseBytes).digest('hex'),
+    },
+    assets: cardStudioRelease.assets.map(asset => ({
+      path: asset.route,
+      size: asset.brotli.size,
+      sha256: asset.brotli.sha256,
+    })),
   },
   configSchema: { min: configMin, max: configMax },
   minimumInstallerVersion,
@@ -91,6 +124,7 @@ const manifest = {
 
 validateFirmwareManifest(manifest, { installerVersion: FIRMWARE_INSTALLER_VERSION });
 assertFirmwareManifestBuildNumber(manifest);
+assertFirmwareManifestCardStudio(manifest);
 await mkdir(releaseDirectory, { recursive: true });
 let existingImage = null;
 try {
@@ -119,6 +153,7 @@ await writeFile(provenancePath, `${JSON.stringify({
   buildId,
   buildNumber,
   image: manifest.image,
+  cardStudio: manifest.cardStudio,
   toolchain: manifest.provenance,
 }, null, 2)}\n`);
 

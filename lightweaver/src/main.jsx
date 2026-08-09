@@ -25,6 +25,9 @@ import './styles/v3-patterns-extra.css';
 // Live-only Playlist controls (.pl-* status / row extras) in the v3 token idiom.
 import './styles/v3-playlist-extra.css';
 import App from './v3/app.jsx';
+import { createOfflineUpdateController } from './lib/offlineUpdate.js';
+import { detectRuntimeMode } from './lib/runtimeMode.js';
+import { createIndexedDbProjectRepository, migrateLocalStorageProjects } from './lib/indexedDbProjectRepository.js';
 
 // Version switch. The 3.3 redesign is the default. The previous interface
 // (version 3) is preserved verbatim under ./src-v3 and stays reachable at
@@ -34,6 +37,17 @@ const params = new URLSearchParams(window.location.search);
 const wantsV3 = params.get('v') === '3' || window.location.hash === '#v3';
 
 const root = createRoot(document.getElementById('root'));
+
+const runtimeMode = detectRuntimeMode();
+const offlineUpdate = createOfflineUpdateController({ runtimeMode });
+void offlineUpdate.register();
+let projectRepository = null;
+try {
+  projectRepository = createIndexedDbProjectRepository();
+  void migrateLocalStorageProjects(projectRepository).catch(() => {});
+} catch { /* localStorage compatibility remains available */ }
+globalThis.__LW_RUNTIME_MODE__ = runtimeMode;
+globalThis.__LW_OFFLINE_UPDATE__ = offlineUpdate;
 
 if (wantsV3) {
   // Frozen previous interface — its own self-contained tree, untouched by 3.3.
@@ -45,5 +59,5 @@ if (wantsV3) {
     root.render(<m.default />);
   });
 } else {
-  root.render(<App />);
+  root.render(<App projectRepository={projectRepository} offlineUpdateController={offlineUpdate} />);
 }

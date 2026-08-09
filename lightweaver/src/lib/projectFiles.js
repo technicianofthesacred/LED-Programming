@@ -1,3 +1,5 @@
+import { validateProjectEnvelope } from './projectRepository.js';
+
 // Canonical Lightweaver project file naming + import filters.
 //
 // The Studio has historically produced several download names
@@ -7,6 +9,8 @@
 // accept `PROJECT_IMPORT_ACCEPT` (permissive, so older exports still open).
 
 export const CANONICAL_PROJECT_EXTENSION = '.lw.json';
+export const COMPLETE_EDITABLE_PROJECT_LABEL = 'Complete editable project';
+export const INSTALLED_CONFIGURATION_LABEL = 'Installed configuration';
 
 // Permissive on purpose: `.lwproj.json` and plain `.json` are legacy export
 // names that must keep loading forever.
@@ -26,4 +30,16 @@ export function slugifyProjectName(projectName) {
 export function canonicalProjectFileName(projectName) {
   const slug = slugifyProjectName(projectName);
   return `${slug || FALLBACK_BASENAME}${CANONICAL_PROJECT_EXTENSION}`;
+}
+
+export function serializeProjectFile(envelope) {
+  return JSON.stringify(envelope, null, 2);
+}
+
+export function parseProjectFile(text) {
+  const parsed = typeof text === 'string' ? JSON.parse(text) : structuredClone(text);
+  // Delayed imports are unnecessary here: project files are already consumed
+  // from the main Studio graph, and envelope validation must happen before UI
+  // replacement confirmation is offered.
+  return validateProjectEnvelope(parsed);
 }

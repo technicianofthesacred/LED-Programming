@@ -53,9 +53,11 @@ import {
   markEdited,
   markInstalled,
   markPersisted,
+  repositoryPersistenceMarker,
   replaceProjectLifecycle,
   replaceProjectSafely,
 } from '../lib/projectLifecycle.js';
+import { createProjectEnvelope } from '../lib/projectRepository.js';
 
 const LS_AUTOSAVE_KEY = 'lw_autosave_v3';
 const LS_AUTOSAVE_BACKUP_KEY = 'lw_autosave_v3_backup';
@@ -292,9 +294,11 @@ export function resolveTimelineTargets(playhead, clips, strips = []) {
   return { globalClip, byStripId };
 }
 
-export function ProjectProvider({ children }) {
+export function ProjectProvider({ children, repository = null, initialProjectEnvelope = null }) {
   const defaults = createDefaultProject();
   const projectSnapshotContributorsRef = useRef(new Set());
+  const repositoryHeadRef = useRef(null);
+  const repositoryQueueRef = useRef(Promise.resolve());
   const replacementFocusRef = useRef(null);
   const replacementResolutionRef = useRef(null);
   const keepEditingRef = useRef(null);
@@ -802,6 +806,17 @@ export function ProjectProvider({ children }) {
     if (didLoadRef.current) return;
     didLoadRef.current = true;
     try {
+      if (initialProjectEnvelope?.project && initialProjectEnvelope?.contentHash) {
+        repositoryHeadRef.current = initialProjectEnvelope.contentHash;
+        suppressNextLifecycleEditRef.current = true;
+        applyProject(initialProjectEnvelope.project);
+        setAutosaveRestoredFrom('card');
+        dispatchProjectLifecycle({
+          type: 'boot',
+          lifecycle: markPersisted(createProjectLifecycle(), 'card'),
+        });
+        return;
+      }
       // Try each stored copy and keep the raw payload + reason when nothing
       // restores (parse failure, forward/unknown version, invalid shape).
       const { payload: savedProject, restoredFrom: savedCopy, failure } =
@@ -850,7 +865,7 @@ export function ProjectProvider({ children }) {
           : createProjectLifecycle(),
       });
     } catch {}
-  }, [applyProject]);
+  }, [applyProject, initialProjectEnvelope]);
 
   // Keep the persisted lifecycle record in sync with the live lifecycle so a
   // reload can distinguish "Saved in browser" from restored-unsaved work. The
@@ -959,11 +974,44 @@ export function ProjectProvider({ children }) {
     try {
       const saved = writeStorageJsonWithBackup(LS_AUTOSAVE_KEY, LS_AUTOSAVE_BACKUP_KEY, serializeProject());
       if (saved) setLastSaved(Date.now());
+      if (saved && repository?.save) {
+        const project = serializeProject();
+        const expectedHead = repositoryHeadRef.current;
+        const lifecycleSnapshot = projectLifecycleRef.current;
+        const persistenceMarker = repositoryPersistenceMarker(repository, lifecycleSnapshot);
+        const envelope = createProjectEnvelope(project, {
+          parentHash: expectedHead,
+          localRevision: Math.max(1, lifecycleSnapshot.editedRevision + 1),
+          source: repository.source || { kind: 'browser' },
+        });
+        repositoryQueueRef.current = repositoryQueueRef.current
+          .then(async () => {
+            let currentExpectedHead = repositoryHeadRef.current;
+            if (!currentExpectedHead && repository.read) {
+              currentExpectedHead = (await repository.read(project.id))?.contentHash || null;
+              repositoryHeadRef.current = currentExpectedHead;
+            }
+            const currentEnvelope = currentExpectedHead === expectedHead
+              ? envelope
+              : createProjectEnvelope(project, {
+                  parentHash: currentExpectedHead,
+                  localRevision: Math.max(1, lifecycleSnapshot.editedRevision + 1),
+                  source: repository.source || { kind: 'browser' },
+                });
+            const persisted = await repository.save(currentEnvelope, currentExpectedHead);
+            repositoryHeadRef.current = persisted.contentHash;
+            setLastSaved(Date.now());
+            if (persistenceMarker) {
+              dispatchProjectLifecycle({ type: 'persisted', ...persistenceMarker });
+            }
+          })
+          .catch(error => console.warn('Lightweaver project repository save failed', error));
+      }
       return saved;
     } catch {
       return false;
     }
-  }, [serializeProject]);
+  }, [repository, serializeProject]);
 
   useEffect(() => {
     clearTimeout(saveTimerRef.current);
@@ -1148,6 +1196,8 @@ export function ProjectProvider({ children }) {
       newProject,
       lastSaved,
       autosaveStatus,
+      projectRepository: repository,
+      projectRepositorySource: repository?.source || { kind: 'browser', label: 'This browser' },
     }}>
       {children}
       {pendingReplacement &&

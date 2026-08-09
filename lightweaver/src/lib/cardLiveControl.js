@@ -21,6 +21,7 @@ import {
   readPersistedCardIdentity,
 } from './cardIdentity.js';
 import { reclaimCardFrameStreams } from './cardFrameStream.js';
+import { getActiveCardTransportAuthority } from './cardTransport.js';
 import { discoverCardWiring, getCardWiringStatus, rollbackCardWiringCandidate } from './cardWiringSafety.js';
 import { CUSTOMER_CONTROL_WIRE_FIELDS } from './cardCustomerControlContract.js';
 
@@ -634,6 +635,8 @@ export function buildMirroredLedRepairPackage(runtimePackage = {}, options = {})
 }
 
 async function postControlPayloadToHost(host, payload, options = {}) {
+  const authority = options.authority || getActiveCardTransportAuthority(host);
+  if (authority) return authority.request('/api/control', { method: 'POST', body: payload });
   await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs || 2500 });
   const url = `${cardHostToUrl(host)}/api/control`;
   const body = JSON.stringify(payload);
@@ -662,6 +665,8 @@ async function postControlPayloadToHost(host, payload, options = {}) {
 }
 
 async function postRecoverLightsToHost(host, payload, options = {}) {
+  const authority = options.authority || getActiveCardTransportAuthority(host);
+  if (authority) return authority.request('/api/recover-lights', { method: 'POST', body: payload });
   await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs || 3000 });
   const url = `${cardHostToUrl(host)}/api/recover-lights`;
   const body = JSON.stringify(payload);
@@ -685,6 +690,8 @@ async function postRecoverLightsToHost(host, payload, options = {}) {
 }
 
 async function postIdentifyToHost(host, options = {}) {
+  const authority = options.authority || getActiveCardTransportAuthority(host);
+  if (authority) return authority.request('/api/identify', { method: 'POST', body: {} });
   await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs || 1200 });
   const url = `${cardHostToUrl(host)}/api/identify`;
   const ctrl = new AbortController();
@@ -709,6 +716,8 @@ async function postIdentifyToHost(host, options = {}) {
 async function readCardZones(host, input = {}) {
   const options = typeof input === 'number' ? { timeoutMs: input } : input;
   const timeoutMs = options.timeoutMs || 1200;
+  const authority = options.authority || getActiveCardTransportAuthority(host);
+  if (authority) return requireBoundedControlObject(await authority.request('/api/zones'));
   if (hasVerifiedBridgeForHost(host) || isMixedContentBlocked()) {
     return requireBoundedControlObject(await sendCardBridgeRequest('zones', {}, { host, timeoutMs }));
   }
@@ -810,6 +819,8 @@ function normalizeCardPatternsPayload(payload) {
 
 async function readCardPatterns(host, options = {}) {
   const timeoutMs = options.timeoutMs || 1200;
+  const authority = options.authority || getActiveCardTransportAuthority(host);
+  if (authority) return normalizeCardPatternsPayload(requireBoundedControlObject(await authority.request('/api/patterns')));
   if (hasVerifiedBridgeForHost(host)) {
     return normalizeCardPatternsPayload(requireBoundedControlObject(await sendCardBridgeRequest('patterns', {}, { host, timeoutMs })));
   }
@@ -886,6 +897,19 @@ function liveTargetsFromZones(zonesPayload = {}, fallbackLook = {}) {
 }
 
 async function pushLivePreviewToHost(host, look, options = {}) {
+  const authority = options.authority || getActiveCardTransportAuthority(host);
+  if (authority) {
+    requireCurrentPreviewIntent(options);
+    const previewLook = look;
+    const response = requireBoundedControlObject(await authority.request('/api/control', {
+      method: 'POST',
+      body: {
+        ...buildLivePreviewControlPayload(previewLook, options),
+        ...(options.revision !== undefined ? { revision: options.revision } : {}),
+      },
+    }));
+    return requireLivePreviewAcknowledgement(response, previewLook, options, { id: authority.cardId });
+  }
   // Local-card mode deliberately exercises the same verified postMessage path
   // as public HTTPS, even when Studio itself is running from an HTTP dev host.
   if (options.preferBridge || isMixedContentBlocked()) {
@@ -1167,6 +1191,11 @@ export async function pushLivePreviewToCard(look, options = {}) {
 export async function pushLiveHardwareToCard(settings, options = {}) {
   const host = options.host || readStoredCardHost();
   const payload = buildLiveHardwareControlPayload(settings);
+  const authority = options.authority || getActiveCardTransportAuthority(host);
+  if (authority) {
+    try { return await authority.request('/api/control', { method: 'POST', body: payload }); }
+    catch (error) { throw normalizePreviewError(host, error); }
+  }
   if (isMixedContentBlocked()) {
     try {
       return await sendCardBridgeRequest('control', payload, { host, timeoutMs: options.timeoutMs || 2500 });

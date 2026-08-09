@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { resolve } from 'path';
+import { readFileSync, readdirSync } from 'node:fs';
+import { relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { resolveStudioReleaseIdentity } from './scripts/studio-release-identity.mjs';
 import { serializeStudioRelease } from './src/lib/studioRelease.js';
@@ -27,6 +28,27 @@ function studioReleasePlugin() {
   };
 }
 
+function cardLocalAssetsPlugin() {
+  const fontRoot = resolve(__dirname, 'public/fonts');
+  return {
+    name: 'lightweaver-card-local-assets',
+    buildStart() {
+      const emitTree = directory => {
+        for (const entry of readdirSync(directory, { withFileTypes: true })) {
+          const path = resolve(directory, entry.name);
+          if (entry.isDirectory()) emitTree(path);
+          else this.emitFile({
+            type: 'asset',
+            fileName: `fonts/${relative(fontRoot, path).replaceAll('\\\\', '/')}`,
+            source: readFileSync(path),
+          });
+        }
+      };
+      emitTree(fontRoot);
+    },
+  };
+}
+
 function lightweaverApiPlugin() {
   return {
     name: 'lightweaver-api',
@@ -47,18 +69,32 @@ function lightweaverApiPlugin() {
   };
 }
 
-export default defineConfig({
-  plugins: [react(), lightweaverApiPlugin(), studioReleasePlugin()],
-  define: {
-    __LIGHTWEAVER_STUDIO_RELEASE__: JSON.stringify(studioRelease),
-  },
-  server: { port: 9998, strictPort: true, watch: { usePolling: true, interval: 500 } },
-  build: {
-    rollupOptions: {
-      input: {
-        main:    resolve(__dirname, 'index.html'),
-        visitor: resolve(__dirname, 'src/visitor/visitor.html'),
+export default defineConfig(({ mode }) => {
+  const cardTarget = mode === 'card';
+  return {
+    base: cardTarget ? '/studio/' : '/',
+    publicDir: cardTarget ? false : 'public',
+    plugins: cardTarget
+      ? [react(), cardLocalAssetsPlugin()]
+      : [react(), lightweaverApiPlugin(), studioReleasePlugin()],
+    define: {
+      __LIGHTWEAVER_STUDIO_RELEASE__: JSON.stringify(studioRelease),
+      __LIGHTWEAVER_BUILD_TARGET__: JSON.stringify(cardTarget ? 'card-local' : 'public-https'),
+    },
+    server: { port: 9998, strictPort: true, watch: { usePolling: true, interval: 500 } },
+    build: {
+      outDir: cardTarget ? '.card-dist-raw' : 'dist',
+      emptyOutDir: true,
+      manifest: true,
+      sourcemap: false,
+      rollupOptions: {
+        input: cardTarget
+          ? resolve(__dirname, 'card.html')
+          : {
+              main: resolve(__dirname, 'index.html'),
+              visitor: resolve(__dirname, 'src/visitor/visitor.html'),
+            },
       },
     },
-  },
+  };
 });

@@ -4,6 +4,29 @@ This is the source of truth for the current ESP32-S3-only product. Studio is
 published at `https://led.mandalacodes.com`; the card runs patterns and accepts
 commands locally. There is no Raspberry Pi in the shipping runtime.
 
+## Windowless offline Studio acceptance — all unperformed
+
+Automated route stubs and headless-browser checks are simulated evidence only.
+Every item here is **UNPERFORMED** until recorded on the named real browser and
+physical card; an HTTP success never substitutes for observing the lights.
+
+- [ ] **UNPERFORMED — macOS Chrome and Edge:** allow, deny, and revoke Local Network Access; exact-card direct control; wrong-card write block; same-tab fallback; no auxiliary window.
+- [ ] **UNPERFORMED — macOS Safari:** failed/unsupported direct probe uses same-tab local Studio; offline control; no auxiliary window.
+- [ ] **UNPERFORMED — Android Chrome:** direct permission outcomes, same-tab fallback, installed-PWA cold offline reload, and background/resume.
+- [ ] **UNPERFORMED — iPhone Safari and Chrome, and iPad Safari:** same-tab local Studio, offline control, background/resume, and fixed-origin HTTPS return.
+- [ ] **UNPERFORMED — private mode:** truthful storage/install limits and no silent project loss on every required browser.
+- [ ] **UNPERFORMED — networks:** router Wi-Fi, card AP `192.168.4.1` without internet, loss after load, reload, Wi-Fi handoff, and reconnect.
+- [ ] **UNPERFORMED — authority:** wrong card, reboot/new boot ID, permission revoke, and origin/network/session/generation change block writes until exact revalidation.
+- [ ] **UNPERFORMED — command families:** Setup, Strip Discovery, Layout/Wire, stage/visible-confirm/install/readback, Patterns, brightness, blackout/Stop, recovery, projects, and HTTP frames through `direct-lna` and `local-origin`; legacy recovery remains usable.
+- [ ] **UNPERFORMED — physical output:** patterns and frames visibly animate expected pixels; Stop blacks out; recovery restores control.
+- [ ] **UNPERFORMED — card serving:** first and repeated HTML/JS/CSS/font delivery causes no visible animation stall; record card/build and measured observation.
+- [ ] **UNPERFORMED — damaged/incompatible bundle:** small recovery page retains safe pattern, brightness, blackout, and installer recovery.
+- [ ] **UNPERFORMED — secure tools:** USB, microphone, and provenance use same-tab handback to fixed `https://led.mandalacodes.com/` only.
+- [ ] **UNPERFORMED — project continuity:** complete editable export/import/card save, visible copy identity, quota rejection, and config-not-backup truthfulness.
+- [ ] **UNPERFORMED — conflict/handoff:** fragment-only ciphertext is exact-card-bound, expiring, single-use; return-online conflicts require compare/keep-both/replace.
+- [ ] **UNPERFORMED — power loss:** interruption at every staging/hash/readback/head-promotion boundary retains the prior known-good project.
+- [ ] **UNPERFORMED — signed combined release:** exact factory offset/size/hash/readback and card-Studio build/schema/API/assets match card-reported identity.
+
 Never substitute a local build, direct HTTP request, terminal command, green
 board LED, API acknowledgement, or mocked browser test for the live erased-card
 acceptance below.

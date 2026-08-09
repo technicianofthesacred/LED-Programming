@@ -369,8 +369,15 @@ test('manifest builder creates a versioned immutable image and canonical manifes
   const scratch = await mkdtemp(resolve(tmpdir(), 'lightweaver-release-'));
   const publicRoot = resolve(scratch, 'public');
   const imagePath = resolve(scratch, 'factory.bin');
+  const cardStudioReleasePath = resolve(scratch, 'card-studio-release.json');
   await mkdir(publicRoot, { recursive: true });
   await writeFile(imagePath, await fixture('test-firmware.bin', null));
+  await writeFile(cardStudioReleasePath, JSON.stringify({
+    schemaVersion: 1, target: 'card-local', buildId: TEST_BUILD_ID, buildNumber: 411,
+    projectSchema: { min: 3, max: 3 }, firmwareApi: { min: 1, max: 1 },
+    totalSize: 7, bundleSha256: '2'.repeat(64),
+    assets: [{ route: '/studio/', brotli: { size: 7, sha256: '3'.repeat(64) } }],
+  }));
   const result = spawnSync(process.execPath, [
     resolve(repoRoot, 'scripts/build-firmware-manifest.mjs'),
     '--image', imagePath,
@@ -382,6 +389,7 @@ test('manifest builder creates a versioned immutable image and canonical manifes
     '--config-min', '1',
     '--config-max', '2',
     '--minimum-installer', '1.4.0',
+    '--card-studio-release', cardStudioReleasePath,
   ], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
 
@@ -414,6 +422,7 @@ test('manifest builder creates a versioned immutable image and canonical manifes
     '--config-min', '1',
     '--config-max', '2',
     '--minimum-installer', '1.4.0',
+    '--card-studio-release', cardStudioReleasePath,
   ], { encoding: 'utf8' });
   assert.notEqual(collision.status, 0);
   assert.match(collision.stderr, /immutable release collision/i);
@@ -526,7 +535,7 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
   );
   assert.equal(
     packageJson.scripts['ci:firmware-sensitive'],
-    'node ../firmware/lightweaver-controller/tests/firmware-version-policy.mjs && npm run test:production-jobs && npm run test:core:source',
+    'node ../firmware/lightweaver-controller/tests/firmware-version-policy.mjs && npm run test:production-jobs && npm run test:core:source && npm run test:windowless:tooling',
   );
   assert.equal(
     packageJson.scripts['test:core:source'],

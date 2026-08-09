@@ -1310,7 +1310,7 @@ test('binding config, migration, route manifest, and package scripts are local-s
   ]);
   assert.deepEqual(JSON.parse(routesText), {
     version: 1,
-    include: ['/api/account', '/api/account/*', '/api/library', '/api/library/*'],
+    include: ['/api/account', '/api/account/*', '/api/library', '/api/library/*', '/api/handoff', '/api/handoff/*'],
     exclude: [],
   });
 

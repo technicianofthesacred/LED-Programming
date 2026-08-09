@@ -1,59 +1,20 @@
 import { expect, test, type Page } from '@playwright/test';
 
-const FOUND_HOST = '192.168.77.17';
-
-async function installFindCardHarness(page: Page, {
-  wrongCard = false,
-  verificationTimeout = false,
-  popupBlocked = false,
-}: { wrongCard?: boolean; verificationTimeout?: boolean; popupBlocked?: boolean } = {}) {
-  await page.addInitScript(({ foundHost, wrongCard, verificationTimeout, popupBlocked }) => {
+async function installFindCardHarness(page: Page) {
+  await page.addInitScript(() => {
     const state = {
-      opens: [] as Array<{ url: string; name: string }>,
-      navigations: [] as string[],
-      closeCalls: 0,
+      opens: [] as Array<{ url: string; name: string; features: string }>,
       captureSweep: false,
       sweepStarted: false,
-      releaseSweep: null as null | (() => void),
     };
     Object.defineProperty(window, '__findCardHarness', { value: state, configurable: true });
-
-    const emit = (source: object, origin: string, data: object) => {
-      const event = new Event('message');
-      Object.defineProperties(event, {
-        source: { value: source }, origin: { value: origin }, data: { value: data },
+    window.open = ((url?: string | URL, name?: string, features?: string) => {
+      state.opens.push({
+        url: String(url || ''),
+        name: String(name || ''),
+        features: String(features || ''),
       });
-      window.dispatchEvent(event);
-    };
-    const proxy: any = {
-      closed: false,
-      focus() {},
-      close() { state.closeCalls += 1; proxy.closed = true; },
-      postMessage(message: any) {
-        if (message.type !== 'firmware-info') return;
-        if (verificationTimeout) return;
-        setTimeout(() => emit(proxy, `http://${foundHost}`, {
-          app: 'LightweaverCardBridge', id: message.id, ok: true, version: 2,
-          response: {
-            cardId: wrongCard ? 'lw-wrong-card-test' : 'lw-find-card-test',
-            firmwareVersion: '1.0.0', buildId: 'build-find-card',
-          },
-        }), 0);
-      },
-    };
-    Object.defineProperty(proxy, 'location', {
-      value: {
-        set href(value: string) {
-          state.navigations.push(String(value));
-          setTimeout(() => emit(proxy, `http://${foundHost}`, {
-            app: 'LightweaverCardBridge', type: 'ready', host: foundHost, version: 2,
-          }), 0);
-        },
-      },
-    });
-    window.open = ((url?: string | URL, name?: string) => {
-      state.opens.push({ url: String(url || ''), name: String(name || '') });
-      return popupBlocked ? null : proxy;
+      return null;
     }) as typeof window.open;
 
     const realFetch = window.fetch.bind(window);
@@ -64,17 +25,9 @@ async function installFindCardHarness(page: Page, {
         return Promise.resolve(new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } }));
       }
       state.sweepStarted = true;
-      if (url !== `http://${foundHost}/api/status`) {
-        return Promise.resolve(new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } }));
-      }
-      return new Promise<Response>(resolve => {
-        state.releaseSweep = () => resolve(new Response(JSON.stringify({
-          app: 'Lightweaver', cardId: wrongCard ? 'lw-expected-card-test' : 'lw-find-card-test',
-          firmwareVersion: '1.0.0', buildId: 'build-find-card',
-        }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
-      });
+      return Promise.resolve(new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } }));
     }) as typeof window.fetch;
-  }, { foundHost: FOUND_HOST, wrongCard, verificationTimeout, popupBlocked });
+  });
 
   await page.route('http://lightweaver.local/**', route => route.abort());
   await page.route('http://192.168.4.1/**', route => route.abort());
@@ -84,67 +37,17 @@ async function installFindCardHarness(page: Page, {
     localStorage.setItem('lw_chip_card_host', '192.168.77.1');
     localStorage.setItem('lw_chip_card_host_history', JSON.stringify(['192.168.77.1']));
   });
-  if (wrongCard) await page.evaluate(() => {
-    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-expected-card-test' }));
-  });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('setup-connect-card')).toBeVisible({ timeout: 15000 });
   await page.evaluate(() => { (window as any).__findCardHarness.captureSweep = true; });
 }
 
-test('Find my card reserves the named window synchronously, then navigates that exact proxy once', async ({ page }) => {
+test('Find my card opens the contained connection setup before launching a local card page', async ({ page }) => {
   await installFindCardHarness(page);
 
   await page.getByTestId('setup-connect-card').click();
-  await expect.poll(() => page.evaluate(() => (window as any).__findCardHarness.sweepStarted)).toBe(true);
-  expect(await page.evaluate(() => (window as any).__findCardHarness.opens)).toEqual([
-    { url: '', name: 'lightweaver-card-bridge' },
-  ]);
-  expect(await page.evaluate(() => (window as any).__findCardHarness.navigations)).toEqual([]);
 
-  await page.evaluate(() => (window as any).__findCardHarness.releaseSweep());
-  await expect(page.getByRole('dialog', { name: 'Connect Lightweaver' })).toBeVisible();
-  const result = await page.evaluate(() => (window as any).__findCardHarness);
-  expect(result.opens).toHaveLength(1);
-  expect(result.navigations).toHaveLength(1);
-  expect(new URL(result.navigations[0]).origin).toBe(`http://${FOUND_HOST}`);
-});
-
-test('Find my card reports bridge verification separately from subnet scan failure', async ({ page }) => {
-  await installFindCardHarness(page, { wrongCard: true });
-  await page.getByTestId('setup-connect-card').click();
-  await expect.poll(() => page.evaluate(() => (window as any).__findCardHarness.sweepStarted)).toBe(true);
-  await page.evaluate(() => (window as any).__findCardHarness.releaseSweep());
-  await expect(page.getByTestId('setup-find-status')).toContainText('verify');
-  await expect(page.getByTestId('setup-find-status')).not.toContainText('search your network');
-});
-
-test('Find my card reports a blocked reservation before starting its scan', async ({ page }) => {
-  await installFindCardHarness(page, { popupBlocked: true });
-  await page.getByTestId('setup-connect-card').click();
-  await expect(page.getByTestId('setup-find-status')).toContainText('Allow the Lightweaver card window');
+  await expect(page.getByRole('dialog', { name: 'Connect Lightweaver', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__findCardHarness.opens)).toEqual([]);
   expect(await page.evaluate(() => (window as any).__findCardHarness.sweepStarted)).toBe(false);
-});
-
-test('Find my card labels an unresponsive verified target as a bridge timeout', async ({ page }) => {
-  await installFindCardHarness(page, { verificationTimeout: true });
-  await page.getByTestId('setup-connect-card').click();
-  await expect.poll(() => page.evaluate(() => (window as any).__findCardHarness.sweepStarted)).toBe(true);
-  await page.evaluate(() => (window as any).__findCardHarness.releaseSweep());
-  await expect(page.getByTestId('setup-find-status')).toContainText('did not answer Studio', { timeout: 6000 });
-});
-
-test('leaving Setup during a held scan closes the reservation and cannot navigate or open the center', async ({ page }) => {
-  await installFindCardHarness(page);
-  await page.getByTestId('setup-connect-card').click();
-  await expect.poll(() => page.evaluate(() => (window as any).__findCardHarness.sweepStarted)).toBe(true);
-  await page.evaluate(() => { window.location.hash = '#screen=patterns'; });
-  await expect(page.getByTestId('setup-connect-card')).toHaveCount(0);
-
-  await page.evaluate(() => (window as any).__findCardHarness.releaseSweep());
-  await page.waitForTimeout(100);
-  const result = await page.evaluate(() => (window as any).__findCardHarness);
-  expect(result.closeCalls).toBe(1);
-  expect(result.navigations).toEqual([]);
-  await expect(page.getByRole('dialog', { name: 'Connect Lightweaver' })).toHaveCount(0);
 });

@@ -19,13 +19,13 @@ const allLanes = {
   artifact: true,
 };
 
-test('UI-only changes select source and browser lanes', () => {
+test('shared Studio UI changes select source, browser, and firmware-sensitive lanes', () => {
   assert.deepEqual(classifyChangedPaths(['lightweaver/src/v3/lw-pattern.jsx']), {
     source: true,
     browser: true,
     cloud: false,
     production: false,
-    firmware: false,
+    firmware: true,
     artifact: false,
   });
 });
@@ -39,6 +39,19 @@ test('Studio domain libraries select source, browser, and firmware-sensitive lan
     firmware: true,
     artifact: false,
   });
+});
+
+test('every shared-source card target and card bundle input is firmware-sensitive', () => {
+  for (const path of [
+    'lightweaver/src/v3/lw-pattern.jsx',
+    'lightweaver/src/components/card/CardConnectionCenter.jsx',
+    'lightweaver/src/card-main.jsx',
+    'lightweaver/card.html',
+    'lightweaver/scripts/build-card-studio.mjs',
+    'firmware/lightweaver-controller/src/LightweaverCardStudio.cpp',
+  ]) {
+    assert.equal(classifyChangedPaths([path]).firmware, true, `${path} must rebuild the combined firmware`);
+  }
 });
 
 test('firmware source selects firmware and production contracts without browser suites', () => {

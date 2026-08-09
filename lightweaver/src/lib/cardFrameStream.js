@@ -33,7 +33,7 @@
 // last resort behind that.
 
 import { sendCardBridgeRequest, getCardBridgeVersion } from './cardBridge.js';
-import { chunkFramePixels, frameChunkPayload } from './frameChunking.js';
+import { FRAME_CHUNK_MAX_PIXELS, chunkFramePixels, frameChunkPayload } from './frameChunking.js';
 import { guardDirectCardMutation } from './cardIdentity.js';
 import {
   canPushDirectlyToCard,
@@ -41,6 +41,7 @@ import {
   normalizeCardHost,
   readStoredCardHost,
 } from './cardConnection.js';
+import { getActiveCardTransportAuthority } from './cardTransport.js';
 
 export const DEFAULT_FRAME_FPS = 18;
 export const MAX_FRAME_FPS = 24;
@@ -268,7 +269,145 @@ export function createDirectFrameTransport(host = '', { WebSocketImpl, fetchImpl
   };
 }
 
-export function defaultFrameTransport(host = '') {
+function authoritySnapshot(authority = {}) {
+  const value = authority.snapshot?.() || authority;
+  return {
+    host: normalizeCardHost(value.host || authority.host || ''),
+    cardId: String(value.cardId || authority.cardId || ''),
+    bootId: String(value.bootId || authority.bootId || ''),
+    ownerSessionId: String(value.ownerSessionId || authority.ownerSessionId || ''),
+    operationGeneration: Number(value.operationGeneration ?? authority.operationGeneration ?? 0),
+  };
+}
+
+function sameAuthoritySnapshot(left, right) {
+  return left.host === right.host
+    && left.cardId === right.cardId
+    && left.bootId === right.bootId
+    && left.ownerSessionId === right.ownerSessionId
+    && left.operationGeneration === right.operationGeneration;
+}
+
+function revokedStreamError(reason = 'authority-revoked') {
+  const error = new Error('HTTP frame authority was revoked. Reconnect before streaming again.');
+  error.reason = reason;
+  return error;
+}
+
+export function createHttpFrameTransport(host = '', {
+  authority,
+  fetchImpl = globalThis.fetch,
+  nowImpl = () => Date.now(),
+  maxChunkPixels = FRAME_CHUNK_MAX_PIXELS,
+  leaseRefreshMarginMs = 500,
+} = {}) {
+  if (!authority || !['direct-lna', 'local-origin'].includes(authority.transport)) {
+    throw new TypeError('A direct-lna or local-origin card authority is required.');
+  }
+  const resolvedHost = normalizeCardHost(host || authority.host || readStoredCardHost());
+  const initial = authoritySnapshot(authority);
+  const baseUrl = authority.transport === 'local-origin' ? '' : cardHostToUrl(resolvedHost);
+  let lease = null;
+  let revoked = false;
+  let nextSequence = 0;
+
+  const assertAuthority = () => {
+    if (revoked || authority.revoked === true || !sameAuthoritySnapshot(initial, authoritySnapshot(authority))) {
+      revoked = true;
+      throw revokedStreamError();
+    }
+  };
+  const post = async (path, body) => {
+    assertAuthority();
+    const response = await fetchImpl(`${baseUrl}${path}`, {
+      method: 'POST',
+      cache: 'no-store',
+      credentials: 'omit',
+      ...(authority.transport === 'direct-lna' ? { targetAddressSpace: 'local' } : {}),
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!response?.ok) {
+      const error = new Error(`Card frame endpoint returned HTTP ${response?.status || 0}.`);
+      error.reason = 'http-frame-failed';
+      throw error;
+    }
+    const result = await response.json().catch(() => ({ ok: true }));
+    assertAuthority();
+    return result;
+  };
+  const bindings = () => {
+    const capability = String(authority.ownerCapability || '');
+    if (!capability) throw revokedStreamError('owner-capability-required');
+    return {
+      ...initial,
+      capability,
+      expectedHead: authority.ownerCapabilityExpectedHead || '',
+    };
+  };
+  const acquireLease = async sequence => {
+    const result = await post('/api/stream/lease', bindings());
+    if (!result?.leaseId) throw new Error('The card did not grant an HTTP frame lease.');
+    lease = {
+      leaseId: String(result.leaseId),
+      expiresAt: nowImpl() + Math.max(1, Number(result.expiresInMs) || 1000),
+    };
+    nextSequence = Number.isSafeInteger(Number(result.nextSequence)) ? Number(result.nextSequence) : sequence;
+  };
+  const ensureLease = async sequence => {
+    if (!lease || nowImpl() >= lease.expiresAt - leaseRefreshMarginMs) await acquireLease(sequence);
+  };
+
+  return Object.freeze({
+    kind: 'http',
+    async sendFrame(pixels, seg, { isCurrent = () => true, sequence } = {}) {
+      assertAuthority();
+      if (!Array.isArray(pixels) || !pixels.length) return { ok: true };
+      const requestedSequence = Number.isSafeInteger(Number(sequence)) ? Number(sequence) : nextSequence;
+      await ensureLease(requestedSequence);
+      if (requestedSequence < nextSequence) {
+        const error = new Error('HTTP frame sequence must increase monotonically.');
+        error.reason = 'non-monotonic-sequence';
+        throw error;
+      }
+      let wireSequence = requestedSequence;
+      const chunkSize = Math.max(1, Math.min(FRAME_CHUNK_MAX_PIXELS, Number(maxChunkPixels) || FRAME_CHUNK_MAX_PIXELS));
+      let last = { ok: true };
+      for (let start = 0; start < pixels.length; start += chunkSize) {
+        if (!isCurrent()) return { ok: true, fenced: true };
+        const chunkPixels = pixels.slice(start, start + chunkSize);
+        last = await post('/api/stream/frame', {
+          ...bindings(),
+          leaseId: lease.leaseId,
+          sequence: wireSequence,
+          start,
+          pixels: chunkPixels,
+          ...(Number.isInteger(seg) ? { seg } : {}),
+        });
+        const reportedNext = Number(last?.nextSequence);
+        wireSequence = Number.isSafeInteger(reportedNext) && reportedNext > wireSequence
+          ? reportedNext
+          : wireSequence + 1;
+      }
+      nextSequence = wireSequence;
+      return last;
+    },
+    async sendCancel() {
+      if (revoked) return { ok: true, revoked: true };
+      assertAuthority();
+      if (lease) await post('/api/stream/stop', { ...bindings(), leaseId: lease.leaseId });
+      revoked = true;
+      lease = null;
+      return { ok: true };
+    },
+    close() { revoked = true; lease = null; },
+  });
+}
+
+export function defaultFrameTransport(host = '', { authority } = {}) {
+  if (authority && ['direct-lna', 'local-origin'].includes(authority.transport)) {
+    return createHttpFrameTransport(host, { authority });
+  }
   return canPushDirectlyToCard()
     ? createDirectFrameTransport(host)
     : createBridgeFrameTransport(host);
@@ -406,6 +545,7 @@ export function createCardFrameStream({
   fps = DEFAULT_FRAME_FPS,
   seg = undefined,
   transport = null,
+  authority = null,
   keepaliveMs = FRAME_KEEPALIVE_MS,
   canSendFrame = () => true,
   onHealth = null,
@@ -414,11 +554,16 @@ export function createCardFrameStream({
   clearIntervalImpl = (...args) => clearInterval(...args),
   now = () => Date.now(),
 } = {}) {
-  const wire = transport === 'bridge'
+  const verifiedAuthority = authority || getActiveCardTransportAuthority(host);
+  const wire = transport === 'bridge' || transport === 'legacy-bridge'
     ? createBridgeFrameTransport(host)
-    : transport === 'direct'
+    : transport === 'direct' && verifiedAuthority
+      ? createHttpFrameTransport(host, { authority: verifiedAuthority })
+      : transport === 'direct'
       ? createDirectFrameTransport(host)
-      : transport || defaultFrameTransport(host);
+    : ['direct-lna', 'local-origin'].includes(transport)
+        ? createHttpFrameTransport(host, { authority: verifiedAuthority })
+        : transport || defaultFrameTransport(host, { authority: verifiedAuthority });
   const ownershipHost = normalizeCardHost(host || readStoredCardHost());
   let frameFps = clampFrameFps(fps);
   let timer = null;

@@ -1823,7 +1823,7 @@ export function reserveCardBridgeWindow() {
   const win = browserWindow();
   if (!win?.open) return null;
   try {
-    const opened = win.open('', CARD_BRIDGE_WINDOW_NAME);
+    const opened = win.open('', CARD_BRIDGE_WINDOW_NAME, CARD_BRIDGE_UTILITY_WINDOW_FEATURES);
     // Opening a named target can replace a live card document with the blank
     // reservation. Its old origin/identity must never retain authority during
     // the subsequent asynchronous discovery gap.
