@@ -246,8 +246,8 @@ String studioOpenScript() {
              "const u=new URL('https://led.mandalacodes.com/');"
              "u.searchParams.set('cardBridge','1');"
              "u.searchParams.set('cardHost',location.host);"
-             "for(const key of ['editPattern','editLook']){const value=requested.searchParams.get(key)||'';if(/^[a-z0-9_-]{1,64}$/i.test(value))u.searchParams.set(key,value)}"
-             "u.hash='#screen=card&section=overview';url=u.href"
+             "let editing=false;for(const key of ['editPattern','editLook']){const value=requested.searchParams.get(key)||'';if(/^[a-z0-9_-]{1,64}$/i.test(value)){u.searchParams.set(key,value);editing=true}}"
+             "u.hash=!editing&&requested.hash==='#screen=layout'?'#screen=layout':'#screen=card&section=overview';url=u.href"
            "}catch(_){url='https://led.mandalacodes.com/?cardBridge=1&cardHost='+encodeURIComponent(location.host)+'#screen=card&section=overview'}"
            "let opener=null;try{if(lwBridgeLaunch&&window.opener&&!window.opener.closed)opener=window.opener}catch(_){}"
            "if(opener){try{opener.location.href=url}catch(_){}try{opener.focus()}catch(_){}return false}"
@@ -959,7 +959,7 @@ void handleAdvancedRoot() {
               "<p class='note'>If you are viewing this from the Lightweaver AP, rejoin gallery WiFi before returning to Studio.</p>"
               "<a class='link' href='");
     page += escapeHtml(factoryBlank ? studioSetupUrl(cfg) : studioBridgeUrl(cfg));
-    page += F("' target='lightweaver-studio'>");
+    page += F("' target='_blank' onclick=\"return lwOpenStudio(event,this.href)\">");
     page += factoryBlank
         ? F("Set up LED strips and install on card \xE2\x86\x92")
         : F("Return to Lightweaver Studio \xE2\x86\x92");

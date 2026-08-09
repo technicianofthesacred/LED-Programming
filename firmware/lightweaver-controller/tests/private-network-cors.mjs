@@ -266,6 +266,19 @@ assert.match(
 );
 assert.doesNotMatch(
   web,
+  /target='lightweaver-studio'/,
+  'commissioning and recovery links must not bypass the verified Studio opener handoff',
+);
+assert.ok(
+  (web.match(/onclick=\\"return lwOpenStudio\(event,this\.href\)\\"/g) || []).length >= 3,
+  'live, commissioning, and recovery Studio links should all use the verified opener handoff',
+);
+assert.ok(
+  web.includes("!editing&&requested.hash==='#screen=layout'?'#screen=layout':'#screen=card&section=overview'"),
+  'bounded Studio handoff should preserve the commissioning layout destination',
+);
+assert.doesNotMatch(
+  web,
   /document\.createElement\(['"]iframe['"]\)/,
   'new card firmware must never embed Studio in the local HTTP page',
 );
@@ -327,8 +340,8 @@ assert.match(
   assert.equal(opener.focusCalls, 1,
     'a card page opened by Studio should focus that exact installer/commissioning tab');
   assert.equal(opener.location.href,
-    'https://led.mandalacodes.com/?cardBridge=1&cardHost=192.168.4.1#screen=card&section=overview',
-    'Open Studio must navigate the verified opener to the requested safe Card route');
+    'https://led.mandalacodes.com/?cardBridge=1&cardHost=192.168.4.1#screen=layout',
+    'commissioning handoff must navigate the verified opener to the requested safe Layout route');
   opener.location.href = 'https://led.mandalacodes.com/#screen=production';
   assert.equal(context.openStudio({ preventDefault() { prevented += 1; } },
     'https://led.mandalacodes.com/?cardBridge=1&cardHost=192.168.4.1&editPattern=calm#screen=card&section=overview'), false);
