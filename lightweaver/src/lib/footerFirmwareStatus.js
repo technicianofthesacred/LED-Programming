@@ -30,30 +30,30 @@ export function classifyFooterFirmwareStatus(installed, verifiedRelease) {
   const release = validRelease(verifiedRelease);
   if (installed === null || installed === undefined) {
     return release
-      ? result('disconnected', null, release.buildNumber, `Firmware ${release.buildNumber} available`, false)
-      : result('disconnected', null, null, 'Firmware release unknown', false);
+      ? result('disconnected', null, release.buildNumber, `Card firmware unknown · latest ${release.buildNumber}`, false)
+      : result('disconnected', null, null, 'Card firmware unknown · latest unknown', false);
   }
 
   const card = validInstalledCard(installed);
   if (!card) {
-    return result('release-unknown', null, release?.buildNumber ?? null, 'Firmware release unknown', false);
+    return result('release-unknown', null, release?.buildNumber ?? null, `Card firmware unknown · latest ${release?.buildNumber ?? 'unknown'}`, false);
   }
 
   if (!release) {
     const label = card.buildNumber === null
-      ? 'Card legacy · release unknown'
-      : `Card ${card.buildNumber} · release unknown`;
+      ? 'Card firmware legacy · latest unknown'
+      : `Card firmware ${card.buildNumber} · latest unknown`;
     return result('release-unknown', card.buildNumber, null, label, false);
   }
 
   if (card.buildNumber === null) {
-    return result('legacy', null, release.buildNumber, `Card legacy → ${release.buildNumber}`, true);
+    return result('legacy', null, release.buildNumber, `Card firmware legacy → ${release.buildNumber}`, true);
   }
   if (card.buildNumber > release.buildNumber) {
-    return result('development-build', card.buildNumber, release.buildNumber, `Card ${card.buildNumber} · release ${release.buildNumber}`, false);
+    return result('development-build', card.buildNumber, release.buildNumber, `Card firmware ${card.buildNumber} · latest ${release.buildNumber}`, false);
   }
   if (card.buildNumber < release.buildNumber || card.buildId !== release.buildId) {
-    return result('update-available', card.buildNumber, release.buildNumber, `Card ${card.buildNumber} → ${release.buildNumber}`, true);
+    return result('update-available', card.buildNumber, release.buildNumber, `Card firmware ${card.buildNumber} → ${release.buildNumber}`, true);
   }
-  return result('current', card.buildNumber, release.buildNumber, `Card ${card.buildNumber} ✓`, false);
+  return result('current', card.buildNumber, release.buildNumber, `Card firmware ${card.buildNumber} ✓`, false);
 }

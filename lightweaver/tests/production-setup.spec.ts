@@ -2106,7 +2106,7 @@ test('a stale tab cannot append a pass or complete a replacement production run'
 test('Change job safely cancels before mutation and firmware preload retry preserves the run', async ({ page }) => {
   await serveJob(page); await installDriver(page);
   await page.goto('/#screen=production');
-  await expect(page.getByTestId('footer-firmware-status')).toHaveText(/^Firmware \d+ available$/);
+  await expect(page.getByTestId('footer-firmware-status')).toHaveText(/^Card firmware unknown · latest \d+$/);
   let signatures = 0;
   await page.route('**/firmware/release-manifest.sig', async route => {
     signatures += 1;

@@ -88,7 +88,7 @@ test('footer reduces telemetry to card, firmware, Studio and Test strip controls
   const footer = page.locator('.status-bar');
   await expect(page.getByTestId('card-link-status')).toContainText('Gallery card');
   await expect(page.getByTestId('footer-firmware-status')).toHaveText(
-    `Card ${release.buildNumber - 1} → ${release.buildNumber}`,
+    `Card firmware ${release.buildNumber - 1} → ${release.buildNumber}`,
   );
   await expect(page.getByTestId('studio-freshness')).toContainText(`Studio ${studioBuild}`);
   await expect(footer).not.toContainText('GPIO');
@@ -116,11 +116,13 @@ test('desktop footer is one row in Card, Firmware, Studio, Test strip order', as
       order: [...node.children].map(child => child.matches('.sb-card') ? 'card' : child.getAttribute('data-testid')).filter(Boolean),
       centers: boxes.map(box => Math.round(box.top + (box.height / 2))),
       lefts: boxes.map(box => box.left),
+      cardWidth: boxes[0].width,
     };
   });
   expect(layout.order).toEqual(['card', 'footer-firmware-status', 'studio-freshness', 'test-strip-control']);
   expect(new Set(layout.centers).size).toBe(1);
   expect(layout.lefts).toEqual([...layout.lefts].sort((a, b) => a - b));
+  expect(layout.cardWidth).toBeLessThan(300);
 });
 
 test('outdated firmware opens the canonical install route without starting hardware work', async ({ page }) => {
@@ -142,7 +144,7 @@ test('phone footer keeps firmware and Studio identities visible without overflow
   await page.setViewportSize({ width: 390, height: 844 });
   await openStudio(page, { buildNumber: release.buildNumber, buildId: release.buildId });
 
-  await expect(page.getByTestId('footer-firmware-status')).toHaveText(`Card ${release.buildNumber} ✓`);
+  await expect(page.getByTestId('footer-firmware-status')).toHaveText(`Card firmware ${release.buildNumber} ✓`);
   await expect(page.getByTestId('footer-firmware-status')).toBeVisible();
   await expect(page.getByTestId('studio-freshness')).toBeVisible();
   const dimensions = await page.locator('.status-bar').evaluate(node => ({
@@ -154,25 +156,25 @@ test('phone footer keeps firmware and Studio identities visible without overflow
 
 test('footer exposes a legacy card as an actionable update', async ({ page }) => {
   await openStudio(page, { buildNumber: 0, buildId: 'a'.repeat(40) });
-  await expect(page.getByTestId('footer-firmware-status')).toHaveText(`Card legacy → ${release.buildNumber}`);
+  await expect(page.getByTestId('footer-firmware-status')).toHaveText(`Card firmware legacy → ${release.buildNumber}`);
 });
 
 test('footer exposes a newer development card without offering an update', async ({ page }) => {
   await openStudio(page, { buildNumber: release.buildNumber + 6, buildId: 'd'.repeat(40) });
   const status = page.getByTestId('footer-firmware-status');
-  await expect(status).toHaveText(`Card ${release.buildNumber + 6} · release ${release.buildNumber}`);
+  await expect(status).toHaveText(`Card firmware ${release.buildNumber + 6} · latest ${release.buildNumber}`);
   await expect(status).not.toHaveRole('button');
 });
 
 test('footer fails closed when the signed release cannot be verified', async ({ page }) => {
   await openStudio(page, { buildNumber: release.buildNumber, buildId: release.buildId }, { releaseUnknown: true });
-  await expect(page.getByTestId('footer-firmware-status')).toHaveText(`Card ${release.buildNumber} · release unknown`);
+  await expect(page.getByTestId('footer-firmware-status')).toHaveText(`Card firmware ${release.buildNumber} · latest unknown`);
   await expect(page.getByTestId('footer-firmware-status')).toHaveAttribute('data-state', 'release-unknown');
 });
 
-test('disconnected footer names the available signed firmware release', async ({ page }) => {
+test('disconnected footer distinguishes the unknown card build from the latest signed release', async ({ page }) => {
   await openStudio(page);
-  await expect(page.getByTestId('footer-firmware-status')).toHaveText(`Firmware ${release.buildNumber} available`);
+  await expect(page.getByTestId('footer-firmware-status')).toHaveText(`Card firmware unknown · latest ${release.buildNumber}`);
 });
 
 test('update-ready Studio keeps showing the build actually open', async ({ page }) => {
