@@ -764,8 +764,11 @@ import { PatternPreview } from './PatternPreview.jsx';
       (cardId) => savedLooks.find(l => (l.id || `mix-${l.patternId}`) === cardId),
       [savedLooks],
     );
-    // The selected pattern is driven by the live look.patternId.
-    const selId = customPatternById.has(activePatternId) ? activePatternId : look.patternId;
+    // A card-returned saved look is selected by its canonical Studio look ID;
+    // ordinary pattern edits continue to follow the live pattern itself.
+    const selId = savedLooks.some(savedLook => savedLook.id === activeLookId)
+      ? activeLookId
+      : (customPatternById.has(activePatternId) ? activePatternId : look.patternId);
     const sel = REAL_PATTERN_BY_ID.get(selId) || customPatternById.get(selId) || adaptPattern(selId) || ALL[0];
     const tint = sel.pal[2] || sel.pal[sel.pal.length - 1];
     const currentComboLabel = (() => {
@@ -1585,6 +1588,7 @@ import { PatternPreview } from './PatternPreview.jsx';
         }
         return;
       }
+      setStandaloneController(previous => ({ ...(previous || {}), activeLookId: '' }));
       setActivePatternId(p.id);
       const nextLook = updatePreviewLook({ patternId: p.id }, { push: false });
       scheduleBrowseLivePreview(nextLook, selectedTarget);

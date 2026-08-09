@@ -17,6 +17,9 @@ export const CUSTOMER_CONTROL_WIRE_FIELDS = Object.freeze([
 
 export function cardEditIntentForPattern(pattern = {}) {
   const key = pattern.mode === 'combo' ? 'editLook' : 'editPattern';
-  const id = String(key === 'editLook' ? pattern.id : pattern.runtimePatternId || '').trim();
+  const installedId = String(pattern.id || '').trim();
+  const id = String(key === 'editLook'
+    ? (installedId.startsWith('combo-') ? installedId.slice('combo-'.length) : installedId)
+    : pattern.runtimePatternId || '').trim();
   return id ? { key, id } : null;
 }

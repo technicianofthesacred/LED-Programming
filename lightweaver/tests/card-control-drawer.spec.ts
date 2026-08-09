@@ -27,6 +27,7 @@ test('a connected footer opens customer card controls without a popup', async ({
   await page.setViewportSize({ width: 390, height: 844 });
   let controlBody: Record<string, unknown> | null = null;
   let rejectBrightnessOnce = true;
+  let releasePendingControl: (() => void) | null = null;
   let projectFingerprint = '';
   await page.route('http://lightweaver.local/api/zones', route => route.fulfill({ json: {
     zones: [{ id: 'all', label: 'Whole piece', patternId: 'bench-warm', brightness: 0.7, speed: 1, hueShift: 0, customHue: 32, customSaturation: 230, customBreathe: false, customDrift: false, driftHueMin: 17, driftHueMax: 203, blackout: false }],
@@ -35,7 +36,7 @@ test('a connected footer opens customer card controls without a popup', async ({
     currentId: 'bench-warm', currentIndex: 0,
     patterns: [
       { id: 'bench-warm', label: 'Warm bench', mode: 'preset', runtimePatternId: 'warm-white', zones: [], controls: { customColor: true, breathe: false, drift: true } },
-      { id: 'ocean', label: 'Ocean combination', mode: 'combo', runtimePatternId: 'ocean', zones: [], controls: { customColor: false, breathe: false, drift: false } },
+      { id: 'combo-moon-look', label: 'Moon look', mode: 'combo', runtimePatternId: 'ocean', zones: [], controls: { customColor: false, breathe: false, drift: false } },
     ],
   } }));
   const cardRuntime = () => ({
@@ -52,6 +53,9 @@ test('a connected footer opens customer card controls without a popup', async ({
       await route.fulfill({ status: 503, json: { ok: false, error: 'busy' } });
       return;
     }
+    if (controlBody.speed === 1.5 && !releasePendingControl) {
+      await new Promise<void>(resolve => { releasePendingControl = resolve; });
+    }
     await route.fulfill({ json: { ok: true, cardId: CARD_ID, ...controlBody, appliedPatternId: controlBody.patternId } });
   });
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
@@ -64,9 +68,9 @@ test('a connected footer opens customer card controls without a popup', async ({
     project.name = 'Drawer gallery project';
     project.layout.starterPending = false;
     project.devices.standaloneController.looks = normalizeSavedLooks([{
-      id: 'ocean', label: 'Ocean combination', defaultLook: { patternId: 'ocean', brightness: 0.7 }, sectionLooks: {},
+      id: 'moon-look', label: 'Moon look', defaultLook: { patternId: 'ocean', brightness: 0.7 }, sectionLooks: {},
     }]);
-    project.devices.standaloneController.activeLookId = 'ocean';
+    project.devices.standaloneController.activeLookId = '';
     localStorage.clear();
     localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-drawer-card' }));
     localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
@@ -105,6 +109,19 @@ test('a connected footer opens customer card controls without a popup', async ({
   await footer.click();
   await expect(drawer).toBeVisible();
 
+  const speed = drawer.getByRole('slider', { name: 'Speed' });
+  await speed.focus();
+  await speed.fill('1.5');
+  await expect.poll(() => Boolean(releasePendingControl)).toBe(true);
+  await expect.poll(() => page.evaluate(() => document.activeElement?.tagName)).toBe('BODY');
+  await page.keyboard.press('Tab');
+  await expect(drawer.getByRole('button', { name: 'Close card controls' })).toBeFocused();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('Shift+Tab');
+  await expect(drawer.getByRole('button', { name: 'Close card controls' })).toBeFocused();
+  releasePendingControl?.();
+  await expect(speed).toBeEnabled();
+
   await page.evaluate(async () => {
     const { getSharedCardLink } = await import('/src/lib/cardLink.js');
     getSharedCardLink().dispatch({ type: 'operation-failed' });
@@ -137,11 +154,11 @@ test('a connected footer opens customer card controls without a popup', async ({
   expect(controlBody).toMatchObject({ driftMin: 0, driftMax: 255 });
   await expect(drawer.getByText(/GPIO|Wiring|Wi-?Fi|Firmware|Install|Reboot|Factory reset/i)).toHaveCount(0);
   await drawer.getByRole('button', { name: 'Next pattern' }).click();
-  await expect.poll(() => controlBody?.patternId).toBe('ocean');
+  await expect.poll(() => controlBody?.patternId).toBe('combo-moon-look');
   expect(controlBody?.syncZones).toBe(true);
-  await expect(drawer.locator('select[aria-label="Pattern"]')).toHaveValue('ocean');
+  await expect(drawer.locator('select[aria-label="Pattern"]')).toHaveValue('combo-moon-look');
   await drawer.getByRole('button', { name: 'Advanced editing' }).click();
   await expect(page).toHaveURL(/#screen=pattern$/, { timeout: 20_000 });
-  await expect(page.getByRole('button', { name: /Ocean combination mix/i })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: /Moon look mix/i })).toHaveAttribute('aria-pressed', 'true');
   await expect.poll(() => new URL(page.url()).searchParams.has('editLook')).toBe(false);
 });
