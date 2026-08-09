@@ -371,7 +371,7 @@ function freshnessPresentation(freshness) {
   return { label: 'Checking', dot: 'off', title: `Checking the current production Studio build. Running ${exact}` };
 }
 
-function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, totalLeds, stripCount, density, fps, testStrip, onToggleTestStrip, onTestStripLengthChange, freshness }) {
+function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, totalLeds, stripCount, starterPending, density, fps, testStrip, onToggleTestStrip, onTestStripLengthChange, freshness }) {
   // A blank (factory-default) card is linked but has no project to push to, so
   // it must not advertise a live push rate.
   const connected = isCardLinkConnected(link) && !link.cardBlank;
@@ -385,7 +385,12 @@ function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, totalLe
 
       <div className="sb-facts">
         <span className="sb-fact"><span>density</span><span className="fv">{density > 0 ? `${density}/m` : "—"}</span></span>
-        <span className="sb-fact"><span>total</span><span className="fv">{totalLeds > 0 ? totalLeds.toLocaleString() : "—"} LEDs · {stripCount} strips</span></span>
+        <span className="sb-fact">
+          <span>{starterPending ? 'layout' : 'total'}</span>
+          <span className="fv">{starterPending
+            ? `${totalLeds.toLocaleString()}-LED starter · not yet placed`
+            : `${totalLeds > 0 ? totalLeds.toLocaleString() : '—'} LEDs · ${stripCount} ${stripCount === 1 ? 'strip' : 'strips'}`}</span>
+        </span>
         <span className="sb-fact"><span>push</span><span className="fv">{connected ? `${fps} fps` : "—"}</span></span>
       </div>
 
@@ -485,7 +490,7 @@ function Shell() {
   const {
     projectName, serializeProject, flushProjectAutosave, replaceProject, replaceWithNewProject, requestReplacementConfirmation,
     projectLifecycle, projectLifecycleLabel, markProjectPersisted, markProjectEdited, isProjectLifecycleMarkerCurrent,
-    strips, layoutDensity,
+    strips, starterPending, layoutDensity,
   } = useProject();
   const runningStudioReleaseRef = useRef(null);
   if (!runningStudioReleaseRef.current) runningStudioReleaseRef.current = getRunningStudioRelease();
@@ -1129,6 +1134,7 @@ function Shell() {
         onOpenConnectionCenter={openConnectionCenter}
         totalLeds={totalLeds}
         stripCount={strips.length}
+        starterPending={starterPending}
         density={layoutDensity}
         fps={pushFps}
         testStrip={testStrip}
