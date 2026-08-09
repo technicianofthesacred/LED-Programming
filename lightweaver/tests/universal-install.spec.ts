@@ -30,10 +30,9 @@ test('tampered release is blocked before the card can be selected', async ({ pag
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: { requestPort: async () => ({}) } });
   });
-  let attempts = 0;
+  let serveTamperedSignature = true;
   await page.route('**/firmware/release-manifest.sig', async route => {
-    attempts += 1;
-    if (attempts === 1) {
+    if (serveTamperedSignature) {
       await route.fulfill({ status: 200, contentType: 'text/plain', body: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' });
       return;
     }
@@ -41,11 +40,13 @@ test('tampered release is blocked before the card can be selected', async ({ pag
   });
   await page.goto('/#screen=flash&mode=install');
 
+  const retryOfficialFirmware = page.getByRole('button', { name: 'Retry official firmware' });
+  await expect(retryOfficialFirmware).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText(/Official firmware could not be verified/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Find connected card' })).toBeDisabled();
   await expect(page.getByRole('button', { name: /Erase card and install/i })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Retry official firmware' })).toBeVisible();
-  await page.getByRole('button', { name: 'Retry official firmware' }).click();
+  serveTamperedSignature = false;
+  await retryOfficialFirmware.click();
   await expect(page.getByText(/Official Lightweaver .* verified and ready/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Find connected card' })).toBeEnabled();
 });
