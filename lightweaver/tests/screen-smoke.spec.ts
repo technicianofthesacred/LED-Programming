@@ -169,12 +169,16 @@ test('footer shows the current Studio build on desktop and phone', async ({ page
 
 test('new production waits for installer and destructive card operations, flushes autosave, then reloads once', async ({ page }) => {
   let marker = studioMarker();
-  await page.route('**/studio-release.json', route => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    headers: { 'cache-control': 'private, no-store' },
-    body: `${JSON.stringify(marker)}\n`,
-  }));
+  let markerRequests = 0;
+  await page.route('**/studio-release.json', route => {
+    markerRequests += 1;
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      headers: { 'cache-control': 'private, no-store' },
+      body: `${JSON.stringify(marker)}\n`,
+    });
+  });
   await page.route('**/studio-build-graph.json', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -190,6 +194,7 @@ test('new production waits for installer and destructive card operations, flushe
   });
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('studio-freshness')).toHaveText(`Studio ${STUDIO_BUILD_NUMBER}`);
+  await expect.poll(() => markerRequests).toBe(1);
   await page.evaluate(() => {
     localStorage.removeItem('lw_autosave_v3');
     window.dispatchEvent(new CustomEvent('lw-install-active', { detail: { active: true } }));
