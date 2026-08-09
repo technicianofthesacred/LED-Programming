@@ -54,6 +54,41 @@ verification. Default to the glitch loop for an individual browser or UI defect.
   when shipping. The exhaustive workflow is release evidence, not an editing
   loop.
 
+## Three inferred operating modes — mandatory
+
+Do not require Adrian to remember mode names or special commands. Infer the mode
+from ordinary language, say which mode you selected in one short sentence, and
+continue unless the Prove authorization rule requires a pause.
+
+| Adrian's request | Mode |
+| --- | --- |
+| Features, glitches, interface problems, a list of issues, or “keep going” | **Sprint** |
+| He is present with lights, colors, pixel counts, strips, wiring, USB, power cycles, or a physical card observation | **Bench** |
+| “Prove Lightweaver” | **Prove**, explicitly authorized |
+| “Check everything”, “confirm it is all working”, or similar exhaustive language | **Prove candidate**; state that it is the long run and obtain confirmation before starting |
+| “Ship”, “push to main”, or “deploy” | Existing release workflow; ship does not authorize and does not silently invoke Prove |
+
+If a request is ambiguous between Sprint and Bench, default to Sprint until an
+immediate physical observation is actually required. Never infer authorization
+for Prove from urgency, a release request, a checkpoint, or available time.
+
+Use `LIGHTWEAVER_WORKBOARD.md` as the cross-session state. Only the primary agent
+edits it. Sub-agents return evidence to the primary instead of editing the board.
+
+- **Sprint:** the primary may use at most three useful sub-agents on independent,
+  non-overlapping ownership boundaries and remains the sole integrator. Use a
+  balanced/default model for bounded work and reserve frontier/deeper reasoning
+  for firmware, persistence, security, or cross-boundary authority. Run one
+  integrated checkpoint after the coherent batch.
+- **Bench:** automate every machine action and ask for one physical observation
+  at a time. Record the exact session and one resumption step. Never mark a
+  visual hardware gate passed yourself.
+- **Prove:** freeze feature changes, run the exhaustive matrix, and distinguish
+  automated proof, observed hardware proof, waivers, and unperformed gates.
+
+Detailed execution rules live in `docs/workflows/sprint.md`,
+`docs/workflows/bench.md`, and `docs/workflows/prove.md`.
+
 ## Project name
 **Lightweaver** — use this name in UI copy, WiFi SSIDs (`Lightweaver-XXXX` MAC-suffix format for the card AP), and any public-facing branding.
 
@@ -117,6 +152,8 @@ signer commit triggered by the merge.
 
 ## Where to look for…
 - **Fast development / verification tiers** → `docs/development-workflow.md`
+- **Current Sprint, visual, Bench, and Prove state** → `LIGHTWEAVER_WORKBOARD.md`
+- **Sprint / Bench / Prove operating guides** → `docs/workflows/`
 - **Launch checklist / deployment source of truth** → `docs/deployment-checklist.md`
 - **Project roadmap (living source of truth)** → `docs/roadmap.md`
 - **Hardware research** → `research.md`
