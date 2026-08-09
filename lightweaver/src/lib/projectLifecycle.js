@@ -26,7 +26,7 @@ export function markPersisted(state, destination, revision = state.editedRevisio
 
 export function repositoryPersistenceMarker(repository, lifecycle) {
   const destination = repository?.source?.kind;
-  if (destination !== 'browser' && destination !== 'card') return null;
+  if (destination !== 'card') return null;
   if (!Number.isSafeInteger(lifecycle?.generation) || !Number.isSafeInteger(lifecycle?.editedRevision)) return null;
   return {
     destination,

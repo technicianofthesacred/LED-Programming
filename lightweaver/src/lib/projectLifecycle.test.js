@@ -15,7 +15,7 @@ import {
   repositoryPersistenceMarker,
 } from './projectLifecycle.js';
 
-test('repository saves preserve the exact lifecycle revision and destination', () => {
+test('card repository saves preserve the exact lifecycle revision without treating recovery writes as explicit saves', () => {
   assert.deepEqual(repositoryPersistenceMarker(
     { source: { kind: 'card' } },
     { generation: 4, editedRevision: 7 },
@@ -26,6 +26,10 @@ test('repository saves preserve the exact lifecycle revision and destination', (
   });
   assert.equal(repositoryPersistenceMarker(
     { source: { kind: 'recovery' } },
+    { generation: 4, editedRevision: 7 },
+  ), null);
+  assert.equal(repositoryPersistenceMarker(
+    { source: { kind: 'browser' } },
     { generation: 4, editedRevision: 7 },
   ), null);
 });
