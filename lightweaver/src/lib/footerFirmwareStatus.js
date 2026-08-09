@@ -31,18 +31,18 @@ export function classifyFooterFirmwareStatus(installed, verifiedRelease) {
   if (installed === null || installed === undefined) {
     return release
       ? result('disconnected', null, release.buildNumber, `Firmware ${release.buildNumber} available`, false)
-      : result('disconnected', null, null, 'Firmware release unavailable', false);
+      : result('disconnected', null, null, 'Firmware release unknown', false);
   }
 
   const card = validInstalledCard(installed);
   if (!card) {
-    return result('release-unknown', null, release?.buildNumber ?? null, 'Firmware release unavailable', false);
+    return result('release-unknown', null, release?.buildNumber ?? null, 'Firmware release unknown', false);
   }
 
   if (!release) {
     const label = card.buildNumber === null
-      ? 'Card legacy · firmware release unavailable'
-      : `Card ${card.buildNumber} · firmware release unavailable`;
+      ? 'Card legacy · release unknown'
+      : `Card ${card.buildNumber} · release unknown`;
     return result('release-unknown', card.buildNumber, null, label, false);
   }
 
@@ -55,5 +55,5 @@ export function classifyFooterFirmwareStatus(installed, verifiedRelease) {
   if (card.buildNumber < release.buildNumber || card.buildId !== release.buildId) {
     return result('update-available', card.buildNumber, release.buildNumber, `Card ${card.buildNumber} → ${release.buildNumber}`, true);
   }
-  return result('current', card.buildNumber, release.buildNumber, `Card ${card.buildNumber} current`, false);
+  return result('current', card.buildNumber, release.buildNumber, `Card ${card.buildNumber} ✓`, false);
 }

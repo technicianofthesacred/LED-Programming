@@ -12,7 +12,7 @@ test('footer firmware status requires both the numbered build and exact revision
     state: 'current',
     installedBuildNumber: 1154,
     releaseBuildNumber: 1154,
-    label: 'Card 1154 current',
+    label: 'Card 1154 ✓',
     actionable: false,
   });
 });
@@ -68,7 +68,7 @@ test('footer firmware status fails closed for missing or malformed verified rele
       state: 'release-unknown',
       installedBuildNumber: 1123,
       releaseBuildNumber: null,
-      label: 'Card 1123 · firmware release unavailable',
+      label: 'Card 1123 · release unknown',
       actionable: false,
     });
   }
@@ -86,7 +86,7 @@ test('footer firmware status truthfully distinguishes an absent card from an una
     state: 'disconnected',
     installedBuildNumber: null,
     releaseBuildNumber: null,
-    label: 'Firmware release unavailable',
+    label: 'Firmware release unknown',
     actionable: false,
   });
 });
@@ -101,7 +101,7 @@ test('footer firmware status fails closed for malformed card identity without ec
       state: 'release-unknown',
       installedBuildNumber: null,
       releaseBuildNumber: 1154,
-      label: 'Firmware release unavailable',
+      label: 'Firmware release unknown',
       actionable: false,
     });
   }
