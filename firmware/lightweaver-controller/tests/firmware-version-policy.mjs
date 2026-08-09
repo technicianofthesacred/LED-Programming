@@ -12,6 +12,7 @@ const helperPath = resolve(firmwareRoot, 'scripts/firmware-version.mjs');
 
 const {
   bumpVersion,
+  checkPreviousProduction,
   compareVersions,
   main,
   parseVersion,
@@ -71,11 +72,8 @@ try {
   execFileSync('git', ['config', 'user.name', 'Lightweaver CI'], { cwd: historyFixture });
   execFileSync('git', ['config', 'user.email', 'ci@example.invalid'], { cwd: historyFixture });
   const fixtureManifestPath = join(historyFixture, 'lightweaver/public/firmware/release-manifest.json');
-  const fixtureSignaturePath = join(historyFixture, 'lightweaver/public/firmware/release-manifest.sig');
-  const fixturePublicKeyPath = join(historyFixture, 'release/keys/lightweaver-release-public.pem');
   const fixtureVersionPath = join(historyFixture, 'VERSION');
   mkdirSync(join(historyFixture, 'lightweaver/public/firmware'), { recursive: true });
-  mkdirSync(join(historyFixture, 'release/keys'), { recursive: true });
   const fixtureKeys = generateKeyPairSync('ec', {
     namedCurve: 'P-256',
     publicKeyEncoding: { type: 'spki', format: 'pem' },
@@ -86,56 +84,70 @@ try {
     key: fixtureKeys.privateKey,
     dsaEncoding: 'ieee-p1363',
   }).toString('base64url');
-  writeFileSync(fixtureManifestPath, `${trustedManifest}\n`);
-  writeFileSync(fixtureSignaturePath, `${trustedSignature}\n`);
-  writeFileSync(fixturePublicKeyPath, fixtureKeys.publicKey);
-  writeFileSync(fixtureVersionPath, '2.0.0\n');
-  execFileSync('git', ['add', '.'], { cwd: historyFixture });
-  execFileSync('git', ['commit', '-qm', 'trusted signed predecessor'], { cwd: historyFixture });
-
-  // The candidate replays an older manifest. Its own file must never lower the
-  // comparison baseline supplied by the immutable first parent.
   writeFileSync(fixtureManifestPath, '{"firmwareVersion":"1.0.0"}\n');
+  writeFileSync(fixtureVersionPath, '1.0.0\n');
+  execFileSync('git', ['add', '.'], { cwd: historyFixture });
+  execFileSync('git', ['commit', '-qm', 'candidate-controlled replay parent'], { cwd: historyFixture });
+
+  // A multi-commit push can control its own first parent. Neither candidate
+  // commit may lower the externally anchored production release baseline.
+  writeFileSync(fixtureManifestPath, '{"firmwareVersion":"0.9.0"}\n');
   writeFileSync(fixtureVersionPath, '1.5.0\n');
   execFileSync('git', ['add', '.'], { cwd: historyFixture });
-  execFileSync('git', ['commit', '-qm', 'candidate manifest replay'], { cwd: historyFixture });
-  const candidateRevision = execFileSync('git', ['rev-parse', 'HEAD'], {
-    cwd: historyFixture,
-    encoding: 'utf8',
-  }).trim();
+  execFileSync('git', ['commit', '-qm', 'candidate after replay parent'], { cwd: historyFixture });
 
-  assert.throws(
-    () => main(['check', '--previous-source', candidateRevision], {
-      cwd: historyFixture,
+  const calls = [];
+  const productionFetch = async (url, options) => {
+    calls.push([url, options]);
+    if (url.endsWith('release-manifest.json')) {
+      return { ok: true, status: 200, text: async () => trustedManifest };
+    }
+    return { ok: true, status: 200, text: async () => trustedSignature };
+  };
+
+  await assert.rejects(
+    checkPreviousProduction({
+      fetchImpl: productionFetch,
+      publicKeyPem: fixtureKeys.publicKey,
       versionPath: fixtureVersionPath,
     }),
     /must be greater than previous signed version 2\.0\.0/i,
   );
+  assert.deepEqual(calls.map(([url]) => url), [
+    'https://led.mandalacodes.com/firmware/release-manifest.json',
+    'https://led.mandalacodes.com/firmware/release-manifest.sig',
+  ]);
+  for (const [, options] of calls) {
+    assert.equal(options.cache, 'no-store');
+    assert.equal(options.credentials, 'omit');
+    assert.equal(options.redirect, 'error');
+  }
+
   writeFileSync(fixtureVersionPath, '2.1.0\n');
-  assert.equal(main(['check', '--previous-source', candidateRevision], {
-    cwd: historyFixture,
+  assert.equal(await checkPreviousProduction({
+    fetchImpl: productionFetch,
+    publicKeyPem: fixtureKeys.publicKey,
     versionPath: fixtureVersionPath,
     write: () => {},
   }), '2.1.0');
 
-  writeFileSync(fixtureSignaturePath, 'invalid-predecessor-signature\n');
-  execFileSync('git', ['add', '.'], { cwd: historyFixture });
-  execFileSync('git', ['commit', '-qm', 'tampered predecessor signature'], { cwd: historyFixture });
-  writeFileSync(fixtureVersionPath, '3.0.0\n');
-  execFileSync('git', ['add', '.'], { cwd: historyFixture });
-  execFileSync('git', ['commit', '-qm', 'candidate after tampered predecessor'], { cwd: historyFixture });
-  const tamperedPredecessorCandidate = execFileSync('git', ['rev-parse', 'HEAD'], {
-    cwd: historyFixture,
-    encoding: 'utf8',
-  }).trim();
-  assert.throws(
-    () => main(['check', '--previous-source', tamperedPredecessorCandidate], {
-      cwd: historyFixture,
+  await assert.rejects(
+    checkPreviousProduction({
+      fetchImpl: async url => ({
+        ok: true,
+        status: 200,
+        text: async () => url.endsWith('.sig') ? 'invalid-signature' : trustedManifest,
+      }),
+      publicKeyPem: fixtureKeys.publicKey,
       versionPath: fixtureVersionPath,
     }),
     /signature/i,
-    'an unauthenticated predecessor manifest must fail closed',
   );
+  await assert.rejects(checkPreviousProduction({
+    fetchImpl: async () => ({ ok: false, status: 503, text: async () => '' }),
+    publicKeyPem: fixtureKeys.publicKey,
+    versionPath: fixtureVersionPath,
+  }), /production firmware release.*503/i);
 } finally {
   rmSync(historyFixture, { recursive: true, force: true });
 }
@@ -161,9 +173,13 @@ assert.match(workflow, /--firmware-version "\$FW_VERSION"/);
 assert.match(workflow, /firmware_version:/, 'tested compile and protected signer must share the resolved version');
 assert.match(
   workflow,
-  /--previous-source "\$SOURCE_REVISION"/,
-  'the trusted predecessor version must come from the tested revision first parent',
+  /--previous-production/,
+  'the trusted predecessor version must come from the authenticated live release',
 );
+assert.doesNotMatch(workflow, /--previous-source|SOURCE_REVISION\^:/);
+assert.match(workflow, /github\.event\.workflow_run\.event == 'push'/);
+assert.match(workflow, /github\.event\.workflow_run\.head_repository\.full_name == github\.repository/);
+assert.match(workflow, /github\.event\.workflow_run\.head_branch == 'main'/);
 assert.doesNotMatch(
   workflow,
   /require\('\.\/lightweaver\/public\/firmware\/release-manifest\.json'\)/,

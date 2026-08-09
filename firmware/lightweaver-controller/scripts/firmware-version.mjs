@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 
-import { execFileSync } from 'node:child_process';
 import { verify as verifySignature } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import {
+  canonicalFirmwareManifestBytes,
+  LIGHTWEAVER_RELEASE_PUBLIC_KEY_PEM,
+} from '../../../packages/installer-core/src/firmware-release.js';
 
 const STRICT_SEMVER = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 const canonicalVersionPath = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'VERSION');
@@ -41,54 +45,62 @@ export function bumpVersion(version, level) {
   return parts.join('.');
 }
 
-function canonicalJson(value) {
-  if (Array.isArray(value)) return value.map(canonicalJson);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalJson(value[key])]));
-  }
-  return value;
-}
-
-function gitFileAtSourceParent(sourceRevision, path, cwd) {
-  return execFileSync('git', ['show', `${sourceRevision}^:${path}`], {
-    cwd,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'inherit'],
+async function fetchProductionReleaseText(fetchImpl, url, label) {
+  if (typeof fetchImpl !== 'function') throw new Error('Production firmware release fetch is unavailable');
+  const response = await fetchImpl(url, {
+    cache: 'no-store',
+    credentials: 'omit',
+    redirect: 'error',
   });
+  if (!response?.ok || response.status !== 200) {
+    throw new Error(`Production firmware release ${label} returned HTTP ${response?.status ?? 'unknown'}`);
+  }
+  return response.text();
 }
 
-export function previousSignedVersionFromSource(sourceRevision, cwd = process.cwd()) {
-  if (!/^[0-9a-f]{40}$/.test(String(sourceRevision))) {
-    throw new Error('Previous source lookup requires an exact 40-character revision');
+export async function checkPreviousProduction({
+  fetchImpl = globalThis.fetch,
+  publicKeyPem = LIGHTWEAVER_RELEASE_PUBLIC_KEY_PEM,
+  versionPath = canonicalVersionPath,
+  write = value => process.stdout.write(value),
+} = {}) {
+  const [manifestText, signatureBody] = await Promise.all([
+    fetchProductionReleaseText(
+      fetchImpl,
+      'https://led.mandalacodes.com/firmware/release-manifest.json',
+      'manifest',
+    ),
+    fetchProductionReleaseText(
+      fetchImpl,
+      'https://led.mandalacodes.com/firmware/release-manifest.sig',
+      'signature',
+    ),
+  ]);
+  let manifest;
+  try {
+    manifest = JSON.parse(manifestText);
+  } catch {
+    throw new Error('Production firmware release manifest is not valid JSON');
   }
-  const manifest = JSON.parse(gitFileAtSourceParent(
-    sourceRevision,
-    'lightweaver/public/firmware/release-manifest.json',
-    cwd,
-  ));
-  const signatureText = gitFileAtSourceParent(
-    sourceRevision,
-    'lightweaver/public/firmware/release-manifest.sig',
-    cwd,
-  ).trim();
-  const publicKey = gitFileAtSourceParent(
-    sourceRevision,
-    'release/keys/lightweaver-release-public.pem',
-    cwd,
-  );
+  const signatureText = signatureBody.trim();
   if (!/^[A-Za-z0-9_-]{86}$/.test(signatureText)) {
-    throw new Error('Previous firmware manifest signature is malformed');
+    throw new Error('Production firmware release signature is malformed');
   }
   const signatureValid = verifySignature(
     'sha256',
-    Buffer.from(JSON.stringify(canonicalJson(manifest))),
-    { key: publicKey, dsaEncoding: 'ieee-p1363' },
+    canonicalFirmwareManifestBytes(manifest),
+    { key: publicKeyPem, dsaEncoding: 'ieee-p1363' },
     Buffer.from(signatureText, 'base64url'),
   );
-  if (!signatureValid) throw new Error('Previous firmware manifest signature verification failed');
+  if (!signatureValid) throw new Error('Production firmware release signature verification failed');
   const previous = manifest.firmwareVersion;
   parseVersion(previous);
-  return previous;
+  const current = readVersion(versionPath);
+  if (compareVersions(current, previous) <= 0) {
+    throw new Error(`Firmware version ${current} must be greater than previous signed version ${previous}`);
+  }
+  write(`${current}\n`);
+  return current;
 }
 
 function readVersion(versionPath) {
@@ -99,7 +111,6 @@ function readVersion(versionPath) {
 }
 
 export function main(argv, {
-  cwd = process.cwd(),
   versionPath = canonicalVersionPath,
   write = value => process.stdout.write(value),
 } = {}) {
@@ -122,21 +133,16 @@ export function main(argv, {
     return current;
   }
 
-  if (command === 'check' && argument === '--previous-source' && previous !== undefined && extra.length === 0) {
-    const trustedPrevious = previousSignedVersionFromSource(previous, cwd);
-    if (compareVersions(current, trustedPrevious) <= 0) {
-      throw new Error(`Firmware version ${current} must be greater than previous signed version ${trustedPrevious}`);
-    }
-    write(`${current}\n`);
-    return current;
-  }
-
-  throw new Error('Usage: firmware-version.mjs bump <patch|minor|major> | check --previous <version> | check --previous-source <revision>');
+  throw new Error('Usage: firmware-version.mjs bump <patch|minor|major> | check --previous <version> | check --previous-production');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
-    main(process.argv.slice(2));
+    if (process.argv.length === 4 && process.argv[2] === 'check' && process.argv[3] === '--previous-production') {
+      await checkPreviousProduction();
+    } else {
+      main(process.argv.slice(2));
+    }
   } catch (error) {
     process.stderr.write(`${error.message}\n`);
     process.exitCode = 1;

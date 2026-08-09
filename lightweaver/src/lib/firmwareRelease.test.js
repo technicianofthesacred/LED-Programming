@@ -507,9 +507,13 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
   assert.match(verifyJob, /npm run ci:firmware-sensitive --prefix lightweaver/);
   assert.match(
     workflow,
-    /--previous-source "\$SOURCE_REVISION"/,
-    'version progression must use the immutable tested revision predecessor, never candidate-owned release metadata',
+    /--previous-production/,
+    'version progression must use the authenticated live production release, never candidate-owned metadata',
   );
+  assert.doesNotMatch(workflow, /--previous-source|SOURCE_REVISION\^:/);
+  assert.match(workflow, /github\.event\.workflow_run\.event == 'push'/);
+  assert.match(workflow, /github\.event\.workflow_run\.head_repository\.full_name == github\.repository/);
+  assert.match(workflow, /github\.event\.workflow_run\.head_branch == 'main'/);
   assert.doesNotMatch(
     workflow,
     /require\('\.\/lightweaver\/public\/firmware\/release-manifest\.json'\)/,
