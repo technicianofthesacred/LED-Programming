@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import test from 'node:test';
@@ -146,6 +146,30 @@ test('generator and job builder reproduce the committed source, artifact, and in
     assert.deepEqual(generatedEntry, committedEntry, 'committed index metadata must be exact builder output');
     const committedArtifact = await readFile(resolve(repoRoot, `lightweaver/public${committedEntry.url}`));
     assert.deepEqual(generatedArtifact, committedArtifact, 'committed artifact must be exact builder output');
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test('generator advances the required release without raising the trusted firmware floor', async () => {
+  const temporary = await mkdtemp(resolve(tmpdir(), 'lightweaver-production-floor-'));
+  try {
+    const manifestPath = resolve(temporary, 'release-manifest.json');
+    const outputPath = resolve(temporary, 'bench-fixture-44.json');
+    await writeFile(manifestPath, JSON.stringify({
+      target: 'esp32-s3-n16r8',
+      firmwareVersion: '1.1.0',
+      buildId: 'a'.repeat(40),
+    }));
+    execFileSync(process.execPath, [
+      resolve(repoRoot, 'release/job-generators/bench-fixture-44.mjs'),
+      '--manifest', manifestPath,
+      '--output', outputPath,
+    ], { cwd: repoRoot, stdio: 'pipe' });
+
+    const generated = JSON.parse(await readFile(outputPath, 'utf8'));
+    assert.equal(generated.firmware.version, '1.1.0');
+    assert.equal(generated.firmware.minimumVersion, '1.0.0');
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
