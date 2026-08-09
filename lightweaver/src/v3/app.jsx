@@ -7,6 +7,7 @@ import { CloudLibraryProvider, useCloudLibrary } from '../state/CloudLibraryCont
 import { useCardStatus } from '../hooks/useCardStatus.js';
 import { CardConnectionCenter } from '../components/card/CardConnectionCenter.jsx';
 import { CardControlDrawer } from '../components/card/CardControlDrawer.jsx';
+import { cardEditIntentForPattern } from '../lib/cardCustomerControlContract.js';
 import { CardStatusControl, cardConnectionStatus } from '../components/card/CardStatusControl.jsx';
 import { useFirmwareReleaseIdentity } from '../hooks/useFirmwareReleaseIdentity.js';
 import { ProjectLoadDialog, ProjectSaveDialog } from '../components/projects/TopBarProjectDialogs.jsx';
@@ -796,10 +797,10 @@ function Shell() {
     setConnectionCenterOpen(true);
   }, []);
   const openAdvancedPattern = useCallback(pattern => {
-    const id = String(pattern?.id || '').trim();
-    if (!id) return;
+    const intent = cardEditIntentForPattern(pattern);
+    if (!intent) return;
+    const { key: intentKey, id } = intent;
     const url = new URL(window.location.href);
-    const intentKey = pattern?.mode === 'combo' ? 'editLook' : 'editPattern';
     const alternateKey = intentKey === 'editLook' ? 'editPattern' : 'editLook';
     url.searchParams.delete(alternateKey);
     url.searchParams.set(intentKey, id);

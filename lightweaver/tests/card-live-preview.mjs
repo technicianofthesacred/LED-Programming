@@ -59,19 +59,24 @@ assert.throws(
   'a matching pattern cannot confirm a changed brightness without applied-value readback',
 );
 assert.equal(requireLivePreviewAcknowledgement(
-  { ok: true, cardId: 'lw-expected', patternId: 'ocean', brightness: 0.4 },
+  { ok: true, cardId: 'lw-expected', patternId: 'ocean', appliedPatternId: 'ocean', brightness: 0.4 },
   { patternId: 'ocean', brightness: 0.4 },
   { expectedCardId: 'lw-expected', expectedControlPatch: { brightness: 0.4 } },
 ).brightness, 0.4);
 assert.throws(
   () => requireLivePreviewAcknowledgement(
-    { ok: true, cardId: 'lw-expected', revision: 41 },
+    { ok: true, cardId: 'lw-expected', revision: 41, patternId: 'bench-warm' },
     { patternId: 'bench-warm' },
     { expectedCardId: 'lw-expected', revision: 41, exactCardPatternId: 'bench-warm', expectedControlPatch: { patternId: 'bench-warm' } },
   ),
   error => error?.reason === 'control-field-unconfirmed',
-  'a revision alone cannot confirm the exact card pattern that was applied',
+  'an echoed revision and accepted request ID cannot confirm the exact card pattern that was applied',
 );
+assert.equal(requireLivePreviewAcknowledgement(
+  { ok: true, cardId: 'lw-expected', revision: 41, patternId: 'bench-warm', appliedPatternId: 'bench-warm' },
+  { patternId: 'bench-warm' },
+  { expectedCardId: 'lw-expected', revision: 41, exactCardPatternId: 'bench-warm', expectedControlPatch: { patternId: 'bench-warm' } },
+).appliedPatternId, 'bench-warm');
 assert.throws(
   () => requireLivePreviewAcknowledgement(
     { ok: true },
@@ -134,7 +139,7 @@ globalThis.fetch = async (url, options) => {
   request = { url, options };
   return {
     ok: true,
-    json: async () => ({ ok: true, patternId: 'ocean' }),
+    json: async () => ({ ok: true, patternId: 'ocean', appliedPatternId: 'ocean' }),
   };
 };
 
@@ -162,7 +167,7 @@ globalThis.fetch = async (url, options = {}) => {
   exactProjectLookRequest = JSON.parse(options.body || '{}');
   return {
     ok: true,
-    json: async () => ({ ok: true, patternId: exactProjectLookRequest.patternId }),
+    json: async () => ({ ok: true, patternId: exactProjectLookRequest.patternId, appliedPatternId: exactProjectLookRequest.patternId }),
   };
 };
 await pushLivePreviewToCard({ patternId: 'bench-warm' }, {
@@ -181,7 +186,7 @@ for (const [label, responseBody, reason, message] of [
   ['ok:false', { ok: false, cardId: 'lw-expected' }, 'preview-unconfirmed', 'The card runtime did not accept the preview command.'],
   ['wrong card', { ok: true, cardId: 'lw-other', patternId: 'ocean' }, 'wrong-card', 'A different Lightweaver card answered the preview request.'],
   ['missing look and revision proof', { ok: true, cardId: 'lw-expected' }, 'runtime-state-unconfirmed', 'The card answered, but did not report which pattern or revision it applied.'],
-  ['wrong echoed look', { ok: true, cardId: 'lw-expected', patternId: 'fire' }, 'preview-mismatch', 'The card runtime reported a different pattern.'],
+  ['wrong echoed look', { ok: true, cardId: 'lw-expected', patternId: 'ocean', appliedPatternId: 'fire' }, 'preview-mismatch', 'The card runtime reported a different pattern.'],
   ['wrong echoed revision', { ok: true, cardId: 'lw-expected', revision: 6 }, 'preview-mismatch', 'The card runtime reported a different preview revision.'],
 ]) {
   globalThis.fetch = async () => ({
@@ -206,7 +211,7 @@ for (const [label, responseBody, reason, message] of [
 
 globalThis.fetch = async () => ({
   ok: true,
-  json: async () => ({ ok: true, cardId: 'lw-expected', patternId: 'ocean', revision: 7 }),
+  json: async () => ({ ok: true, cardId: 'lw-expected', patternId: 'ocean', appliedPatternId: 'ocean', revision: 7 }),
 });
 const acknowledgedPreview = await pushLivePreviewToCard(
   { patternId: 'ocean' },
@@ -245,13 +250,13 @@ assert.equal(revisionOnlyProof.confirmedRevision, 7);
 
 globalThis.fetch = async () => ({
   ok: true,
-  json: async () => ({ ok: true, cardId: 'lw-expected', confirmedLook: { patternId: 'ocean' } }),
+  json: async () => ({ ok: true, cardId: 'lw-expected', appliedPatternId: 'ocean' }),
 });
 const lookOnlyProof = await pushLivePreviewToCard(
   { patternId: 'ocean' },
   { host: 'lightweaver.local', expectedCardId: 'lw-expected', revision: 7, autoDiscover: false, latestOnly: false },
 );
-assert.equal(lookOnlyProof.confirmedLook.patternId, 'ocean');
+assert.equal(lookOnlyProof.appliedPatternId, 'ocean');
 
 let aliasRequestBody = null;
 globalThis.fetch = async (url, options = {}) => {
@@ -262,6 +267,7 @@ globalThis.fetch = async (url, options = {}) => {
       ok: true,
       cardId: 'lw-expected',
       patternId: aliasRequestBody.patternId,
+      appliedPatternId: aliasRequestBody.patternId,
       revision: aliasRequestBody.revision,
     }),
   };
@@ -275,7 +281,7 @@ assert.equal(aliasAcknowledgement.patternId, 'aurora', 'firmware echo is validat
 assert.equal(aliasAcknowledgement.revision, 19, 'alias-aware acknowledgement must preserve applied preview revision proof');
 
 const controlResponseLimit = 8192;
-const exactLimitBase = JSON.stringify({ ok: true, cardId: 'lw-expected', patternId: 'ocean', padding: '' });
+const exactLimitBase = JSON.stringify({ ok: true, cardId: 'lw-expected', patternId: 'ocean', appliedPatternId: 'ocean', padding: '' });
 const exactLimitBody = exactLimitBase.slice(0, -2) + 'x'.repeat(controlResponseLimit - exactLimitBase.length) + '"}';
 assert.equal(new TextEncoder().encode(exactLimitBody).byteLength, controlResponseLimit);
 globalThis.fetch = async () => new Response(exactLimitBody, {
@@ -324,13 +330,13 @@ await assert.rejects(
 globalThis.fetch = async () => ({
   ok: true,
   json: async () => ({
-    currentId: 'aurora', currentIndex: 0,
-    patterns: [{ id: 'aurora', label: 'Aurora', mode: 'procedural', zones: [] }],
+    currentId: 'bench-warm', currentIndex: 0,
+    patterns: [{ id: 'bench-warm', label: 'Warm bench', mode: 'preset', runtimePatternId: 'warm-white', controls: { customColor: false, breathe: true, drift: false }, zones: [] }],
   }),
 });
 assert.deepEqual(await readCardPatternsFromCard({ host: 'lightweaver.local', timeoutMs: 50 }), {
-  currentId: 'aurora', currentIndex: 0,
-  patterns: [{ id: 'aurora', label: 'Aurora', mode: 'procedural', zones: [] }],
+  currentId: 'bench-warm', currentIndex: 0,
+  patterns: [{ id: 'bench-warm', label: 'Warm bench', mode: 'preset', runtimePatternId: 'warm-white', controls: { customColor: false, breathe: true, drift: false }, zones: [] }],
 });
 globalThis.fetch = async () => ({
   ok: true,
@@ -340,6 +346,24 @@ await assert.rejects(
   readCardPatternsFromCard({ host: 'lightweaver.local', timeoutMs: 50 }),
   error => error?.reason === 'invalid-patterns',
   'untrusted pattern data is rejected before the customer UI can render it',
+);
+globalThis.fetch = async () => ({
+  ok: true,
+  json: async () => ({ currentId: 'bench-warm', currentIndex: 0, patterns: [{ id: 'bench-warm', label: 'Bad metadata', mode: 'preset', runtimePatternId: '../warm-white', zones: [] }] }),
+});
+await assert.rejects(
+  readCardPatternsFromCard({ host: 'lightweaver.local', timeoutMs: 50 }),
+  error => error?.reason === 'invalid-patterns',
+  'untrusted runtime pattern metadata is rejected before editor routing',
+);
+globalThis.fetch = async () => ({
+  ok: true,
+  json: async () => ({ currentId: 'aurora', currentIndex: 0, patterns: [{ id: 'aurora', label: 'Bad controls', mode: 'preset', runtimePatternId: 'aurora', controls: { drift: 'yes' }, zones: [] }] }),
+});
+await assert.rejects(
+  readCardPatternsFromCard({ host: 'lightweaver.local', timeoutMs: 50 }),
+  error => error?.reason === 'invalid-patterns',
+  'capability metadata must contain real booleans',
 );
 globalThis.fetch = async () => new Response(JSON.stringify({ zones: [], padding: 'x'.repeat(9000) }), {
   status: 200,
@@ -699,7 +723,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   return {
     ok: true,
-    json: async () => ({ ok: true, patternId: JSON.parse(options.body || '{}').patternId }),
+    json: async () => ({ ok: true, patternId: JSON.parse(options.body || '{}').patternId, appliedPatternId: JSON.parse(options.body || '{}').patternId }),
   };
 };
 
@@ -732,7 +756,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   return {
     ok: true,
-    json: async () => ({ ok: true, patternId: JSON.parse(options.body || '{}').patternId }),
+    json: async () => ({ ok: true, patternId: JSON.parse(options.body || '{}').patternId, appliedPatternId: JSON.parse(options.body || '{}').patternId }),
   };
 };
 
@@ -765,7 +789,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   return {
     ok: true,
-    json: async () => ({ ok: true, patternId: JSON.parse(options.body || '{}').patternId }),
+    json: async () => ({ ok: true, patternId: JSON.parse(options.body || '{}').patternId, appliedPatternId: JSON.parse(options.body || '{}').patternId }),
   };
 };
 
@@ -803,7 +827,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   return {
     ok: true,
-    json: async () => ({ ok: true, recovered: true, patternId: JSON.parse(options.body || '{}').patternId }),
+    json: async () => ({ ok: true, recovered: true, patternId: JSON.parse(options.body || '{}').patternId, appliedPatternId: JSON.parse(options.body || '{}').patternId }),
   };
 };
 
@@ -864,7 +888,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   const body = JSON.parse(options.body || '{}');
   arbitratedControlRequests.push(body.patternId);
-  return { ok: true, json: async () => ({ ok: true, patternId: body.patternId }) };
+  return { ok: true, json: async () => ({ ok: true, patternId: body.patternId, appliedPatternId: body.patternId }) };
 };
 const staleAurora = pushLivePreviewToCard({ patternId: 'aurora', zone: 'zone-a' }, {
   host: '192.168.18.69',
@@ -892,7 +916,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   return {
     ok: true,
-    json: async () => ({ ok: true, patternId: body.patternId }),
+    json: async () => ({ ok: true, patternId: body.patternId, appliedPatternId: body.patternId }),
   };
 };
 
@@ -947,7 +971,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   return {
     ok: true,
-    json: async () => ({ ok: true, patternId: body.patternId, revision: body.revision }),
+    json: async () => ({ ok: true, patternId: body.patternId, appliedPatternId: body.patternId, revision: body.revision }),
   };
 };
 
@@ -1006,7 +1030,7 @@ const bridgeWindow = {
                 }
               : message.type === 'zones'
                 ? { zones: [{ id: 'all', patternId: 'aurora' }], padding: bridgeZonePadding }
-              : { ok: true, bridged: true, cardId: 'lw-live-preview', patternId: message.payload?.patternId, padding: bridgeControlPadding },
+              : { ok: true, bridged: true, cardId: 'lw-live-preview', patternId: message.payload?.patternId, appliedPatternId: message.payload?.patternId, padding: bridgeControlPadding },
         },
       });
     }, 0);

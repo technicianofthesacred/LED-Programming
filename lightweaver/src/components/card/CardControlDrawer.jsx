@@ -67,12 +67,18 @@ export function CardControlDrawer({ open, link, host, onClose, onAdvanced, onRec
   const connected = connectionStatus === 'Connected';
   const mutationDisabled = !connected || Boolean(controls?.pending);
   const activePattern = view?.patterns.find(pattern => pattern.id === view.activePatternId);
-  const customControls = activePattern?.id === 'custom-color' ? activePattern.controls : null;
+  const customControls = activePattern?.controls && Object.values(activePattern.controls).some(Boolean)
+    ? activePattern.controls
+    : null;
   const runControl = patch => {
     if (!controls?.view || mutationDisabled) return;
     const optimistic = beginCustomerControl(controls, patch);
     setControls(optimistic);
-    const look = { ...optimistic.view.look, blackout: optimistic.view.blackout };
+    const look = {
+      ...optimistic.view.look,
+      blackout: optimistic.view.blackout,
+      ...(patch.patternId ? { syncZones: true } : {}),
+    };
     pushLivePreviewToCard(look, {
       host,
       expectedCardId: link.card?.id || '',

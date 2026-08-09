@@ -1,4 +1,5 @@
 import { normalizeCardVisualLook } from './cardVisualLook.js';
+import { CUSTOMER_CONTROL_WIRE_FIELDS } from './cardCustomerControlContract.js';
 
 const MAX_PATTERNS = 48;
 const MAX_ZONES = 16;
@@ -23,16 +24,25 @@ function normalizedPatterns(payload = {}) {
     seen.add(id);
     const mode = boundedText(pattern?.mode, 'procedural');
     if (!PATTERN_ID.test(mode) || !Array.isArray(pattern?.zones || [])) throw new TypeError('Malformed card pattern response.');
-    const explicit = pattern?.controls && typeof pattern.controls === 'object' ? pattern.controls : {};
+    if (pattern?.controls !== undefined && (!pattern.controls || typeof pattern.controls !== 'object' || Array.isArray(pattern.controls))) {
+      throw new TypeError('Malformed card pattern response.');
+    }
+    const explicit = pattern?.controls || {};
+    if (['customColor', 'breathe', 'drift'].some(key => explicit[key] !== undefined && typeof explicit[key] !== 'boolean')) {
+      throw new TypeError('Malformed card pattern response.');
+    }
+    const runtimePatternId = boundedText(pattern?.runtimePatternId);
+    if (pattern?.runtimePatternId !== undefined && !PATTERN_ID.test(runtimePatternId)) throw new TypeError('Malformed card pattern response.');
     return {
       id,
       label,
       mode,
+      runtimePatternId,
       zones: (pattern.zones || []).map(zone => ({ id: boundedText(zone?.id), label: boundedText(zone?.label), patternId: boundedText(zone?.patternId) })),
       controls: {
-        customColor: explicit.customColor !== false,
-        breathe: explicit.breathe !== false,
-        drift: explicit.drift !== false,
+        customColor: explicit.customColor === true,
+        breathe: explicit.breathe === true,
+        drift: explicit.drift === true,
       },
     };
   });
@@ -128,26 +138,20 @@ export function beginCustomerControl(state, patch = {}, options = {}) {
   return { ...state, view: nextView, pending: command, failure: null, retry: null, command };
 }
 
-function responseLook(model, response = {}) {
-  const patternId = boundedText(response.patternId || response.confirmedLook?.patternId, model.activePatternId);
+function responseLook(model, response = {}, patch = {}) {
+  const patternId = boundedText(patch.patternId, model.activePatternId);
+  const responseValues = Object.fromEntries(CUSTOMER_CONTROL_WIRE_FIELDS.flatMap(field => (
+    field.control === 'patternId' || field.control === 'blackout' || response[field.acknowledgement] === undefined
+      ? []
+      : [[field.control, response[field.acknowledgement]]]
+  )));
   return {
     ...model,
     activePatternId: model.patterns.some(pattern => pattern.id === patternId) ? patternId : model.activePatternId,
     look: normalizedLook({
       ...model.look,
       patternId,
-      brightness: response.brightness ?? model.look.brightness,
-      speed: response.speed ?? model.look.speed,
-      hueShift: response.hueShift ?? model.look.hueShift,
-      customHue: response.hue ?? model.look.customHue,
-      customSaturation: response.saturation ?? model.look.customSaturation,
-      customBreathe: response.breathe ?? model.look.customBreathe,
-      breatheLowerPct: response.breatheLowerPct ?? model.look.breatheLowerPct,
-      breatheUpperPct: response.breatheUpperPct ?? model.look.breatheUpperPct,
-      breatheCycleSeconds: response.breatheCycleSeconds ?? model.look.breatheCycleSeconds,
-      customDrift: response.drift ?? model.look.customDrift,
-      driftHueMin: response.driftMin ?? model.look.driftHueMin,
-      driftHueMax: response.driftMax ?? model.look.driftHueMax,
+      ...responseValues,
     }, model.patterns),
     blackout: typeof response.blackout === 'boolean' ? response.blackout : model.blackout,
   };
@@ -164,13 +168,10 @@ export function applyCustomerControlAcknowledgement(state, commandId, responseOr
       failure: responseOrError instanceof Error ? responseOrError : new Error('The card did not accept that control.'),
     };
   }
-  const aliases = {
-    patternId: 'patternId', brightness: 'brightness', speed: 'speed', hueShift: 'hueShift', blackout: 'blackout',
-    customHue: 'hue', customSaturation: 'saturation', customBreathe: 'breathe', customDrift: 'drift',
-    breatheLowerPct: 'breatheLowerPct', breatheUpperPct: 'breatheUpperPct', breatheCycleSeconds: 'breatheCycleSeconds',
-    driftHueMin: 'driftMin', driftHueMax: 'driftMax',
-  };
-  const missing = Object.keys(state.pending.patch).some(key => responseOrError[aliases[key] || key] === undefined);
+  const missing = Object.keys(state.pending.patch).some(key => {
+    const field = CUSTOMER_CONTROL_WIRE_FIELDS.find(candidate => candidate.control === key);
+    return !field || responseOrError[field.acknowledgement] === undefined;
+  });
   if (missing) {
     return {
       ...state,
@@ -180,6 +181,6 @@ export function applyCustomerControlAcknowledgement(state, commandId, responseOr
       failure: new Error('The card did not confirm every changed control.'),
     };
   }
-  const confirmed = responseLook(state.confirmed, responseOrError);
+  const confirmed = responseLook(state.confirmed, responseOrError, state.pending.patch);
   return { ...state, confirmed, view: clone(confirmed), pending: null, failure: null, retry: null };
 }
