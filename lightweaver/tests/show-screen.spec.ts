@@ -110,7 +110,15 @@ async function installShowStubs(page: any) {
       configurable: true,
       value() { (this as any).__playing = false; },
     });
-    (URL as any).createObjectURL = () => 'blob:show-song';
+    (window as any).__showProjectBlob = null;
+    (window as any).showSaveFilePicker = undefined;
+    (URL as any).createObjectURL = (value: Blob) => {
+      if (value?.type === 'application/json') {
+        (window as any).__showProjectBlob = value;
+        return 'blob:show-project';
+      }
+      return 'blob:show-song';
+    };
     (URL as any).revokeObjectURL = () => {};
 
     class FakeWebSocket {
@@ -177,26 +185,34 @@ async function installMatchingShowCardProject(page: any, project: any) {
   }, evidence);
 }
 
+async function readCanonicalShowProject(page: any) {
+  await page.getByRole('button', { name: 'Export project' }).click();
+  await expect.poll(async () => page.evaluate(() => Boolean((window as any).__showProjectBlob))).toBe(true);
+  return page.evaluate(async () => JSON.parse(await (window as any).__showProjectBlob.text()));
+}
+
 async function connectMatchingShowCard(page: any) {
-  // ProjectContext normalizes restored layout state and flushes its canonical
-  // serialization after a 500ms debounce. Linux CI can finish that work later
-  // than one fixed sleep, so require the serialized snapshot to remain
-  // unchanged across a full debounce window before authorizing the card.
-  let stableSnapshot = '';
-  await expect.poll(async () => {
-    const next = await page.evaluate(() => localStorage.getItem('lw_autosave_v3') || '');
-    const stable = Boolean(next) && next === stableSnapshot;
-    stableSnapshot = next;
-    return stable;
-  }, { intervals: [600], timeout: 10_000 }).toBe(true);
-  await page.evaluate(async () => {
-    const activeProject = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
-    const { cardProjectFingerprint } = await import('/src/lib/cardProjectResolver.js');
-    const project = {
-      projectId: activeProject.id,
-      projectRevision: Number.isSafeInteger(activeProject.revision) ? activeProject.revision : 0,
-      projectFingerprint: cardProjectFingerprint(activeProject),
-    };
+  // Do not sample the already-present localStorage value until Show has
+  // rendered the restored project. On a slower Linux runner the old fixture
+  // could observe the pre-hydration value twice, authorize that fingerprint,
+  // and then have ProjectContext's canonical 500ms autosave invalidate the
+  // authority before the first frame reached the socket.
+  const stage = page.getByTestId('show-stage');
+  await expect(stage).toBeVisible({ timeout: 10_000 });
+  await expect(stage).toHaveAttribute('data-frame-version', /\d+/, { timeout: 10_000 });
+
+  // Export uses the exact serializeProject() snapshot passed into Show. That
+  // is the deterministic identity boundary; localStorage can legitimately lag
+  // it while ProjectContext's debounced canonical autosave is still pending.
+  const activeProject = await readCanonicalShowProject(page);
+  const project = {
+    projectId: activeProject.id,
+    projectRevision: Number.isSafeInteger(activeProject.revision) ? activeProject.revision : 0,
+    projectFingerprint: cardProjectFingerprint(activeProject),
+  };
+  expect(project.projectId).toBeTruthy();
+  expect(project.projectFingerprint).toMatch(/^[a-f0-9]{16,64}$/);
+  await page.evaluate(async (project) => {
     localStorage.setItem('lw_show_test_card_project_v1', JSON.stringify(project));
     const readiness = {
       app: 'Lightweaver',
@@ -229,7 +245,7 @@ async function connectMatchingShowCard(page: any) {
     const link = getSharedCardLink();
     link.dispatch(event);
     link.dispatch(event);
-  });
+  }, project);
 }
 
 async function openShow(page: any) {
