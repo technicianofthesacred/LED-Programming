@@ -19,6 +19,16 @@ test('runtime mode follows origin capability, never browser name', () => {
   });
 });
 
+test('the compiled public Studio target stays public when served from a secure preview origin', () => {
+  assert.deepEqual(detectRuntimeMode({
+    origin: 'http://127.0.0.1:4173',
+    secureContext: true,
+    buildTarget: 'public-https',
+  }), {
+    kind: 'public-https', transport: 'direct-lna', secureTools: true, onlineStudioUrl: ONLINE_STUDIO_URL,
+  });
+});
+
 test('secure tool handback assigns a bounded canonical HTTPS route in the same tab', () => {
   let assigned = '';
   const url = handBackToOnlineStudio('flash', { locationRef: { assign(value) { assigned = value; } } });

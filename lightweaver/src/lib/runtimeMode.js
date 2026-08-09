@@ -1,5 +1,8 @@
 export const ONLINE_STUDIO_URL = 'https://led.mandalacodes.com/';
 export const CARD_LOCAL_STUDIO_PATH = '/studio/';
+const COMPILED_BUILD_TARGET = typeof __LIGHTWEAVER_BUILD_TARGET__ === 'string'
+  ? __LIGHTWEAVER_BUILD_TARGET__
+  : '';
 
 function normalizedOrigin(value) {
   try { return new URL(String(value)).origin; } catch { return ''; }
@@ -8,10 +11,14 @@ function normalizedOrigin(value) {
 export function detectRuntimeMode({
   origin = globalThis.location?.origin || '',
   secureContext = globalThis.isSecureContext === true,
+  buildTarget = COMPILED_BUILD_TARGET,
 } = {}) {
   const publicOrigin = normalizedOrigin(ONLINE_STUDIO_URL);
   const actualOrigin = normalizedOrigin(origin);
-  const publicHttps = actualOrigin === publicOrigin && secureContext;
+  const publicHttps = secureContext && (
+    buildTarget === 'public-https'
+    || (buildTarget !== 'card-local' && actualOrigin === publicOrigin)
+  );
   return Object.freeze({
     kind: publicHttps ? 'public-https' : 'card-local',
     transport: publicHttps ? 'direct-lna' : 'local-origin',
