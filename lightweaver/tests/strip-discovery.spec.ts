@@ -313,7 +313,16 @@ test.describe('a blank card whose firmware applies its first config', () => {
     await expect(findStrips).toHaveText('Find my strips');
     await findStrips.click();
     await expect(page).toHaveURL(/#screen=discovery/);
+    const setup = page.getByTestId('card-setup-overlay');
+    await expect(setup).toBeVisible();
+    await expect(setup).toHaveAttribute('role', 'dialog');
+    await expect(setup).toHaveAttribute('aria-modal', 'true');
     await expect(page.getByTestId('strip-discovery')).toBeVisible();
+    await expect(page.getByTestId('card-setup-stop-lights')).toBeVisible();
+
+    await page.getByTestId('card-setup-close').click();
+    await expect(setup).toHaveCount(0);
+    await expect(page).toHaveURL(/#screen=layout$/);
   });
 
   test('Test & Install sends a blank card to discovery instead of an LED check it cannot run', async ({ page }) => {
@@ -335,7 +344,12 @@ test.describe('a blank card whose firmware applies its first config', () => {
     // Probing must not begin while the card is still restarting: every frame
     // sent in that window is refused, and a dark strip reads as "no LEDs here".
     await expect(page.getByTestId('discovery-installing')).toBeVisible();
+    await expect(page.getByTestId('card-setup-close')).toBeDisabled();
+    await expect(page.getByTestId('card-setup-disconnect')).toBeDisabled();
+    await expect(page.getByTestId('card-setup-stop-lights')).toBeEnabled();
     await expect(page.getByTestId('discovery-probe')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId('card-setup-close')).toBeDisabled();
+    await expect(page.getByTestId('card-setup-disconnect')).toBeDisabled();
 
     // Exactly one write, it was a config the card can actually run (one output
     // and one look is the whole validity bar), and Studio issued the restart
@@ -382,6 +396,14 @@ test.describe('a blank card whose firmware applies its first config', () => {
     await expect(page.getByTestId('discovery-result-16')).toHaveText('GPIO 16 · 47 LEDs');
     await page.getByTestId('discovery-record-save').click();
     await expect(page.getByTestId('discovery-done')).toBeVisible();
+    await expect(page.getByTestId('discovery-install')).toHaveCount(0);
+    await expect(page.getByTestId('discovery-open-patterns')).toHaveCount(0);
+    await expect(page.getByTestId('discovery-continue-layout')).toBeVisible();
+    await expect(page.getByTestId('card-setup-close')).toBeEnabled();
+    await expect(page.getByTestId('card-setup-disconnect')).toBeEnabled();
+
+    await page.getByTestId('discovery-continue-layout').click();
+    await expect(page).toHaveURL(/#screen=layout&mode=draw$/);
 
     const recorded = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_port_roles_v1') || 'null'));
     expect(recorded).toContainEqual({ pin: 16, role: 'strip', pixelCount: 47, controlKind: '' });
@@ -449,7 +471,7 @@ test.describe('a blank card whose firmware applies its first config', () => {
     await page.goto('/#screen=discovery', { waitUntil: 'domcontentloaded' });
     await dispatchBlankCard(page);
     await expect(page.getByTestId('strip-discovery')).toBeVisible();
-    await expect(page.getByTestId('discovery-start-note')).toContainText('256 LEDs per chosen port');
+    await expect(page.getByTestId('discovery-start-note')).toContainText('256 lights per chosen output');
     await expect(page.getByTestId('discovery-start-note')).toContainText(/restart/i);
   });
 });

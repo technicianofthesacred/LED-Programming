@@ -1,5 +1,5 @@
-// Locks the versioned card page bridge (currently v4; frame shipped in v1,
-// chunk `start` in v3, the blank-card port probe in v4):
+// Locks the versioned card page bridge (currently v6; explicit passive-utility
+// release shipped after the v5 clear-project relay):
 //
 // 1. VERSIONING — the card→Studio 'ready' postMessages and every relay reply
 //    carry `version:N` spliced from the single C++ constant LW_BRIDGE_VERSION
@@ -55,12 +55,12 @@ const web = readFileSync(resolve(here, '../src/LightweaverWeb.cpp'), 'utf8');
 const bridgeVersionMatch = web.match(/constexpr int LW_BRIDGE_VERSION = (\d+);/);
 assert.ok(bridgeVersionMatch, 'LightweaverWeb.cpp must pin the bridge protocol version constant');
 const bridgeVersion = Number(bridgeVersionMatch[1]);
-assert.equal(bridgeVersion, 5, 'the bridge protocol version should be 5 (adds the clear-project relay)');
+assert.equal(bridgeVersion, 6, 'the bridge protocol version should be 6 (adds explicit bridge utility release)');
 
 // Every relay type Studio can send must actually exist in the card's router,
 // or the request round-trips into an 'invalid-payload' throw the owner reads as
 // a broken card. This is the seam that a version bump alone does not protect.
-for (const relayType of ['beacon-ports', 'beacon-port']) {
+for (const relayType of ['beacon-ports', 'beacon-port', 'release-bridge']) {
   assert.match(web, new RegExp(`m\\.type==='${relayType}'`),
     `the bridge relay must route '${relayType}' or Studio's probe reaches nothing`);
 }

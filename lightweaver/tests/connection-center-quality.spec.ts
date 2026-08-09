@@ -501,7 +501,6 @@ test('Bridge return does not call a successful POST independent restoration proo
   await page.evaluate(() => localStorage.setItem('lw_card_identity_v1', JSON.stringify({
     version: 1, id: 'lw-441bf681feb0', firmwareVersion: '1.2.3', buildId: 'a'.repeat(40),
   })));
-  await page.getByTestId('card-link-status').click();
   await expect.poll(() => page.evaluate(() => (window as any).__commissioningPushes.length)).toBe(0);
   await expect(page.getByRole('heading', { name: 'Set up card' })).toBeVisible();
   await dispatchCardLinkEvent(page, {
