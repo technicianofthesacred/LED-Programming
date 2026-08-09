@@ -9,6 +9,7 @@
 #include <esp_system.h>
 #include <mbedtls/sha256.h>
 
+// Non-PlatformIO compile fallback only; PlatformIO injects canonical VERSION.
 #ifndef LW_FIRMWARE_VERSION
 #define LW_FIRMWARE_VERSION "1.0.0"
 #endif
