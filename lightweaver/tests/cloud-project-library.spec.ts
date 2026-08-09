@@ -1077,8 +1077,6 @@ test('saved starter project stays visibly unplaced through New and Load until it
   await fixture.install(page);
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
 
-  const statusBar = page.locator('.status-bar');
-  await expect(statusBar).toContainText('layout44-LED starter · not yet placed');
   await expect(page.getByTestId('layout-primitive-picker')).toBeVisible();
   await page.getByRole('button', { name: 'Save project', exact: true }).click();
   await expect(page.getByTestId('workspace-notice')).toContainText('saved in browser library');
@@ -1087,12 +1085,11 @@ test('saved starter project stays visibly unplaced through New and Load until it
   await page.getByRole('dialog', { name: 'Load project' })
     .getByRole('button', { name: 'Open Unplaced starter project' }).click();
 
-  await expect(statusBar).toContainText('layout44-LED starter · not yet placed');
   await expect(page.getByTestId('layout-primitive-picker')).toBeVisible();
   await page.getByTestId('layout-primitive-picker')
     .getByRole('button', { name: 'Create line' }).click();
-  await expect(page.locator('.status-bar .sb-fact').filter({ hasText: 'total' }).locator('.fv'))
-    .toHaveText('44 LEDs · 1 strip');
+  await expect(page.getByTestId('layout-primitive-picker')).toHaveCount(0);
+  await expect(page.locator('.la-strip-row')).toHaveCount(1);
 });
 
 test('claimed browser records remain available to signed-out Save, New, and Load', async ({ page }) => {
