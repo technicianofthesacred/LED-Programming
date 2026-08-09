@@ -2429,6 +2429,12 @@ void handlePatterns() {
     p["id"] = cfg.looks[i].id;
     p["label"] = cfg.looks[i].label;
     p["mode"] = cfg.looks[i].mode;
+    p["runtimePatternId"] = cfg.looks[i].preset.length() ? cfg.looks[i].preset : cfg.looks[i].id;
+    const bool supportsCustomTuning = cfg.looks[i].preset == "custom-color";
+    JsonObject controls = p["controls"].to<JsonObject>();
+    controls["customColor"] = supportsCustomTuning;
+    controls["breathe"] = supportsCustomTuning;
+    controls["drift"] = supportsCustomTuning;
     JsonArray zones = p["zones"].to<JsonArray>();
     for (uint8_t zoneIndex = 0; zoneIndex < cfg.looks[i].zoneCount; zoneIndex++) {
       JsonObject z = zones.add<JsonObject>();

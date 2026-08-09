@@ -224,6 +224,17 @@ for (const route of ['/api/status', '/api/firmware-info', '/api/patterns', '/api
 
 assert.match(
   web,
+  /p\["runtimePatternId"\]\s*=\s*cfg\.looks\[i\]\.preset\.length\(\)\s*\?\s*cfg\.looks\[i\]\.preset\s*:\s*cfg\.looks\[i\]\.id/,
+  '/api/patterns must expose the installed look\'s underlying editable runtime pattern',
+);
+assert.match(
+  web,
+  /controls\["customColor"\][\s\S]{0,300}controls\["breathe"\][\s\S]{0,300}controls\["drift"\]/,
+  '/api/patterns must expose truthful customer tuning capabilities',
+);
+
+assert.match(
+  web,
   /lwconfig/,
   'card page should accept public Studio config handoff fragments after Chrome blocks HTTPS-to-local HTTP writes',
 );
