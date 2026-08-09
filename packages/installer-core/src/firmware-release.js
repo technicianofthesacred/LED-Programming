@@ -258,7 +258,7 @@ async function readBoundedFirmwareImage(response, expectedSize) {
   return bytes;
 }
 
-export async function loadProductionFirmwareRelease(
+export async function loadProductionFirmwareManifest(
   fetchImpl = globalThis.fetch,
   cryptoImpl = globalThis.crypto,
   {
@@ -308,7 +308,16 @@ export async function loadProductionFirmwareRelease(
   );
   if (!signatureValid) throw new Error('Firmware manifest signature verification failed');
 
-  validateFirmwareManifest(manifest, { installerVersion });
+  return validateFirmwareManifest(manifest, { installerVersion });
+}
+
+export async function loadProductionFirmwareRelease(
+  fetchImpl = globalThis.fetch,
+  cryptoImpl = globalThis.crypto,
+  options = {},
+) {
+  const { runtime = 'browser' } = options;
+  const manifest = await loadProductionFirmwareManifest(fetchImpl, cryptoImpl, options);
   const imageUrl = resolveProductionReleaseUrl(manifest.image.url, 'image', runtime);
   const imageResponse = await fetchRequired(fetchImpl, imageUrl, 'image');
   const bytes = await readBoundedFirmwareImage(imageResponse, manifest.image.size);
