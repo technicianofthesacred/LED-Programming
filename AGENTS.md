@@ -29,6 +29,31 @@ As of 2026-06 the runtime is **ESP32-S3 only**. The card runs the Lightweaver fi
 - **Public UI split**: `led.mandalacodes.com` is the public Studio/setup/support surface. Actual LED commands stay local through the card page, WLED UI, Pi proxy (deferred), or another local bridge.
 - **Launch gate**: before deployment, run `npm run launch:check` from `lightweaver/`, then complete the hardware and site smoke tests in `docs/deployment-checklist.md`.
 
+## Fast development loop — mandatory
+
+Use `docs/development-workflow.md` as the source of truth for proportional
+verification. Default to the glitch loop for an individual browser or UI defect.
+
+- “Build” means implement the approved idea and verify it; it never means stop
+  after writing a spec or plan.
+- In the glitch loop, write one focused regression, witness red, implement the
+  smallest fix, witness green, and inspect the real screen. Do not run the full
+  launch gate for each glitch.
+- Do not bump firmware, rebuild or sign release artifacts, deploy, or flash
+  hardware for browser-only changes. Batch related browser fixes into a
+  checkpoint first.
+- Do not flash hardware unless the change actually requires firmware proof or
+  Adrian explicitly asks for a release. Never flash a configured card with the
+  destructive factory image without first recording a recovery path for its
+  Wi-Fi and project configuration.
+- Keep one stable preview. Do not leave a second Vite server running while
+  browser tests execute.
+- If a check needs Adrian's eyes, add it to a visual-feedback list and continue
+  every independent non-visual check. Do not pause the whole workstream.
+- Run the checkpoint gate once after a coherent batch. Run the release gate only
+  when shipping. The exhaustive workflow is release evidence, not an editing
+  loop.
+
 ## Project name
 **Lightweaver** — use this name in UI copy, WiFi SSIDs (`Lightweaver-XXXX` MAC-suffix format for the card AP), and any public-facing branding.
 
@@ -91,6 +116,7 @@ signer commit triggered by the merge.
 - `firmware/lightweaver-controller/` — sellable standalone card firmware with local config page, rotary controls, and microSD sequence support
 
 ## Where to look for…
+- **Fast development / verification tiers** → `docs/development-workflow.md`
 - **Launch checklist / deployment source of truth** → `docs/deployment-checklist.md`
 - **Project roadmap (living source of truth)** → `docs/roadmap.md`
 - **Hardware research** → `research.md`
