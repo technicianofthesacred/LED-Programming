@@ -31,7 +31,7 @@ assert.deepEqual(calls, [
 
 - [ ] **Step 2: Run the focused test and witness RED**
 
-Run: `node --test lightweaver/src/lib/firmwareRelease.test.js`  
+Run: `node --test lightweaver/src/lib/firmwareRelease.test.js`
 Expected: FAIL because `loadProductionFirmwareManifest` is not exported.
 
 - [ ] **Step 3: Extract the signed-manifest boundary**
@@ -54,7 +54,7 @@ Refactor `loadProductionFirmwareRelease` to call the new function before fetchin
 
 - [ ] **Step 4: Run focused release tests GREEN**
 
-Run: `node --test lightweaver/src/lib/firmwareRelease.test.js`  
+Run: `node --test lightweaver/src/lib/firmwareRelease.test.js`
 Expected: all firmware-release tests pass.
 
 - [ ] **Step 5: Commit the release-loader boundary**
@@ -89,7 +89,7 @@ assert.deepEqual(classifyFooterFirmwareStatus(
 
 - [ ] **Step 2: Run focused classifier test RED**
 
-Run: `node --test lightweaver/src/lib/footerFirmwareStatus.test.js`  
+Run: `node --test lightweaver/src/lib/footerFirmwareStatus.test.js`
 Expected: FAIL because the module does not exist.
 
 - [ ] **Step 3: Implement one pure fail-closed classifier**
@@ -98,7 +98,7 @@ Export `classifyFooterFirmwareStatus(installed, release)` and return only bounde
 
 - [ ] **Step 4: Run focused classifier test GREEN**
 
-Run: `node --test lightweaver/src/lib/footerFirmwareStatus.test.js`  
+Run: `node --test lightweaver/src/lib/footerFirmwareStatus.test.js`
 Expected: all matrix cases pass.
 
 - [ ] **Step 5: Commit the classifier**
@@ -133,7 +133,7 @@ assert.doesNotMatch(platformio, /LW_FIRMWARE_VERSION=.*1\.0\.0/);
 
 - [ ] **Step 2: Run the contract RED**
 
-Run: `node firmware/lightweaver-controller/tests/firmware-version-policy.mjs`  
+Run: `node firmware/lightweaver-controller/tests/firmware-version-policy.mjs`
 Expected: FAIL because canonical VERSION and helper are absent.
 
 - [ ] **Step 3: Add canonical version injection**
@@ -171,7 +171,7 @@ Expected: all pass.
 
 - [ ] **Step 7: Compile ESP32-S3 firmware**
 
-Run: `pio run -d firmware/lightweaver-controller -e esp32-s3-n16r8`  
+Run: `pio run -d firmware/lightweaver-controller -e esp32-s3-n16r8`
 Expected: successful build reporting the injected 1.1.0 source version.
 
 - [ ] **Step 8: Commit version enforcement**
