@@ -4,6 +4,7 @@ const MAX_PATTERNS = 48;
 const MAX_ZONES = 16;
 const MAX_TEXT_LENGTH = 96;
 const PATTERN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+let nextControlRevision = (Date.now() >>> 0) || 1;
 
 function boundedText(value, fallback = '') {
   const text = String(value ?? '').trim();
@@ -20,7 +21,20 @@ function normalizedPatterns(payload = {}) {
     const label = boundedText(pattern?.label, id);
     if (!PATTERN_ID.test(id) || !label || seen.has(id)) throw new TypeError('Malformed card pattern response.');
     seen.add(id);
-    return { id, label };
+    const mode = boundedText(pattern?.mode, 'procedural');
+    if (!PATTERN_ID.test(mode) || !Array.isArray(pattern?.zones || [])) throw new TypeError('Malformed card pattern response.');
+    const explicit = pattern?.controls && typeof pattern.controls === 'object' ? pattern.controls : {};
+    return {
+      id,
+      label,
+      mode,
+      zones: (pattern.zones || []).map(zone => ({ id: boundedText(zone?.id), label: boundedText(zone?.label), patternId: boundedText(zone?.patternId) })),
+      controls: {
+        customColor: explicit.customColor !== false,
+        breathe: explicit.breathe !== false,
+        drift: explicit.drift !== false,
+      },
+    };
   });
   if (!patterns.length) throw new TypeError('Malformed card pattern response.');
   return patterns;
@@ -52,6 +66,8 @@ function normalizedZone(payload = {}) {
       breatheUpperPct: zone?.breatheUpperPct,
       breatheCycleSeconds: zone?.breatheCycleSeconds,
       customDrift: zone?.customDrift ?? zone?.drift,
+      driftHueMin: zone?.driftHueMin ?? zone?.driftMin,
+      driftHueMax: zone?.driftHueMax ?? zone?.driftMax,
     },
     blackout: zone?.blackout === true,
   };
@@ -62,7 +78,10 @@ function normalizedLook(source = {}, patterns = []) {
   const patternId = patterns.some(pattern => pattern.id === requestedPattern)
     ? requestedPattern
     : patterns[0].id;
-  return normalizeCardVisualLook({ ...source, patternId });
+  const normalized = normalizeCardVisualLook({ ...source, patternId });
+  const driftHueMin = Math.max(0, Math.min(255, Math.trunc(Number(source.driftHueMin ?? 0) || 0)));
+  const driftHueMax = Math.max(0, Math.min(255, Math.trunc(Number(source.driftHueMax ?? 255) || 0)));
+  return { ...normalized, patternId, driftHueMin, driftHueMax };
 }
 
 export function normalizeCardCustomerControls(zonesPayload = {}, patternsPayload = {}) {
@@ -86,11 +105,17 @@ function clone(value) {
 
 export function createCardCustomerControls(confirmed) {
   const model = clone(confirmed);
-  return { confirmed: model, view: clone(model), pending: null, failure: null, retry: null, nextCommandId: 1 };
+  return { confirmed: model, view: clone(model), pending: null, failure: null, retry: null };
 }
 
-export function beginCustomerControl(state, patch = {}) {
-  const command = { id: state.nextCommandId, patch: clone(patch) };
+function allocateControlRevision() {
+  nextControlRevision = (nextControlRevision + 1) >>> 0;
+  if (nextControlRevision === 0) nextControlRevision = 1;
+  return nextControlRevision;
+}
+
+export function beginCustomerControl(state, patch = {}, options = {}) {
+  const command = { id: options.revision || allocateControlRevision(), patch: clone(patch) };
   const nextView = {
     ...state.view,
     activePatternId: patch.patternId && state.view.patterns.some(pattern => pattern.id === patch.patternId)
@@ -100,7 +125,7 @@ export function beginCustomerControl(state, patch = {}) {
     blackout: typeof patch.blackout === 'boolean' ? patch.blackout : state.view.blackout,
   };
   nextView.look.patternId = nextView.activePatternId;
-  return { ...state, view: nextView, pending: command, failure: null, retry: null, nextCommandId: command.id + 1, command };
+  return { ...state, view: nextView, pending: command, failure: null, retry: null, command };
 }
 
 function responseLook(model, response = {}) {
@@ -121,6 +146,8 @@ function responseLook(model, response = {}) {
       breatheUpperPct: response.breatheUpperPct ?? model.look.breatheUpperPct,
       breatheCycleSeconds: response.breatheCycleSeconds ?? model.look.breatheCycleSeconds,
       customDrift: response.drift ?? model.look.customDrift,
+      driftHueMin: response.driftMin ?? model.look.driftHueMin,
+      driftHueMax: response.driftMax ?? model.look.driftHueMax,
     }, model.patterns),
     blackout: typeof response.blackout === 'boolean' ? response.blackout : model.blackout,
   };
@@ -137,6 +164,22 @@ export function applyCustomerControlAcknowledgement(state, commandId, responseOr
       failure: responseOrError instanceof Error ? responseOrError : new Error('The card did not accept that control.'),
     };
   }
-  const confirmed = responseLook(state.view, responseOrError);
+  const aliases = {
+    patternId: 'patternId', brightness: 'brightness', speed: 'speed', hueShift: 'hueShift', blackout: 'blackout',
+    customHue: 'hue', customSaturation: 'saturation', customBreathe: 'breathe', customDrift: 'drift',
+    breatheLowerPct: 'breatheLowerPct', breatheUpperPct: 'breatheUpperPct', breatheCycleSeconds: 'breatheCycleSeconds',
+    driftHueMin: 'driftMin', driftHueMax: 'driftMax',
+  };
+  const missing = Object.keys(state.pending.patch).some(key => responseOrError[aliases[key] || key] === undefined);
+  if (missing) {
+    return {
+      ...state,
+      view: clone(state.confirmed),
+      pending: null,
+      retry: clone(state.pending.patch),
+      failure: new Error('The card did not confirm every changed control.'),
+    };
+  }
+  const confirmed = responseLook(state.confirmed, responseOrError);
   return { ...state, confirmed, view: clone(confirmed), pending: null, failure: null, retry: null };
 }

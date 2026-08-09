@@ -51,6 +51,29 @@ assert.throws(
 );
 assert.throws(
   () => requireLivePreviewAcknowledgement(
+    { ok: true, cardId: 'lw-expected', patternId: 'ocean' },
+    { patternId: 'ocean', brightness: 0.4 },
+    { expectedCardId: 'lw-expected', expectedControlPatch: { brightness: 0.4 } },
+  ),
+  error => error?.reason === 'control-field-unconfirmed',
+  'a matching pattern cannot confirm a changed brightness without applied-value readback',
+);
+assert.equal(requireLivePreviewAcknowledgement(
+  { ok: true, cardId: 'lw-expected', patternId: 'ocean', brightness: 0.4 },
+  { patternId: 'ocean', brightness: 0.4 },
+  { expectedCardId: 'lw-expected', expectedControlPatch: { brightness: 0.4 } },
+).brightness, 0.4);
+assert.throws(
+  () => requireLivePreviewAcknowledgement(
+    { ok: true, cardId: 'lw-expected', revision: 41 },
+    { patternId: 'bench-warm' },
+    { expectedCardId: 'lw-expected', revision: 41, exactCardPatternId: 'bench-warm', expectedControlPatch: { patternId: 'bench-warm' } },
+  ),
+  error => error?.reason === 'control-field-unconfirmed',
+  'a revision alone cannot confirm the exact card pattern that was applied',
+);
+assert.throws(
+  () => requireLivePreviewAcknowledgement(
     { ok: true },
     { patternId: 'ocean' },
     { expectedCardId: 'lw-expected', previewAcknowledgementCapability: 'legacy-ok-only' },
@@ -133,6 +156,22 @@ assert.equal(request.options.method, 'POST');
 assert.equal(request.options.headers['Content-Type'], 'application/json');
 assert.equal(JSON.parse(request.options.body).patternId, 'ocean');
 assert.equal(JSON.parse(request.options.body).cancelStream, true);
+
+let exactProjectLookRequest = null;
+globalThis.fetch = async (url, options = {}) => {
+  exactProjectLookRequest = JSON.parse(options.body || '{}');
+  return {
+    ok: true,
+    json: async () => ({ ok: true, patternId: exactProjectLookRequest.patternId }),
+  };
+};
+await pushLivePreviewToCard({ patternId: 'bench-warm' }, {
+  host: 'lightweaver.local',
+  exactCardPatternId: 'bench-warm',
+  latestOnly: false,
+  autoDiscover: false,
+});
+assert.equal(exactProjectLookRequest.patternId, 'bench-warm', 'the explicit drawer path preserves a bounded project look id');
 
 // A transport response is only runtime acknowledgement. It must be valid JSON,
 // say ok:true, belong to the paired card, and report the requested
@@ -302,6 +341,35 @@ await assert.rejects(
   error => error?.reason === 'invalid-patterns',
   'untrusted pattern data is rejected before the customer UI can render it',
 );
+globalThis.fetch = async () => new Response(JSON.stringify({ zones: [], padding: 'x'.repeat(9000) }), {
+  status: 200,
+  headers: { 'Content-Type': 'application/json' },
+});
+await assert.rejects(
+  readCardZonesFromCard({ host: 'lightweaver.local', timeoutMs: 50 }),
+  error => error?.reason === 'response-too-large',
+  'direct zone reads enforce the control response byte ceiling',
+);
+{
+  const identityCalls = [];
+  const values = new Map([['lw_card_identity_v1', JSON.stringify({ version: 1, id: 'lw-expected' })]]);
+  globalThis.window = {
+    location: { protocol: 'http:' },
+    localStorage: { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) },
+  };
+  globalThis.localStorage = globalThis.window.localStorage;
+  globalThis.fetch = async url => {
+    identityCalls.push(String(url));
+    return { ok: true, json: async () => ({ cardId: 'lw-wrong', firmwareVersion: '1.1.1' }) };
+  };
+  await assert.rejects(
+    readCardZonesFromCard({ host: 'lightweaver.local', expectedCardId: 'lw-expected', timeoutMs: 50 }),
+    error => error?.reason === 'wrong-card',
+  );
+  assert.deepEqual(identityCalls, ['http://lightweaver.local/api/firmware-info'], 'wrong-card identity stops before the zone read');
+  delete globalThis.window;
+  delete globalThis.localStorage;
+}
 
 assert.deepEqual(buildLiveHardwareControlPayload({ colorOrder: 'grb' }), {
   colorOrder: 'GRB',
@@ -910,6 +978,7 @@ assert.deepEqual(interleavedPreviewRequests, [
 const listeners = new Map();
 const bridgeMessages = [];
 let bridgeControlPadding = '';
+let bridgeZonePadding = '';
 const bridgeWindow = {
   postMessage(message, targetOrigin) {
     bridgeMessages.push({ message, targetOrigin });
@@ -935,6 +1004,8 @@ const bridgeWindow = {
                   currentId: 'aurora', currentIndex: 0,
                   patterns: [{ id: 'aurora', label: 'Aurora', mode: 'procedural', zones: [] }],
                 }
+              : message.type === 'zones'
+                ? { zones: [{ id: 'all', patternId: 'aurora' }], padding: bridgeZonePadding }
               : { ok: true, bridged: true, cardId: 'lw-live-preview', patternId: message.payload?.patternId, padding: bridgeControlPadding },
         },
       });
@@ -995,6 +1066,16 @@ assert.deepEqual(bridgedPatterns, {
   patterns: [{ id: 'aurora', label: 'Aurora', mode: 'procedural', zones: [] }],
 }, 'a verified bridge reads the bounded card pattern list without direct fetch');
 assert.equal(bridgeMessages[0].message.type, 'patterns');
+
+bridgeMessages.length = 0;
+assert.equal((await readCardZonesFromCard({ host: 'lightweaver.local', timeoutMs: 1000 })).zones[0].id, 'all');
+assert.equal(bridgeMessages[0].message.type, 'zones');
+bridgeZonePadding = 'x'.repeat(controlResponseLimit + 1);
+await assert.rejects(
+  readCardZonesFromCard({ host: 'lightweaver.local', timeoutMs: 1000 }),
+  error => error?.reason === 'response-too-large',
+  'verified bridge zone reads enforce the same byte ceiling',
+);
 
 bridgeControlPadding = 'x'.repeat(controlResponseLimit + 1);
 await assert.rejects(

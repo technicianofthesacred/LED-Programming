@@ -669,6 +669,9 @@ button.sb-firmware:hover { background: var(--bg-elev-2); color: var(--text-hi); 
 .card-control-sliders output, .card-control-custom output { color: var(--text-hi); font-family: var(--font-mono); font-size: 11px; }
 .card-control-toggle { display: flex; align-items: center; gap: 8px; color: var(--text-mid); font-size: 12px; }
 .card-control-toggle input { accent-color: var(--accent-hi); }
+.card-palette-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.card-palette-presets button { min-height: 36px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-elev); color: var(--text-hi); }
+.card-palette-presets button:disabled { opacity: .55; cursor: wait; }
 .card-control-actions { display: flex; gap: 8px; justify-content: space-between; border-top: 1px solid var(--border-hair); padding-top: 17px; }
 .card-control-actions .primary { background: var(--accent); border-color: var(--accent-hi); color: var(--on-accent); }
 .card-control-loading { margin: 24px 0; color: var(--text-mid); }

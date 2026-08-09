@@ -280,7 +280,8 @@ export function requireLivePreviewAcknowledgement(response, look = {}, options =
   }
 
   const requestedPatternId = String(look?.patternId || '').trim();
-  const requestedRuntimePatternId = getCardPatternRuntimeId(requestedPatternId) || requestedPatternId;
+  const requestedRuntimePatternId = String(options.exactCardPatternId || '').trim()
+    || getCardPatternRuntimeId(requestedPatternId) || requestedPatternId;
   const echoedPatternId = String(
     response.patternId || response.confirmedPatternId || response.confirmedLook?.patternId || response.look?.patternId || '',
   ).trim();
@@ -291,6 +292,28 @@ export function requireLivePreviewAcknowledgement(response, look = {}, options =
   const echoedRevision = acknowledgementRevision(response.revision ?? response.confirmedRevision);
   if (requestedRevision !== null && echoedRevision !== null && requestedRevision !== echoedRevision) {
     throw previewAckError('preview-mismatch', 'The card runtime reported a different preview revision.');
+  }
+  const changedFieldAliases = {
+    patternId: ['patternId', 'patternId'],
+    brightness: ['brightness', 'brightness'], speed: ['speed', 'speed'], hueShift: ['hueShift', 'hueShift'], blackout: ['blackout', 'blackout'],
+    customHue: ['hue', 'hue'], customSaturation: ['saturation', 'saturation'], customBreathe: ['breathe', 'breathe'], customDrift: ['drift', 'drift'],
+    breatheLowerPct: ['breatheLowerPct', 'breatheLowerPct'], breatheUpperPct: ['breatheUpperPct', 'breatheUpperPct'], breatheCycleSeconds: ['breatheCycleSeconds', 'breatheCycleSeconds'],
+    driftHueMin: ['driftMin', 'driftMin'], driftHueMax: ['driftMax', 'driftMax'],
+  };
+  const expectedPatch = options.expectedControlPatch;
+  if (expectedPatch && typeof expectedPatch === 'object') {
+    const payload = buildLivePreviewControlPayload(look, options);
+    for (const key of Object.keys(expectedPatch)) {
+      const [payloadKey, responseKey] = changedFieldAliases[key] || [];
+      const expected = payload[payloadKey];
+      const actual = key === 'patternId' ? echoedPatternId : response[responseKey];
+      const equal = typeof expected === 'number'
+        ? Number.isFinite(Number(actual)) && Math.abs(Number(actual) - expected) < 0.0001
+        : actual === expected;
+      if (!payloadKey || actual === undefined || !equal) {
+        throw previewAckError('control-field-unconfirmed', 'The card did not confirm every changed control.');
+      }
+    }
   }
   const hasConfirmedLook = Boolean(requestedRuntimePatternId && echoedPatternId === requestedRuntimePatternId);
   const hasConfirmedRevision = Boolean(requestedRevision !== null && echoedRevision === requestedRevision);
@@ -367,9 +390,13 @@ export function buildLiveHardwareControlPayload(settings = {}) {
   };
 }
 
-export function buildLivePreviewControlPayload(look = {}) {
+export function buildLivePreviewControlPayload(look = {}, options = {}) {
   const normalized = normalizeCardVisualLook(look);
-  const runtimePatternId = getCardPatternRuntimeId(normalized.patternId) || normalized.patternId;
+  const exactCardPatternId = String(options.exactCardPatternId || '').trim();
+  if (exactCardPatternId && (!CARD_PATTERN_ID.test(exactCardPatternId) || exactCardPatternId !== String(look.patternId || '').trim())) {
+    throw new CardPushError('invalid-pattern-id', 'The selected card pattern ID is invalid.');
+  }
+  const runtimePatternId = exactCardPatternId || getCardPatternRuntimeId(normalized.patternId) || normalized.patternId;
   const driftMin = Number(look.driftHueMin);
   const driftMax = Number(look.driftHueMax);
   return {
@@ -681,16 +708,30 @@ async function postIdentifyToHost(host, options = {}) {
   }
 }
 
-async function readCardZones(host, timeoutMs = 1200) {
-  if (isMixedContentBlocked()) {
-    return sendCardBridgeRequest('zones', {}, { host, timeoutMs });
+async function readCardZones(host, input = {}) {
+  const options = typeof input === 'number' ? { timeoutMs: input } : input;
+  const timeoutMs = options.timeoutMs || 1200;
+  if (hasVerifiedBridgeForHost(host) || isMixedContentBlocked()) {
+    return requireBoundedControlObject(await sendCardBridgeRequest('zones', {}, { host, timeoutMs }));
+  }
+  if (options.verifyIdentity) {
+    await guardDirectCardMutation(host, {
+      fetchImpl: options.fetchImpl,
+      timeoutMs,
+      expected: options.expectedCardId ? { id: options.expectedCardId } : null,
+    });
   }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const response = await fetch(`${cardHostToUrl(host)}/api/zones`, { signal: ctrl.signal });
-    if (!response.ok) return null;
-    return await response.json().catch(() => null);
+    const text = await readBoundedControlResponseText(response);
+    if (!response.ok) throw new CardPushError('http', `card returned ${response.status}: ${text || 'no body'}`);
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      throw new CardPushError('invalid-zones', 'The card returned an invalid zone list.', error);
+    }
   } finally {
     clearTimeout(timer);
   }
@@ -699,7 +740,7 @@ async function readCardZones(host, timeoutMs = 1200) {
 export async function readCardZonesFromCard(options = {}) {
   const host = options.host || readStoredCardHost();
   try {
-    return await readCardZones(host, options.timeoutMs || 1200);
+    return await readCardZones(host, { ...options, verifyIdentity: true });
   } catch (error) {
     throw normalizePreviewError(host, error);
   }
@@ -741,7 +782,18 @@ function normalizeCardPatternsPayload(payload) {
       }
       return { id: zoneId, label: zoneLabel, patternId };
     });
-    return { id, label, mode, zones };
+    const controls = pattern.controls;
+    if (controls !== undefined && (!controls || typeof controls !== 'object' || Array.isArray(controls))) {
+      throw new CardPushError('invalid-patterns', 'The card returned an invalid pattern list.');
+    }
+    return {
+      id, label, mode, zones,
+      ...(controls ? { controls: {
+        customColor: controls.customColor === true,
+        breathe: controls.breathe === true,
+        drift: controls.drift === true,
+      } } : {}),
+    };
   });
   const currentId = boundedPatternText(payload.currentId);
   const currentIndex = Number(payload.currentIndex);
@@ -756,6 +808,11 @@ async function readCardPatterns(host, options = {}) {
   if (hasVerifiedBridgeForHost(host)) {
     return normalizeCardPatternsPayload(requireBoundedControlObject(await sendCardBridgeRequest('patterns', {}, { host, timeoutMs })));
   }
+  await guardDirectCardMutation(host, {
+    fetchImpl: options.fetchImpl,
+    timeoutMs,
+    expected: options.expectedCardId ? { id: options.expectedCardId } : null,
+  });
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -829,7 +886,11 @@ async function pushLivePreviewToHost(host, look, options = {}) {
   if (options.preferBridge || isMixedContentBlocked()) {
     return pushLivePreviewToBridge(host, look, options);
   }
-  const verifiedCard = await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs || 2500 });
+  const verifiedCard = await guardDirectCardMutation(host, {
+    fetchImpl: options.fetchImpl,
+    timeoutMs: options.timeoutMs || 2500,
+    expected: options.expectedCardId ? { id: options.expectedCardId } : null,
+  });
   requireCurrentPreviewIntent(options);
   let previewLook = look;
   let previewZoneFallback = null;
@@ -852,7 +913,7 @@ async function pushLivePreviewToHost(host, look, options = {}) {
   }
   const url = `${cardHostToUrl(host)}/api/control`;
   const body = JSON.stringify({
-    ...buildLivePreviewControlPayload(previewLook),
+    ...buildLivePreviewControlPayload(previewLook, options),
     ...(options.revision !== undefined ? { revision: options.revision } : {}),
   });
   const ctrl = new AbortController();
@@ -908,7 +969,7 @@ async function pushLivePreviewToBridge(host, look, options = {}) {
   const json = requireBoundedControlObject(await sendCardBridgeRequest(
     'control',
     {
-      ...buildLivePreviewControlPayload(previewLook),
+      ...buildLivePreviewControlPayload(previewLook, options),
       ...(options.revision !== undefined ? { revision: options.revision } : {}),
     },
     { host, timeoutMs: options.timeoutMs || 2500 },

@@ -7,7 +7,7 @@ import { CloudLibraryProvider, useCloudLibrary } from '../state/CloudLibraryCont
 import { useCardStatus } from '../hooks/useCardStatus.js';
 import { CardConnectionCenter } from '../components/card/CardConnectionCenter.jsx';
 import { CardControlDrawer } from '../components/card/CardControlDrawer.jsx';
-import { CardStatusControl } from '../components/card/CardStatusControl.jsx';
+import { CardStatusControl, cardConnectionStatus } from '../components/card/CardStatusControl.jsx';
 import { useFirmwareReleaseIdentity } from '../hooks/useFirmwareReleaseIdentity.js';
 import { ProjectLoadDialog, ProjectSaveDialog } from '../components/projects/TopBarProjectDialogs.jsx';
 import { WorkspaceNotice } from '../components/projects/WorkspaceNotice.jsx';
@@ -403,7 +403,7 @@ function StatusBar({ link, connectionCenterOpen, cardControlOpen, onOpenCardCont
           link={link}
           onOpen={onOpenCardControl}
           open={connectionCenterOpen || cardControlOpen}
-          dialogId={isCardLinkConnected(link) ? 'card-control-drawer' : 'card-connection-center'}
+          dialogId={cardConnectionStatus(link) === 'Connected' ? 'card-control-drawer' : 'card-connection-center'}
         />
       </div>
 
@@ -784,19 +784,29 @@ function Shell() {
   const openConnectionCenter = useCallback(() => setConnectionCenterOpen(true), []);
   const closeConnectionCenter = useCallback(() => setConnectionCenterOpen(false), []);
   const openCardControl = useCallback(() => {
-    if (isCardLinkConnected(cardLink)) setCardControlOpen(true);
-    else setConnectionCenterOpen(true);
+    if (cardConnectionStatus(cardLink) === 'Connected') setCardControlOpen(true);
+    else {
+      setCardControlOpen(false);
+      setConnectionCenterOpen(true);
+    }
   }, [cardLink]);
   const closeCardControl = useCallback(() => setCardControlOpen(false), []);
-  const openAdvancedPattern = useCallback(patternId => {
-    const id = String(patternId || '').trim();
+  const reconnectFromCardControl = useCallback(() => {
+    setCardControlOpen(false);
+    setConnectionCenterOpen(true);
+  }, []);
+  const openAdvancedPattern = useCallback(pattern => {
+    const id = String(pattern?.id || '').trim();
     if (!id) return;
     const url = new URL(window.location.href);
-    url.searchParams.set('editPattern', id);
+    const intentKey = pattern?.mode === 'combo' ? 'editLook' : 'editPattern';
+    const alternateKey = intentKey === 'editLook' ? 'editPattern' : 'editLook';
+    url.searchParams.delete(alternateKey);
+    url.searchParams.set(intentKey, id);
     window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
     setCardControlOpen(false);
-    navigateStudio('pattern');
-  }, [navigateStudio]);
+    openCardSection('overview');
+  }, [openCardSection]);
   const clearBridgeResult = useCallback(outcome => {
     clearStoredBridgeResult();
     bridgeResultAcceptedRef.current = false;
@@ -1193,6 +1203,7 @@ function Shell() {
         host={cardLink.host || cardStatus.host}
         onClose={closeCardControl}
         onAdvanced={openAdvancedPattern}
+        onReconnect={reconnectFromCardControl}
       />
       {loadDialogOpen && (
         <ProjectLoadDialog
