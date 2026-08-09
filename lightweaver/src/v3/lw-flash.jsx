@@ -660,77 +660,78 @@ import { openInChrome } from '../lib/openInChrome.js';
     const releaseReady = releaseState.state === 'ready';
     return (
       <div className={`install-flow${embedded ? ' embedded' : ''}`} aria-live="polite">
-        <CardCommissioningSteps stage={cardState.state === 'ready' || installState === 'installing' || installState === 'observing' ? 'install-safely' : 'connect-card'} />
-        <div>
-          <div className="eyebrow">Safe automatic installer</div>
-          <InstallHeading>Install Lightweaver</InstallHeading>
-          <p>Plug the card into this computer by USB. Studio verifies the official firmware and checks the card before it can erase anything.</p>
-        </div>
+        <div className="install-task">
+          <CardCommissioningSteps stage={cardState.state === 'ready' || installState === 'installing' || installState === 'observing' ? 'install-safely' : 'connect-card'} />
 
-        <div className={`install-release ${releaseState.state}`} role="status">
-          {releaseState.state === 'loading' && 'Verifying the official Lightweaver release…'}
-          {releaseState.state === 'ready' && `Official Lightweaver ${releaseState.release.manifest.firmwareVersion} · ${formatFirmwareBuildLabel(releaseState.release.manifest)} verified and ready.`}
-          {releaseState.state === 'error' && `Official firmware could not be verified. Nothing can be installed. ${releaseState.error}`}
-        </div>
-        {/*
-          What this install actually does to THIS card. Stating only the firmware
-          about to be written answers "what is this?" but not "am I changing
-          anything, and which way?" — and an install is never free, so the same
-          build being reinstalled has to read as a wipe, not as an upgrade.
-        */}
-        {updatePlan.headline && (
-          <div className={`install-update-plan is-${updatePlan.state}`} data-testid="install-update-plan" role="status">
-            <p className="install-update-headline">{updatePlan.headline}</p>
-            <p className="install-update-caution">{updatePlan.caution}</p>
-          </div>
-        )}
-        {releaseState.state === 'error' && (
-          <button className="btn" type="button" onClick={() => setReleaseAttempt(attempt => attempt + 1)}>Retry official firmware</button>
-        )}
+          <header className="install-intro">
+            <div className="eyebrow">Safe automatic installer</div>
+            <InstallHeading>Install Lightweaver</InstallHeading>
+            <p>Plug the card into this computer by USB. Studio verifies the official firmware and checks the card before it can erase anything.</p>
+            <div className={`install-release ${releaseState.state}`} role="status">
+              {releaseState.state === 'loading' && 'Verifying the official Lightweaver release…'}
+              {releaseState.state === 'ready' && `Official Lightweaver ${releaseState.release.manifest.firmwareVersion} · ${formatFirmwareBuildLabel(releaseState.release.manifest)} verified and ready.`}
+              {releaseState.state === 'error' && `Official firmware could not be verified. Nothing can be installed. ${releaseState.error}`}
+            </div>
+            {releaseState.state === 'error' && (
+              <button className="btn" type="button" onClick={() => setReleaseAttempt(attempt => attempt + 1)}>Retry official firmware</button>
+            )}
+          </header>
 
-        <div className="card install-card-check">
-          <div>
-            <h2>1. Find your connected card</h2>
-            <p>Studio will ask which USB device to use, then confirm it is the correct ESP32-S3 card with 16 MB of flash.</p>
-          </div>
-          <button className="btn-lg" type="button" onClick={findCard} disabled={!releaseReady || cardState.state === 'finding' || installState === 'installing' || installState === 'observing'}>
-            {cardState.state === 'finding' ? 'Checking card…' : cardState.state === 'ready' ? 'Change connected card' : 'Find connected card'}
-          </button>
-          {cardState.state === 'ready' && (
-            <div className="install-check-ok">Correct card found · ESP32-S3 · 16 MB</div>
+          {/* Explain exactly what this install does to the connected card. */}
+          {updatePlan.headline && (
+            <div className={`install-update-plan is-${updatePlan.state}`} data-testid="install-update-plan" role="status">
+              <p className="install-update-headline">{updatePlan.headline}</p>
+              <p className="install-update-caution">{updatePlan.caution}</p>
+            </div>
           )}
-          {cardState.state === 'error' && <div className="install-check-error" role="alert">{cardState.error}</div>}
-        </div>
 
-        {cardState.state === 'ready' && (
-          <div className="card install-confirm">
-            <h2>2. Confirm the reset</h2>
-            <p>Installing Lightweaver erases the card's current firmware, Wi-Fi details, patterns, and settings. Your Studio project stays here.</p>
-            <label>
-              <input type="checkbox" checked={eraseConfirmed} onChange={(event) => setEraseConfirmed(event.target.checked)} />
-              <span>I understand this will erase everything currently stored on this card.</span>
-            </label>
-            <button className="btn-lg" type="button" onClick={install} disabled={!eraseConfirmed || installState === 'installing' || installState === 'observing'}>
-              {installState === 'installing'
-                ? `Installing… ${Math.round(progress * 100)}%`
-                : installState === 'observing'
-                  ? 'Checking how the card restarted…'
-                  : 'Erase card and install Lightweaver'}
+          <section className="card install-action-card install-card-check">
+            <div className="install-action-copy">
+              <h2>Find your connected card</h2>
+              <p>Studio will ask which USB device to use, then confirm it is the correct ESP32-S3 card with 16 MB of flash.</p>
+            </div>
+            <button className="btn-lg" type="button" onClick={findCard} disabled={!releaseReady || cardState.state === 'finding' || installState === 'installing' || installState === 'observing'}>
+              {cardState.state === 'finding' ? 'Checking card…' : cardState.state === 'ready' ? 'Change connected card' : 'Find connected card'}
             </button>
-          </div>
-        )}
+            {cardState.state === 'ready' && (
+              <div className="install-check-ok">Correct card found · ESP32-S3 · 16 MB</div>
+            )}
+            {cardState.state === 'error' && <div className="install-check-error" role="alert">{cardState.error}</div>}
+          </section>
 
-        {installState === 'observing' && (
-          <div className="install-release ready" role="status">
-            Installed. Watching this card restart over USB so Studio knows whether it starts its setup hotspot or rejoins a Wi-Fi network it already had. Keep the USB cable connected.
-          </div>
-        )}
+          {cardState.state === 'ready' && (
+            <section className="card install-action-card install-confirm">
+              <div className="install-action-copy">
+                <h2>Confirm the reset</h2>
+                <p>Installing Lightweaver erases the card's current firmware, Wi-Fi details, patterns, and settings. Your Studio project stays here.</p>
+              </div>
+              <label>
+                <input type="checkbox" checked={eraseConfirmed} onChange={(event) => setEraseConfirmed(event.target.checked)} />
+                <span>I understand this will erase everything currently stored on this card.</span>
+              </label>
+              <div className="install-confirm-action">
+                <button className="btn-lg" type="button" onClick={install} disabled={!eraseConfirmed || installState === 'installing' || installState === 'observing'}>
+                  {installState === 'installing'
+                    ? `Installing… ${Math.round(progress * 100)}%`
+                    : installState === 'observing'
+                      ? 'Checking how the card restarted…'
+                      : 'Erase card and install Lightweaver'}
+                </button>
+                {installState === 'installing' && (
+                  <div className="fl-bar" role="progressbar" aria-label="Installing Lightweaver" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(progress * 100)}>
+                    <div className="fill" style={{ width: `${Math.round(progress * 100)}%` }} />
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
 
-        {installState === 'installing' && (
-          <div className="fl-bar" role="progressbar" aria-label="Installing Lightweaver" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(progress * 100)}>
-            <div className="fill" style={{ width: `${Math.round(progress * 100)}%` }} />
-          </div>
-        )}
+          {installState === 'observing' && (
+            <div className="install-release ready install-observing" role="status">
+              Installed. Watching this card restart over USB so Studio knows whether it starts its setup hotspot or rejoins a Wi-Fi network it already had. Keep the USB cable connected.
+            </div>
+          )}
+        </div>
       </div>
     );
   }

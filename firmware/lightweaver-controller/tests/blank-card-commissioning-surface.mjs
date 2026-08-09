@@ -29,10 +29,16 @@ assert.doesNotMatch(studioBridgeUrl, /#screen=patterns/,
   'card-to-Studio links must not consume pattern intent against an arbitrary open project');
 
 const studioSetupUrl = functionBody(web, /String\s+studioSetupUrl\s*\([^;]*\)\s*\{/);
-assert.match(studioSetupUrl, /#screen=layout(?:&mode=draw)?/,
-  'factory-blank cards must open the existing LED layout/setup flow');
+assert.match(studioSetupUrl, /#screen=card&section=setup/,
+  'factory-blank cards must open automatic Setup diagnosis before Layout');
+assert.doesNotMatch(studioSetupUrl, /#screen=layout/,
+  'factory-blank cards must never enter the playback-ready Layout dead end');
 assert.doesNotMatch(studioSetupUrl, /#screen=patterns/,
   'factory-blank setup must never drop the operator into runtime Patterns');
+
+const studioOpenScript = functionBody(web, /String\s+studioOpenScript\s*\(\)\s*\{/);
+assert.match(studioOpenScript, /requested\.hash==='#screen=card&section=setup'[\s\S]*?'#screen=card&section=setup'/,
+  'the verified Studio opener must preserve the canonical Setup route for a factory-blank card');
 
 assert.match(web, /const studioUrlForPattern=id=>[\s\S]*?u\.searchParams\.set\('editPattern',id\)[\s\S]*?u\.hash='#screen=card&section=overview'/,
   'ready-card Edit in Studio must preserve pattern intent while routing through exact project resolution');
@@ -84,6 +90,26 @@ assert.doesNotMatch(commissioningMarkup, /id='pw'|Save and join Wi|Pattern bank|
 const bridgeScript = advancedRoot.indexOf('page += studioBridgeScript();');
 assert.ok(bridgeScript > controlsStart,
   'the card bridge script must remain unconditional across setup, commissioning, and controls');
+
+const bridgeLifecycle = functionBody(web, /String\s+studioBridgeScript\s*\(\)\s*\{/);
+assert.match(bridgeLifecycle, /m\.type==='release-bridge'/,
+  'Studio must have one explicit bridge release message rather than relying on Setup completion');
+assert.match(bridgeLifecycle, /const lwBridgeReleaseReasons=\['disconnected'\]/,
+  'only an explicit card-session disconnect may release the live bridge');
+assert.doesNotMatch(bridgeLifecycle, /setup-complete|session-cancelled/,
+  'Setup completion and panel dismissal must preserve the bridge for Patterns and later commands');
+assert.match(bridgeLifecycle, /lwBridgeUtilityActive&&lwBridgeLaunch&&ev\.source===window\.opener&&ev\.origin===lwBridgeLaunch\.get\('studioOrigin'\)/,
+  'release must require the active utility, exact opener, and exact validated Studio origin');
+assert.match(bridgeLifecycle, /lwBridgeReply\(ev,\{id:m\.id,type:m\.type,ok:true,response:\{released:true\}\}\)[\s\S]*?setTimeout\(\(\)=>lwCloseBridgeUtility\('disconnected'\),0\)/,
+  'release must acknowledge Studio before attempting to close the utility window');
+assert.match(bridgeLifecycle, /window\.opener\.closed[\s\S]*?lwCloseBridgeUtility\('opener-teardown'\)/,
+  'Studio/opener teardown must end a passive utility that can no longer bridge commands');
+assert.match(web, /id='bridge-utility'[^>]*hidden[^>]*role='status'[^>]*aria-live='polite'/,
+  'the card page must ship a passive minimal bridge surface');
+assert.match(web, /const lwBridgeUtilityIntent=\(\)=>\{[\s\S]*?\['studioBridge','studioOrigin','bridgeUtility'\][\s\S]*?p\.get\('bridgeUtility'\)==='1'/,
+  'passive mode requires the exact bounded bridge-only launch fragment');
+assert.match(web, /resizeTo\(360,180\)/,
+  'the script-opened bridge should request compact utility dimensions where permitted');
 
 const setupScriptStart = advancedRoot.indexOf('if (needsWifiSetup) {', bridgeScript);
 assert.ok(setupScriptStart > bridgeScript,

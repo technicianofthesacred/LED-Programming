@@ -8,8 +8,6 @@ const CARD_ID = 'lw-setup-ladder';
 // The link's default host. Dispatching a verification for any other host is
 // ignored by the reducer, so the mock answers on this one.
 const CARD_HOST = 'lightweaver.local';
-const PIN = 18;
-const LIGHTS = 41;
 
 function readyStatus() {
   return {
@@ -53,118 +51,53 @@ test.beforeEach(async ({ page }) => {
   }, { cardId: CARD_ID, host: CARD_HOST });
 });
 
-const statusOf = (page, id: string) =>
-  page.locator(`[data-testid="setup-step-${id}"]`).getAttribute('data-status');
-
-// What the project actually recorded, read back out of the autosave the app
-// writes. This is the answer the card is later built from.
-const readStrip = (page) => page.evaluate(() => {
-  const project = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
-  const strip = (project.portRoles || []).find((entry: any) => entry.role === 'strip');
-  return {
-    pin: strip?.pin,
-    pixelCount: strip?.pixelCount,
-    order: project?.devices?.standaloneController?.led?.colorOrder,
-  };
+test('Setup presents four outcome phases with one active task', async ({ page }) => {
+  const phases = page.locator('[data-testid^="setup-phase-"]');
+  await expect(phases).toHaveCount(4);
+  expect(await phases.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-phase-id'))))
+    .toEqual(['connect', 'lights', 'layout', 'verify']);
+  await expect(page.locator('[data-testid^="setup-phase-"][aria-current="step"]')).toHaveCount(1);
+  await expect(page.getByTestId('setup-phase-lights')).toHaveAttribute('data-status', 'current');
+  await expect(page.getByTestId('setup-phase-lights')).toContainText('Find and verify the lights');
+  await expect(page.getByTestId('setup-phase-layout')).toContainText('Place lights in the artwork');
+  await expect(page.getByTestId('setup-phase-verify')).toContainText('Test and save to card');
 });
 
-test('each step answers its own question in place, and answering it advances the ladder', async ({ page }) => {
-  await expect.poll(() => statusOf(page, 'pin'), { timeout: 15000 }).toBe('current');
-
-  // The port picker is the step itself — not a collapsed panel inside it that
-  // re-asks the colour order and the light count as well.
-  await expect(page.getByTestId('setup-pin-value')).toBeVisible();
-  await expect(page.getByTestId('setup-colour-value')).toHaveCount(0);
-  await expect(page.getByTestId('setup-count-value')).toHaveCount(0);
-
-  await page.getByTestId('setup-pin-value').selectOption(String(PIN));
-  await page.getByTestId('setup-pin-apply').click();
-  await expect.poll(() => statusOf(page, 'pin')).toBe('done');
-  await expect.poll(() => statusOf(page, 'colour')).toBe('current');
-
-  // Colour can be answered directly. It used to be answerable only by running a
-  // hardware probe, or through the shared form that also reset the port.
-  await page.getByTestId('setup-colour-value').selectOption('RGB');
-  await page.getByTestId('setup-colour-set').click();
-  await expect.poll(() => statusOf(page, 'colour')).toBe('done');
-  await expect.poll(() => statusOf(page, 'count')).toBe('current');
-
-  // The count field is present before the ruler has ever been lit.
-  await page.getByTestId('setup-count-value').fill(String(LIGHTS));
-  await page.getByTestId('setup-count-apply').click();
-  await expect.poll(() => statusOf(page, 'count')).toBe('done');
-  await expect.poll(() => statusOf(page, 'install')).toBe('current');
-
-  await expect.poll(() => readStrip(page)).toEqual({ pin: PIN, pixelCount: LIGHTS, order: 'RGB' });
+test('blank card enters shared light discovery before Layout', async ({ page }) => {
+  await page.getByTestId('setup-lights-action').click();
+  await expect(page.getByTestId('card-setup-overlay')).toBeVisible();
+  await expect(page.getByTestId('strip-discovery')).toBeVisible();
+  await expect(page.getByTestId('setup-phase-layout')).toHaveAttribute('data-status', 'upcoming');
+  await expect(page.locator('iframe')).toHaveCount(0);
 });
 
-test('a zero count is refused instead of being recorded as an answer', async ({ page }) => {
-  await expect.poll(() => statusOf(page, 'pin'), { timeout: 15000 }).toBe('current');
-  await page.getByTestId('setup-pin-value').selectOption(String(PIN));
-  await page.getByTestId('setup-pin-apply').click();
-  await page.getByTestId('setup-colour-value').selectOption('RGB');
-  await page.getByTestId('setup-colour-set').click();
-  await expect.poll(() => statusOf(page, 'count')).toBe('current');
-
-  await page.getByTestId('setup-count-value').fill('0');
-  await page.getByTestId('setup-count-apply').click();
-  await expect(page.getByTestId('setup-counting')).toContainText('above zero');
-  expect(await statusOf(page, 'count')).toBe('current');
+test('Setup removes the optional shelf and competing first-run actions', async ({ page }) => {
+  await expect(page.getByText('Any time', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Save the project', exact: true })).toHaveCount(0);
+  await expect(page.getByText('Add knobs and buttons', { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId('setup-skip')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Open Layout/i })).toHaveCount(0);
 });
 
-test('Change on a finished step opens that step\'s controls, seeded with its answer', async ({ page }) => {
-  await expect.poll(() => statusOf(page, 'pin'), { timeout: 15000 }).toBe('current');
-  await page.getByTestId('setup-pin-value').selectOption(String(PIN));
-  await page.getByTestId('setup-pin-apply').click();
-  await expect.poll(() => statusOf(page, 'pin')).toBe('done');
-
-  // Reopening a done step used to render an empty box for every step except the
-  // three that shared the wiring form, and those showed a blank form that wiped
-  // the answer on submit.
-  await page.getByTestId('setup-step-pin-change').click();
-  await expect(page.getByTestId('setup-pin-value')).toHaveValue(String(PIN));
-
-  await page.getByTestId('setup-step-wifi-change').click();
-  await expect(page.getByTestId('setup-wifi-connect')).toBeVisible();
-
-  await page.getByTestId('setup-step-flash-change').click();
-  await expect(page.getByTestId('setup-connect-card')).toBeVisible();
+test('Setup identity row names the exact card project and installed match', async ({ page }) => {
+  const identity = page.getByTestId('setup-identity-row');
+  await expect(identity).toBeVisible();
+  await expect(identity).toContainText(CARD_ID);
+  await expect(identity).toContainText(/connected/i);
+  await expect(identity).toContainText(/project/i);
+  await expect(identity).toContainText(/not installed|temporary setup|match/i);
 });
 
-test('changing the port keeps the light count rather than resetting the ladder', async ({ page }) => {
-  await expect.poll(() => statusOf(page, 'pin'), { timeout: 15000 }).toBe('current');
-  await page.getByTestId('setup-pin-value').selectOption(String(PIN));
-  await page.getByTestId('setup-pin-apply').click();
-  await page.getByTestId('setup-colour-value').selectOption('RGB');
-  await page.getByTestId('setup-colour-set').click();
-  await page.getByTestId('setup-count-value').fill(String(LIGHTS));
-  await page.getByTestId('setup-count-apply').click();
-  await expect.poll(() => statusOf(page, 'count')).toBe('done');
+test('Setup controls remain touchable in the focused mobile task column', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const task = page.getByTestId('setup-active-task');
+  await expect(task).toBeVisible();
+  const box = await task.boundingBox();
+  expect(box?.width || 0).toBeLessThanOrEqual(366);
+  expect(await task.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
 
-  await page.getByTestId('setup-step-pin-change').click();
-  const otherPin = await page.getByTestId('setup-pin-value')
-    .locator('option')
-    .evaluateAll((options, current) => options.map(o => (o as HTMLOptionElement).value).find(v => v !== current), String(PIN));
-  await page.getByTestId('setup-pin-value').selectOption(String(otherPin));
-  await page.getByTestId('setup-pin-apply').click();
-
-  await expect.poll(() => readStrip(page))
-    .toEqual({ pin: Number(otherPin), pixelCount: LIGHTS, order: 'RGB' });
-  expect(await statusOf(page, 'count')).toBe('done');
-});
-
-test('every "Any time" row does the thing it names', async ({ page }) => {
-  await expect(page.getByTestId('setup-step-layout')).toBeVisible();
-
-  await page.getByTestId('setup-step-controls-action').click();
-  await expect.poll(() => page.evaluate(() => window.location.hash)).toContain('mode=wire');
-
-  await page.goto('/#screen=setup', { waitUntil: 'domcontentloaded' });
-  await page.getByTestId('setup-step-layout-action').click();
-  await expect.poll(() => page.evaluate(() => window.location.hash)).toContain('screen=layout');
-
-  await page.goto('/#screen=setup', { waitUntil: 'domcontentloaded' });
-  await page.getByTestId('setup-step-save-action').click();
-  // Saving is the top bar's save: it reports back through the workspace notice.
-  await expect(page.locator('.workspace-notice, [data-testid=workspace-notice]')).toBeVisible({ timeout: 10000 });
+  for (const control of await task.locator('button, input, select').all()) {
+    if (!(await control.isVisible())) continue;
+    expect((await control.boundingBox())?.height || 0).toBeGreaterThanOrEqual(44);
+  }
 });

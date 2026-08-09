@@ -12,6 +12,7 @@ import { CardStatusControl, cardConnectionStatus } from '../components/card/Card
 import { useFirmwareReleaseIdentity } from '../hooks/useFirmwareReleaseIdentity.js';
 import { ProjectLoadDialog, ProjectSaveDialog } from '../components/projects/TopBarProjectDialogs.jsx';
 import { WorkspaceNotice } from '../components/projects/WorkspaceNotice.jsx';
+import { releaseCardBridge } from '../lib/cardBridge.js';
 import { bootstrapCardHostFromLocation, canPushDirectlyToCard } from '../lib/cardConnection.js';
 import {
   bootstrapBridgeCallback,
@@ -74,6 +75,7 @@ const PatternLabScreen = lazy(() => import('../pattern-lab/PatternLabScreen.jsx'
 const PlaylistScreen = lazy(() => import('./lw-playlist.jsx').then(module => ({ default: module.PlaylistScreen })));
 const ShowScreen = lazy(() => import('./lw-show.jsx').then(module => ({ default: module.ShowScreen })));
 const CardScreen = lazy(() => import('./lw-card.jsx').then(module => ({ default: module.CardScreen })));
+const CardSetupOverlay = lazy(() => import('../components/card/CardSetupOverlay.jsx'));
 
 // Setup is no longer a rail destination of its own. It is the first section of
 // the card workspace, which is where every other answer about the card already
@@ -90,13 +92,8 @@ const STUDIO_SCREENS = [
 // card is SENT, not a place the owner browses to. Its two entrances are the
 // connection center and Test & Install — the exact two moments the question
 // "which strips does this card even have?" comes up.
-const StripDiscoveryScreen = lazy(() => import('../components/card/StripDiscoveryPanel.jsx').then(module => ({ default: module.StripDiscoveryPanel })));
-const OFF_RAIL_SCREENS = { discovery: StripDiscoveryScreen };
-const SCREEN_KEYS = [...STUDIO_SCREENS.map(screen => screen.id), ...Object.keys(OFF_RAIL_SCREENS)];
-const SCREEN_BY_ID = {
-  ...Object.fromEntries(STUDIO_SCREENS.map(screen => [screen.id, screen.Component])),
-  ...OFF_RAIL_SCREENS,
-};
+const SCREEN_KEYS = [...STUDIO_SCREENS.map(screen => screen.id), 'discovery'];
+const SCREEN_BY_ID = Object.fromEntries(STUDIO_SCREENS.map(screen => [screen.id, screen.Component]));
 const PROTECTED_COMMISSIONING_STAGES = new Set(['install-safely', 'set-up-card', 'check-lights']);
 const SCREEN_RECOVERY_KEY = 'lw_screen_recovery_v1';
 
@@ -485,6 +482,10 @@ function Shell() {
   const routeHash = useSyncExternalStore(routeStore.subscribe, routeStore.read, routeStore.read);
   const view = useMemo(() => studioViewFromHash(routeHash, viewOptions()), [routeHash]);
   const cardRoute = useMemo(() => cardRouteFromHash(routeHash), [routeHash]);
+  const cardSetupReturnHashRef = useRef('#screen=layout');
+  useEffect(() => {
+    if (view !== 'discovery') cardSetupReturnHashRef.current = routeHash || '#screen=layout';
+  }, [routeHash, view]);
   const [installActive, setInstallActive] = useState(false);
   const [hardwareOperationActive, setHardwareOperationActive] = useState(false);
   const [commissioningActive, setCommissioningActive] = useState(readCommissioningProtection);
@@ -707,6 +708,20 @@ function Shell() {
     flushProjectAutosave();
     navigateToView(requested);
   }, [flushProjectAutosave, navigateToView, openCardSection]);
+
+  const closeCardSetup = useCallback(() => {
+    routeStore.replace(cardSetupReturnHashRef.current || '#screen=layout');
+  }, [routeStore]);
+
+  const completeCardSetup = useCallback(() => {
+    flushProjectAutosave();
+    routeStore.replace('#screen=layout&mode=draw');
+  }, [flushProjectAutosave, routeStore]);
+
+  const disconnectCardSetup = useCallback(async () => {
+    await releaseCardBridge('disconnected');
+    closeCardSetup();
+  }, [closeCardSetup]);
 
   // The one place the route is reconciled. It reads the live URL and derives
   // the screen from that same string — deliberately NOT from the rendered
@@ -1079,7 +1094,14 @@ function Shell() {
     e.target.value = '';
   }, [cloudLibrary, replaceProject]);
 
-  const Screen = SCREEN_BY_ID[view];
+  const cardSetupOpen = view === 'discovery';
+  const underlyingView = cardSetupOpen
+    ? studioViewFromHash(cardSetupReturnHashRef.current, viewOptions())
+    : view;
+  const underlyingCardRoute = cardSetupOpen
+    ? cardRouteFromHash(cardSetupReturnHashRef.current)
+    : cardRoute;
+  const Screen = SCREEN_BY_ID[underlyingView];
   let persistentNotice = null;
   if (cloudLibrary.activeRemoteProject && cloudLibrary.syncState.conflict) {
     persistentNotice = {
@@ -1119,9 +1141,9 @@ function Shell() {
         onNew={onNew} onLoad={onLoad} onDownload={onDownload} onSave={onSave}
         onPreferences={() => openCardSection('preferences')}
       />
-      <Rail view={view} navigate={navigateStudio} openCard={openCardSection} />
+      <Rail view={underlyingView} navigate={navigateStudio} openCard={openCardSection} />
 
-      <ScreenErrorBoundary key={view} onBeforeReload={flushProjectAutosave} onRecover={() => navigateStudio('layout')}>
+      <ScreenErrorBoundary key={underlyingView} onBeforeReload={flushProjectAutosave} onRecover={() => navigateStudio('layout')}>
         <Suspense fallback={<div className="screen route-loading" role="status" aria-live="polite">Loading Studio screen…</div>}>
           {Screen ? <>
             <Screen
@@ -1147,12 +1169,25 @@ function Shell() {
               onMatchedProjectLoaded={onMatchedCardProjectLoaded}
               onStartNewProject={onStartNewProject}
               onSaveProject={onSave}
-              route={cardRoute}
+              route={underlyingCardRoute}
             />
             <ScreenReady />
           </> : null}
         </Suspense>
       </ScreenErrorBoundary>
+
+      {cardSetupOpen && (
+        <Suspense fallback={<div className="card-setup-backdrop"><div className="card-setup-loading" role="status">Opening the light check…</div></div>}>
+          <CardSetupOverlay
+            cardHost={cardLink.host || cardStatus.host}
+            cardLink={cardLink}
+            go={navigateStudio}
+            onDismiss={closeCardSetup}
+            onDisconnect={disconnectCardSetup}
+            onComplete={completeCardSetup}
+          />
+        </Suspense>
+      )}
 
       <WorkspaceNotice
         notice={visibleWorkspaceNotice}
