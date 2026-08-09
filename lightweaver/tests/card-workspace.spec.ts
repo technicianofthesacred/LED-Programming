@@ -321,7 +321,7 @@ async function connectCommissioningCard(page) {
   }]);
 }
 
-test('wide desktop footer keeps card identity, telemetry, and test controls in separate regions', async ({ page }) => {
+test('wide desktop footer keeps card, firmware, Studio, and test controls in order', async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('card-link-status')).toBeVisible();
@@ -342,27 +342,27 @@ test('wide desktop footer keeps card identity, telemetry, and test controls in s
     }),
   }]);
   await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
-  await expect(page.locator('.card-status-summary')).toBeVisible();
+  await expect(page.locator('.card-status-summary')).toHaveCount(0);
 
   const regions = await page.locator('.status-bar').evaluate(node => {
     const rect = selector => node.querySelector(selector)?.getBoundingClientRect();
     return {
       card: rect('.sb-card'),
-      facts: rect('.sb-facts'),
+      firmware: rect('.sb-firmware'),
+      studio: rect('.sb-freshness'),
       test: rect('.sb-teststrip'),
       control: rect('.card-status-control'),
       copy: rect('.card-status-copy'),
       name: rect('.card-status-name'),
       state: rect('.card-status-state'),
-      summary: rect('.card-status-summary'),
     };
   });
-  expect(regions.card.right).toBeLessThanOrEqual(regions.facts.left);
-  expect(regions.facts.right).toBeLessThanOrEqual(regions.test.left);
+  expect(regions.card.right).toBeLessThanOrEqual(regions.firmware.left);
+  expect(regions.firmware.right).toBeLessThanOrEqual(regions.studio.left);
+  expect(regions.studio.right).toBeLessThanOrEqual(regions.test.left);
   expect(regions.control.right).toBeLessThanOrEqual(regions.card.right);
   expect(regions.name.right).toBeLessThanOrEqual(regions.state.left);
-  expect(regions.state.right).toBeLessThanOrEqual(regions.summary.left);
-  expect(regions.copy.right).toBeLessThanOrEqual(regions.summary.left);
+  expect(regions.copy.right).toBeLessThanOrEqual(regions.control.right);
 });
 
 test('Card overview persists WiFi progress, gates the setup address, and resumes after reload', async ({ page }) => {

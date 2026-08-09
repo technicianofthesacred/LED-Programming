@@ -1,7 +1,22 @@
 import os
 import re
+from pathlib import Path
 
 Import("env")
+
+version_path = Path(env.subst("$PROJECT_DIR")) / "VERSION"
+version_contents = version_path.read_text(encoding="utf-8")
+if version_contents.endswith("\r\n"):
+    firmware_version = version_contents[:-2]
+elif version_contents.endswith("\n"):
+    firmware_version = version_contents[:-1]
+else:
+    firmware_version = version_contents
+if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", firmware_version):
+    raise ValueError("firmware VERSION must be a strict major.minor.patch semantic version")
+environment_version = os.environ.get("LW_FIRMWARE_VERSION")
+if environment_version is not None and environment_version != firmware_version:
+    raise ValueError("LW_FIRMWARE_VERSION must match the canonical firmware VERSION file")
 
 build_id = os.environ.get("LW_BUILD_ID", "dev")
 if build_id != "dev" and not re.fullmatch(r"[0-9a-f]{40}", build_id):
@@ -21,6 +36,7 @@ if build_id != "dev" and build_number == "0":
     raise ValueError("LW_BUILD_NUMBER must be injected alongside a release LW_BUILD_ID")
 
 env.Append(CPPDEFINES=[
+    ("LW_FIRMWARE_VERSION", f'\\"{firmware_version}\\"'),
     ("LW_BUILD_ID", f'\\"{build_id}\\"'),
     ("LW_BUILD_NUMBER", build_number),
 ])

@@ -501,15 +501,15 @@ input[type=number]::-webkit-outer-spin-button {
   grid-area: stat;
   position: relative; z-index: 36;
   min-width: 0; overflow: hidden;
-  display: flex; align-items: center; gap: 0;
+  display: flex; align-items: center; gap: 9px;
   padding: 0 12px; height: 32px;
   border-top: 1px solid var(--border-hair);
   background: var(--bg-app);
   font-size: 11.5px; color: var(--text-lo);
 }
 .sb-card {
-  min-width: 0; overflow: hidden; flex: 1 1 390px;
-  display: flex; align-items: center; gap: 9px; padding-right: 12px;
+  min-width: 0; max-width: 100%; overflow: hidden; flex: 0 1 auto;
+  display: flex; align-items: center;
 }
 .sb-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .sb-dot.on { background: var(--ok); box-shadow: 0 0 7px var(--ok); }
@@ -536,19 +536,23 @@ input[type=number]::-webkit-outer-spin-button {
 .sb-stream .pulse { width: 5px; height: 5px; border-radius: 50%; background: var(--ok); animation: pulse 1.6s ease-in-out infinite; }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 
-.sb-div { width: 1px; height: 16px; flex: 0 0 auto; background: var(--border-hair); margin: 0 12px; }
-.sb-facts { min-width: 0; overflow: hidden; flex: 0 1 auto; display: flex; align-items: center; gap: 0; font-family: var(--font-mono); font-size: 11px; color: var(--text-lo); }
-.sb-fact { min-width: 0; padding: 0 11px; display: flex; align-items: center; gap: 6px; }
-.sb-fact:not(:last-child) { border-right: 1px solid var(--border-hair); }
-.sb-fact .fv { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-mid); }
 .sb-spring { flex: 1; }
+.sb-firmware {
+  flex: 0 0 auto; min-height: 22px; padding: 2px 9px;
+  display: inline-flex; align-items: center; white-space: nowrap;
+  border: 1px solid transparent; border-radius: 100px;
+  color: var(--text-mid); font-family: var(--font-mono); font-size: 10.5px;
+}
+button.sb-firmware { background: var(--bg-sel); border-color: var(--accent-line); color: var(--accent-hi); }
+button.sb-firmware:hover { background: var(--bg-elev-2); color: var(--text-hi); }
+.sb-firmware.is-current { color: var(--ok); }
+.sb-firmware.is-release-unknown { color: var(--text-lo); }
 .sb-freshness {
   min-width: 0; flex: 0 0 auto;
   display: inline-flex; align-items: center; gap: 6px;
-  padding-left: 12px; white-space: nowrap;
+  white-space: nowrap;
   color: var(--text-mid); font-family: var(--font-mono); font-size: 10.5px;
 }
-.sb-freshness code { color: var(--text-lo); font: inherit; }
 .sb-freshness .sb-dot.warn { background: var(--warn); box-shadow: none; }
 .sb-freshness.is-unknown { color: var(--text-lo); }
 .sb-right { display: flex; align-items: center; gap: 0; font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
@@ -571,7 +575,6 @@ input[type=number]::-webkit-outer-spin-button {
   background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
   color: var(--text-mid); font-family: var(--font-mono); font-size: 11px; text-align: right;
 }
-.sb-ts-input:disabled { opacity: 0.5; }
 .sb-ts-note { color: var(--accent); white-space: nowrap; }
 
 /* scrollbars */
@@ -590,7 +593,7 @@ input[type=number]::-webkit-outer-spin-button {
 .layer-name, .layer-len, .add-layer,
 .insp-head .nm, .insp-head .tag, .field > .k, .inspector-value,
 .insp-cta, .mini-seg button,
-.sb-label, .sb-stream, .sb-facts, .sb-fact, .sb-right, .sb-right .kbd,
+.sb-label, .sb-stream, .sb-right, .sb-right .kbd,
 .sb-teststrip, .sb-ts-toggle, .sb-ts-note {
   white-space: nowrap;
 }
@@ -599,7 +602,7 @@ input[type=number]::-webkit-outer-spin-button {
 
 /* Persistent card connection control and its anchored connection panel. */
 .card-status-control {
-  min-width: 0; width: 100%; height: 26px; max-width: none; overflow: hidden; flex: 1 1 auto;
+  min-width: 0; width: auto; height: 26px; max-width: 100%; overflow: hidden; flex: 0 1 auto;
   display: inline-flex; align-items: center; gap: 8px;
   padding: 0 9px; border: 1px solid var(--border-soft); border-radius: var(--r-sm);
   background: var(--bg-elev); color: var(--text-mid);
@@ -625,7 +628,7 @@ input[type=number]::-webkit-outer-spin-button {
 .card-status-control.is-needs-project .card-status-dot,
 .card-status-control.is-found-pair .card-status-dot { background: var(--warn); }
 .card-status-copy {
-  min-width: 0; max-width: 58%; overflow: hidden; flex: 0 1 auto;
+  min-width: 0; max-width: 100%; overflow: hidden; flex: 1 1 auto;
   display: inline-flex; align-items: center; gap: 7px;
 }
 .card-status-name {
@@ -633,10 +636,6 @@ input[type=number]::-webkit-outer-spin-button {
   flex: 1 1 auto; color: var(--text-hi); font-weight: 600;
 }
 .card-status-state { flex: 0 0 auto; color: var(--text-mid); }
-.card-status-summary {
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 160px;
-  color: var(--text-mid); font-family: var(--font-mono); font-size: 10.5px;
-}
 .card-status-announcement {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
@@ -695,6 +694,13 @@ input[type=number]::-webkit-outer-spin-button {
 }
 .card-acknowledged-facts dt { color: var(--text-mid); }
 .card-acknowledged-facts dd { margin: 0; color: var(--text-hi); overflow-wrap: anywhere; }
+.card-firmware-update {
+  display: grid; gap: 5px; margin-top: 12px; padding: 11px 12px;
+  border: 1px solid var(--accent-line); border-radius: var(--r-md); background: var(--bg-sel);
+}
+.card-firmware-update strong { color: var(--text-hi); font-size: 12.5px; }
+.card-firmware-update > p { margin: 0; color: var(--text-mid); font-size: 11.5px; line-height: 1.45; }
+.card-firmware-update .card-connection-actions { margin-top: 6px; }
 
 .card-commissioning { display: grid; gap: 16px; min-width: 0; }
 .card-commissioning h3 { margin: 0; }
@@ -785,10 +791,9 @@ input[type=number]::-webkit-outer-spin-button {
     flex-wrap: wrap; height: auto; min-height: 32px;
     row-gap: 6px; padding: 6px 12px;
   }
-  .sb-card { min-width: 0; flex: 1 1 360px; }
+  .sb-card { min-width: 0; flex: 0 1 auto; }
   .card-status-control { max-width: 100%; }
-  .sb-facts { display: none; }
-  .sb-teststrip { flex: 1 1 auto; }
+  .sb-teststrip { flex: 0 0 auto; }
 }
 
 @media (max-width: 640px) {
@@ -814,12 +819,21 @@ input[type=number]::-webkit-outer-spin-button {
   .top-div { display: none; }
   .top-action { width: 44px; height: 44px; min-width: 44px; min-height: 44px; }
 
-  .status-bar { flex-wrap: wrap; height: auto; min-height: 32px; row-gap: 6px; padding: 6px 12px; }
-  .sb-card { flex-wrap: wrap; row-gap: 4px; }
-  .sb-facts { display: none; }
+  .status-bar {
+    display: grid; height: auto; min-height: 32px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "card studio" "firmware test";
+    gap: 6px 8px; padding: 6px 12px;
+  }
+  .sb-card { grid-area: card; min-width: 0; }
+  .sb-firmware { grid-area: firmware; justify-self: start; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  .sb-teststrip { grid-area: test; justify-self: end; }
+  .sb-teststrip.is-active { grid-column: 1 / -1; justify-self: stretch; flex-wrap: wrap; }
+  .sb-teststrip.is-active .sb-ts-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .sb-freshness { grid-area: studio; justify-self: end; }
+  .sb-spring { display: none; }
 
   .card-status-control { min-height: 44px; max-width: min(100%, 300px); }
-  .card-status-summary { display: none; }
   .card-connection-center {
     left: 0; right: 0; bottom: 0; width: 100%; max-height: min(76vh, 640px);
     padding: 18px 18px max(18px, env(safe-area-inset-bottom));

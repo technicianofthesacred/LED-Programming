@@ -1,4 +1,7 @@
 import { test, expect } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+
+const signedRelease = JSON.parse(await readFile(new URL('../public/firmware/release-manifest.json', import.meta.url), 'utf8'));
 
 test.beforeEach(async ({ page }) => {
   await page.route('http://lightweaver.local/**', route => route.abort());
@@ -125,7 +128,7 @@ async function deliverBridgeResult(page, overrides: Record<string, unknown> = {}
 }
 
 test('announces asynchronous connection states without repeating card metadata', async ({ page }) => {
-  const announcement = page.getByRole('status');
+  const announcement = page.locator('.card-status-announcement');
 
   await dispatchCardLinkEvent(page, { type: 'connecting', via: 'bridge', host: 'lightweaver.local' });
   await expect(announcement).toHaveText('Connecting');
@@ -180,6 +183,67 @@ test('renders verified card behavior through the new orchestrator state', async 
   await expect(dialog.getByRole('button', { name: 'Done', exact: true })).toBeVisible();
   await expect(dialog).toContainText('Gallery card');
   await expect(dialog).toContainText('440');
+});
+
+test('connected outdated firmware offers the safe installer without starting hardware work', async ({ page }) => {
+  await page.evaluate(() => {
+    (window as any).__hardwareOperations = 0;
+    window.addEventListener('lw-hardware-operation-active', () => { (window as any).__hardwareOperations += 1; });
+  });
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await dispatchCardLinkEvent(page, {
+    type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
+    card: {
+      id: 'lw-quality', name: 'Gallery card', pixelCount: 440,
+      firmwareVersion: '1.4.0', buildNumber: signedRelease.buildNumber - 1, buildId: 'a'.repeat(40),
+    },
+    readiness: readyStatus('lw-quality'),
+  });
+
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  await expect(dialog.getByText('Your card firmware is out of date.')).toBeVisible();
+  await expect(dialog).toContainText(`Installed build ${signedRelease.buildNumber - 1}; latest build ${signedRelease.buildNumber}.`);
+  await dialog.getByRole('button', { name: 'Update firmware' }).click();
+  await expect(page).toHaveURL(/#screen=card&section=install$/);
+  expect(await page.evaluate(() => (window as any).__hardwareOperations)).toBe(0);
+});
+
+test('connected outdated firmware can be deferred without losing the verified card', async ({ page }) => {
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await dispatchCardLinkEvent(page, {
+    type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
+    card: {
+      id: 'lw-quality', name: 'Gallery card', pixelCount: 440,
+      firmwareVersion: '1.4.0', buildNumber: signedRelease.buildNumber - 1, buildId: 'a'.repeat(40),
+    },
+    readiness: readyStatus('lw-quality'),
+  });
+
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  await dialog.getByRole('button', { name: 'Not now' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByTestId('card-link-status')).toContainText('Connected');
+});
+
+test('connected current firmware does not show an update prompt', async ({ page }) => {
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await dispatchCardLinkEvent(page, {
+    type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
+    card: {
+      id: 'lw-quality', name: 'Gallery card', pixelCount: 440,
+      firmwareVersion: signedRelease.firmwareVersion,
+      buildNumber: signedRelease.buildNumber,
+      buildId: signedRelease.buildId,
+    },
+    readiness: readyStatus('lw-quality', {
+      firmwareVersion: signedRelease.firmwareVersion,
+      buildId: signedRelease.buildId,
+    }),
+  });
+
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  await expect(dialog.getByText('Your card firmware is out of date.')).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Done', exact: true })).toBeVisible();
 });
 
 test('ready-browser-usb opens the fixed local install screen', async ({ page }) => {

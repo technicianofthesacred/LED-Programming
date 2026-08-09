@@ -1,5 +1,4 @@
 import React from 'react';
-import { cardBuildLabel } from '../../lib/cardIdentity.js';
 import { isCardLinkConnected } from '../../lib/cardLink.js';
 
 const ATTENTION_REASONS = new Set([
@@ -33,19 +32,9 @@ export function cardConnectionStatus(link = {}) {
   return 'Not connected';
 }
 
-function connectedSummary(card = {}) {
-  return [
-    card.pixelCount > 0 ? `${card.pixelCount} pixels` : '',
-    card.gpioSummary,
-    card.firmwareVersion ? `firmware ${card.firmwareVersion}` : '',
-    cardBuildLabel(card),
-  ].filter(Boolean).join(' · ');
-}
-
 export function CardStatusControl({ link, onOpen, open = false }) {
   const status = cardConnectionStatus(link);
   const connected = status === 'Connected';
-  const summary = connected ? connectedSummary(link.card) : '';
   const accessibleName = connected
     ? `${link.card?.name || 'Lightweaver'} · Connected`
     : `Connect Lightweaver · ${status}`;
@@ -67,7 +56,6 @@ export function CardStatusControl({ link, onOpen, open = false }) {
           <span className="card-status-name">{connected ? (link.card?.name || 'Lightweaver') : 'Lightweaver'}</span>
           <span className="card-status-state">{status}</span>
         </span>
-        {summary && <span className="card-status-summary">{summary}</span>}
       </button>
       <span className="card-status-announcement" role="status" aria-live="polite" aria-atomic="true">
         {status}

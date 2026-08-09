@@ -135,7 +135,7 @@ test('every primary screen exposes the Lightweaver connection control', async ({
   }
 });
 
-test('footer shows the current Studio build at the far right on desktop and phone', async ({ page }) => {
+test('footer shows the current Studio build on desktop and phone', async ({ page }) => {
   let markerRequests = 0;
   const pageErrors: string[] = [];
   page.on('pageerror', error => pageErrors.push(error.message));
@@ -155,9 +155,8 @@ test('footer shows the current Studio build at the far right on desktop and phon
   await expect.poll(() => markerRequests).toBe(1);
 
   const beacon = page.getByTestId('studio-freshness');
-  await expect(beacon).toHaveText(`Studio currentBuild ${STUDIO_BUILD_NUMBER}`);
+  await expect(beacon).toHaveText(`Studio ${STUDIO_BUILD_NUMBER}`);
   await expect(beacon).toHaveAttribute('title', new RegExp(`revision ${STUDIO_SOURCE_REVISION.slice(0, 12)}`));
-  await expect(page.locator('.status-bar > :last-child')).toHaveAttribute('data-testid', 'studio-freshness');
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(beacon).toBeVisible();
@@ -190,18 +189,22 @@ test('new production waits for installer and destructive card operations, flushe
     };
   });
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByTestId('studio-freshness')).toContainText('Studio current');
+  await expect(page.getByTestId('studio-freshness')).toHaveText(`Studio ${STUDIO_BUILD_NUMBER}`);
   await page.evaluate(() => {
     localStorage.removeItem('lw_autosave_v3');
     window.dispatchEvent(new CustomEvent('lw-install-active', { detail: { active: true } }));
     window.dispatchEvent(new CustomEvent('lw-hardware-operation-active', { detail: { active: true, operation: 'install-project' } }));
   });
 
-  // A newer production build advertises the NEXT build number, so the waiting
-  // beacon names the build the refresh will land on.
+  // The visible identity remains the Studio build that is actually open; the
+  // newer target stays in the focusable diagnostic until reload is safe.
   marker = studioMarker('b'.repeat(40), STUDIO_BUILD_NUMBER + 1);
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect(page.getByTestId('studio-freshness')).toHaveText(`Update readyBuild ${STUDIO_BUILD_NUMBER + 1}`);
+  await expect(page.getByTestId('studio-freshness')).toHaveText(`Studio ${STUDIO_BUILD_NUMBER}`);
+  await expect(page.getByTestId('studio-freshness')).toHaveAttribute(
+    'title',
+    new RegExp(`Update ready: Build ${STUDIO_BUILD_NUMBER + 1}`),
+  );
   expect(await page.evaluate(() => (window as any).__lwFreshnessReloads.length)).toBe(0);
 
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('lw-install-active', { detail: { active: false } })));
@@ -225,7 +228,8 @@ test('invalid or cacheable Studio markers show bounded unknown state without rel
     (window as any).__LW_STUDIO_RELOAD_FOR_TEST__ = () => { (window as any).__lwFreshnessReloads += 1; };
   });
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByTestId('studio-freshness')).toHaveText(`Freshness unknownBuild ${STUDIO_BUILD_NUMBER}`);
+  await expect(page.getByTestId('studio-freshness')).toHaveText(`Studio ${STUDIO_BUILD_NUMBER}`);
+  await expect(page.getByTestId('studio-freshness')).toHaveAttribute('title', /freshness could not be verified/i);
   expect(await page.evaluate(() => (window as any).__lwFreshnessReloads)).toBe(0);
 });
 
@@ -657,7 +661,8 @@ for (const width of [641, 768, 900]) {
       readiness: readyStatus('lw-responsive-card', { buildId: 'responsive-build' }),
     }]);
     await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
-    await expect(page.locator('.card-status-summary')).not.toContainText('Responsive gallery card');
+    await expect(page.locator('.card-status-summary')).toHaveCount(0);
+    await expect(page.locator('.status-bar')).not.toContainText(/GPIO|firmware 1\.4\.0|440 pixels/);
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
   });
 }

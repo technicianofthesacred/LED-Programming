@@ -61,7 +61,10 @@ export function classifyChangedPaths(paths, { conservative = false, generatedRel
     if (isAnyPath(path, [
       'firmware/lightweaver-controller/src',
       'firmware/lightweaver-controller/scripts',
-    ]) || path === 'firmware/lightweaver-controller/platformio.ini') {
+    ]) || [
+      'firmware/lightweaver-controller/VERSION',
+      'firmware/lightweaver-controller/platformio.ini',
+    ].includes(path)) {
       lanes.firmware = true;
       lanes.production = true;
       continue;

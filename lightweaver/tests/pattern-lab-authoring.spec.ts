@@ -125,6 +125,33 @@ test('exports Brightness and Speed as independent playback controls', async ({ p
   expect(exported.playback).toEqual({ brightness: 0.25, speed: 1.75 });
 });
 
+test('offers one accessible Import recipe control and imports through its file chooser', async ({ page }) => {
+  await page.getByLabel('Base pattern').selectOption('aurora');
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export recipe' }).click();
+  const downloadedPath = await (await downloadPromise).path();
+  expect(downloadedPath).not.toBeNull();
+  const recipe = JSON.parse(await readFile(downloadedPath!, 'utf8'));
+  recipe.name = 'Accessible import';
+
+  const importControl = page.getByRole('button', { name: 'Import recipe', exact: true });
+  await expect(importControl).toHaveCount(1);
+  await importControl.focus();
+  await page.keyboard.press('Tab');
+  await expect(page.locator('.plab-file-input')).not.toBeFocused();
+  const chooserPromise = page.waitForEvent('filechooser');
+  await importControl.click();
+  const chooser = await chooserPromise;
+  await chooser.setFiles({
+    name: 'accessible-import.lwrecipe.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(recipe)),
+  });
+
+  await expect(page.getByTestId('pattern-lab-draft-name')).toHaveText('Accessible import');
+  await expect(page.getByTestId('pattern-lab-save-status')).toContainText('Imported Accessible import.');
+});
+
 test('announces continuous Movement through its nearest semantic anchor', async ({ page }) => {
   await page.getByLabel('Base pattern').selectOption('aurora');
   const movement = page.getByRole('slider', { name: 'Movement', exact: true });

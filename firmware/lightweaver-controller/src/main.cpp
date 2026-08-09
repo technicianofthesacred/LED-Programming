@@ -47,6 +47,7 @@
 #define LW_SPI_MISO 13
 #endif
 
+// Non-PlatformIO compile fallback only; PlatformIO injects canonical VERSION.
 #ifndef LW_FIRMWARE_VERSION
 #define LW_FIRMWARE_VERSION "1.0.0"
 #endif

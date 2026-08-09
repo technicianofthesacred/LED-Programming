@@ -1055,6 +1055,43 @@ test('top-bar Load keeps browser saves recoverable after New while signed out', 
   });
 });
 
+test('saved starter project stays visibly unplaced through New and Load until its first primitive', async ({ page }) => {
+  const fixture = new LibraryFixture(null);
+  const savedProject = portable('Unplaced starter project', 'lwproj-unplaced-starter');
+  await page.addInitScript((project) => {
+    localStorage.setItem('lw_project_library_v1', JSON.stringify({
+      version: 1,
+      records: [{
+        id: 'unplaced-starter-record',
+        name: project.name,
+        createdAt: 1,
+        updatedAt: 2,
+        projectVersion: project.version,
+        project,
+      }],
+    }));
+    localStorage.setItem('lw_project_active_record_v1', 'unplaced-starter-record');
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(project));
+    localStorage.setItem('lw_autosave_v3_backup', JSON.stringify(project));
+  }, savedProject);
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+
+  await expect(page.getByTestId('layout-primitive-picker')).toBeVisible();
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  await expect(page.getByTestId('workspace-notice')).toContainText('saved in browser library');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await page.getByRole('button', { name: 'Load project' }).click();
+  await page.getByRole('dialog', { name: 'Load project' })
+    .getByRole('button', { name: 'Open Unplaced starter project' }).click();
+
+  await expect(page.getByTestId('layout-primitive-picker')).toBeVisible();
+  await page.getByTestId('layout-primitive-picker')
+    .getByRole('button', { name: 'Create line' }).click();
+  await expect(page.getByTestId('layout-primitive-picker')).toHaveCount(0);
+  await expect(page.locator('.la-strip-row')).toHaveCount(1);
+});
+
 test('claimed browser records remain available to signed-out Save, New, and Load', async ({ page }) => {
   const fixture = new LibraryFixture('worker');
   const savedProject = portable('Claimed browser piece', 'lwproj-claimed-browser');

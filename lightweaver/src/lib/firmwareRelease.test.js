@@ -13,6 +13,7 @@ import {
   LIGHTWEAVER_RELEASE_PUBLIC_KEY_PEM,
   MINIMUM_PRODUCTION_FIRMWARE_VERSION,
   canonicalFirmwareManifestBytes,
+  loadProductionFirmwareManifest,
   loadProductionFirmwareRelease,
   assertFirmwareManifestBuildNumber,
   formatFirmwareBuildLabel,
@@ -28,13 +29,14 @@ async function fixture(name, encoding = 'utf8') {
   return readFile(resolve(fixtureRoot, name), encoding);
 }
 
-function response(body, ok = true, { contentLength, chunks } = {}) {
+function response(body, ok = true, { contentLength, chunks, redirected = false } = {}) {
   const bytes = typeof body === 'string' ? Buffer.from(body) : Buffer.from(body);
   let index = 0;
   const streamChunks = chunks ?? [bytes];
   return {
     ok,
     status: ok ? 200 : 404,
+    redirected,
     async text() { return typeof body === 'string' ? body : Buffer.from(body).toString('utf8'); },
     headers: {
       get(name) {
@@ -152,6 +154,96 @@ test('verifies a fixed signed manifest before fetching and hashing its image', a
   assert.equal(release.manifest.firmwareVersion, '1.2.3');
   assert.equal(release.bytes.byteLength, release.manifest.image.size);
   assert.equal(calls.at(-1), release.manifest.image.url);
+});
+
+test('loads a verified production manifest without requesting its firmware image', async () => {
+  const { fetchImpl, calls } = await createFixtureFetch();
+  const publicKeyPem = await fixture('test-only-release-public.pem');
+  const manifest = await loadProductionFirmwareManifest(fetchImpl, webcrypto, {
+    publicKeyPem,
+    installerVersion: '1.4.0',
+  });
+
+  assert.equal(manifest.firmwareVersion, '1.2.3');
+  assert.deepEqual(calls, [
+    '/firmware/release-manifest.json',
+    '/firmware/release-manifest.sig',
+  ]);
+});
+
+test('rejects a tampered manifest signature without requesting its firmware image', async () => {
+  const manifest = await fixture('valid-manifest.json');
+  const signature = await fixture('valid-manifest.sig');
+  const publicKeyPem = await fixture('test-only-release-public.pem');
+  const calls = [];
+  const fetchImpl = async url => {
+    calls.push(String(url));
+    if (String(url).endsWith('release-manifest.json')) return response(manifest);
+    if (String(url).endsWith('release-manifest.sig')) {
+      return response(`A${signature.trim().slice(1)}`);
+    }
+    return response('missing', false);
+  };
+
+  await assert.rejects(
+    loadProductionFirmwareManifest(fetchImpl, webcrypto, { publicKeyPem }),
+    /signature/i,
+  );
+  assert.equal(calls.length, 2);
+});
+
+test('rejects redirects while loading a production manifest', async () => {
+  const { fetchImpl: fixtureFetch } = await createFixtureFetch();
+  const publicKeyPem = await fixture('test-only-release-public.pem');
+  const fetchImpl = async url => {
+    const fixtureResponse = await fixtureFetch(url);
+    return String(url).endsWith('release-manifest.json')
+      ? { ...fixtureResponse, redirected: true }
+      : fixtureResponse;
+  };
+
+  await assert.rejects(
+    loadProductionFirmwareManifest(fetchImpl, webcrypto, { publicKeyPem }),
+    /redirects are not allowed/i,
+  );
+});
+
+test('rejects a signed manifest with a malformed build number before requesting its firmware image', async () => {
+  const base = JSON.parse(await fixture('valid-manifest.json'));
+  const manifest = { ...base, buildNumber: '412' };
+  const keys = await webcrypto.subtle.generateKey(
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    true,
+    ['sign', 'verify'],
+  );
+  const signature = new Uint8Array(await webcrypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    keys.privateKey,
+    canonicalFirmwareManifestBytes(manifest),
+  ));
+  const spki = Buffer.from(await webcrypto.subtle.exportKey('spki', keys.publicKey));
+  const publicKeyPem = `-----BEGIN PUBLIC KEY-----\n${spki.toString('base64').match(/.{1,64}/g).join('\n')}\n-----END PUBLIC KEY-----`;
+  const calls = [];
+  const fetchImpl = async url => {
+    calls.push(String(url));
+    if (String(url).endsWith('release-manifest.json')) return response(JSON.stringify(manifest));
+    if (String(url).endsWith('release-manifest.sig')) return response(Buffer.from(signature).toString('base64url'));
+    return response('missing', false);
+  };
+
+  await assert.rejects(
+    loadProductionFirmwareManifest(fetchImpl, webcrypto, { publicKeyPem }),
+    /buildNumber must be a positive integer/,
+  );
+  assert.equal(calls.length, 2);
+});
+
+test('fails closed when the production manifest is unavailable', async () => {
+  const publicKeyPem = await fixture('test-only-release-public.pem');
+  await assert.rejects(
+    loadProductionFirmwareManifest(async () => response('missing', false), webcrypto, { publicKeyPem }),
+    /manifest/i,
+  );
 });
 
 test('rejects a tampered manifest before requesting any image', async () => {
@@ -413,6 +505,20 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
   assert.doesNotMatch(verifyJob, /LIGHTWEAVER_RELEASE_SIGNING_KEY|environment:/);
   assert.match(verifyJob, /permissions:\s*\n\s*contents: read/);
   assert.match(verifyJob, /npm run ci:firmware-sensitive --prefix lightweaver/);
+  assert.match(
+    workflow,
+    /--previous-production/,
+    'version progression must use the authenticated live production release, never candidate-owned metadata',
+  );
+  assert.doesNotMatch(workflow, /--previous-source|SOURCE_REVISION\^:/);
+  assert.match(workflow, /github\.event\.workflow_run\.event == 'push'/);
+  assert.match(workflow, /github\.event\.workflow_run\.head_repository\.full_name == github\.repository/);
+  assert.match(workflow, /github\.event\.workflow_run\.head_branch == 'main'/);
+  assert.doesNotMatch(
+    workflow,
+    /require\('\.\/lightweaver\/public\/firmware\/release-manifest\.json'\)/,
+    'candidate checkout metadata must not define the previous trusted firmware version',
+  );
   assert.match(verifyJob, /pio run/);
   assert.ok(
     verifyJob.indexOf('npm run ci:firmware-sensitive') < verifyJob.indexOf('pio run'),
@@ -420,7 +526,7 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
   );
   assert.equal(
     packageJson.scripts['ci:firmware-sensitive'],
-    'npm run test:production-jobs && npm run test:core:source',
+    'node ../firmware/lightweaver-controller/tests/firmware-version-policy.mjs && npm run test:production-jobs && npm run test:core:source',
   );
   assert.equal(
     packageJson.scripts['test:core:source'],

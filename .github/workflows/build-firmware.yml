@@ -16,13 +16,14 @@ concurrency:
 
 jobs:
   classify:
-    if: github.event.workflow_run.conclusion == 'success'
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
       firmware: ${{ steps.changes.outputs.firmware }}
       build_number: ${{ steps.buildnumber.outputs.value }}
+      firmware_version: ${{ steps.firmwaremeta.outputs.version }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -43,6 +44,12 @@ jobs:
             export CI_GENERATED_RELEASE=true
           fi
           node scripts/ci-changed-lanes.mjs
+      - name: Resolve the canonical firmware version
+        id: firmwaremeta
+        run: |
+          version="$(tr -d '\r\n' < firmware/lightweaver-controller/VERSION)"
+          node -e 'if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(process.argv[1])) process.exit(1)' "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       # Commit count of the tested revision — the same number GitHub prints as
       # "N Commits". The compiled binary and the signed manifest both take THIS
       # number, so a card and the published release can never disagree about
@@ -85,10 +92,17 @@ jobs:
           npm ci --prefix lightweaver
       - name: Verify signer-sensitive contracts
         run: npm run ci:firmware-sensitive --prefix lightweaver
+      - name: Require a progressing firmware version
+        env:
+          FW_VERSION: ${{ needs.classify.outputs.firmware_version }}
+        run: |
+          test "$(tr -d '\r\n' < firmware/lightweaver-controller/VERSION)" = "$FW_VERSION"
+          npm run firmware:version:check --prefix lightweaver -- --previous-production
       - name: Verify pinned firmware compiles with the tested identity
         env:
           LW_BUILD_ID: ${{ github.event.workflow_run.head_sha }}
           LW_BUILD_NUMBER: ${{ needs.classify.outputs.build_number }}
+          LW_FIRMWARE_VERSION: ${{ needs.classify.outputs.firmware_version }}
         run: |
           pio run -d firmware/lightweaver-controller -e esp32-s3-n16r8
           node firmware/lightweaver-controller/tests/card-identity-capabilities.mjs
@@ -103,6 +117,7 @@ jobs:
     env:
       SOURCE_REVISION: ${{ github.event.workflow_run.head_sha }}
       BUILD_NUMBER: ${{ needs.classify.outputs.build_number }}
+      FW_VERSION: ${{ needs.classify.outputs.firmware_version }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -124,16 +139,20 @@ jobs:
           restore-keys: pio-${{ runner.os }}-
       - name: Install PlatformIO
         run: pip install platformio==6.1.19
+      - name: Recheck firmware version before protected signing
+        run: |
+          test "$(tr -d '\r\n' < firmware/lightweaver-controller/VERSION)" = "$FW_VERSION"
+          npm run firmware:version:check --prefix lightweaver -- --previous-production
       - name: Rebuild tested factory binary
         env:
           LW_BUILD_ID: ${{ env.SOURCE_REVISION }}
           LW_BUILD_NUMBER: ${{ env.BUILD_NUMBER }}
+          LW_FIRMWARE_VERSION: ${{ env.FW_VERSION }}
         run: firmware/lightweaver-controller/scripts/build-factory-bin.sh
       - name: Build and sign immutable release set
         env:
           LIGHTWEAVER_RELEASE_SIGNING_KEY: ${{ secrets.LIGHTWEAVER_RELEASE_SIGNING_KEY }}
         run: |
-          FW_VERSION="$(sed -n 's/.*LW_FIRMWARE_VERSION=\\"\([^\\"]*\)\\".*/\1/p' firmware/lightweaver-controller/platformio.ini)"
           CONFIG_VERSION="$(sed -n 's/.*LW_CONFIG_SCHEMA_VERSION=\([0-9][0-9]*\).*/\1/p' firmware/lightweaver-controller/platformio.ini)"
           test -n "$FW_VERSION"
           test -n "$CONFIG_VERSION"
@@ -167,6 +186,7 @@ jobs:
           )
           RELEASE_INPUTS=(
             'firmware/lightweaver-controller/src/**'
+            'firmware/lightweaver-controller/VERSION'
             'firmware/lightweaver-controller/platformio.ini'
             'firmware/lightweaver-controller/scripts/**'
             'scripts/build-firmware-manifest.mjs'
