@@ -250,7 +250,7 @@ String studioOpenScript() {
              "u.hash='#screen=card&section=overview';url=u.href"
            "}catch(_){url='https://led.mandalacodes.com/?cardBridge=1&cardHost='+encodeURIComponent(location.host)+'#screen=card&section=overview'}"
            "let opener=null;try{if(lwBridgeLaunch&&window.opener&&!window.opener.closed)opener=window.opener}catch(_){}"
-           "if(opener){try{opener.focus()}catch(_){}return false}"
+           "if(opener){try{opener.location.href=url}catch(_){}try{opener.focus()}catch(_){}return false}"
            "const opened=window.open(url,'lightweaver-studio');"
            "if(!opened)alert('Allow pop-ups for this page, then tap Open Studio again.');"
            "else try{opened.focus()}catch(_){}"
@@ -370,6 +370,7 @@ String studioBridgeScript() {
                 "try{let response=null;"
                   "if(m.type==='status'||m.type==='ping'){response=await get('/api/status')}"
                   "else if(m.type==='zones'){response=await get('/api/zones')}"
+                  "else if(m.type==='patterns'){response=await get('/api/patterns')}"
                   // Blank-card port probe. GET lists the ports this card can light;
                   // POST pins one so the owner can ask a named port directly instead
                   // of waiting for the sweep to reach it. Relayed because the HTTPS
@@ -453,6 +454,7 @@ void handleRoot() {
             ".head{display:flex;justify-content:space-between;align-items:baseline}"
             ".head .title{font-size:13px;letter-spacing:2px;text-transform:uppercase;color:#9a8d75}"
             ".head .piece{font-size:13px;letter-spacing:0.5px;color:#c89b5c}"
+            ".card-origin{align-self:flex-start;border:1px solid #5a452d;border-radius:999px;padding:5px 9px;color:#c89b5c;font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase}"
             ".grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}"
             ".tile{position:relative;background:#141414;border:1px solid #262626;border-radius:12px;padding:8px;display:flex;flex-direction:column;gap:6px;cursor:pointer;overflow:hidden}"
             ".tile.active{border-color:#c89b5c}"
@@ -580,7 +582,7 @@ void handleRoot() {
     page += escapeHtml(cfg.pieceName);
     page += F("</span>");
   }
-  page += F("</div>");
+  page += F("</div><div class='card-origin'>On this Lightweaver card</div>");
   // AP-fallback with saved credentials: the card has a home network configured
   // but couldn't join it (wrong password, network down, out of range). Surface
   // that clearly instead of leaving the visitor on a dead end — offer a way to
@@ -853,6 +855,7 @@ void handleAdvancedRoot() {
             ".head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:28px}"
             "h1{font-size:22px;font-weight:500;letter-spacing:0.5px;margin:0}"
             ".piece{color:#9a8d75;font-size:13px;font-family:ui-monospace,SF Mono,monospace}"
+            ".card-origin{display:inline-flex;border:1px solid #5a452d;border-radius:999px;padding:5px 9px;margin:-16px 0 18px;color:#c89b5c;font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase}"
             ".card{background:#141414;border:1px solid #262626;border-radius:14px;padding:20px;margin-bottom:14px}"
             ".card h2{font-size:11px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:#9a8d75;margin:0 0 16px}"
             ".now{display:flex;align-items:center;gap:14px;margin-bottom:18px}"
@@ -924,7 +927,7 @@ void handleAdvancedRoot() {
     page += escapeHtml(cfg.pieceName);
     page += F("</span>");
   }
-  page += F("</div>");
+  page += F("</div><div class='card-origin'>On this Lightweaver card</div>");
 
   if (needsWifiSetup) {
     // First-time setup — only show the WiFi join form

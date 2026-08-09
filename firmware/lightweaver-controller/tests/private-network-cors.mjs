@@ -241,6 +241,10 @@ assert.match(
   /LightweaverCardBridge/,
   'card page should reply to Studio bridge messages after proxying local card commands',
 );
+assert.ok(
+  web.includes("m.type==='patterns'){response=await get('/api/patterns')"),
+  'card bridge should expose the bounded read-only pattern catalog to the Studio drawer',
+);
 assert.match(
   web,
   /cardBridge=1/,
@@ -322,8 +326,17 @@ assert.match(
   assert.equal(prevented, 1);
   assert.equal(opener.focusCalls, 1,
     'a card page opened by Studio should focus that exact installer/commissioning tab');
-  assert.equal(opener.location.href, 'https://led.mandalacodes.com/#screen=production',
-    'returning from the card must not navigate the existing Studio tab away from its active flow');
+  assert.equal(opener.location.href,
+    'https://led.mandalacodes.com/?cardBridge=1&cardHost=192.168.4.1#screen=card&section=overview',
+    'Open Studio must navigate the verified opener to the requested safe Card route');
+  opener.location.href = 'https://led.mandalacodes.com/#screen=production';
+  assert.equal(context.openStudio({ preventDefault() { prevented += 1; } },
+    'https://led.mandalacodes.com/?cardBridge=1&cardHost=192.168.4.1&editPattern=calm#screen=card&section=overview'), false);
+  assert.equal(prevented, 2);
+  assert.equal(opener.focusCalls, 2);
+  assert.equal(opener.location.href,
+    'https://led.mandalacodes.com/?cardBridge=1&cardHost=192.168.4.1&editPattern=calm#screen=card&section=overview',
+    'Edit in Studio must preserve the bounded pattern intent when navigating the verified opener');
   assert.deepEqual(openCalls, [],
     'a live Studio opener must be reused without opening or targeting another Studio window');
   assert.deepEqual(alerts, []);
@@ -375,6 +388,10 @@ assert.match(
 assert.ok(
   (web.match(/id='edit-studio'/g) || []).length >= 2,
   'both local card pages should expose a selected-pattern Edit in Studio button',
+);
+assert.ok(
+  (web.match(/On this Lightweaver card/g) || []).length >= 2,
+  'both local card pages must clearly identify themselves as controls served by the physical card',
 );
 assert.match(
   web,
