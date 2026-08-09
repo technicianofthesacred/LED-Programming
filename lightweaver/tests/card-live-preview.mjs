@@ -13,6 +13,7 @@ import {
   resetLiveOutputOnCard,
   stopCardLights,
   pushSectionPreviewToCard,
+  readCardPatternsFromCard,
   readCardZonesFromCard,
 } from '../src/lib/cardLiveControl.js';
 import { prepareCardStoragePayload } from '../src/lib/cardStoragePayload.js';
@@ -279,6 +280,27 @@ globalThis.fetch = async () => { throw new TypeError('network down'); };
 await assert.rejects(
   readCardZonesFromCard({ host: 'lightweaver.local', timeoutMs: 50 }),
   error => error?.reason === 'offline',
+);
+
+globalThis.fetch = async () => ({
+  ok: true,
+  json: async () => ({
+    currentId: 'aurora', currentIndex: 0,
+    patterns: [{ id: 'aurora', label: 'Aurora', mode: 'procedural', zones: [] }],
+  }),
+});
+assert.deepEqual(await readCardPatternsFromCard({ host: 'lightweaver.local', timeoutMs: 50 }), {
+  currentId: 'aurora', currentIndex: 0,
+  patterns: [{ id: 'aurora', label: 'Aurora', mode: 'procedural', zones: [] }],
+});
+globalThis.fetch = async () => ({
+  ok: true,
+  json: async () => ({ currentId: 'bad id', currentIndex: 0, patterns: [{ id: 'bad id', label: 'Bad', mode: 'procedural', zones: [] }] }),
+});
+await assert.rejects(
+  readCardPatternsFromCard({ host: 'lightweaver.local', timeoutMs: 50 }),
+  error => error?.reason === 'invalid-patterns',
+  'untrusted pattern data is rejected before the customer UI can render it',
 );
 
 assert.deepEqual(buildLiveHardwareControlPayload({ colorOrder: 'grb' }), {
@@ -908,6 +930,11 @@ const bridgeWindow = {
                 bootId: 'test-boot', runtimePhase: 'ready', knownGoodProject: true,
                 commandReady: true, outputReady: true,
               }
+              : message.type === 'patterns'
+                ? {
+                  currentId: 'aurora', currentIndex: 0,
+                  patterns: [{ id: 'aurora', label: 'Aurora', mode: 'procedural', zones: [] }],
+                }
               : { ok: true, bridged: true, cardId: 'lw-live-preview', patternId: message.payload?.patternId, padding: bridgeControlPadding },
         },
       });
@@ -959,6 +986,15 @@ assert.equal(bridgeMessages[0].targetOrigin, 'http://lightweaver.local');
 assert.equal(bridgeMessages[0].message.app, 'LightweaverStudioBridge');
 assert.equal(bridgeMessages[0].message.type, 'control');
 assert.equal(bridgeMessages[0].message.payload.patternId, 'ocean');
+
+bridgeMessages.length = 0;
+const bridgedPatterns = await readCardPatternsFromCard({ host: 'lightweaver.local', timeoutMs: 1000 });
+assert.deepEqual(bridgedPatterns, {
+  currentId: 'aurora',
+  currentIndex: 0,
+  patterns: [{ id: 'aurora', label: 'Aurora', mode: 'procedural', zones: [] }],
+}, 'a verified bridge reads the bounded card pattern list without direct fetch');
+assert.equal(bridgeMessages[0].message.type, 'patterns');
 
 bridgeControlPadding = 'x'.repeat(controlResponseLimit + 1);
 await assert.rejects(

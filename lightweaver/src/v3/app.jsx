@@ -6,6 +6,7 @@ import { ProjectProvider, useProject } from '../state/ProjectContext.jsx';
 import { CloudLibraryProvider, useCloudLibrary } from '../state/CloudLibraryContext.jsx';
 import { useCardStatus } from '../hooks/useCardStatus.js';
 import { CardConnectionCenter } from '../components/card/CardConnectionCenter.jsx';
+import { CardControlDrawer } from '../components/card/CardControlDrawer.jsx';
 import { CardStatusControl } from '../components/card/CardStatusControl.jsx';
 import { useFirmwareReleaseIdentity } from '../hooks/useFirmwareReleaseIdentity.js';
 import { ProjectLoadDialog, ProjectSaveDialog } from '../components/projects/TopBarProjectDialogs.jsx';
@@ -394,11 +395,16 @@ function FirmwareStatusControl({ status, installedBuildId, releaseBuildId, relea
     : <span {...common}>{status.label}</span>;
 }
 
-function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, firmwareStatus, firmwareRelease, firmwareReleaseError, onOpenFirmwareUpdate, testStrip, onToggleTestStrip, onTestStripLengthChange, runningStudioRelease, freshness }) {
+function StatusBar({ link, connectionCenterOpen, cardControlOpen, onOpenCardControl, firmwareStatus, firmwareRelease, firmwareReleaseError, onOpenFirmwareUpdate, testStrip, onToggleTestStrip, onTestStripLengthChange, runningStudioRelease, freshness }) {
   return (
     <footer className="status-bar">
       <div className="sb-card">
-        <CardStatusControl link={link} onOpen={onOpenConnectionCenter} open={connectionCenterOpen} />
+        <CardStatusControl
+          link={link}
+          onOpen={onOpenCardControl}
+          open={connectionCenterOpen || cardControlOpen}
+          dialogId={isCardLinkConnected(link) ? 'card-control-drawer' : 'card-connection-center'}
+        />
       </div>
 
       <span className="sb-spring" aria-hidden="true" />
@@ -486,6 +492,7 @@ function Shell() {
   const commissioningActiveRef = useRef(commissioningActive);
   const installRouteRef = useRef('#screen=card&section=install');
   const [connectionCenterOpen, setConnectionCenterOpen] = useState(false);
+  const [cardControlOpen, setCardControlOpen] = useState(false);
   // Every navigation in the shell goes through here: it moves the URL, and the
   // screen follows because it is derived from the URL. Nothing sets the screen
   // on its own, so nothing can leave the two disagreeing.
@@ -776,6 +783,20 @@ function Shell() {
   ), [cardLink.card, connected, firmwareReleaseIdentity.manifest, firmwareReleaseIdentity.state]);
   const openConnectionCenter = useCallback(() => setConnectionCenterOpen(true), []);
   const closeConnectionCenter = useCallback(() => setConnectionCenterOpen(false), []);
+  const openCardControl = useCallback(() => {
+    if (isCardLinkConnected(cardLink)) setCardControlOpen(true);
+    else setConnectionCenterOpen(true);
+  }, [cardLink]);
+  const closeCardControl = useCallback(() => setCardControlOpen(false), []);
+  const openAdvancedPattern = useCallback(patternId => {
+    const id = String(patternId || '').trim();
+    if (!id) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('editPattern', id);
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    setCardControlOpen(false);
+    navigateStudio('pattern');
+  }, [navigateStudio]);
   const clearBridgeResult = useCallback(outcome => {
     clearStoredBridgeResult();
     bridgeResultAcceptedRef.current = false;
@@ -1134,7 +1155,8 @@ function Shell() {
       <StatusBar
         link={cardLink}
         connectionCenterOpen={connectionCenterOpen}
-        onOpenConnectionCenter={openConnectionCenter}
+        cardControlOpen={cardControlOpen}
+        onOpenCardControl={openCardControl}
         firmwareStatus={firmwareStatus}
         firmwareRelease={firmwareReleaseIdentity.manifest}
         firmwareReleaseError={firmwareReleaseIdentity.error}
@@ -1164,6 +1186,13 @@ function Shell() {
           mode: cardStatus.status?.setupMode || cardStatus.status?.mode,
           setupNetwork: cardStatus.status?.setupNetwork,
         }}
+      />
+      <CardControlDrawer
+        open={cardControlOpen}
+        link={cardLink}
+        host={cardLink.host || cardStatus.host}
+        onClose={closeCardControl}
+        onAdvanced={openAdvancedPattern}
       />
       {loadDialogOpen && (
         <ProjectLoadDialog

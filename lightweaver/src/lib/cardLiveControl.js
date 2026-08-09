@@ -32,6 +32,9 @@ const MIRRORED_REPAIR_OUTPUT_PIN = 16;
 const MIRRORED_REPAIR_DEFAULT_PIXELS = 44;
 const MIRRORED_REPAIR_LOOK_IDS = ['fire', 'ripple', 'warm-white', 'aurora', 'plasma', 'ocean', 'rainbow', 'scanner'];
 const MAX_CONTROL_RESPONSE_BYTES = 8192;
+const MAX_CARD_PATTERNS = 48;
+const MAX_CARD_PATTERN_ZONES = 16;
+const CARD_PATTERN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const latestPreviewQueues = new Map();
 
 export const LIVE_CONTROL_AUTHORITY_MESSAGES = Object.freeze({
@@ -697,6 +700,83 @@ export async function readCardZonesFromCard(options = {}) {
   const host = options.host || readStoredCardHost();
   try {
     return await readCardZones(host, options.timeoutMs || 1200);
+  } catch (error) {
+    throw normalizePreviewError(host, error);
+  }
+}
+
+function hasVerifiedBridgeForHost(host) {
+  const bridge = getCardBridgeState();
+  return bridge?.connected === true
+    && bridge?.verified === true
+    && normalizeCardHost(bridge.host || '') === normalizeCardHost(host || '');
+}
+
+function boundedPatternText(value, fallback = '') {
+  const text = String(value ?? '').trim();
+  return text && text.length <= 96 ? text : fallback;
+}
+
+function normalizeCardPatternsPayload(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload) || !Array.isArray(payload.patterns)
+    || payload.patterns.length > MAX_CARD_PATTERNS) {
+    throw new CardPushError('invalid-patterns', 'The card returned an invalid pattern list.');
+  }
+  const seen = new Set();
+  const patterns = payload.patterns.map(pattern => {
+    const id = boundedPatternText(pattern?.id);
+    const label = boundedPatternText(pattern?.label);
+    const mode = boundedPatternText(pattern?.mode, 'procedural');
+    if (!CARD_PATTERN_ID.test(id) || !label || seen.has(id) || !CARD_PATTERN_ID.test(mode)
+      || !Array.isArray(pattern?.zones) || pattern.zones.length > MAX_CARD_PATTERN_ZONES) {
+      throw new CardPushError('invalid-patterns', 'The card returned an invalid pattern list.');
+    }
+    seen.add(id);
+    const zones = pattern.zones.map(zone => {
+      const zoneId = boundedPatternText(zone?.id);
+      const zoneLabel = boundedPatternText(zone?.label);
+      const patternId = boundedPatternText(zone?.patternId);
+      if (!CARD_PATTERN_ID.test(zoneId) || !zoneLabel || !CARD_PATTERN_ID.test(patternId)) {
+        throw new CardPushError('invalid-patterns', 'The card returned an invalid pattern list.');
+      }
+      return { id: zoneId, label: zoneLabel, patternId };
+    });
+    return { id, label, mode, zones };
+  });
+  const currentId = boundedPatternText(payload.currentId);
+  const currentIndex = Number(payload.currentIndex);
+  if (!patterns.length || !seen.has(currentId) || !Number.isInteger(currentIndex) || currentIndex < -1 || currentIndex >= patterns.length) {
+    throw new CardPushError('invalid-patterns', 'The card returned an invalid pattern list.');
+  }
+  return { currentId, currentIndex, patterns };
+}
+
+async function readCardPatterns(host, options = {}) {
+  const timeoutMs = options.timeoutMs || 1200;
+  if (hasVerifiedBridgeForHost(host)) {
+    return normalizeCardPatternsPayload(requireBoundedControlObject(await sendCardBridgeRequest('patterns', {}, { host, timeoutMs })));
+  }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${cardHostToUrl(host)}/api/patterns`, { signal: ctrl.signal });
+    const text = await readBoundedControlResponseText(response);
+    if (!response.ok) throw new CardPushError('http', `card returned ${response.status}: ${text || 'no body'}`);
+    try {
+      return normalizeCardPatternsPayload(JSON.parse(text));
+    } catch (error) {
+      if (error instanceof CardPushError) throw error;
+      throw new CardPushError('invalid-patterns', 'The card returned an invalid pattern list.', error);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function readCardPatternsFromCard(options = {}) {
+  const host = options.host || readStoredCardHost();
+  try {
+    return await readCardPatterns(host, options);
   } catch (error) {
     throw normalizePreviewError(host, error);
   }

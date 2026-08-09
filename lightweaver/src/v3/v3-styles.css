@@ -650,6 +650,30 @@ button.sb-firmware:hover { background: var(--bg-elev-2); color: var(--text-hi); 
   box-shadow: 0 12px 32px color-mix(in oklab, var(--bg-app) 72%, transparent);
 }
 .card-connection-center:focus { outline: none; }
+.card-control-layer { position: fixed; inset: 0; z-index: 80; display: flex; justify-content: flex-end; background: color-mix(in srgb, var(--bg-canvas) 45%, transparent); }
+.card-control-drawer { width: min(430px, 100vw); height: 100%; overflow: auto; overscroll-behavior: contain; padding: 22px; background: var(--bg-panel); border-left: 1px solid var(--border); box-shadow: -16px 0 44px color-mix(in srgb, var(--bg-canvas) 72%, transparent); }
+.card-control-drawer:focus { outline: none; }
+.card-control-head { display: flex; justify-content: space-between; gap: 16px; padding-bottom: 18px; border-bottom: 1px solid var(--border-hair); }
+.card-control-head p { margin: 0 0 4px; color: var(--text-lo); font-size: 10px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase; }
+.card-control-head h2 { margin: 0; color: var(--text-hi); font-size: 19px; line-height: 1.25; }
+.card-control-head span { display: block; margin-top: 4px; color: var(--ok); font-size: 12px; }
+.card-control-body { display: grid; gap: 20px; padding: 20px 0 4px; }
+.card-control-body section { display: grid; gap: 10px; }
+.card-control-body h3 { margin: 0; color: var(--text-hi); font-size: 13px; }
+.card-pattern-select { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 7px; }
+.card-pattern-select button, .card-pattern-select select, .card-control-actions .btn, .card-control-error .btn { min-height: 38px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-elev); color: var(--text-hi); padding: 0 10px; }
+.card-pattern-select button:disabled, .card-control-body input:disabled { opacity: .55; cursor: wait; }
+.card-control-sliders, .card-control-custom { border-top: 1px solid var(--border-hair); padding-top: 17px; }
+.card-control-sliders label, .card-control-custom > label:not(.card-control-toggle) { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; color: var(--text-mid); font-size: 12px; }
+.card-control-sliders input, .card-control-custom > label:not(.card-control-toggle) input { grid-column: 1 / -1; inline-size: 100%; accent-color: var(--accent-hi); }
+.card-control-sliders output, .card-control-custom output { color: var(--text-hi); font-family: var(--font-mono); font-size: 11px; }
+.card-control-toggle { display: flex; align-items: center; gap: 8px; color: var(--text-mid); font-size: 12px; }
+.card-control-toggle input { accent-color: var(--accent-hi); }
+.card-control-actions { display: flex; gap: 8px; justify-content: space-between; border-top: 1px solid var(--border-hair); padding-top: 17px; }
+.card-control-actions .primary { background: var(--accent); border-color: var(--accent-hi); color: var(--on-accent); }
+.card-control-loading { margin: 24px 0; color: var(--text-mid); }
+.card-control-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; padding: 11px; border: 1px solid color-mix(in srgb, var(--danger) 60%, var(--border)); border-radius: var(--r-sm); background: color-mix(in srgb, var(--danger) 10%, var(--bg-panel)); }
+.card-control-error p { margin: 0; color: var(--text-hi); font-size: 12px; line-height: 1.4; }
 .card-connection-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .card-connection-kicker {
   margin: 0 0 4px; color: var(--text-mid); font-size: 10px; font-weight: 600;
@@ -748,6 +772,8 @@ button.sb-firmware:hover { background: var(--bg-elev-2); color: var(--text-hi); 
 }
 @media (max-width: 640px) {
   .card-commissioning-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .card-control-layer { align-items: flex-end; }
+  .card-control-drawer { width: 100%; height: 100dvh; max-height: 100dvh; border-left: 0; border-top: 1px solid var(--border); border-radius: 18px 18px 0 0; padding: 18px max(16px, env(safe-area-inset-right)) calc(18px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
 }
 .card-connection-details { margin-top: 16px; padding-top: 13px; border-top: 1px solid var(--border-hair); }
 .card-connection-details summary { width: fit-content; cursor: pointer; color: var(--text-mid); font-size: 11.5px; }

@@ -32,7 +32,7 @@ export function cardConnectionStatus(link = {}) {
   return 'Not connected';
 }
 
-export function CardStatusControl({ link, onOpen, open = false }) {
+export function CardStatusControl({ link, onOpen, open = false, dialogId = 'card-connection-center' }) {
   const status = cardConnectionStatus(link);
   const connected = status === 'Connected';
   const accessibleName = connected
@@ -48,7 +48,7 @@ export function CardStatusControl({ link, onOpen, open = false }) {
         aria-label={accessibleName}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-controls="card-connection-center"
+        aria-controls={dialogId}
         data-testid="card-link-status"
       >
         <span className="card-status-dot" aria-hidden="true" />
