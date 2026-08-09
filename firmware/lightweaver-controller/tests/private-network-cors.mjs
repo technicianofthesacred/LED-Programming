@@ -224,6 +224,17 @@ for (const route of ['/api/status', '/api/firmware-info', '/api/patterns', '/api
 
 assert.match(
   web,
+  /p\["runtimePatternId"\]\s*=\s*cfg\.looks\[i\]\.preset\.length\(\)\s*\?\s*cfg\.looks\[i\]\.preset\s*:\s*cfg\.looks\[i\]\.id/,
+  '/api/patterns must expose the installed look\'s underlying editable runtime pattern',
+);
+assert.match(
+  web,
+  /controls\["customColor"\][\s\S]{0,300}controls\["breathe"\][\s\S]{0,300}controls\["drift"\]/,
+  '/api/patterns must expose truthful customer tuning capabilities',
+);
+
+assert.match(
+  web,
   /lwconfig/,
   'card page should accept public Studio config handoff fragments after Chrome blocks HTTPS-to-local HTTP writes',
 );
@@ -240,6 +251,10 @@ assert.match(
   web,
   /LightweaverCardBridge/,
   'card page should reply to Studio bridge messages after proxying local card commands',
+);
+assert.ok(
+  web.includes("m.type==='patterns'){response=await get('/api/patterns')"),
+  'card bridge should expose the bounded read-only pattern catalog to the Studio drawer',
 );
 assert.match(
   web,
@@ -259,6 +274,19 @@ assert.match(
   web,
   /function lwOpenStudio\(event,url\)/,
   'simple local card page should define the Studio click handoff as a global function callable from inline onclick',
+);
+assert.doesNotMatch(
+  web,
+  /target='lightweaver-studio'/,
+  'commissioning and recovery links must not bypass the verified Studio opener handoff',
+);
+assert.ok(
+  (web.match(/onclick=\\"return lwOpenStudio\(event,this\.href\)\\"/g) || []).length >= 3,
+  'live, commissioning, and recovery Studio links should all use the verified opener handoff',
+);
+assert.ok(
+  web.includes("!editing&&requested.hash==='#screen=layout'?'#screen=layout':'#screen=card&section=overview'"),
+  'bounded Studio handoff should preserve the commissioning layout destination',
 );
 assert.doesNotMatch(
   web,
@@ -322,8 +350,17 @@ assert.match(
   assert.equal(prevented, 1);
   assert.equal(opener.focusCalls, 1,
     'a card page opened by Studio should focus that exact installer/commissioning tab');
-  assert.equal(opener.location.href, 'https://led.mandalacodes.com/#screen=production',
-    'returning from the card must not navigate the existing Studio tab away from its active flow');
+  assert.equal(opener.location.href,
+    'https://led.mandalacodes.com/?cardBridge=1&cardHost=192.168.4.1#screen=layout',
+    'commissioning handoff must navigate the verified opener to the requested safe Layout route');
+  opener.location.href = 'https://led.mandalacodes.com/#screen=production';
+  assert.equal(context.openStudio({ preventDefault() { prevented += 1; } },
+    'https://led.mandalacodes.com/?cardBridge=1&cardHost=192.168.4.1&editPattern=calm#screen=card&section=overview'), false);
+  assert.equal(prevented, 2);
+  assert.equal(opener.focusCalls, 2);
+  assert.equal(opener.location.href,
+    'https://led.mandalacodes.com/?cardBridge=1&cardHost=192.168.4.1&editPattern=calm#screen=card&section=overview',
+    'Edit in Studio must preserve the bounded pattern intent when navigating the verified opener');
   assert.deepEqual(openCalls, [],
     'a live Studio opener must be reused without opening or targeting another Studio window');
   assert.deepEqual(alerts, []);
@@ -375,6 +412,10 @@ assert.match(
 assert.ok(
   (web.match(/id='edit-studio'/g) || []).length >= 2,
   'both local card pages should expose a selected-pattern Edit in Studio button',
+);
+assert.ok(
+  (web.match(/On this Lightweaver card/g) || []).length >= 2,
+  'both local card pages must clearly identify themselves as controls served by the physical card',
 );
 assert.match(
   web,

@@ -939,6 +939,7 @@ const parentBridge = {
         ok: true,
         cardId: 'lw-001122aabbcc',
         patternId: message.payload.patternId,
+        appliedPatternId: message.payload.patternId,
         revision: message.payload.revision,
         applied: message.payload,
       });

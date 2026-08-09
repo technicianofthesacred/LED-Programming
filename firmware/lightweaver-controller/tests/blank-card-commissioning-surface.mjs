@@ -74,12 +74,10 @@ assert.match(commissioningMarkup, /If you are viewing this from the Lightweaver 
   'commissioning must tell AP-connected operators to restore gallery WiFi before using Studio');
 assert.match(commissioningMarkup, /factoryBlank\s*\?\s*studioSetupUrl\(cfg\)\s*:\s*studioBridgeUrl\(cfg\)/,
   'factory blank must use setup while recovery retains the existing station-targeted Studio URL');
-assert.match(commissioningMarkup, /target='lightweaver-studio'/,
-  'commissioning must reuse the stable Studio window so session recovery remains available');
-assert.doesNotMatch(commissioningMarkup, /target='_blank'/,
-  'commissioning must not create an unrelated Studio browsing context');
-assert.doesNotMatch(commissioningMarkup, /lwOpenStudio/,
-  'commissioning CTA must not rewrite the station cardHost to the AP page location');
+assert.match(commissioningMarkup, /onclick=\\"return lwOpenStudio\(event,this\.href\)\\"/,
+  'commissioning must route through the verified Studio opener before using its named fallback');
+assert.doesNotMatch(commissioningMarkup, /target='lightweaver-studio'/,
+  'commissioning must not bypass the verified opener with a different named browsing context');
 assert.doesNotMatch(commissioningMarkup, /id='pw'|Save and join Wi|Pattern bank|id='brightness'/,
   'station-connected blank cards must not be asked for WiFi again or receive visitor controls');
 

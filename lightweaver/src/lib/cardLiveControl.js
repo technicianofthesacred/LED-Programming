@@ -22,6 +22,7 @@ import {
 } from './cardIdentity.js';
 import { reclaimCardFrameStreams } from './cardFrameStream.js';
 import { discoverCardWiring, getCardWiringStatus, rollbackCardWiringCandidate } from './cardWiringSafety.js';
+import { CUSTOMER_CONTROL_WIRE_FIELDS } from './cardCustomerControlContract.js';
 
 function isMixedContentBlocked() {
   return typeof window !== 'undefined' && !canPushDirectlyToCard(window.location.protocol);
@@ -32,6 +33,9 @@ const MIRRORED_REPAIR_OUTPUT_PIN = 16;
 const MIRRORED_REPAIR_DEFAULT_PIXELS = 44;
 const MIRRORED_REPAIR_LOOK_IDS = ['fire', 'ripple', 'warm-white', 'aurora', 'plasma', 'ocean', 'rainbow', 'scanner'];
 const MAX_CONTROL_RESPONSE_BYTES = 8192;
+const MAX_CARD_PATTERNS = 48;
+const MAX_CARD_PATTERN_ZONES = 16;
+const CARD_PATTERN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const latestPreviewQueues = new Map();
 
 export const LIVE_CONTROL_AUTHORITY_MESSAGES = Object.freeze({
@@ -277,10 +281,9 @@ export function requireLivePreviewAcknowledgement(response, look = {}, options =
   }
 
   const requestedPatternId = String(look?.patternId || '').trim();
-  const requestedRuntimePatternId = getCardPatternRuntimeId(requestedPatternId) || requestedPatternId;
-  const echoedPatternId = String(
-    response.patternId || response.confirmedPatternId || response.confirmedLook?.patternId || response.look?.patternId || '',
-  ).trim();
+  const requestedRuntimePatternId = String(options.exactCardPatternId || '').trim()
+    || getCardPatternRuntimeId(requestedPatternId) || requestedPatternId;
+  const echoedPatternId = String(response.appliedPatternId || '').trim();
   if (requestedRuntimePatternId && echoedPatternId && requestedRuntimePatternId !== echoedPatternId) {
     throw previewAckError('preview-mismatch', 'The card runtime reported a different pattern.');
   }
@@ -288,6 +291,21 @@ export function requireLivePreviewAcknowledgement(response, look = {}, options =
   const echoedRevision = acknowledgementRevision(response.revision ?? response.confirmedRevision);
   if (requestedRevision !== null && echoedRevision !== null && requestedRevision !== echoedRevision) {
     throw previewAckError('preview-mismatch', 'The card runtime reported a different preview revision.');
+  }
+  const expectedPatch = options.expectedControlPatch;
+  if (expectedPatch && typeof expectedPatch === 'object') {
+    const payload = buildLivePreviewControlPayload(look, options);
+    for (const key of Object.keys(expectedPatch)) {
+      const field = CUSTOMER_CONTROL_WIRE_FIELDS.find(candidate => candidate.control === key);
+      const expected = payload[field?.wire];
+      const actual = response[field?.acknowledgement];
+      const equal = typeof expected === 'number'
+        ? Number.isFinite(Number(actual)) && Math.abs(Number(actual) - expected) < 0.0001
+        : actual === expected;
+      if (!field || actual === undefined || !equal) {
+        throw previewAckError('control-field-unconfirmed', 'The card did not confirm every changed control.');
+      }
+    }
   }
   const hasConfirmedLook = Boolean(requestedRuntimePatternId && echoedPatternId === requestedRuntimePatternId);
   const hasConfirmedRevision = Boolean(requestedRevision !== null && echoedRevision === requestedRevision);
@@ -364,29 +382,39 @@ export function buildLiveHardwareControlPayload(settings = {}) {
   };
 }
 
-export function buildLivePreviewControlPayload(look = {}) {
+export function buildLivePreviewControlPayload(look = {}, options = {}) {
   const normalized = normalizeCardVisualLook(look);
-  const runtimePatternId = getCardPatternRuntimeId(normalized.patternId) || normalized.patternId;
+  const exactCardPatternId = String(options.exactCardPatternId || '').trim();
+  if (exactCardPatternId && (!CARD_PATTERN_ID.test(exactCardPatternId) || exactCardPatternId !== String(look.patternId || '').trim())) {
+    throw new CardPushError('invalid-pattern-id', 'The selected card pattern ID is invalid.');
+  }
+  const runtimePatternId = exactCardPatternId || getCardPatternRuntimeId(normalized.patternId) || normalized.patternId;
   const driftMin = Number(look.driftHueMin);
   const driftMax = Number(look.driftHueMax);
-  return {
-    cancelStream: true,
-    ...(look.zone ? { zone: String(look.zone) } : {}),
-    ...(typeof look.syncZones === 'boolean' ? { syncZones: look.syncZones } : {}),
-    ...(typeof look.blackout === 'boolean' ? { blackout: look.blackout } : {}),
+  const values = {
     patternId: runtimePatternId,
     brightness: normalized.brightness,
     speed: normalized.speed,
     hueShift: normalized.hueShift,
-    hue: normalized.customHue,
-    saturation: normalized.customSaturation,
-    breathe: normalized.customBreathe,
+    customHue: normalized.customHue,
+    customSaturation: normalized.customSaturation,
+    customBreathe: normalized.customBreathe,
     breatheLowerPct: normalized.breatheLowerPct,
     breatheUpperPct: normalized.breatheUpperPct,
     breatheCycleSeconds: normalized.breatheCycleSeconds,
-    drift: normalized.customDrift,
-    ...(Number.isFinite(driftMin) ? { driftMin: Math.max(0, Math.min(255, Math.trunc(driftMin))) } : {}),
-    ...(Number.isFinite(driftMax) ? { driftMax: Math.max(0, Math.min(255, Math.trunc(driftMax))) } : {}),
+    customDrift: normalized.customDrift,
+    ...(typeof look.blackout === 'boolean' ? { blackout: look.blackout } : {}),
+    ...(Number.isFinite(driftMin) ? { driftHueMin: Math.max(0, Math.min(255, Math.trunc(driftMin))) } : {}),
+    ...(Number.isFinite(driftMax) ? { driftHueMax: Math.max(0, Math.min(255, Math.trunc(driftMax))) } : {}),
+  };
+  const controlPayload = Object.fromEntries(CUSTOMER_CONTROL_WIRE_FIELDS.flatMap(field => (
+    values[field.control] === undefined ? [] : [[field.wire, values[field.control]]]
+  )));
+  return {
+    cancelStream: true,
+    ...(look.zone ? { zone: String(look.zone) } : {}),
+    ...(typeof look.syncZones === 'boolean' ? { syncZones: look.syncZones } : {}),
+    ...controlPayload,
   };
 }
 
@@ -678,16 +706,30 @@ async function postIdentifyToHost(host, options = {}) {
   }
 }
 
-async function readCardZones(host, timeoutMs = 1200) {
-  if (isMixedContentBlocked()) {
-    return sendCardBridgeRequest('zones', {}, { host, timeoutMs });
+async function readCardZones(host, input = {}) {
+  const options = typeof input === 'number' ? { timeoutMs: input } : input;
+  const timeoutMs = options.timeoutMs || 1200;
+  if (hasVerifiedBridgeForHost(host) || isMixedContentBlocked()) {
+    return requireBoundedControlObject(await sendCardBridgeRequest('zones', {}, { host, timeoutMs }));
+  }
+  if (options.verifyIdentity) {
+    await guardDirectCardMutation(host, {
+      fetchImpl: options.fetchImpl,
+      timeoutMs,
+      expected: options.expectedCardId ? { id: options.expectedCardId } : null,
+    });
   }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const response = await fetch(`${cardHostToUrl(host)}/api/zones`, { signal: ctrl.signal });
-    if (!response.ok) return null;
-    return await response.json().catch(() => null);
+    const text = await readBoundedControlResponseText(response);
+    if (!response.ok) throw new CardPushError('http', `card returned ${response.status}: ${text || 'no body'}`);
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      throw new CardPushError('invalid-zones', 'The card returned an invalid zone list.', error);
+    }
   } finally {
     clearTimeout(timer);
   }
@@ -696,7 +738,107 @@ async function readCardZones(host, timeoutMs = 1200) {
 export async function readCardZonesFromCard(options = {}) {
   const host = options.host || readStoredCardHost();
   try {
-    return await readCardZones(host, options.timeoutMs || 1200);
+    return await readCardZones(host, { ...options, verifyIdentity: true });
+  } catch (error) {
+    throw normalizePreviewError(host, error);
+  }
+}
+
+function hasVerifiedBridgeForHost(host) {
+  const bridge = getCardBridgeState();
+  return bridge?.connected === true
+    && bridge?.verified === true
+    && normalizeCardHost(bridge.host || '') === normalizeCardHost(host || '');
+}
+
+function boundedPatternText(value, fallback = '') {
+  const text = String(value ?? '').trim();
+  return text && text.length <= 96 ? text : fallback;
+}
+
+function normalizeCardPatternsPayload(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload) || !Array.isArray(payload.patterns)
+    || payload.patterns.length > MAX_CARD_PATTERNS) {
+    throw new CardPushError('invalid-patterns', 'The card returned an invalid pattern list.');
+  }
+  const seen = new Set();
+  const patterns = payload.patterns.map(pattern => {
+    const id = boundedPatternText(pattern?.id);
+    const label = boundedPatternText(pattern?.label);
+    const mode = boundedPatternText(pattern?.mode, 'procedural');
+    if (!CARD_PATTERN_ID.test(id) || !label || seen.has(id) || !CARD_PATTERN_ID.test(mode)
+      || !Array.isArray(pattern?.zones) || pattern.zones.length > MAX_CARD_PATTERN_ZONES) {
+      throw new CardPushError('invalid-patterns', 'The card returned an invalid pattern list.');
+    }
+    seen.add(id);
+    const zones = pattern.zones.map(zone => {
+      const zoneId = boundedPatternText(zone?.id);
+      const zoneLabel = boundedPatternText(zone?.label);
+      const patternId = boundedPatternText(zone?.patternId);
+      if (!CARD_PATTERN_ID.test(zoneId) || !zoneLabel || !CARD_PATTERN_ID.test(patternId)) {
+        throw new CardPushError('invalid-patterns', 'The card returned an invalid pattern list.');
+      }
+      return { id: zoneId, label: zoneLabel, patternId };
+    });
+    const runtimePatternId = boundedPatternText(pattern.runtimePatternId);
+    if (pattern.runtimePatternId !== undefined && (!runtimePatternId || !CARD_PATTERN_ID.test(runtimePatternId))) {
+      throw new CardPushError('invalid-patterns', 'The card returned an invalid pattern list.');
+    }
+    const controls = pattern.controls;
+    if (controls !== undefined && (!controls || typeof controls !== 'object' || Array.isArray(controls))) {
+      throw new CardPushError('invalid-patterns', 'The card returned an invalid pattern list.');
+    }
+    if (controls && ['customColor', 'breathe', 'drift'].some(key => controls[key] !== undefined && typeof controls[key] !== 'boolean')) {
+      throw new CardPushError('invalid-patterns', 'The card returned an invalid pattern list.');
+    }
+    return {
+      id, label, mode, ...(runtimePatternId ? { runtimePatternId } : {}), zones,
+      ...(controls ? { controls: {
+        customColor: controls.customColor === true,
+        breathe: controls.breathe === true,
+        drift: controls.drift === true,
+      } } : {}),
+    };
+  });
+  const currentId = boundedPatternText(payload.currentId);
+  const currentIndex = Number(payload.currentIndex);
+  if (!patterns.length || !seen.has(currentId) || !Number.isInteger(currentIndex) || currentIndex < -1 || currentIndex >= patterns.length) {
+    throw new CardPushError('invalid-patterns', 'The card returned an invalid pattern list.');
+  }
+  return { currentId, currentIndex, patterns };
+}
+
+async function readCardPatterns(host, options = {}) {
+  const timeoutMs = options.timeoutMs || 1200;
+  if (hasVerifiedBridgeForHost(host)) {
+    return normalizeCardPatternsPayload(requireBoundedControlObject(await sendCardBridgeRequest('patterns', {}, { host, timeoutMs })));
+  }
+  await guardDirectCardMutation(host, {
+    fetchImpl: options.fetchImpl,
+    timeoutMs,
+    expected: options.expectedCardId ? { id: options.expectedCardId } : null,
+  });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${cardHostToUrl(host)}/api/patterns`, { signal: ctrl.signal });
+    const text = await readBoundedControlResponseText(response);
+    if (!response.ok) throw new CardPushError('http', `card returned ${response.status}: ${text || 'no body'}`);
+    try {
+      return normalizeCardPatternsPayload(JSON.parse(text));
+    } catch (error) {
+      if (error instanceof CardPushError) throw error;
+      throw new CardPushError('invalid-patterns', 'The card returned an invalid pattern list.', error);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function readCardPatternsFromCard(options = {}) {
+  const host = options.host || readStoredCardHost();
+  try {
+    return await readCardPatterns(host, options);
   } catch (error) {
     throw normalizePreviewError(host, error);
   }
@@ -749,7 +891,11 @@ async function pushLivePreviewToHost(host, look, options = {}) {
   if (options.preferBridge || isMixedContentBlocked()) {
     return pushLivePreviewToBridge(host, look, options);
   }
-  const verifiedCard = await guardDirectCardMutation(host, { fetchImpl: options.fetchImpl, timeoutMs: options.timeoutMs || 2500 });
+  const verifiedCard = await guardDirectCardMutation(host, {
+    fetchImpl: options.fetchImpl,
+    timeoutMs: options.timeoutMs || 2500,
+    expected: options.expectedCardId ? { id: options.expectedCardId } : null,
+  });
   requireCurrentPreviewIntent(options);
   let previewLook = look;
   let previewZoneFallback = null;
@@ -772,7 +918,7 @@ async function pushLivePreviewToHost(host, look, options = {}) {
   }
   const url = `${cardHostToUrl(host)}/api/control`;
   const body = JSON.stringify({
-    ...buildLivePreviewControlPayload(previewLook),
+    ...buildLivePreviewControlPayload(previewLook, options),
     ...(options.revision !== undefined ? { revision: options.revision } : {}),
   });
   const ctrl = new AbortController();
@@ -828,7 +974,7 @@ async function pushLivePreviewToBridge(host, look, options = {}) {
   const json = requireBoundedControlObject(await sendCardBridgeRequest(
     'control',
     {
-      ...buildLivePreviewControlPayload(previewLook),
+      ...buildLivePreviewControlPayload(previewLook, options),
       ...(options.revision !== undefined ? { revision: options.revision } : {}),
     },
     { host, timeoutMs: options.timeoutMs || 2500 },
