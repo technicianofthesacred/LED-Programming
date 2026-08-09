@@ -1007,16 +1007,36 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
     <div className="screen card-workspace-screen">
       <div className="card-workspace">
         <nav className="card-section-nav" aria-label="Hardware sections">
-          {Object.entries(SECTION_LABELS).map(([key, label]) => (
-            <button
-              key={key}
-              type="button"
-              aria-current={route.section === key ? 'page' : undefined}
-              onClick={() => onOpenSection(key)}
-            >
-              {label}
-            </button>
-          ))}
+          <div className="card-section-mobile">
+            <span className="card-section-mobile-label" aria-hidden="true">Hardware</span>
+            <label className="card-section-select-wrap">
+              <select
+                aria-label="Hardware section"
+                value={SECTION_LABELS[route.section] ? route.section : ''}
+                onChange={event => event.target.value && onOpenSection(event.target.value)}
+              >
+                <option value="" disabled>Choose a section</option>
+                {Object.entries(SECTION_LABELS).map(([key, label]) => (
+                  <option key={key} value={key}>{label}</option>
+                ))}
+              </select>
+              <svg aria-hidden="true" viewBox="0 0 16 16" width="16" height="16">
+                <path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </label>
+          </div>
+          <div className="card-section-tabs">
+            {Object.entries(SECTION_LABELS).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                aria-current={route.section === key ? 'page' : undefined}
+                onClick={() => onOpenSection(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </nav>
         <main className={`card-workspace-body${setup ? ' lw-setup-body' : ''}`}>
           <header className="card-workspace-header">
