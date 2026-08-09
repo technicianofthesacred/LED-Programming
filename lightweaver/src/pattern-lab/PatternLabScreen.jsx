@@ -1192,7 +1192,7 @@ export default function PatternLabScreen() {
               <button id="plab-save-private" type="button" className="btn primary" disabled={!draft} onClick={saveDraft}>Save private draft</button>
               <button type="button" className="btn" disabled={!draft} onClick={exportRecipe}>Export recipe</button>
               <button type="button" className="btn" onClick={() => importRef.current?.click()}>Import recipe</button>
-              <input ref={importRef} className="plab-file-input" aria-label="Import recipe" type="file" accept=".lwrecipe.json,application/json" onChange={importRecipe} />
+              <input ref={importRef} className="plab-file-input" aria-label="Import recipe" aria-hidden="true" tabIndex={-1} type="file" accept=".lwrecipe.json,application/json" onChange={importRecipe} />
             </div>
           </aside>
         </section>
