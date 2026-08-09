@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 
 import { fingerprintCommissioningProject } from '../../lightweaver/src/lib/cardCommissioningFlow.js';
 import { buildCardRuntimePackageFromProject } from '../../lightweaver/src/lib/cardRuntimeProject.js';
+import { MINIMUM_PRODUCTION_FIRMWARE_VERSION } from '../../packages/installer-core/src/firmware-release.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -133,7 +134,7 @@ const source = {
     target: manifest.target,
     version: manifest.firmwareVersion,
     buildId: manifest.buildId,
-    minimumVersion: manifest.firmwareVersion,
+    minimumVersion: MINIMUM_PRODUCTION_FIRMWARE_VERSION,
   },
   project: {
     id: restoreSnapshot.id,
