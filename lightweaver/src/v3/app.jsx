@@ -364,12 +364,15 @@ function Rail({ view, navigate, openCard }) {
    site is running the newest code without decoding anything. That comparison
    is the whole question the beacon exists to answer. The exact revision stays
    in the hover title for anyone who needs to match it to a commit. */
-function freshnessPresentation(freshness) {
-  const exact = `Build ${freshness.buildNumber} · revision ${freshness.buildId}.`;
-  if (freshness.status === 'current') return { dot: 'on', title: `Studio is current. ${exact}` };
-  if (freshness.status === 'update-ready') return { dot: 'warn', title: `Studio update ready. ${exact} Refresh waits for the active card operation to finish. Reason: ${freshness.reason || 'operation-active'}.` };
-  if (freshness.status === 'unknown') return { dot: 'warn', title: `Studio freshness could not be verified. Running ${exact} Reason: ${freshness.reason || 'unknown'}.` };
-  return { dot: 'off', title: `Checking the current production Studio build. Running ${exact}` };
+function freshnessPresentation(runningRelease, freshness) {
+  const running = `Build ${runningRelease.buildNumber} · revision ${runningRelease.sourceRevision}.`;
+  if (freshness.status === 'current') return { dot: 'on', title: `Studio is current. ${running}` };
+  if (freshness.status === 'update-ready') {
+    const target = `Build ${freshness.buildNumber} · revision ${freshness.buildId}.`;
+    return { dot: 'warn', title: `Studio ${running} Update ready: ${target} Refresh waits for the active card operation to finish. Reason: ${freshness.reason || 'operation-active'}.` };
+  }
+  if (freshness.status === 'unknown') return { dot: 'warn', title: `Studio freshness could not be verified. Running ${running} Reason: ${freshness.reason || 'unknown'}.` };
+  return { dot: 'off', title: `Checking the current production Studio build. Running ${running}` };
 }
 
 function FirmwareStatusControl({ status, installedBuildId, releaseBuildId, releaseError, onOpenFirmwareUpdate }) {
@@ -391,7 +394,7 @@ function FirmwareStatusControl({ status, installedBuildId, releaseBuildId, relea
     : <span {...common}>{status.label}</span>;
 }
 
-function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, firmwareStatus, firmwareRelease, firmwareReleaseError, onOpenFirmwareUpdate, testStrip, onToggleTestStrip, onTestStripLengthChange, freshness }) {
+function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, firmwareStatus, firmwareRelease, firmwareReleaseError, onOpenFirmwareUpdate, testStrip, onToggleTestStrip, onTestStripLengthChange, runningStudioRelease, freshness }) {
   return (
     <footer className="status-bar">
       <div className="sb-card">
@@ -406,15 +409,32 @@ function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, firmwar
         onOpenFirmwareUpdate={onOpenFirmwareUpdate}
       />
 
+      {(() => {
+        const presentation = freshnessPresentation(runningStudioRelease, freshness);
+        return (
+          <div
+            className={`sb-freshness is-${freshness.status}`}
+            data-testid="studio-freshness"
+            title={presentation.title}
+            aria-label={presentation.title}
+            tabIndex={0}
+          >
+            <span className={`sb-dot ${presentation.dot}`} aria-hidden="true" />
+            <span>Studio {runningStudioRelease.buildNumber}</span>
+          </div>
+        );
+      })()}
+
       <div className={`sb-teststrip${testStrip.enabled ? ' is-active' : ''}`} data-testid="test-strip-control">
         <button
           type="button"
           className={"sb-ts-toggle" + (testStrip.enabled ? " on" : "")}
           onClick={() => onToggleTestStrip(!testStrip.enabled)}
           aria-pressed={testStrip.enabled}
+          aria-label={testStrip.enabled ? 'Stop testing strip' : 'Test strip'}
           title="Bench-test on a short strip without changing your saved design"
         >
-          Test strip
+          {testStrip.enabled ? `Testing ${testStrip.length} LEDs` : 'Test strip'}
         </button>
         {testStrip.enabled && (
           <>
@@ -427,28 +447,9 @@ function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, firmwar
               onChange={(e) => onTestStripLengthChange(e.target.value)}
               aria-label="Test strip LED count"
             />
-            <span>LEDs</span>
-            <span className="sb-ts-note">Testing on {testStrip.length} LEDs (your design is unchanged).</span>
           </>
         )}
       </div>
-
-      <div className="sb-spring" />
-
-      {(() => {
-        const presentation = freshnessPresentation(freshness);
-        return (
-          <div
-            className={`sb-freshness is-${freshness.status}`}
-            data-testid="studio-freshness"
-            title={presentation.title}
-            aria-label={presentation.title}
-          >
-            <span className={`sb-dot ${presentation.dot}`} aria-hidden="true" />
-            <span>Studio {freshness.buildNumber}</span>
-          </div>
-        );
-      })()}
     </footer>
   );
 }
@@ -1139,6 +1140,7 @@ function Shell() {
         testStrip={testStrip}
         onToggleTestStrip={onToggleTestStrip}
         onTestStripLengthChange={onTestStripLengthChange}
+        runningStudioRelease={runningStudioReleaseRef.current}
         freshness={freshness}
       />
       <CardConnectionCenter

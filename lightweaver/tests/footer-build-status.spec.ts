@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 
@@ -6,7 +7,28 @@ const release = JSON.parse(await readFile(new URL('../public/firmware/release-ma
 const studioRevision = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 const studioBuild = Number(execFileSync('git', ['rev-list', '--count', 'HEAD'], { encoding: 'utf8' }).trim());
 
-async function openStudio(page, card = null) {
+function currentStudioMarker() {
+  return {
+    schemaVersion: 1,
+    sourceRevision: studioRevision,
+    buildId: studioRevision.slice(0, 12),
+    buildNumber: studioBuild,
+  };
+}
+
+function studioBuildGraph(marker) {
+  const markerText = `${JSON.stringify(marker)}\n`;
+  return {
+    schemaVersion: 1,
+    files: [
+      { path: 'assets/footer-ready.js', bytes: 1, sha256: '1'.repeat(64) },
+      { path: 'index.html', bytes: 1, sha256: '2'.repeat(64) },
+      { path: 'studio-release.json', bytes: Buffer.byteLength(markerText), sha256: createHash('sha256').update(markerText).digest('hex') },
+    ],
+  };
+}
+
+async function openStudio(page, card = null, { marker = currentStudioMarker(), releaseUnknown = false } = {}) {
   if (card) {
     await page.addInitScript(({ buildNumber, buildId }) => {
       localStorage.setItem('lw_card_identity_v1', JSON.stringify({
@@ -23,13 +45,18 @@ async function openStudio(page, card = null) {
     status: 200,
     contentType: 'application/json',
     headers: { 'cache-control': 'no-store' },
-    body: `${JSON.stringify({
-      schemaVersion: 1,
-      sourceRevision: studioRevision,
-      buildId: studioRevision.slice(0, 12),
-      buildNumber: studioBuild,
-    })}\n`,
+    body: `${JSON.stringify(marker)}\n`,
   }));
+  await page.route('**/studio-build-graph.json', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    headers: { 'cache-control': 'no-store' },
+    body: `${JSON.stringify(studioBuildGraph(marker))}\n`,
+  }));
+  await page.route('**/assets/footer-ready.js', route => route.fulfill({ status: 200, body: 'x' }));
+  if (releaseUnknown) {
+    await page.route('**/firmware/release-manifest.sig', route => route.fulfill({ status: 200, body: 'invalid' }));
+  }
   const cardRoute = route => card
     ? route.fulfill({
         status: 200,
@@ -74,7 +101,26 @@ test('footer reduces telemetry to card, firmware, Studio and Test strip controls
   await expect(page.getByLabel('Test strip LED count')).toHaveCount(0);
   await page.getByRole('button', { name: 'Test strip' }).click();
   await expect(page.getByLabel('Test strip LED count')).toBeVisible();
-  await expect(page.getByTestId('test-strip-control')).toContainText('your design is unchanged');
+  await expect(page.getByRole('button', { name: 'Stop testing strip' })).toHaveText('Testing 30 LEDs');
+  await expect(page.getByTestId('test-strip-control')).not.toContainText('your design is unchanged');
+});
+
+test('desktop footer is one row in Card, Firmware, Studio, Test strip order', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openStudio(page, { buildNumber: release.buildNumber, buildId: release.buildId });
+
+  const layout = await page.locator('.status-bar').evaluate(node => {
+    const selectors = ['.sb-card', '[data-testid="footer-firmware-status"]', '[data-testid="studio-freshness"]', '[data-testid="test-strip-control"]'];
+    const boxes = selectors.map(selector => node.querySelector(selector)?.getBoundingClientRect());
+    return {
+      order: [...node.children].map(child => child.matches('.sb-card') ? 'card' : child.getAttribute('data-testid')).filter(Boolean),
+      centers: boxes.map(box => Math.round(box.top + (box.height / 2))),
+      lefts: boxes.map(box => box.left),
+    };
+  });
+  expect(layout.order).toEqual(['card', 'footer-firmware-status', 'studio-freshness', 'test-strip-control']);
+  expect(new Set(layout.centers).size).toBe(1);
+  expect(layout.lefts).toEqual([...layout.lefts].sort((a, b) => a - b));
 });
 
 test('outdated firmware opens the canonical install route without starting hardware work', async ({ page }) => {
@@ -104,4 +150,48 @@ test('phone footer keeps firmware and Studio identities visible without overflow
     scrollWidth: node.scrollWidth,
   }));
   expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
+});
+
+test('footer exposes a legacy card as an actionable update', async ({ page }) => {
+  await openStudio(page, { buildNumber: 0, buildId: 'a'.repeat(40) });
+  await expect(page.getByTestId('footer-firmware-status')).toHaveText(`Card legacy → ${release.buildNumber}`);
+});
+
+test('footer exposes a newer development card without offering an update', async ({ page }) => {
+  await openStudio(page, { buildNumber: release.buildNumber + 6, buildId: 'd'.repeat(40) });
+  const status = page.getByTestId('footer-firmware-status');
+  await expect(status).toHaveText(`Card ${release.buildNumber + 6} · release ${release.buildNumber}`);
+  await expect(status).not.toHaveRole('button');
+});
+
+test('footer fails closed when the signed release cannot be verified', async ({ page }) => {
+  await openStudio(page, { buildNumber: release.buildNumber, buildId: release.buildId }, { releaseUnknown: true });
+  await expect(page.getByTestId('footer-firmware-status')).toHaveText(`Card ${release.buildNumber} · release unknown`);
+  await expect(page.getByTestId('footer-firmware-status')).toHaveAttribute('data-state', 'release-unknown');
+});
+
+test('disconnected footer names the available signed firmware release', async ({ page }) => {
+  await openStudio(page);
+  await expect(page.getByTestId('footer-firmware-status')).toHaveText(`Firmware ${release.buildNumber} available`);
+});
+
+test('update-ready Studio keeps showing the build actually open', async ({ page }) => {
+  const marker = currentStudioMarker();
+  await page.addInitScript(() => {
+    sessionStorage.clear();
+    (window as any).__LW_STUDIO_RELOAD_FOR_TEST__ = () => {};
+  });
+  await openStudio(page, null, { marker });
+  const studio = page.getByTestId('studio-freshness');
+  await expect(studio).toHaveClass(/is-current/);
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('lw-hardware-operation-active', { detail: { active: true } })));
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  marker.sourceRevision = 'b'.repeat(40);
+  marker.buildId = marker.sourceRevision.slice(0, 12);
+  marker.buildNumber = studioBuild + 1;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+
+  await expect(studio).toHaveText(`Studio ${studioBuild}`);
+  await expect(studio).toHaveAttribute('aria-label', new RegExp(`Build ${studioBuild + 1}.*revision ${'b'.repeat(12)}`));
+  await expect(studio).toHaveAttribute('tabindex', '0');
 });
