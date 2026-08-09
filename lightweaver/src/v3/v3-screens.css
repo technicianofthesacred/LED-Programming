@@ -21,17 +21,19 @@
   display: grid; grid-template-rows: auto minmax(0, 1fr);
 }
 .card-section-nav {
-  min-width: 0; display: flex; flex-wrap: wrap; gap: 4px;
+  min-width: 0;
   padding: 10px clamp(12px, 2.5vw, 28px);
   border-bottom: 1px solid var(--border-hair); background: var(--bg-panel);
 }
-.card-section-nav button {
+.card-section-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.card-section-mobile { display: none; }
+.card-section-tabs button {
   min-height: 36px; padding: 7px 11px; border: 1px solid transparent;
   border-radius: var(--r-sm); color: var(--text-lo); font-size: 12px; font-weight: 550;
   white-space: nowrap;
 }
-.card-section-nav button:hover { color: var(--text-hi); background: var(--bg-elev); }
-.card-section-nav button[aria-current="page"] {
+.card-section-tabs button:hover { color: var(--text-hi); background: var(--bg-elev); }
+.card-section-tabs button[aria-current="page"] {
   color: var(--text-hi); border-color: var(--accent-line); background: var(--accent-soft);
 }
 .card-workspace-body {
@@ -110,8 +112,30 @@
 .prod-embedded .prod-handoff { width: 100%; margin: 0; }
 
 @media (max-width: 720px) {
-  .card-section-nav { flex-wrap: wrap; overflow-x: hidden; }
-  .card-section-nav button { min-height: 44px; }
+  .card-section-nav { padding: 8px 12px; overflow-x: hidden; }
+  .card-section-tabs { display: none; }
+  .card-section-mobile {
+    min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr);
+    align-items: center; gap: 12px;
+  }
+  .card-section-mobile-label {
+    color: var(--text-lo); font-family: var(--font-mono); font-size: 10px;
+    font-weight: 650; letter-spacing: .1em; text-transform: uppercase;
+  }
+  .card-section-select-wrap { min-width: 0; position: relative; display: block; }
+  .card-section-select-wrap select {
+    width: 100%; height: 46px; padding: 0 42px 0 14px;
+    appearance: none; border: 1px solid var(--accent-line); border-radius: var(--r-md);
+    background: var(--accent-soft); color: var(--text-hi); font: inherit;
+    font-size: 14px; font-weight: 650; cursor: pointer;
+  }
+  .card-section-select-wrap select:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  .card-section-select-wrap svg {
+    position: absolute; top: 50%; right: 14px; translate: 0 -50%;
+    color: var(--accent); pointer-events: none;
+  }
   .card-workspace-body { padding: 18px 12px 42px; }
   .card-setup-steps { grid-template-columns: minmax(0, 1fr); }
   .card-setup-steps li { border-right: 0; border-bottom: 1px solid var(--border-soft); }

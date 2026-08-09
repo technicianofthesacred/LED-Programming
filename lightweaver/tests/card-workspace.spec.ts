@@ -1313,22 +1313,30 @@ test('Hardware offers an exact current project without intent and auto-opens onl
   await expect(page).toHaveURL(/#screen=pattern$/, { timeout: 25_000 });
 });
 
-test('Card section navigation wraps without page overflow on a 390px viewport', async ({ page }) => {
+test('Card section navigation becomes one compact switcher on a 390px viewport', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
 
   const sections = page.getByRole('navigation', { name: 'Hardware sections' });
+  const switcher = sections.getByLabel('Hardware section');
+  await expect(switcher).toBeVisible();
+  await expect(switcher).toHaveValue('overview');
+  expect(await switcher.evaluate(element => Number.parseFloat(getComputedStyle(element).height))).toBeGreaterThanOrEqual(44);
+
+  for (const label of ['Setup', 'Card status', 'Install or update', 'Hardware settings', 'Advanced & Support', 'Preferences']) {
+    await expect(switcher.getByRole('option', { name: label, exact: true })).toHaveCount(1);
+    await expect(sections.getByRole('button', { name: label, exact: true })).toBeHidden();
+  }
+
+  await switcher.selectOption('setup');
+  await expect(page).toHaveURL(/#screen=card&section=setup$/);
+  await expect(page.getByRole('heading', { name: 'Set up your Lightweaver', level: 1 })).toBeFocused();
+
   const dimensions = await sections.evaluate(node => ({
     clientWidth: node.clientWidth,
     scrollWidth: node.scrollWidth,
   }));
   expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
-
-  for (const label of ['Setup', 'Card status', 'Install or update', 'Hardware settings', 'Advanced & Support', 'Preferences']) {
-    const button = sections.getByRole('button', { name: label, exact: true });
-    await expect(button).toBeVisible();
-    await expect(button).toBeInViewport();
-  }
 
   const pageWidth = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
