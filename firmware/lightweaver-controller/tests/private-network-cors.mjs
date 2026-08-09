@@ -32,6 +32,44 @@ assert.notEqual(bridgeLaunchEnd, -1, 'bridge should validate its launch fragment
 const emittedBridgeLaunch = [...web.slice(bridgeStart, bridgeLaunchEnd).matchAll(/"(?:\\.|[^"\\])*"/g)]
   .map(match => JSON.parse(match[0]))
   .join('');
+assert.match(emittedBridgeLaunch, /const lwBridgeUtilityIntent=/,
+  'bridge launch parsing must define the bounded first-load utility intent before ready handling');
+
+function bridgeUtilityLaunch(hash) {
+  const context = {
+    URLSearchParams,
+    location: { hash },
+    window: { opener: { closed: false } },
+  };
+  vm.runInNewContext(
+    `${emittedBridgeLaunch};globalThis.hasLaunch=!!lwBridgeLaunch;globalThis.utilityIntent=lwBridgeUtilityIntent()`,
+    context,
+  );
+  return { hasLaunch: context.hasLaunch, utilityIntent: context.utilityIntent };
+}
+
+assert.deepEqual(
+  bridgeUtilityLaunch('#studioBridge=1&studioOrigin=https%3A%2F%2Fled.mandalacodes.com&bridgeUtility=1'),
+  { hasLaunch: true, utilityIntent: true },
+  'one exact bridgeUtility=1 flag on the verified bridge-only launch must activate the passive utility on first load',
+);
+assert.deepEqual(
+  bridgeUtilityLaunch('#studioBridge=1&studioOrigin=https%3A%2F%2Fled.mandalacodes.com'),
+  { hasLaunch: true, utilityIntent: false },
+  'a verified visible card-page launch without utility intent must stay visible',
+);
+for (const hash of [
+  '#studioBridge=1&studioOrigin=https%3A%2F%2Fled.mandalacodes.com&bridgeUtility=0',
+  '#studioBridge=1&studioOrigin=https%3A%2F%2Fled.mandalacodes.com&bridgeUtility=1&bridgeUtility=1',
+]) {
+  assert.deepEqual(bridgeUtilityLaunch(hash), { hasLaunch: false, utilityIntent: false },
+    'invalid or duplicate bridgeUtility values must invalidate the bridge launch');
+}
+assert.deepEqual(
+  bridgeUtilityLaunch('#studioBridge=1&studioOrigin=https%3A%2F%2Fled.mandalacodes.com&bridgeUtility=1&unexpected=1'),
+  { hasLaunch: true, utilityIntent: false },
+  'utility intent must reject unknown fragment fields instead of turning a visible card page passive',
+);
 
 const trustedOrigins = [
   'https://led.mandalacodes.com',
@@ -285,8 +323,8 @@ assert.ok(
   'live, commissioning, and recovery Studio links should all use the verified opener handoff',
 );
 assert.ok(
-  web.includes("!editing&&requested.hash==='#screen=layout'?'#screen=layout':'#screen=card&section=overview'"),
-  'bounded Studio handoff should preserve the commissioning layout destination',
+  web.includes("!editing&&requested.hash==='#screen=layout'?'#screen=layout':!editing&&requested.hash==='#screen=card&section=setup'?'#screen=card&section=setup':'#screen=card&section=overview'"),
+  'bounded Studio handoff should preserve both the Layout and guided Setup destinations',
 );
 assert.doesNotMatch(
   web,
