@@ -6,8 +6,6 @@ import { readCardProjectEvidence, readCardStatusEnvelope } from '../lib/cardPush
 import { resolveCardProject, describeResolvedCardProject } from '../lib/cardProjectResolver.js';
 import { isBenchProjectEvidence } from '../lib/benchConfig.js';
 import { projectSkeletonFromCardStatus } from '../lib/discoveryCommit.js';
-import { sweepKnownSubnetsForCard } from '../lib/cardConnection.js';
-import { acquireCardBridgeFromGesture, cancelReservedCardBridgeWindow, reserveCardBridgeWindow } from '../lib/cardBridge.js';
 import { cardConnectionStatus } from '../components/card/CardStatusControl.jsx';
 import { useProject } from '../state/ProjectContext.jsx';
 
@@ -52,9 +50,7 @@ export function SetupScreen({
   const [commissioningFlow, setCommissioningFlow] = useState(() => inspectCardCommissioning().flow);
   const [cardState, setCardState] = useState({ evidence: null, status: null, read: false });
   const [resolution, setResolution] = useState({ kind: 'unknown' });
-  const [finding, setFinding] = useState({ busy: false, message: '' });
   const importRef = useRef(null);
-  const findRequestRef = useRef({ generation: 0, reservedWindow: null });
   const resolveInputsRef = useRef({ currentProject, activeCloudProjects, browserProjects });
   const previousPhaseRef = useRef('');
   resolveInputsRef.current = { currentProject, activeCloudProjects, browserProjects };
@@ -70,15 +66,6 @@ export function SetupScreen({
       window.removeEventListener('storage', sync);
       window.removeEventListener(CARD_COMMISSIONING_CHANGED_EVENT, sync);
     };
-  }, []);
-
-  // A reservation that never became the verified bridge belongs to this card
-  // search and is safe to close. An acquired bridge is deliberately absent
-  // here: Setup, Layout and install share it until explicit disconnect.
-  useEffect(() => () => {
-    const active = findRequestRef.current;
-    findRequestRef.current = { generation: active.generation + 1, reservedWindow: null };
-    cancelReservedCardBridgeWindow(active.reservedWindow);
   }, []);
 
   const applyCardParts = (parts, status = null) => {
@@ -184,68 +171,6 @@ export function SetupScreen({
 
   const go = hash => { window.location.hash = hash; };
 
-  const findMyCard = async () => {
-    const previous = findRequestRef.current;
-    cancelReservedCardBridgeWindow(previous.reservedWindow);
-    const generation = previous.generation + 1;
-    const reservedWindow = reserveCardBridgeWindow();
-    findRequestRef.current = { generation, reservedWindow };
-    const isCurrent = () => findRequestRef.current.generation === generation;
-    const releaseReservation = () => {
-      cancelReservedCardBridgeWindow(reservedWindow);
-      if (isCurrent()) findRequestRef.current = { generation, reservedWindow: null };
-    };
-    if (!reservedWindow) {
-      setFinding({ busy: false, message: 'Allow the Lightweaver card window, then try again.' });
-      return;
-    }
-    setFinding({ busy: true, message: 'Looking for your card on your network…' });
-    let found;
-    try {
-      found = await sweepKnownSubnetsForCard({
-        onProgress: message => isCurrent() && setFinding({ busy: true, message }),
-      });
-    } catch {
-      if (!isCurrent()) return;
-      releaseReservation();
-      setFinding({ busy: false, message: 'Could not search your network from here. Connect by hand instead.' });
-      return;
-    }
-    if (!isCurrent()) { releaseReservation(); return; }
-    if (!found) {
-      releaseReservation();
-      setFinding({ busy: false, message: 'No card answered. Check its power and Wi-Fi, then try again.' });
-      return;
-    }
-    setFinding({ busy: true, message: `Found it at ${found.host}. Connecting…` });
-    try {
-      const attempt = acquireCardBridgeFromGesture(found.host, {
-        reservedWindow,
-        acceptDiscovered: true,
-        timeoutMs: 15000,
-      });
-      findRequestRef.current = { generation, reservedWindow: null };
-      await attempt.ready;
-      if (!isCurrent()) return;
-      setFinding({ busy: false, message: `Found it at ${found.host}. Connected.` });
-      onOpenConnectionCenter?.();
-    } catch (error) {
-      if (!isCurrent()) return;
-      releaseReservation();
-      const reason = String(error?.reason || '');
-      setFinding({
-        busy: false,
-        message: reason === 'popup-blocked'
-          ? 'Allow the Lightweaver card window, then try again.'
-          : reason === 'bridge-timeout'
-            ? 'The card was found, but its page did not answer Studio. Check the card window and try again.'
-            : reason === 'bridge-closed'
-              ? 'The card was found, but its reserved window was closed. Try Find my card again.'
-              : 'The card was found, but Studio could not verify its identity. Connect by hand instead.',
-      });
-    }
-  };
-
   const startFromCard = () => applyCardParts(
     projectSkeletonFromCardStatus(cardState.status || cardLink?.readiness || {}),
     cardState.status,
@@ -276,10 +201,9 @@ export function SetupScreen({
         <div className="lw-setup-task" data-testid="setup-active-task">
           {blocker === 'firmware' && <p role="status">This exact card needs Lightweaver firmware before setup can continue.</p>}
           {blocker === 'wifi' && <p role="status">The exact card is on its setup network. Finish Wi-Fi, then return here.</p>}
-          <button type="button" className="btn primary" data-testid="setup-connect-card" disabled={finding.busy} onClick={findMyCard}>
-            {finding.busy ? 'Finding your card…' : 'Find my card'}
+          <button type="button" className="btn primary" data-testid="setup-connect-card" onClick={() => onOpenConnectionCenter?.()}>
+            Find my card
           </button>
-          {finding.message && <p className="lw-setup-note" data-testid="setup-find-status" role="status">{finding.message}</p>}
           <button type="button" className="btn" data-testid="setup-connect-manual" onClick={() => onOpenConnectionCenter?.()}>Connect by address</button>
           {blocker === 'firmware' && <button type="button" className="btn" onClick={() => go('#screen=card&section=install')}>Install or update firmware</button>}
           {blocker === 'wifi' && <button type="button" className="btn" onClick={() => onOpenConnectionCenter?.()}>Continue Wi-Fi setup</button>}

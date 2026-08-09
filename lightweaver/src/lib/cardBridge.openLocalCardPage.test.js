@@ -136,7 +136,11 @@ test('a gesture-reserved card window navigates to a discovered host without a se
 
   const reserved = reserveCardBridgeWindow();
   assert.equal(reserved, tab, 'the user gesture reserves the stable named tab');
-  assert.deepEqual(opened, [{ url: '', name: CARD_BRIDGE_WINDOW_NAME, features: undefined }]);
+  assert.deepEqual(opened, [{
+    url: '',
+    name: CARD_BRIDGE_WINDOW_NAME,
+    features: CARD_BRIDGE_UTILITY_WINDOW_FEATURES,
+  }]);
 
   const attempt = acquireCardBridgeFromGesture(host, {
     reservedWindow: reserved,
