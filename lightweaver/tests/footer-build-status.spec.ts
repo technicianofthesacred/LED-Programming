@@ -117,12 +117,19 @@ test('desktop footer is one row in Card, Firmware, Studio, Test strip order', as
       centers: boxes.map(box => Math.round(box.top + (box.height / 2))),
       lefts: boxes.map(box => box.left),
       cardWidth: boxes[0].width,
+      cardRight: boxes[0].right,
+      firmwareLeft: boxes[1].left,
+      testRight: boxes[3].right,
+      footerWidth: node.getBoundingClientRect().width,
+      footerRight: node.getBoundingClientRect().right,
     };
   });
   expect(layout.order).toEqual(['card', 'footer-firmware-status', 'studio-freshness', 'test-strip-control']);
   expect(new Set(layout.centers).size).toBe(1);
   expect(layout.lefts).toEqual([...layout.lefts].sort((a, b) => a - b));
   expect(layout.cardWidth).toBeLessThan(300);
+  expect(layout.firmwareLeft - layout.cardRight).toBeGreaterThan(layout.footerWidth * 0.25);
+  expect(layout.footerRight - layout.testRight).toBeLessThanOrEqual(16);
 });
 
 test('outdated firmware opens the canonical install route without starting hardware work', async ({ page }) => {
@@ -134,7 +141,10 @@ test('outdated firmware opens the canonical install route without starting hardw
   });
   await openStudio(page, { buildNumber: release.buildNumber - 1, buildId: 'a'.repeat(40) });
 
-  await page.getByTestId('footer-firmware-status').click();
+  const firmware = page.getByTestId('footer-firmware-status');
+  await expect(firmware).toHaveText(`Card firmware ${release.buildNumber - 1} → ${release.buildNumber}`);
+  await expect(firmware).toHaveRole('button');
+  await firmware.click();
 
   await expect(page).toHaveURL(/#screen=card&section=install$/);
   expect(await page.evaluate(() => (window as any).__hardwareOperations)).toBe(0);

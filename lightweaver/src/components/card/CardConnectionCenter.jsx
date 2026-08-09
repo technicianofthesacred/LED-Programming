@@ -60,6 +60,8 @@ export function CardConnectionCenter({
   bridgeResult,
   onClearBridgeResult,
   recoverLights,
+  firmwareStatus,
+  onOpenFirmwareUpdate,
   setupEvidence = {},
 }) {
   const panelRef = useRef(null);
@@ -102,6 +104,8 @@ export function CardConnectionCenter({
     discoveredCard: link.discoveredCard,
     ...flowEvidence,
   });
+  const showFirmwareUpdate = action.id === 'ready-local-card'
+    && firmwareStatus?.state === 'update-available';
 
   useEffect(() => {
     if (!open) return undefined;
@@ -484,20 +488,33 @@ export function CardConnectionCenter({
             </dl>
           )}
 
-          <div className="card-connection-actions">
-            {renderPrimaryAction()}
-            {action.secondaryAction?.id === 'adopt-discovered-card' && (
-              <button type="button" className="btn" onClick={useDiscoveredCard}>Use this card instead</button>
-            )}
-            {action.secondaryAction?.id === 'trust-updated-card' && (
-              // Same verified adoption path as "Use this card instead": it
-              // re-reads identity at the host, re-checks full status, and only
-              // then replaces the remembered firmware identity (ui-repair B1).
-              <button type="button" className="btn" data-testid="trust-updated-card" onClick={useDiscoveredCard} disabled={pairingBusy}>
-                {pairingBusy ? 'Re-pairing…' : action.secondaryAction.label}
-              </button>
-            )}
-          </div>
+          {showFirmwareUpdate && (
+            <div className="card-firmware-update" role="note">
+              <strong>Your card firmware is out of date.</strong>
+              <p>Installed build {firmwareStatus.installedBuildNumber}; latest build {firmwareStatus.releaseBuildNumber}.</p>
+              <div className="card-connection-actions">
+                <button type="button" className="btn primary" onClick={onOpenFirmwareUpdate}>Update firmware</button>
+                <button type="button" className="btn" onClick={onClose}>Not now</button>
+              </div>
+            </div>
+          )}
+
+          {!showFirmwareUpdate && (
+            <div className="card-connection-actions">
+              {renderPrimaryAction()}
+              {action.secondaryAction?.id === 'adopt-discovered-card' && (
+                <button type="button" className="btn" onClick={useDiscoveredCard}>Use this card instead</button>
+              )}
+              {action.secondaryAction?.id === 'trust-updated-card' && (
+                // Same verified adoption path as "Use this card instead": it
+                // re-reads identity at the host, re-checks full status, and only
+                // then replaces the remembered firmware identity (ui-repair B1).
+                <button type="button" className="btn" data-testid="trust-updated-card" onClick={useDiscoveredCard} disabled={pairingBusy}>
+                  {pairingBusy ? 'Re-pairing…' : action.secondaryAction.label}
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
 

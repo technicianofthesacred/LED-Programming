@@ -401,6 +401,8 @@ function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, firmwar
         <CardStatusControl link={link} onOpen={onOpenConnectionCenter} open={connectionCenterOpen} />
       </div>
 
+      <span className="sb-spring" aria-hidden="true" />
+
       <FirmwareStatusControl
         status={firmwareStatus}
         installedBuildId={isCardLinkConnected(link) ? link.card?.buildId : ''}
@@ -1152,6 +1154,11 @@ function Shell() {
         bridgeResult={bridgeResult}
         onClearBridgeResult={clearBridgeResult}
         recoverLights={typeof window.__LW_RECOVER_LIGHTS_FOR_TEST__ === 'function' ? window.__LW_RECOVER_LIGHTS_FOR_TEST__ : undefined}
+        firmwareStatus={firmwareStatus}
+        onOpenFirmwareUpdate={() => {
+          closeConnectionCenter();
+          openCardSection('install');
+        }}
         setupEvidence={{
           host: cardLink.host || cardStatus.host,
           mode: cardStatus.status?.setupMode || cardStatus.status?.mode,
