@@ -7,6 +7,7 @@ import { CloudLibraryProvider, useCloudLibrary } from '../state/CloudLibraryCont
 import { useCardStatus } from '../hooks/useCardStatus.js';
 import { CardConnectionCenter } from '../components/card/CardConnectionCenter.jsx';
 import { CardStatusControl } from '../components/card/CardStatusControl.jsx';
+import { useFirmwareReleaseIdentity } from '../hooks/useFirmwareReleaseIdentity.js';
 import { ProjectLoadDialog, ProjectSaveDialog } from '../components/projects/TopBarProjectDialogs.jsx';
 import { WorkspaceNotice } from '../components/projects/WorkspaceNotice.jsx';
 import { bootstrapCardHostFromLocation, canPushDirectlyToCard } from '../lib/cardConnection.js';
@@ -18,7 +19,7 @@ import {
   launchBridgeOperation,
   readStoredBridgeResult,
 } from '../lib/bridgeLaunch.js';
-import { DEFAULT_WLED_PUSH_FPS } from '../lib/deviceController.js';
+import { classifyFooterFirmwareStatus } from '../lib/footerFirmwareStatus.js';
 import {
   bootstrapCardLink,
   connectCardLink,
@@ -365,38 +366,47 @@ function Rail({ view, navigate, openCard }) {
    in the hover title for anyone who needs to match it to a commit. */
 function freshnessPresentation(freshness) {
   const exact = `Build ${freshness.buildNumber} · revision ${freshness.buildId}.`;
-  if (freshness.status === 'current') return { label: 'Studio current', dot: 'on', title: `Studio is current. ${exact}` };
-  if (freshness.status === 'update-ready') return { label: 'Update ready', dot: 'warn', title: `Build ${freshness.buildNumber} is ready. Refresh waits for the active card operation to finish. Revision ${freshness.buildId}.` };
-  if (freshness.status === 'unknown') return { label: 'Freshness unknown', dot: 'warn', title: `Studio could not verify the current production build. It will try again while online. Running ${exact}` };
-  return { label: 'Checking', dot: 'off', title: `Checking the current production Studio build. Running ${exact}` };
+  if (freshness.status === 'current') return { dot: 'on', title: `Studio is current. ${exact}` };
+  if (freshness.status === 'update-ready') return { dot: 'warn', title: `Studio update ready. ${exact} Refresh waits for the active card operation to finish. Reason: ${freshness.reason || 'operation-active'}.` };
+  if (freshness.status === 'unknown') return { dot: 'warn', title: `Studio freshness could not be verified. Running ${exact} Reason: ${freshness.reason || 'unknown'}.` };
+  return { dot: 'off', title: `Checking the current production Studio build. Running ${exact}` };
 }
 
-function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, totalLeds, stripCount, starterPending, density, fps, testStrip, onToggleTestStrip, onTestStripLengthChange, freshness }) {
-  // A blank (factory-default) card is linked but has no project to push to, so
-  // it must not advertise a live push rate.
-  const connected = isCardLinkConnected(link) && !link.cardBlank;
+function FirmwareStatusControl({ status, installedBuildId, releaseBuildId, releaseError, onOpenFirmwareUpdate }) {
+  const details = [
+    status.label,
+    installedBuildId ? `Installed revision ${installedBuildId}.` : 'No installed card revision is connected.',
+    releaseBuildId ? `Signed release revision ${releaseBuildId}.` : `Signed release unavailable: ${releaseError || 'unknown'}.`,
+  ].join(' ');
+  const common = {
+    className: `sb-firmware is-${status.state}`,
+    'data-testid': 'footer-firmware-status',
+    'data-state': status.state,
+    title: details,
+    'aria-label': details,
+    role: status.actionable ? undefined : 'status',
+  };
+  return status.actionable
+    ? <button type="button" {...common} onClick={onOpenFirmwareUpdate}>{status.label}</button>
+    : <span {...common}>{status.label}</span>;
+}
+
+function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, firmwareStatus, firmwareRelease, firmwareReleaseError, onOpenFirmwareUpdate, testStrip, onToggleTestStrip, onTestStripLengthChange, freshness }) {
   return (
     <footer className="status-bar">
       <div className="sb-card">
         <CardStatusControl link={link} onOpen={onOpenConnectionCenter} open={connectionCenterOpen} />
       </div>
 
-      <div className="sb-div" />
+      <FirmwareStatusControl
+        status={firmwareStatus}
+        installedBuildId={isCardLinkConnected(link) ? link.card?.buildId : ''}
+        releaseBuildId={firmwareRelease?.buildId}
+        releaseError={firmwareReleaseError}
+        onOpenFirmwareUpdate={onOpenFirmwareUpdate}
+      />
 
-      <div className="sb-facts">
-        <span className="sb-fact"><span>density</span><span className="fv">{density > 0 ? `${density}/m` : "—"}</span></span>
-        <span className="sb-fact">
-          <span>{starterPending ? 'layout' : 'total'}</span>
-          <span className="fv">{starterPending
-            ? `${totalLeds.toLocaleString()}-LED starter · not yet placed`
-            : `${totalLeds > 0 ? totalLeds.toLocaleString() : '—'} LEDs · ${stripCount} ${stripCount === 1 ? 'strip' : 'strips'}`}</span>
-        </span>
-        <span className="sb-fact"><span>push</span><span className="fv">{connected ? `${fps} fps` : "—"}</span></span>
-      </div>
-
-      <div className="sb-div" />
-
-      <div className="sb-teststrip" data-testid="test-strip-control">
+      <div className={`sb-teststrip${testStrip.enabled ? ' is-active' : ''}`} data-testid="test-strip-control">
         <button
           type="button"
           className={"sb-ts-toggle" + (testStrip.enabled ? " on" : "")}
@@ -406,19 +416,20 @@ function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, totalLe
         >
           Test strip
         </button>
-        <input
-          className="sb-ts-input"
-          type="number"
-          min={1}
-          max={2000}
-          value={testStrip.length}
-          disabled={!testStrip.enabled}
-          onChange={(e) => onTestStripLengthChange(e.target.value)}
-          aria-label="Test strip LED count"
-        />
-        <span>LEDs</span>
         {testStrip.enabled && (
-          <span className="sb-ts-note">Testing on {testStrip.length} LEDs (your design is unchanged).</span>
+          <>
+            <input
+              className="sb-ts-input"
+              type="number"
+              min={1}
+              max={2000}
+              value={testStrip.length}
+              onChange={(e) => onTestStripLengthChange(e.target.value)}
+              aria-label="Test strip LED count"
+            />
+            <span>LEDs</span>
+            <span className="sb-ts-note">Testing on {testStrip.length} LEDs (your design is unchanged).</span>
+          </>
         )}
       </div>
 
@@ -431,10 +442,10 @@ function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, totalLe
             className={`sb-freshness is-${freshness.status}`}
             data-testid="studio-freshness"
             title={presentation.title}
+            aria-label={presentation.title}
           >
             <span className={`sb-dot ${presentation.dot}`} aria-hidden="true" />
-            <span>{presentation.label}</span>
-            <code>Build {freshness.buildNumber}</code>
+            <span>Studio {freshness.buildNumber}</span>
           </div>
         );
       })()}
@@ -443,14 +454,6 @@ function StatusBar({ link, connectionCenterOpen, onOpenConnectionCenter, totalLe
 }
 
 /* ---------- Shell (inside ProjectProvider, real data wired in) ---------- */
-/* The configured card push rate — same setting useWled reads (Settings →
-   "Card push fps", persisted by Tweaks under lw_wled_push_fps). */
-function readPushFps() {
-  try {
-    const v = Number(localStorage.getItem('lw_wled_push_fps'));
-    return Number.isFinite(v) && v > 0 ? v : DEFAULT_WLED_PUSH_FPS;
-  } catch { return DEFAULT_WLED_PUSH_FPS; }
-}
 
 function applyStoredStudioTheme() {
   try {
@@ -490,7 +493,6 @@ function Shell() {
   const {
     projectName, serializeProject, flushProjectAutosave, replaceProject, replaceWithNewProject, requestReplacementConfirmation,
     projectLifecycle, projectLifecycleLabel, markProjectPersisted, markProjectEdited, isProjectLifecycleMarkerCurrent,
-    strips, starterPending, layoutDensity,
   } = useProject();
   const runningStudioReleaseRef = useRef(null);
   if (!runningStudioReleaseRef.current) runningStudioReleaseRef.current = getRunningStudioRelease();
@@ -500,6 +502,9 @@ function Shell() {
     buildNumber: runningStudioReleaseRef.current.buildNumber,
     reason: '',
   }));
+  const firmwareReleaseIdentity = useFirmwareReleaseIdentity(
+    `${freshness.buildId}:${freshness.buildNumber}`,
+  );
   const freshnessMonitorRef = useRef(null);
   const flushProjectAutosaveRef = useRef(flushProjectAutosave);
   flushProjectAutosaveRef.current = flushProjectAutosave;
@@ -762,7 +767,10 @@ function Shell() {
     cardStatus.allowAdopt,
   ]);
   const connected = isCardLinkConnected(cardLink);
-  const totalLeds = strips.reduce((s, strip) => s + (strip.pixels?.length || 0), 0);
+  const firmwareStatus = useMemo(() => classifyFooterFirmwareStatus(
+    connected ? cardLink.card : null,
+    firmwareReleaseIdentity.state === 'verified' ? firmwareReleaseIdentity.manifest : null,
+  ), [cardLink.card, connected, firmwareReleaseIdentity.manifest, firmwareReleaseIdentity.state]);
   const openConnectionCenter = useCallback(() => setConnectionCenterOpen(true), []);
   const closeConnectionCenter = useCallback(() => setConnectionCenterOpen(false), []);
   const clearBridgeResult = useCallback(outcome => {
@@ -826,14 +834,6 @@ function Shell() {
       isSnapshotCurrent: isProjectSwitchSnapshotCurrent,
     });
   }, [cloudLibrary, flushProjectAutosave, isProjectSwitchSnapshotCurrent, markProjectPersisted, projectAssociationSaveBlocked, saveProjectToBrowserGuarded]);
-
-  // configured push rate; Tweaks fires lw-preview-settings when it changes
-  const [pushFps, setPushFps] = useState(readPushFps);
-  useEffect(() => {
-    const sync = () => setPushFps(readPushFps());
-    window.addEventListener('lw-preview-settings', sync);
-    return () => window.removeEventListener('lw-preview-settings', sync);
-  }, []);
 
   // Test strip mode (src/lib/testStrip.js) — a bench/session-only override,
   // never part of the saved project. Read fresh at mount, then kept in sync
@@ -1132,11 +1132,10 @@ function Shell() {
         link={cardLink}
         connectionCenterOpen={connectionCenterOpen}
         onOpenConnectionCenter={openConnectionCenter}
-        totalLeds={totalLeds}
-        stripCount={strips.length}
-        starterPending={starterPending}
-        density={layoutDensity}
-        fps={pushFps}
+        firmwareStatus={firmwareStatus}
+        firmwareRelease={firmwareReleaseIdentity.manifest}
+        firmwareReleaseError={firmwareReleaseIdentity.error}
+        onOpenFirmwareUpdate={() => openCardSection('install')}
         testStrip={testStrip}
         onToggleTestStrip={onToggleTestStrip}
         onTestStripLengthChange={onTestStripLengthChange}
