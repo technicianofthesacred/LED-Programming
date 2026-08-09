@@ -4,6 +4,22 @@ This workflow keeps ordinary product iteration fast while retaining the strict
 release and hardware gates that make a shipped Lightweaver trustworthy. The
 mistake to avoid is applying the final release process to every small defect.
 
+## How to ask
+
+You do not need to remember mode names. Describe what you want in ordinary
+language and the primary agent chooses the operating mode:
+
+- A list of features or glitches becomes [Sprint](workflows/sprint.md).
+- Sitting with the card, strip, colors, wiring, or power becomes
+  [Bench](workflows/bench.md).
+- “Prove Lightweaver” starts the explicitly authorized long
+  [Prove](workflows/prove.md) run. Less explicit “check everything” language
+  requires a duration warning and confirmation first.
+- “Ship” keeps its release meaning and never silently invokes Prove.
+
+The operating mode controls coordination and human attention. The verification
+tiers below still control how much automated evidence runs inside that mode.
+
 ## The three loops
 
 ### Glitch loop — 3–10 minutes
