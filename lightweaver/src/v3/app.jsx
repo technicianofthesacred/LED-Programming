@@ -30,6 +30,7 @@ import {
 import { downloadJsonFile } from '../lib/downloadFile.js';
 import {
   associateProjectLibraryRecordGuarded,
+  clearProjectLibraryAssociationGuarded,
   isProjectLibrarySaveBlocked,
   listProjectLibraryRecords,
   readActiveProjectLibraryRecordId,
@@ -483,7 +484,7 @@ function Shell() {
   }, [routeStore]);
   const {
     projectName, serializeProject, flushProjectAutosave, replaceProject, replaceWithNewProject, requestReplacementConfirmation,
-    projectLifecycle, projectLifecycleLabel, markProjectPersisted,
+    projectLifecycle, projectLifecycleLabel, markProjectPersisted, markProjectEdited, isProjectLifecycleMarkerCurrent,
     strips, layoutDensity,
   } = useProject();
   const runningStudioReleaseRef = useRef(null);
@@ -919,8 +920,15 @@ function Shell() {
     else showWorkspaceEvent('Download failed', { kind: 'error', persistent: true, review: true });
   }, [markProjectPersisted, projectName, serializeProject, showWorkspaceEvent]);
   const onLoad = useCallback(() => setLoadDialogOpen(true), []);
-  const onMatchedCardProjectLoaded = useCallback(async ({ source, recordId, recordSnapshot }) => {
+  const onMatchedCardProjectLoaded = useCallback(async ({ source, recordId, recordSnapshot, expectedMarker }) => {
+    const markerPresent = Number.isSafeInteger(expectedMarker?.generation)
+      && Number.isSafeInteger(expectedMarker?.revision);
+    if (source === 'browser' && !markerPresent) {
+      return { ok: false, reason: 'lifecycle-marker-required' };
+    }
+    const associationIsCurrent = () => !markerPresent || isProjectLifecycleMarkerCurrent(expectedMarker);
     if (source === 'cloud') {
+      if (!associationIsCurrent()) return { ok: false, reason: 'superseded' };
       try {
         writeActiveProjectLibraryRecordId('');
         if (readActiveProjectLibraryRecordId() !== '') {
@@ -946,10 +954,20 @@ function Shell() {
           throw new Error('missing browser project record snapshot');
         }
         const association = await associateProjectLibraryRecordGuarded(recordSnapshot);
+        if (!associationIsCurrent()) {
+          if (association?.ok) {
+            await clearProjectLibraryAssociationGuarded({
+              recordId,
+              ownershipToken: association.associationOwnershipToken,
+            });
+          }
+          return { ok: false, reason: 'superseded' };
+        }
         if (!association?.ok) throw new Error(association?.reason || 'browser project association failed');
         browserAssociationRef.current = association.associationSnapshot;
-        markProjectPersisted('browser');
+        markProjectPersisted('browser', expectedMarker);
       } else {
+        if (!associationIsCurrent()) return { ok: false, reason: 'superseded' };
         writeActiveProjectLibraryRecordId('');
         if (readActiveProjectLibraryRecordId() !== '') {
           throw new Error('browser project association was not cleared');
@@ -959,13 +977,30 @@ function Shell() {
       setProjectAssociationSaveBlocked(false);
       return { ok: true };
     } catch {
+      if (!associationIsCurrent()) return { ok: false, reason: 'superseded' };
       cloudLibrary.detachProject();
       browserAssociationRef.current = null;
-      try { writeActiveProjectLibraryRecordId(''); } catch { /* Saving remains blocked below. */ }
+      if (source === 'browser') markProjectEdited();
       setProjectAssociationSaveBlocked(true);
       return { ok: false, reason: 'association-handoff-failed' };
     }
-  }, [cloudLibrary, markProjectPersisted]);
+  }, [cloudLibrary, isProjectLifecycleMarkerCurrent, markProjectEdited, markProjectPersisted]);
+  const openBrowserProject = useCallback(async project => {
+    const recordId = String(project?.id || '');
+    const recordSnapshot = readProjectLibraryRecordSnapshot(recordId);
+    if (!recordSnapshot.record || recordSnapshot.record.project?.id !== project?.project?.id) {
+      return { ok: false, reason: 'browser-conflict' };
+    }
+    const replacement = await replaceProject(recordSnapshot.record.project);
+    if (!replacement.ok) return replacement;
+    const association = await onMatchedCardProjectLoaded({
+      source: 'browser',
+      recordId,
+      recordSnapshot,
+      expectedMarker: replacement.marker,
+    });
+    return association.ok ? replacement : { ...association, replacementCommitted: true };
+  }, [onMatchedCardProjectLoaded, replaceProject]);
   const onImport = useCallback(() => fileInputRef.current?.click(), []);
   const onNew = useCallback(async () => {
     const result = await replaceWithNewProject();
@@ -1118,8 +1153,10 @@ function Shell() {
       />
       {loadDialogOpen && (
         <ProjectLoadDialog
+          browserProjects={listProjectLibraryRecords()}
           onClose={() => setLoadDialogOpen(false)}
           onImport={onImport}
+          onOpenBrowserProject={openBrowserProject}
           onOpenFailure={result => showWorkspaceEvent(
             result?.error?.message || (result?.reason === 'stale-session'
               ? 'Your session changed. Sign in again from Preferences.'

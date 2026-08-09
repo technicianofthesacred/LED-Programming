@@ -10,7 +10,7 @@ import { useProject } from '../state/ProjectContext.jsx';
 import { REAL_PATTERN_BY_ID, adaptPattern, adaptSavedLook } from './v3-data.js';
 import { getCardPatternById } from '../lib/cardPatternBank.js';
 import { DEFAULT_CARD_PATTERN_BANK } from '../lib/cardRuntimeContract.js';
-import { cardStorageJson, readCardProjectEvidence } from '../lib/cardPushClient.js';
+import { CardPushError, cardStorageJson, readCardProjectEvidence } from '../lib/cardPushClient.js';
 import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
 import { prepareCardDeployment, waitForCardDeploymentVerification } from '../lib/cardDeployment.js';
 import { normalizePatchBoard } from '../lib/patchBoard.js';
@@ -45,6 +45,7 @@ import {
   syncRuntimePackageToCard,
 } from '../lib/cardSectionSync.js';
 import {
+  decideLiveControlProjectAuthority,
   pushLivePreviewToCard,
   pushSectionPreviewToCard,
   recoverCardLights,
@@ -97,7 +98,7 @@ function realPatternShape(patternId) {
   return REAL_PATTERN_BY_ID.get(patternId) || adaptPattern(patternId);
 }
 
-  function PlaylistScreen({ connected, go }) {
+  function PlaylistScreen({ connected, cardLink, go }) {
     const {
       projectId,
       projectName,
@@ -168,6 +169,23 @@ function realPatternShape(patternId) {
       if (!runtimePackage) throw runtimeBuild.error;
       return runtimePackage;
     };
+    const requireLiveControlAuthority = (patternId = '') => {
+      const authority = decideLiveControlProjectAuthority({
+        connected: connected || cardLink?.readiness?.playbackReady === true,
+        studioProject: requireRuntimePackage(),
+        cardStatus: cardLink?.readiness || {},
+        patternId,
+      });
+      if (!authority.ok) {
+        const error = new CardPushError(authority.reason || authority.state, authority.message);
+        error.liveControlAuthority = true;
+        throw error;
+      }
+      return authority;
+    };
+    const classifyPlaylistControlFailure = (error) => error?.liveControlAuthority
+      ? { code: error.reason, message: error.message }
+      : classifyCardActionFailure(error);
     const safeProjectName = (projectName || 'lightweaver-piece').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
 
     // ── live playlist write-back to the standalone controller ─────────────
@@ -250,6 +268,7 @@ function realPatternShape(patternId) {
       setHandoffUrl('');
       setPlaylistStatus(null);
       try {
+        requireLiveControlAuthority(patternId);
         const testStrip = readTestStrip();
         if (testStrip.enabled) {
           await ensureTestStripLayoutOnCard(host, requireRuntimePackage(), testStrip.length);
@@ -265,7 +284,7 @@ function realPatternShape(patternId) {
         }
       } catch (error) {
         if (sequence !== previewSequence.current || actionGeneration !== cardActionGeneration.current || error?.reason === 'superseded') return false;
-        const failure = classifyCardActionFailure(error);
+        const failure = classifyPlaylistControlFailure(error);
         dispatchPreviewAction({ type: 'fail', revision: sequence, error: failure.message });
         setPlaylistStatus({ kind: 'err', message: failure.message, physicalPreview: true, failure });
       }
@@ -281,6 +300,7 @@ function realPatternShape(patternId) {
       setHandoffUrl('');
       setPlaylistStatus(null);
       try {
+        requireLiveControlAuthority(savedLook.defaultLook?.patternId || savedLook.preset || '');
         const testStrip = readTestStrip();
         if (testStrip.enabled) {
           // A saved mix is normally several section targets across the real
@@ -324,7 +344,7 @@ function realPatternShape(patternId) {
         }
       } catch (error) {
         if (sequence !== previewSequence.current || actionGeneration !== cardActionGeneration.current || error?.reason === 'superseded') return;
-        const failure = classifyCardActionFailure(error);
+        const failure = classifyPlaylistControlFailure(error);
         dispatchPreviewAction({ type: 'fail', revision: sequence, error: failure.message });
         setPlaylistStatus({ kind: 'err', message: failure.message, physicalPreview: true, failure });
       }
@@ -367,15 +387,21 @@ function realPatternShape(patternId) {
       setHandoffUrl('');
       setPlaylistStatus({ kind: 'pending', message: 'Resetting live output on card…' });
       try {
+        requireLiveControlAuthority();
         const testStrip = readTestStrip();
         if (testStrip.enabled) await ensureTestStripLayoutOnCard(host, requireRuntimePackage(), testStrip.length);
-        await resetLiveOutputOnCard(fallbackLiveLook(), { host, timeoutMs: 3000 });
+        await resetLiveOutputOnCard(fallbackLiveLook(), {
+          host,
+          timeoutMs: 3000,
+          transport: cardLink?.transport,
+          studioProject: runtimePackage,
+        });
         if (actionGeneration !== cardActionGeneration.current) return;
         setLive(null);
         setPlaylistStatus({ kind: 'ok', message: 'Live output reset on card.' });
       } catch (error) {
         if (actionGeneration !== cardActionGeneration.current) return;
-        const failure = classifyCardActionFailure(error);
+        const failure = classifyPlaylistControlFailure(error);
         setPlaylistStatus({
           kind: 'err',
           message: failure.message,

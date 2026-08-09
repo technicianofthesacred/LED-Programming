@@ -127,6 +127,10 @@ let bridgeIdentityError = '';
 let bridgeLastSeenAt = 0;
 let bridgeSeq = 0;
 let bridgeLifecycle = 0;
+// Non-null only while a user-gesture-acquired named window is intentionally
+// blank and waiting for asynchronous discovery to choose its card origin.
+// Messages from the outgoing document carry no authority during this gap.
+let bridgeReservedWindow = null;
 // Exact AP evidence retained across the origin switch. It remains present when
 // the first station navigation fails, allowing the caller to retry the same
 // WindowProxy without accepting a new/stale generation. While this is set,
@@ -295,6 +299,7 @@ function clearBridgeTarget({
   preserveHandoff = false,
 } = {}) {
   invalidateBridgeHandoffNavigationContext();
+  bridgeReservedWindow = null;
   bridgeWindow = null;
   bridgeOrigin = origin || '';
   bridgeHost = normalizeCardHost(host || bridgeHost || readStoredCardHost());
@@ -339,8 +344,10 @@ function revokeBridgeForNavigation({
   reason = 'bridge-navigated',
   message = 'The tracked card page started a new navigation.',
   preserveHandoff = false,
+  preserveReservation = false,
 } = {}) {
   rejectPendingBridgeRequests(reason, message);
+  if (!preserveReservation) bridgeReservedWindow = null;
   bridgeLifecycle += 1;
   clearBlankDiscoveryAuthority();
   bridgeConnected = false;
@@ -805,6 +812,7 @@ export function cardBridgeAutoPreviewEnabled() {
 function handleBridgeMessage(event) {
   const data = event?.data || {};
   if (data.app !== CARD_BRIDGE_APP) return;
+  if (bridgeReservedWindow) return;
 
   if (data.type === 'ready') {
     // Verify the handshake comes from a local card origin before trusting it.
@@ -1800,10 +1808,71 @@ export function getCardBridgeVersion() {
   return bridgeVersion;
 }
 
+// Reserve the one stable card tab while the browser still considers the click
+// a user gesture. Discovery can then finish asynchronously and navigate this
+// exact WindowProxy without asking Chromium to create another popup.
+export function reserveCardBridgeWindow() {
+  const win = browserWindow();
+  if (!win?.open) return null;
+  try {
+    const opened = win.open('', CARD_BRIDGE_WINDOW_NAME);
+    // Opening a named target can replace a live card document with the blank
+    // reservation. Its old origin/identity must never retain authority during
+    // the subsequent asynchronous discovery gap.
+    if (opened) {
+      revokeBridgeForNavigation();
+      bridgeReservedWindow = opened;
+    }
+    return opened;
+  } catch {
+    return null;
+  }
+}
+
+export function cancelReservedCardBridgeWindow(target) {
+  if (!target || bridgeReservedWindow !== target) return false;
+  bridgeReservedWindow = null;
+  try {
+    target.close?.();
+  } catch {
+    /* Closing a script-opened reservation is best-effort. */
+  }
+  clearBridgeTarget();
+  return true;
+}
+
+function navigateReservedCardBridgeWindow(target, host, studioUrl) {
+  if (!target || bridgeReservedWindow !== target) return null;
+  if (bridgeTargetClosed(target) || !isLocalCardHost(host)) {
+    cancelReservedCardBridgeWindow(target);
+    return null;
+  }
+  const origin = cardHostToUrl(host);
+  const url = buildCardBridgeLaunchUrl(host, studioUrl);
+  revokeBridgeForNavigation({ host, origin, preserveReservation: true });
+  trackNavigatedBridgeWindow(target, { host, origin, persistHost: false });
+  try {
+    target.location.href = url;
+  } catch {
+    try {
+      target.location = url;
+    } catch {
+      clearBridgeTarget({ host, origin });
+      return null;
+    }
+  }
+  // Navigation has now been initiated with the new origin already installed.
+  // Keep the gate closed through the assignment itself so synchronous straggler
+  // events from the outgoing document cannot regain authority in that gap.
+  bridgeReservedWindow = null;
+  return target;
+}
+
 export function acquireCardBridgeFromGesture(rawHost = '', {
   studioUrl = '',
   timeoutMs = 10000,
   acceptDiscovered = false,
+  reservedWindow = null,
 } = {}) {
   const win = browserWindow();
   const host = normalizeCardHost(rawHost || readStoredCardHost());
@@ -1812,8 +1881,13 @@ export function acquireCardBridgeFromGesture(rawHost = '', {
   bootstrapCardBridgeFromOpener();
 
   const current = getCardBridgeState();
+  const expectedIdentityFailed = state => Boolean(readPersistedCardIdentity()?.id)
+    && Boolean(state?.identityError)
+    && !state?.identityVerified;
+  const currentExpectedIdentityFailed = expectedIdentityFailed(current);
   const currentEvidenceReady = current.identityVerified || (
     acceptDiscovered
+    && !currentExpectedIdentityFailed
     && current.verified
     && Boolean(current.discoveredCard?.id)
   );
@@ -1839,6 +1913,11 @@ export function acquireCardBridgeFromGesture(rawHost = '', {
   };
   const resolveWhenVerified = (state = getCardBridgeState()) => {
     const hostMatches = normalizeCardHost(state?.host) === host;
+    if (expectedIdentityFailed(state)) {
+      cleanup();
+      settle.reject(bridgeError('The card page did not verify the paired Lightweaver identity.', state.identityError));
+      return true;
+    }
     const discoveryReady = acceptDiscovered
       && state?.verified
       && hostMatches
@@ -1876,13 +1955,20 @@ export function acquireCardBridgeFromGesture(rawHost = '', {
 
   // Keep this before any asynchronous boundary: popup permission is attached
   // to the user's pattern-click gesture, and the stable name reuses one tab.
-  const opened = openCardBridge(host, { autoOpenStudio: false, studioUrl });
+  const opened = reservedWindow
+    ? navigateReservedCardBridgeWindow(reservedWindow, host, studioUrl)
+    : openCardBridge(host, { autoOpenStudio: false, studioUrl });
   attempt.window = opened;
   if (!opened) {
     cleanup();
+    const reservationClosed = Boolean(reservedWindow && bridgeTargetClosed(reservedWindow));
     settle.reject(bridgeError(
-      'Allow the Lightweaver card window, then try the pattern again.',
-      'popup-blocked',
+      reservationClosed
+        ? 'The reserved Lightweaver card window was closed before it could connect.'
+        : reservedWindow
+          ? 'The reserved Lightweaver card window could not navigate to the card.'
+          : 'Allow the Lightweaver card window, then try the pattern again.',
+      reservationClosed ? 'bridge-closed' : reservedWindow ? 'bridge-navigation-failed' : 'popup-blocked',
     ));
     return attempt;
   }

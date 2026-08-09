@@ -91,9 +91,9 @@ async function gotoFreshPatterns(page) {
   await issueRegisteredPatternAuthorization(page);
 }
 
-async function pairReadyPatternCard(page, cardId: string, firmwareVersion = '1.0.0', suppliedBuildId = '') {
+async function pairReadyPatternCard(page, cardId: string, firmwareVersion = '1.0.0', suppliedBuildId = '', suppliedProject = null) {
   const buildId = suppliedBuildId || `${cardId}-build`;
-  const project = createDefaultProject();
+  const project = suppliedProject || createDefaultProject();
   const fixture = registerPatternAuthorizationFixture(page, {
     project, cardId, firmwareVersion, buildId,
   });
@@ -107,8 +107,8 @@ async function pairReadyPatternCard(page, cardId: string, firmwareVersion = '1.0
     app: 'Lightweaver', provisioningContractVersion: 1,
     cardId, firmwareVersion, buildId, bootId: `${cardId}-boot`,
     runtimePhase: 'ready', knownGoodProject: true,
-    commandReady: true, outputReady: true,
-    piece: { id: project.id }, projectFingerprint: fixture.projectFingerprint,
+    commandReady: true, outputReady: true, playbackReady: true,
+    projectId: project.id, piece: { id: project.id }, projectRevision: 0, projectFingerprint: fixture.projectFingerprint,
   } }));
   await page.route('**/api/firmware-info', route => route.fulfill({ json: {
     app: 'Lightweaver', cardId, firmwareVersion, buildId, bootId: `${cardId}-boot`,
@@ -1163,9 +1163,12 @@ test('missing runtime state proof recovers the card before asking for visible co
   await expect(page.getByRole('alert').getByRole('button', { name: 'Recover lights' })).toHaveCount(0);
 });
 
-test('production bridge transport sends only the newest selection to the source-bound popup', async ({ page }) => {
+test('production bridge transport does not replay queued selections across bridge verification', async ({ page }) => {
   const controlRequests: Record<string, unknown>[] = [];
-  await pairReadyPatternCard(page, 'lw-bridge-test', '1.0.0', 'bridge-test-build');
+  const installedProject = createDefaultProject();
+  installedProject.activePatternId = 'plasma';
+  installedProject.pattern.activePatternId = 'plasma';
+  await pairReadyPatternCard(page, 'lw-bridge-test', '1.0.0', 'bridge-test-build', installedProject);
   const bridgeFixture = patternAuthorizationFixtures.get(page)!;
   await page.route('**/api/control', async route => {
     controlRequests.push(JSON.parse(route.request().postData() || '{}'));
@@ -1200,7 +1203,8 @@ test('production bridge transport sends only the newest selection to the source-
                           app: 'Lightweaver', provisioningContractVersion: 1,
                           cardId: 'lw-bridge-test', firmwareVersion: '1.0.0', buildId: 'bridge-test-build',
                           bootId: 'lw-bridge-test-boot', runtimePhase: 'ready', knownGoodProject: true,
-                          commandReady: true, outputReady: true, projectId, projectFingerprint,
+                          commandReady: true, outputReady: true, playbackReady: true,
+                          projectId, piece: { id: projectId }, projectRevision: 0, projectFingerprint,
                         }
                       : { ok: true, cardId: 'lw-bridge-test', patternId: message.payload?.patternId, revision: message.payload?.revision },
                 },
@@ -1224,14 +1228,12 @@ test('production bridge transport sends only the newest selection to the source-
   await page.reload({ waitUntil: 'domcontentloaded' });
   await issueRegisteredPatternAuthorization(page);
   await expect(page.getByRole('button', { name: 'Install on card' })).toBeEnabled();
+  await expect(page.getByTestId('card-link-status')).toContainText('Connected');
 
-  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
-  await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
-  await expect(page.getByTestId('pattern-preview-meta')).toContainText('Plasma');
-  expect(await page.evaluate(() => (window as any).__bridgeOpenCalls)).toHaveLength(1);
-  await page.waitForTimeout(150);
-  expect(controlRequests).toHaveLength(0);
-
+  await page.evaluate(async () => {
+    const { acquireCardBridgeFromGesture } = await import('/src/lib/cardBridge.js');
+    (window as any).__bridgeAttempt = acquireCardBridgeFromGesture('lightweaver.local');
+  });
   await page.evaluate(() => {
     const popup = (window as any).__bridgePopup;
     window.dispatchEvent(new MessageEvent('message', {
@@ -1245,22 +1247,23 @@ test('production bridge transport sends only the newest selection to the source-
       },
     }));
   });
-
   await expect.poll(() => page.evaluate(() => (
     (window as any).__bridgeMessages.map((entry: any) => entry.message.type)
-  ))).toContain('control');
-  const bridgeRequest = await page.evaluate(() => (window as any).__bridgeMessages.find((entry: any) => entry.message.type === 'control'));
-  const bridgeMessageTypes = await page.evaluate(() => (window as any).__bridgeMessages.map((entry: any) => entry.message.type));
-  expect(bridgeMessageTypes.indexOf('status')).toBeGreaterThanOrEqual(0);
-  expect(bridgeMessageTypes.indexOf('status')).toBeLessThan(bridgeMessageTypes.indexOf('control'));
-  expect(bridgeRequest.targetOrigin).toBe('http://lightweaver.local');
-  expect(bridgeRequest.message.app).toBe('LightweaverStudioBridge');
-  expect(bridgeRequest.message.type).toBe('control');
-  expect(bridgeRequest.message.payload.patternId).toBe('plasma');
+  ))).toContain('status');
+  await expect(page.getByTestId('card-link-status')).toContainText('Connected');
+  expect(await page.evaluate(() => (window as any).__bridgeOpenCalls)).toHaveLength(1);
+
+  await page.evaluate(() => {
+    (document.querySelector('.pm-cards .pmcard[data-pattern-id="ocean"]') as HTMLElement).click();
+    (document.querySelector('.pm-cards .pmcard[data-pattern-id="plasma"]') as HTMLElement).click();
+  });
+  await expect(page.getByTestId('pattern-preview-meta')).toContainText('Plasma');
+
+  await expect(page.getByRole('alert')).toContainText('This card is not ready for pattern commands.');
   expect(controlRequests).toHaveLength(0);
-  await page.waitForTimeout(2400);
-  await expect(page.getByRole('alert')).toHaveCount(0);
-  expect((await page.evaluate(() => (window as any).__bridgeMessages)).filter((entry: any) => entry.message.type === 'control')).toHaveLength(1);
+  const bridgeMessages = await page.evaluate(() => (window as any).__bridgeMessages);
+  expect(bridgeMessages.filter((entry: any) => entry.message.type === 'control')).toHaveLength(0);
+  expect(bridgeMessages.filter((entry: any) => entry.message.type === 'status').every((entry: any) => entry.targetOrigin === 'http://lightweaver.local')).toBe(true);
 });
 
 test('a Ready pattern tap is never replayed when card readiness is lost before the bridge resolves', async ({ page }) => {
@@ -1513,7 +1516,10 @@ test('an older card bridge points to the single Flash recovery action', async ({
 
 test('a legacy bridge lifecycle change blocks the next pattern before sending it', async ({ page }) => {
   const controlRequests: Record<string, unknown>[] = [];
-  await pairReadyPatternCard(page, 'lw-legacy-test', '1.0.0', 'legacy-test-build');
+  const installedProject = createDefaultProject();
+  installedProject.activePatternId = 'plasma';
+  installedProject.pattern.activePatternId = 'plasma';
+  await pairReadyPatternCard(page, 'lw-legacy-test', '1.0.0', 'legacy-test-build', installedProject);
   const bridgeFixture = patternAuthorizationFixtures.get(page)!;
   await page.route('**/api/control', async route => {
     controlRequests.push(JSON.parse(route.request().postData() || '{}'));
@@ -1541,7 +1547,8 @@ test('a legacy bridge lifecycle change blocks the next pattern before sending it
                       app: 'Lightweaver', provisioningContractVersion: 1,
                       cardId: 'lw-legacy-test', firmwareVersion: '1.0.0', buildId: 'legacy-test-build',
                       bootId: 'lw-legacy-test-boot', runtimePhase: 'ready', knownGoodProject: true,
-                      commandReady: true, outputReady: true, projectId, projectFingerprint,
+                      commandReady: true, outputReady: true, playbackReady: true,
+                      projectId, piece: { id: projectId }, projectRevision: 0, projectFingerprint,
                     }
                   : { ok: true, cardId: 'lw-legacy-test', patternId: message.payload?.patternId, revision: message.payload?.revision },
             },
@@ -1563,8 +1570,12 @@ test('a legacy bridge lifecycle change blocks the next pattern before sending it
   await page.reload({ waitUntil: 'domcontentloaded' });
   await issueRegisteredPatternAuthorization(page);
   await expect(page.getByRole('button', { name: 'Install on card' })).toBeEnabled();
+  await expect(page.getByTestId('card-link-status')).toContainText('Connected');
 
-  await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
+  await page.evaluate(async () => {
+    const { acquireCardBridgeFromGesture } = await import('/src/lib/cardBridge.js');
+    (window as any).__legacyBridgeAttempt = acquireCardBridgeFromGesture('lightweaver.local');
+  });
   await page.evaluate(() => {
     window.dispatchEvent(new MessageEvent('message', {
       origin: 'http://lightweaver.local',
@@ -1578,10 +1589,9 @@ test('a legacy bridge lifecycle change blocks the next pattern before sending it
   });
   await expect.poll(() => page.evaluate(() => (
     (window as any).__legacyBridgeMessages.map((entry: any) => entry.message.type)
-  ))).toContain('control');
-  const legacyMessageTypes = await page.evaluate(() => (window as any).__legacyBridgeMessages.map((entry: any) => entry.message.type));
-  expect(legacyMessageTypes.indexOf('status')).toBeGreaterThanOrEqual(0);
-  expect(legacyMessageTypes.indexOf('status')).toBeLessThan(legacyMessageTypes.indexOf('control'));
+  ))).toContain('status');
+  await expect(page.getByTestId('card-link-status')).toContainText('Connected');
+
   await page.evaluate(() => {
     (window as any).__legacyBridgeMessages.length = 0;
     (window as any).__legacyReplyVersion = 0;

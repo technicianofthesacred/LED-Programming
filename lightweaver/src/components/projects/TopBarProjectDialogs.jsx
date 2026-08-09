@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useCloudLibrary } from '../../state/CloudLibraryContext.jsx';
 import { CloudLibraryDialogPortal } from './ProjectHistoryDialog.jsx';
 
-export function ProjectLoadDialog({ onClose, onImport, onOpenFailure, onOpenPreferences }) {
+export function ProjectLoadDialog({ browserProjects, onClose, onImport, onOpenBrowserProject, onOpenFailure, onOpenPreferences }) {
   const library = useCloudLibrary();
   const [query, setQuery] = useState('');
   const dialogRef = useRef(null);
@@ -14,6 +14,11 @@ export function ProjectLoadDialog({ onClose, onImport, onOpenFailure, onOpenPref
     if (!needle) return library.activeProjects;
     return library.activeProjects.filter(project => project.title.toLocaleLowerCase().includes(needle));
   }, [library.activeProjects, query]);
+  const browserMatches = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    if (!needle) return browserProjects;
+    return browserProjects.filter(project => project.name.toLocaleLowerCase().includes(needle));
+  }, [browserProjects, query]);
 
   const openProject = async project => {
     const opening = library.openProject(project);
@@ -22,10 +27,17 @@ export function ProjectLoadDialog({ onClose, onImport, onOpenFailure, onOpenPref
     if (!result?.ok && !['cancelled', 'superseded'].includes(result?.reason)) onOpenFailure(result);
   };
 
+  const openBrowserProject = async project => {
+    const opening = onOpenBrowserProject(project);
+    onClose();
+    const result = await opening;
+    if (!result?.ok && !['cancelled', 'superseded'].includes(result?.reason)) onOpenFailure(result);
+  };
+
   return (
     <CloudLibraryDialogPortal
       dialogRef={dialogRef}
-      initialFocusRef={signedIn ? searchRef : closeRef}
+      initialFocusRef={signedIn || browserProjects.length ? searchRef : closeRef}
       onClose={onClose}
     >
       <div className="cloud-library-backdrop">
@@ -44,20 +56,42 @@ export function ProjectLoadDialog({ onClose, onImport, onOpenFailure, onOpenPref
             <button ref={closeRef} type="button" className="btn ghost-sm topbar-dialog-close" aria-label="Close Load project" onClick={onClose}>×</button>
           </div>
 
+          {(signedIn || browserProjects.length > 0) && (
+            <label className="topbar-project-search">
+              <span className="sr-only">Search projects</span>
+              <input
+                ref={searchRef}
+                type="search"
+                className="pm-input"
+                aria-label="Search projects"
+                placeholder="Search projects"
+                value={query}
+                onChange={event => setQuery(event.target.value)}
+              />
+            </label>
+          )}
+          <div className="topbar-project-source">
+            <h3>On this device</h3>
+            <div className="topbar-project-list">
+              {browserMatches.map(project => (
+                <div className="topbar-project-row" key={project.id}>
+                  <span>{project.name}</span>
+                  <button
+                    type="button"
+                    className="btn ghost-sm"
+                    aria-label={`Open ${project.name}`}
+                    onClick={() => void openBrowserProject(project)}
+                  >
+                    Open
+                  </button>
+                </div>
+              ))}
+              {!browserMatches.length && <p className="topbar-project-empty">No browser projects match.</p>}
+            </div>
+          </div>
           {signedIn ? (
-            <>
-              <label className="topbar-project-search">
-                <span className="sr-only">Search projects</span>
-                <input
-                  ref={searchRef}
-                  type="search"
-                  className="pm-input"
-                  aria-label="Search projects"
-                  placeholder="Search projects"
-                  value={query}
-                  onChange={event => setQuery(event.target.value)}
-                />
-              </label>
+            <div className="topbar-project-source">
+              <h3>Online library</h3>
               <div className="topbar-project-list">
                 {projects.map(project => (
                   <div className="topbar-project-row" key={project.id}>
@@ -74,7 +108,7 @@ export function ProjectLoadDialog({ onClose, onImport, onOpenFailure, onOpenPref
                 ))}
                 {!projects.length && <p className="topbar-project-empty">No active projects match.</p>}
               </div>
-            </>
+            </div>
           ) : library.session.status === 'loading' ? (
             <p>Checking your online library…</p>
           ) : (

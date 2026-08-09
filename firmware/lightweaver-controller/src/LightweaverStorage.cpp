@@ -1972,6 +1972,11 @@ bool stageRuntimeConfigJson(const String& json, String& activationId, String& me
     prefs.end();
     return false;
   }
+  if (priorState != WIRING_CANDIDATE_NONE) {
+    prefs.end();
+    message = "wiring transaction is active; confirm or roll back before staging another candidate";
+    return false;
+  }
   if (!finalizeCommittedPromotion(prefs)) {
     prefs.end();
     message = "prior promotion cleanup failed";
