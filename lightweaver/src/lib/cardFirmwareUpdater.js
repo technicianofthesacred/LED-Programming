@@ -9,6 +9,13 @@ function text(value, max = 128) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
 }
 
+function exactProjectHead(value) {
+  if (value === '') return '';
+  if (typeof value !== 'string') return null;
+  const normalized = value.toLowerCase();
+  return SHA256.test(normalized) ? normalized : null;
+}
+
 function browserSessionStorage() {
   try { return globalThis.window?.sessionStorage || null; }
   catch { return null; }
@@ -40,7 +47,7 @@ function binding(authority, release, physicalConfirmation) {
     bootId: text(authority?.bootId, 96),
     ownerSessionId: text(authority?.ownerSessionId, 128),
     operationGeneration: Number(authority?.operationGeneration),
-    expectedProjectHead: text(authority?.projectHead, 64).toLowerCase(),
+    expectedProjectHead: exactProjectHead(authority?.projectHead),
     capability: text(authority?.ownerCapability, 512),
     physicalConfirmationNonce: text(physicalConfirmation, 160),
     releaseBuildId: text(release.manifest.buildId, 40).toLowerCase(),
@@ -48,8 +55,8 @@ function binding(authority, release, physicalConfirmation) {
   };
   if (!authority?.request || authority.revoked || !CARD_ID.test(result.cardId)
     || !result.bootId || !result.ownerSessionId
-    || !Number.isSafeInteger(result.operationGeneration) || result.operationGeneration < 0
-    || !SHA256.test(result.expectedProjectHead)
+    || !Number.isSafeInteger(result.operationGeneration) || result.operationGeneration <= 0
+    || result.expectedProjectHead === null
     || !result.capability || !result.physicalConfirmationNonce) {
     throw new Error('A current exact-card owner authority and physical confirmation are required.');
   }
@@ -86,11 +93,12 @@ function base64url(bytes) {
 
 function safeSession(value) {
   const usb = value?.mode === 'usb';
+  const expectedProjectHead = exactProjectHead(value?.expectedProjectHead);
   const session = {
     version: 1,
     cardId: text(value?.cardId, 64),
     previousBootId: text(value?.previousBootId, 96),
-    expectedProjectHead: text(value?.expectedProjectHead, 64).toLowerCase(),
+    expectedProjectHead,
     expectedProjectFingerprint: text(value?.expectedProjectFingerprint, 64).toLowerCase(),
     targetFirmwareVersion: text(value?.targetFirmwareVersion, 48),
     targetBuildId: text(value?.targetBuildId, 40).toLowerCase(),
@@ -101,8 +109,7 @@ function safeSession(value) {
   };
   if (session.version !== 1 || !CARD_ID.test(session.cardId)
     || (!usb && !session.previousBootId)
-    || (session.expectedProjectHead && !SHA256.test(session.expectedProjectHead))
-    || (!usb && !SHA256.test(session.expectedProjectHead)) || !BUILD_ID.test(session.targetBuildId)
+    || session.expectedProjectHead === null || !BUILD_ID.test(session.targetBuildId)
     || !Number.isSafeInteger(session.targetBuildNumber) || session.targetBuildNumber < 1
     || !SHA256.test(session.ticketSha256)
     || !Number.isSafeInteger(session.acknowledgedBytes) || session.acknowledgedBytes < 0) return null;
@@ -141,7 +148,7 @@ export function correlateFirmwareUpdateReconnect(rawSession, status = {}) {
     || text(status.buildId, 40).toLowerCase() !== session.targetBuildId) {
     return { ok: false, reason: 'target-mismatch' };
   }
-  if (text(status.projectHead, 64).toLowerCase() !== session.expectedProjectHead
+  if (exactProjectHead(status.projectHead) !== session.expectedProjectHead
     || (session.expectedProjectFingerprint
       && text(status.projectFingerprint, 64).toLowerCase() !== session.expectedProjectFingerprint)) {
     return { ok: false, reason: 'project-changed' };
@@ -160,8 +167,9 @@ export function correlateFirmwareUpdateRecovery(rawSession, updateStatus = {}, r
   if (session.previousBootId && bootId === session.previousBootId) {
     return { ok: false, terminal: false, phase: '', reason: 'boot-unchanged' };
   }
-  if ((session.expectedProjectHead
-      && text(readiness.projectHead, 64).toLowerCase() !== session.expectedProjectHead)
+  const projectHeadMustMatch = session.mode !== 'usb' || Boolean(session.expectedProjectHead);
+  if ((projectHeadMustMatch
+      && exactProjectHead(readiness.projectHead) !== session.expectedProjectHead)
     || (session.expectedProjectFingerprint
       && text(readiness.projectFingerprint, 64).toLowerCase() !== session.expectedProjectFingerprint)) {
     return { ok: false, terminal: false, phase: '', reason: 'project-changed' };

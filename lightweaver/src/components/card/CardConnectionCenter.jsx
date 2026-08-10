@@ -577,16 +577,15 @@ export function CardConnectionCenter({
                 <dt>Installed</dt>
                 <dd className="card-fact-value-with-action">
                   <span className="card-firmware-version">{directIdentity.firmwareVersion ? `v${directIdentity.firmwareVersion}` : 'Version unknown'}{cardBuildLabel(directIdentity) ? ` · ${cardBuildLabel(directIdentity)}` : ''}</span>
-                  <span className="card-inline-firmware-slot" aria-hidden="true" />
                 </dd>
               </div>
               <div className="card-fact-row">
                 <dt>Current</dt>
                 <dd className="card-fact-value-with-action">
                   <span className="card-firmware-version">{firmwareRelease?.firmwareVersion ? `v${firmwareRelease.firmwareVersion}` : 'Version unknown'}{cardBuildLabel(firmwareRelease) ? ` · ${cardBuildLabel(firmwareRelease)}` : ''}</span>
-                  {showDirectFirmwareUpdate ? (
+                  {showDirectFirmwareUpdate && (
                     <button type="button" className="btn card-inline-firmware-update" onClick={onOpenFirmwareUpdate || openInstall}>Update firmware</button>
-                  ) : <span className="card-inline-firmware-slot" aria-hidden="true" />}
+                  )}
                 </dd>
               </div>
             </dl>

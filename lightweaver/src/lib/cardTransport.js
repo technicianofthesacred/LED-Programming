@@ -58,8 +58,10 @@ async function parseJsonResponse(response) {
     try {
       const details = await response.json();
       error.details = details;
-      error.code = details?.reason || details?.code || '';
-      if (details?.message) error.message = details.message;
+      error.code = details?.reason || details?.code || details?.error || '';
+      const cardMessage = [details?.message, details?.detail, details?.error]
+        .find(value => typeof value === 'string' && value.trim());
+      if (cardMessage) error.message = cardMessage.trim().slice(0, 240);
       if (details?.currentHead) error.currentHead = details.currentHead;
     } catch { /* an HTTP status remains sufficient evidence */ }
     throw error;

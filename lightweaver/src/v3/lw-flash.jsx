@@ -662,13 +662,16 @@ import {
           <dl className="card-acknowledged-facts">
             <dt>Card</dt><dd>{card.id}</dd>
             <dt>Installed</dt><dd>{installedLabel}</dd>
-            <dt>Update</dt><dd>{targetLabel}</dd>
+            <dt>Update</dt>
+            <dd className="preserving-update-target">
+              <span>{targetLabel}</span>
+              {!confirming && phase === 'idle' && (
+                <button className="btn preserving-update-inline-action" type="button" disabled={!release} onClick={() => setConfirming(true)}>{actionLabel}</button>
+              )}
+            </dd>
             {readiness?.projectHead && <><dt>Project head</dt><dd>{readiness.projectHead}</dd></>}
           </dl>
         </div>
-        {!confirming && phase === 'idle' && (
-          <button className="btn-lg" type="button" disabled={!release} onClick={() => setConfirming(true)}>{actionLabel}</button>
-        )}
         {confirming && phase === 'idle' && (
           <div className="install-confirm-action">
             <p>Press the card control once, then confirm below. Studio binds this update to this exact card and project.</p>

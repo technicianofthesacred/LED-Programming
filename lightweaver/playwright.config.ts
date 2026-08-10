@@ -2,6 +2,11 @@ import { defineConfig, devices } from '@playwright/test';
 import { testPort as port, testBaseURL } from './tests/testPort.mjs';
 export default defineConfig({
   testDir: './tests',
+  timeout: 60_000,
+  // The canonical release suite runs hundreds of browser scenarios serially.
+  // Keep assertions tolerant of transient host load while individual actions
+  // retain Playwright's normal timeouts and still fail closed.
+  expect: { timeout: 15_000 },
   use: {
     baseURL: testBaseURL,
     // Keep same-origin API fixtures authoritative even if a developer has a

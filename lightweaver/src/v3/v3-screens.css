@@ -596,6 +596,13 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 }
 .install-card-check { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px 20px; }
 .install-action-copy { min-width: 0; }
+.preserving-update-panel .card-acknowledged-facts dd {
+  text-align: right; font-variant-numeric: tabular-nums;
+}
+.preserving-update-target {
+  display: grid; justify-items: end; gap: 8px;
+}
+.preserving-update-inline-action { justify-self: end; }
 .install-card-check h2,
 .install-confirm h2 { margin: 0 0 6px; font-size: 16px; }
 .install-card-check p,

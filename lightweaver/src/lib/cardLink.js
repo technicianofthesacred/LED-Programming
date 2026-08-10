@@ -73,7 +73,7 @@ export function initialCardLinkState(host = '') {
     candidateBootId: '',
     requiresStableRevalidation: false,
     revalidationGeneration: 0,
-    operationGeneration: 0,
+    operationGeneration: 1,
     handoffCorrelation: null,
     handoffFlowId: '',
     handoffEnvelopeCount: 0,
