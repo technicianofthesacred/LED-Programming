@@ -36,6 +36,9 @@ static constexpr LightweaverCardStudioAsset LW_CARD_STUDIO_ASSETS[] = {};
 #ifndef LW_CONFIG_SCHEMA_VERSION
 #define LW_CONFIG_SCHEMA_VERSION 1
 #endif
+#ifndef LW_PROJECT_SCHEMA_VERSION
+#error "LW_PROJECT_SCHEMA_VERSION must be defined by the firmware build"
+#endif
 #ifndef LW_CAPABILITIES_VERSION
 #define LW_CAPABILITIES_VERSION 1
 #endif
@@ -74,8 +77,8 @@ bool compressedAssetHashValid(const LightweaverCardStudioAsset& asset) {
 bool validateBundle() {
   if (!LW_CARD_STUDIO_GENERATED_BUNDLE_PRESENT) { g_cardStudioValidationError = "card Studio bundle missing"; return false; }
   if (!LW_CARD_STUDIO_BUILD_ID[0] || LW_CARD_STUDIO_BUILD_NUMBER == 0) { g_cardStudioValidationError = "card Studio build identity missing"; return false; }
-  if (LW_CONFIG_SCHEMA_VERSION < LW_CARD_STUDIO_PROJECT_SCHEMA_MIN ||
-      LW_CONFIG_SCHEMA_VERSION > LW_CARD_STUDIO_PROJECT_SCHEMA_MAX) { g_cardStudioValidationError = "card Studio project schema incompatible"; return false; }
+  if (LW_PROJECT_SCHEMA_VERSION < LW_CARD_STUDIO_PROJECT_SCHEMA_MIN ||
+      LW_PROJECT_SCHEMA_VERSION > LW_CARD_STUDIO_PROJECT_SCHEMA_MAX) { g_cardStudioValidationError = "card Studio project schema incompatible"; return false; }
   if (LW_CAPABILITIES_VERSION < LW_CARD_STUDIO_FIRMWARE_API_MIN ||
       LW_CAPABILITIES_VERSION > LW_CARD_STUDIO_FIRMWARE_API_MAX) { g_cardStudioValidationError = "card Studio firmware API incompatible"; return false; }
   if (!LW_CARD_STUDIO_ASSET_COUNT || !LW_CARD_STUDIO_TOTAL_SIZE ||

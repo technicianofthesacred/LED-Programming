@@ -14,6 +14,7 @@ const injector = fs.readFileSync(path.join(root, 'scripts/inject-build-identity.
 for (const flag of [
   'LW_FIRMWARE_VERSION',
   'LW_CONFIG_SCHEMA_VERSION',
+  'LW_PROJECT_SCHEMA_VERSION',
   'LW_CAPABILITIES_VERSION',
 ]) {
   assert.match(platform, new RegExp(`-D${flag}=`), `${flag} must have a pinned build default`);

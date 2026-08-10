@@ -34,6 +34,9 @@
 #ifndef LW_CAPABILITIES_VERSION
 #define LW_CAPABILITIES_VERSION 1
 #endif
+#ifndef LW_PROJECT_SCHEMA_VERSION
+#error "LW_PROJECT_SCHEMA_VERSION must be defined by the firmware build"
+#endif
 
 namespace {
 constexpr const char* LW_UPDATE_TARGET = "esp32-s3-n16r8";
@@ -43,7 +46,6 @@ constexpr size_t LW_PARTITION_TABLE_BYTES = 0x1000;
 constexpr uint32_t LW_APP0_OFFSET = 0x10000;
 constexpr uint32_t LW_APP1_OFFSET = 0x650000;
 constexpr size_t LW_APP_SLOT_BYTES = 0x640000;
-constexpr uint32_t LW_PROJECT_SCHEMA_VERSION = 3;
 
 // Same public key as release/keys/lightweaver-release-public.pem. Production
 // firmware never compiles a test-key override.
