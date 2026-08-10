@@ -122,6 +122,7 @@ export async function runPreservingUsbBootstrap({
     if (typeof writeApplication !== 'function') fail('The preserving writer is unavailable.');
     writeStarted = true;
     await writeApplication(loader, plan.bytes, plan.address, false, value => onProgress?.({ phase: 'updating', progress: value }));
+    onProgress?.({ phase: 'verifying', progress: 1 });
     const readback = bytes(await loader.readFlash(plan.address, plan.bytes.byteLength));
     if (!readback || readback.byteLength !== plan.bytes.byteLength
       || await sha256Hex(readback) !== plan.expectedSha256) {

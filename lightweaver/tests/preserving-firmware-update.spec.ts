@@ -47,7 +47,8 @@ async function openPreservingFixture(page: any, mode: 'wifi' | 'usb', outcome = 
     (window as any).__LW_PRESERVING_RECONNECT_TIMEOUT_MS__ = outcome === 'reload-disconnected' ? 800 : 75;
     (window as any).__LW_RUN_PRESERVING_USB_BOOTSTRAP_FOR_TEST__ = async ({ onProgress }: any) => {
       onProgress({ phase: 'updating', progress: 1 });
-      onProgress({ phase: 'verified', progress: 1 });
+      onProgress({ phase: 'verifying', progress: 1 });
+      if (outcome === 'usb-verifying') await new Promise(() => {});
       return { ok: true };
     };
     (window as any).__LW_CREATE_FIRMWARE_UPDATER_FOR_TEST__ = ({ onProgress }: any) => ({
@@ -131,6 +132,16 @@ test('preserving update: older card offers one USB bootstrap and separates facto
   await expect(recovery).toBeVisible();
   await recovery.click();
   await expect(page.getByText(/permanently removes Wi-Fi, projects, patterns, wiring, and settings/i)).toBeVisible();
+});
+
+test('preserving update: completed USB send visibly acknowledges readback verification', async ({ page }) => {
+  await openPreservingFixture(page, 'usb', 'usb-verifying');
+  const panel = page.getByTestId('preserving-update-panel');
+  await panel.getByRole('button', { name: 'Update once over USB' }).click();
+  await panel.getByRole('checkbox', { name: /physically confirmed/i }).check();
+  await panel.getByRole('button', { name: 'Start preserving update' }).click();
+  await expect(panel.getByRole('status')).toHaveText('Upload complete · checking the saved update');
+  await expect(panel.getByRole('status')).not.toContainText('Sending signed update');
 });
 
 test('preserving update: USB reset ends with an actionable bounded reconnect failure', async ({ page }) => {
