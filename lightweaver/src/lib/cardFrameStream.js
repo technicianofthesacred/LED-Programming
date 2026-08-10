@@ -405,7 +405,7 @@ export function createHttpFrameTransport(host = '', {
 }
 
 export function defaultFrameTransport(host = '', { authority } = {}) {
-  if (authority && ['direct-lna', 'local-origin'].includes(authority.transport)) {
+  if (authority?.ownerCapability && ['direct-lna', 'local-origin'].includes(authority.transport)) {
     return createHttpFrameTransport(host, { authority });
   }
   return canPushDirectlyToCard()
@@ -557,12 +557,14 @@ export function createCardFrameStream({
   const verifiedAuthority = authority || getActiveCardTransportAuthority(host);
   const wire = transport === 'bridge' || transport === 'legacy-bridge'
     ? createBridgeFrameTransport(host)
-    : transport === 'direct' && verifiedAuthority
+    : transport === 'direct' && verifiedAuthority?.ownerCapability
       ? createHttpFrameTransport(host, { authority: verifiedAuthority })
       : transport === 'direct'
       ? createDirectFrameTransport(host)
-    : ['direct-lna', 'local-origin'].includes(transport)
+    : ['direct-lna', 'local-origin'].includes(transport) && verifiedAuthority?.ownerCapability
         ? createHttpFrameTransport(host, { authority: verifiedAuthority })
+        : ['direct-lna', 'local-origin'].includes(transport)
+          ? createDirectFrameTransport(host)
         : transport || defaultFrameTransport(host, { authority: verifiedAuthority });
   const ownershipHost = normalizeCardHost(host || readStoredCardHost());
   let frameFps = clampFrameFps(fps);
