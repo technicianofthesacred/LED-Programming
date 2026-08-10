@@ -384,15 +384,14 @@ test('Card overview persists WiFi progress, gates the setup address, and resumes
   await seedCommissioningFlow(page, 'wifi');
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  const steps = page.getByTestId('card-setup-steps').locator('li');
-  await expect(steps.nth(0)).toHaveAttribute('data-step-state', 'complete');
-  await expect(steps.nth(1)).toHaveAttribute('data-step-state', 'complete');
-  await expect(steps.nth(2)).toHaveAttribute('data-step-state', 'current');
-  await expect(steps.nth(3)).toHaveAttribute('data-step-state', 'upcoming');
-  await expect(steps.nth(4)).toHaveAttribute('data-step-state', 'upcoming');
+  await expect(page.getByTestId('card-setup-steps')).toHaveCount(0);
+  await expect(page.getByTestId('card-setup-diagnosis')).toContainText('Finish connecting this card to Wi-Fi.');
+  await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+  await expect(page).toHaveURL(/#screen=card&section=setup&task=configure-wifi$/);
 
-  await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
-  await expect(page).toHaveURL(/#screen=card&section=install$/);
+  // The preserving installer remains the execution surface. The overview now
+  // proves that every entrance resolves through the same exact Setup task first.
+  await page.goto('/#screen=card&section=install', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: 'I’ve joined Lightweaver-EEFF', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toHaveCount(0);
   await page.getByRole('button', { name: 'I’ve joined Lightweaver-EEFF', exact: true }).click();
@@ -590,7 +589,8 @@ test('reality-driven detection replaces the dead 192.168.4.1 link with the resto
   await seedCommissioningFlow(page, 'wifi');
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue Wi-Fi setup', exact: true }).click();
   await page.getByRole('button', { name: 'I’ve joined Lightweaver-EEFF', exact: true }).click();
 
   // While the card is still on its setup AP (unreachable on the LAN — the
@@ -627,7 +627,8 @@ test('a wrong card answering on the LAN never auto-advances setup past the ident
   await seedCommissioningFlow(page, 'wifi');
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue Wi-Fi setup', exact: true }).click();
   await page.getByRole('button', { name: 'I’ve joined Lightweaver-EEFF', exact: true }).click();
 
   // A different card (mismatched identity) answers /api/status in station
@@ -1345,20 +1346,17 @@ test('Card section navigation becomes one compact switcher on a 390px viewport',
   expect(pageWidth.scrollWidth).toBeLessThanOrEqual(pageWidth.viewportWidth);
 });
 
-test('disconnected Card overview shows the ordered setup path and Connect as primary', async ({ page }) => {
+test('disconnected Card overview delegates to one exact Setup task without a second ladder', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
 
   await expect(page.getByRole('heading', { name: 'Your Lightweaver hardware' })).toBeVisible();
   await dispatchCardLink(page, [{ type: 'bridge-lost', reason: 'never-connected', host: 'lightweaver.local' }]);
   await expect(page.getByTestId('card-detected-state')).toContainText(/not detected|not connected/i);
-  const steps = page.getByTestId('card-setup-steps').locator('li');
-  await expect(steps).toHaveCount(5);
-  await expect(steps.locator('.card-setup-label')).toHaveText(['Connect', 'Install firmware', 'WiFi', 'Install on card', 'Test lights']);
-  await expect(page.getByRole('button', { name: 'Connect card', exact: true })).toHaveClass(/primary/);
-
-  const batch = page.getByTestId('card-batch-link');
-  await expect(batch).toContainText('Making many cards?');
-  await expect(batch.getByRole('button', { name: 'Batch production', exact: true })).toBeVisible();
+  await expect(page.getByTestId('card-setup-steps')).toHaveCount(0);
+  const diagnosis = page.getByTestId('card-setup-diagnosis');
+  await expect(diagnosis).toContainText(/connect/i);
+  await diagnosis.getByRole('button', { name: 'Continue setup', exact: true }).click();
+  await expect(page).toHaveURL(/#screen=card&section=setup&task=connect-card$/);
 });
 
 test('direct discovery never auto-adopts; only the explicit pair action persists identity', async ({ page }) => {

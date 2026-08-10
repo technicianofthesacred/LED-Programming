@@ -29,6 +29,7 @@ import {
 import { normalizeCardHost } from '../lib/cardConnection.js';
 import { BENCH_PROJECT_ID } from '../lib/benchConfig.js';
 import { STRIP_DISCOVERY_LABEL } from '../lib/cardAction.js';
+import { deriveSetupJourney } from '../lib/setupJourney.js';
 
 // navigateStudio (the `go` prop) takes a bare screen key, not the `screen=…`
 // hash fragment that STRIP_DISCOVERY_ROUTE holds — passing the fragment fell
@@ -96,6 +97,7 @@ function CardOverview({
   onConnectCard,
   onOpenConnectionCenter,
   onOpenSection,
+  onOpenSetupTask,
   go,
   replaceProject,
   currentProject,
@@ -165,27 +167,23 @@ function CardOverview({
   } catch {
     currentProjectInstallable = false;
   }
-  const setupLabels = ['Connect', 'Install firmware', 'WiFi', 'Install on card', 'Test lights'];
-  let currentSetupIndex = ready || blankCard ? 3 : 0;
-  if (commissioningFlow?.stage === 'install-safely') currentSetupIndex = 1;
-  else if (commissioningFlow?.stage === 'set-up-card') {
-    currentSetupIndex = ['setup-required', 'setup-joined'].includes(commissioningFlow.networkState) ? 2 : 3;
-  } else if (commissioningFlow?.stage === 'check-lights') currentSetupIndex = 4;
-
-  let commissioningAction = null;
-  if (commissioningFlow?.stage === 'install-safely') {
-    commissioningAction = { label: 'Continue installation', section: 'install' };
-  } else if (commissioningFlow?.stage === 'set-up-card') {
-    if (['setup-required', 'setup-joined'].includes(commissioningFlow.networkState)) {
-      commissioningAction = { label: 'Continue WiFi setup', section: 'install' };
-    } else if (commissioningFlow.cardAcknowledgedAt) {
-      commissioningAction = { label: 'Install project on card', section: 'install' };
-    } else {
-      commissioningAction = { label: 'Reconnect installed card', section: 'install' };
-    }
-  } else if (commissioningFlow?.stage === 'check-lights') {
-    commissioningAction = { label: 'Test lights', section: 'install' };
-  }
+  const setupJourney = deriveSetupJourney({ cardLink, commissioningFlow, project: currentProject });
+  const setupTaskCopy = {
+    'connect-card': 'Connect the exact Lightweaver card.',
+    'pair-card': 'Pair the card Studio found.',
+    'reconnect-card': 'Reconnect the expected Lightweaver card.',
+    'recover-operation': 'Recover the unfinished card operation safely.',
+    'update-firmware': 'Update this card before setup continues.',
+    'configure-wifi': 'Finish connecting this card to Wi-Fi.',
+    'install-project': 'Install the current project on this exact card.',
+    'discover-lights': 'Find and count the connected lights.',
+    'place-lights': 'Place the discovered lights on the artwork.',
+    'verify-direction': 'Verify the physical direction of each strip.',
+    'test-and-save': 'Test and save the project to the card.',
+    'confirm-visible-lights': 'Confirm what the installed lights show.',
+    'load-matching-project': 'Load the saved project that matches this card.',
+    'open-patterns': 'Setup is complete. Continue to your patterns.',
+  }[setupJourney.taskId] || 'Continue the exact next Setup task.';
 
   let presentation;
   if (activity === 'failed') {
@@ -760,25 +758,6 @@ function CardOverview({
     const autoIntent = isCardEditIntentAbandoned(requestedIntent) ? '' : requestedIntent;
     void loadMatchingCardProject({ probeOnly: !autoIntent, autoIntent, probeSignature: signature });
   }, [activeCloudProjects, browserProjects, cardHost, cardLink, cardProjectProbeRevision, loadMatchingCardProject, projectGeneration, ready]);
-  const renderAction = (action, primary = false) => action && (
-    <button
-      type="button"
-      className={`btn${primary ? ' primary' : ''}`}
-      disabled={action.disabled}
-      onClick={() => action.action === 'connect'
-        ? openConnection()
-        : action.action === 'discovery'
-          ? go(STRIP_DISCOVERY_VIEW)
-        : action.action === 'new-project'
-          ? onStartNewProject?.()
-        : action.view
-          ? go(action.view)
-          : onOpenSection(action.section)}
-    >
-      {action.label}
-    </button>
-  );
-
   return (
     <div className="card-overview">
       <div className="card-overview-state">
@@ -789,37 +768,12 @@ function CardOverview({
         </div>
       </div>
 
-      <ol className="card-setup-steps" data-testid="card-setup-steps" aria-label="Card setup order">
-        {setupLabels.map((label, index) => {
-          const stepState = index < currentSetupIndex ? 'complete' : index === currentSetupIndex ? 'current' : 'upcoming';
-          return (
-            <li key={label} data-step-state={stepState} aria-current={stepState === 'current' ? 'step' : undefined}>
-              <span className="card-setup-number" aria-hidden="true">{stepState === 'complete' ? '✓' : index + 1}</span>
-              <span className="card-setup-label">{label}</span>
-            </li>
-          );
-        })}
-      </ol>
-
-      <div className="card-overview-actions">
-        {commissioningAction ? (
-          <>
-            {renderAction(commissioningAction, true)}
-            <button type="button" className="btn" onClick={() => onOpenSection('support')}>Open support</button>
-          </>
-        ) : ready && activity === 'idle' ? (
-          <>
-            {renderAction(presentation.primary, true)}
-            {renderAction(presentation.secondary)}
-            <button type="button" className="btn" onClick={() => onOpenSection('install')}>Check for update</button>
-          </>
-        ) : (
-          <>
-            {renderAction(presentation.primary, true)}
-            {renderAction(presentation.secondary)}
-            {renderAction(presentation.tertiary)}
-          </>
-        )}
+      <div className="card-support-panel" data-testid="card-setup-diagnosis">
+        <h2>Next setup task</h2>
+        <p>{setupTaskCopy}</p>
+        <button type="button" className="btn primary" onClick={() => onOpenSetupTask?.(setupJourney.taskId)}>
+          Continue setup
+        </button>
       </div>
 
       {ready && (
@@ -949,7 +903,7 @@ function CardSupport({ initialTool, cardProps, onOpenConnectionCenter, onOpenSec
   );
 }
 
-export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection, go, replaceProject, currentProject, projectGeneration, activeCloudProjects, browserProjects, readBrowserProjects, readCloudProject, openMatchingCardProject, confirmProjectReplacement, saveBeforeCardProjectSwitch, saveProjectToBrowserGuarded, isProjectSwitchSnapshotCurrent, onMatchedProjectLoaded, onStartNewProject, onSaveProject, route = { section: DEFAULT_CARD_SECTION, supportTool: '' } }) {
+export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection, onOpenSetupTask, go, replaceProject, currentProject, projectGeneration, activeCloudProjects, browserProjects, readBrowserProjects, readCloudProject, openMatchingCardProject, confirmProjectReplacement, saveBeforeCardProjectSwitch, saveProjectToBrowserGuarded, isProjectSwitchSnapshotCurrent, onMatchedProjectLoaded, onStartNewProject, onSaveProject, route = { section: DEFAULT_CARD_SECTION, supportTool: '' } }) {
   const headingRef = useRef(null);
   const mountedRef = useRef(false);
 
@@ -992,7 +946,7 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
   else if (route.section === 'workshop') content = <ProductionScreen embedded cardHost={cardHost} cardLink={cardLink} onConnectCard={onConnectCard} />;
   else if (route.section === 'preferences') content = <SettingsScreen embedded mode="preferences" {...cardProps} />;
   else if (route.section === 'support') content = <CardSupport initialTool={route.supportTool} cardProps={cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} />;
-  else content = <CardOverview {...cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} go={go} replaceProject={replaceProject} currentProject={currentProject} projectGeneration={projectGeneration} activeCloudProjects={activeCloudProjects} browserProjects={browserProjects} readBrowserProjects={readBrowserProjects} readCloudProject={readCloudProject} openMatchingCardProject={openMatchingCardProject} confirmProjectReplacement={confirmProjectReplacement} saveBeforeCardProjectSwitch={saveBeforeCardProjectSwitch} isProjectSwitchSnapshotCurrent={isProjectSwitchSnapshotCurrent} onMatchedProjectLoaded={onMatchedProjectLoaded} onStartNewProject={onStartNewProject} />;
+  else content = <CardOverview {...cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} onOpenSetupTask={onOpenSetupTask} go={go} replaceProject={replaceProject} currentProject={currentProject} projectGeneration={projectGeneration} activeCloudProjects={activeCloudProjects} browserProjects={browserProjects} readBrowserProjects={readBrowserProjects} readCloudProject={readCloudProject} openMatchingCardProject={openMatchingCardProject} confirmProjectReplacement={confirmProjectReplacement} saveBeforeCardProjectSwitch={saveBeforeCardProjectSwitch} isProjectSwitchSnapshotCurrent={isProjectSwitchSnapshotCurrent} onMatchedProjectLoaded={onMatchedProjectLoaded} onStartNewProject={onStartNewProject} />;
 
   // Batch production (route.section === 'workshop') renders outside the tab
   // set: its own heading and kicker, no section tab highlighted.

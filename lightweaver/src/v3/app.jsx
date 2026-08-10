@@ -75,6 +75,7 @@ import { createStudioFreshnessMonitor } from '../lib/studioFreshness.js';
 import { STUDIO_HARDWARE_OPERATION_EVENT } from '../lib/studioHardwareOperation.js';
 import { getRunningStudioRelease } from '../lib/studioRelease.js';
 import { bootstrapStudioCardConnection } from '../lib/studioCardBootstrap.js';
+import { deriveSetupJourney } from '../lib/setupJourney.js';
 
 const PatternScreen = lazy(() => import('./lw-pattern.jsx').then(module => ({ default: module.PatternScreen })));
 const PatternLabScreen = lazy(() => import('../pattern-lab/PatternLabScreen.jsx'));
@@ -740,6 +741,7 @@ function Shell({ offlineUpdateController = null }) {
     params.set('screen', 'card');
     params.set('section', isCardSection(section) ? section : DEFAULT_CARD_SECTION);
     params.delete('mode');
+    params.delete('task');
     // Replace, not push, so Back behaves the same for screen and section
     // changes as it does for rail navigation.
     routeStore.replace(`#${params.toString()}`);
@@ -845,6 +847,17 @@ function Shell({ offlineUpdateController = null }) {
     connected ? cardLink.card : null,
     firmwareReleaseIdentity.state === 'verified' ? firmwareReleaseIdentity.manifest : null,
   ), [cardLink.card, connected, firmwareReleaseIdentity.manifest, firmwareReleaseIdentity.state]);
+  const openSetupTask = useCallback(taskId => {
+    if (installActiveRef.current) return;
+    markCardSectionNavigation();
+    flushProjectAutosave();
+    const journey = deriveSetupJourney({
+      cardLink,
+      commissioningFlow: inspectCardCommissioning().flow,
+      project: serializeProject(),
+    });
+    routeStore.replace(`#screen=card&section=setup&task=${encodeURIComponent(taskId || journey.taskId)}`);
+  }, [cardLink, flushProjectAutosave, routeStore, serializeProject]);
   const openConnectionCenter = useCallback(() => setConnectionCenterOpen(true), []);
   const closeConnectionCenter = useCallback(() => setConnectionCenterOpen(false), []);
   const openCardControl = useCallback(() => {
@@ -853,12 +866,12 @@ function Shell({ offlineUpdateController = null }) {
     else if (status === 'Needs attention' || status === 'Needs project') {
       setCardControlOpen(false);
       setConnectionCenterOpen(false);
-      openCardSection('setup');
+      openSetupTask();
     } else {
       setCardControlOpen(false);
       setConnectionCenterOpen(true);
     }
-  }, [cardLink, openCardSection]);
+  }, [cardLink, openSetupTask]);
   const closeCardControl = useCallback(() => setCardControlOpen(false), []);
   const reconnectFromCardControl = useCallback(() => {
     setCardControlOpen(false);
@@ -1216,6 +1229,7 @@ function Shell({ offlineUpdateController = null }) {
               onOpenConnectionCenter={openConnectionCenter}
               go={navigateStudio}
               onOpenSection={openCardSection}
+              onOpenSetupTask={openSetupTask}
               replaceProject={replaceProject}
               currentProject={serializeProject()}
               projectGeneration={projectLifecycle.generation}
