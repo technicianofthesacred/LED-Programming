@@ -112,6 +112,29 @@ test('USB discovery names the exact card and separates last-verified installed f
   await expect(identity).toContainText(`v${manifest.firmwareVersion} · Build ${manifest.buildNumber}`);
 });
 
+test('USB flash identity outranks remembered firmware and is labeled as a direct card read', async ({ page }) => {
+  await page.addInitScript(({ card }) => {
+    localStorage.clear();
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify(card));
+    Object.defineProperty(navigator, 'serial', { configurable: true, value: {} });
+    (window as any).__LW_FIND_INSTALL_CARD_FOR_TEST__ = async () => ({
+      connection: { loader: {}, transport: { disconnect: async () => true } },
+      hardware: {
+        cardId: card.id, chipName: 'ESP32-S3', chipDescription: 'ESP32-S3',
+        flashSize: '16MB', flashBytes: 16 * 1024 * 1024,
+        firmwareVersion: '1.1.3', buildId: 'c80ba832eebe0b681112753b32d24001d01bf56f',
+        source: 'usb-flash',
+      },
+    });
+  }, { card: remembered(1198, 'a'.repeat(40)) });
+  await page.goto('/#screen=flash&mode=install', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Find connected card' }).click();
+
+  const identity = page.getByTestId('install-card-identity');
+  await expect(identity).toContainText('v1.1.3 · Build c80ba832eebe (read directly from this card over USB)');
+  await expect(identity).not.toContainText('v1.0.0');
+});
+
 test('LAN connection explains and releases an active USB inspection before any status probe', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.clear();

@@ -5,6 +5,7 @@ import {
 } from './flashConnection.js';
 import { writeVerifiedFlash } from './flashPlan.js';
 import { cardIdFromEspMac } from './cardCommissioningFlow.js';
+import { readLightweaverFirmwareIdentity } from './usbFirmwareIdentity.js';
 
 const WLED_API_URL = 'https://api.github.com/repos/wled/WLED/releases/latest';
 
@@ -27,12 +28,17 @@ export async function inspectConnectedESP(loader, chipDescription = '') {
   if (!loader) throw new Error('The connected card could not be inspected');
   const flashSize = await loader.detectFlashSize();
   const mac = await loader.chip?.readMac?.(loader);
+  const chipName = String(loader.chip?.CHIP_NAME || '');
+  const firmware = chipName === 'ESP32-S3' && String(flashSize) === '16MB'
+    ? await readLightweaverFirmwareIdentity(loader)
+    : null;
   return {
     chipDescription: String(chipDescription || loader.chip?.CHIP_NAME || 'Unknown chip'),
-    chipName: String(loader.chip?.CHIP_NAME || ''),
+    chipName,
     flashSize,
     mac: String(mac || ''),
     cardId: cardIdFromEspMac(mac),
+    ...(firmware || {}),
   };
 }
 

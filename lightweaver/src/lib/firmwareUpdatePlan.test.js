@@ -100,6 +100,17 @@ test('a live link is trusted over a remembered one', () => {
   );
 });
 
+test('firmware read directly from this USB card outranks browser and LAN history', () => {
+  const hardware = {
+    cardId: 'lw-1', firmwareVersion: '1.1.3', buildId: 'c'.repeat(40), source: 'usb-flash',
+  };
+  assert.equal(resolveInstalledFirmware({
+    hardware,
+    linkedCard: { id: 'lw-1', firmwareVersion: '1.1.1', buildNumber: 1198, buildId: 'a'.repeat(40) },
+    rememberedCard: { id: 'lw-1', firmwareVersion: '1.0.0', buildNumber: 1000, buildId: 'b'.repeat(40) },
+  }), hardware);
+});
+
 // Reporting the last card's firmware for the one on the desk is worse than
 // saying nothing, because it reads as a measurement of THIS card.
 test('a remembered identity for a DIFFERENT card is never used', () => {

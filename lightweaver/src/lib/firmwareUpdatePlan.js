@@ -126,6 +126,7 @@ export function resolveInstalledFirmware({ linkedCard = null, rememberedCard = n
     const id = String(candidate.id || candidate.cardId || '').trim().toLowerCase();
     return !id || id === plugged;
   };
+  if (hardware?.source === 'usb-flash' && matches(hardware)) return hardware;
   if (matches(linkedCard)) return linkedCard;
   if (matches(rememberedCard)) return rememberedCard;
   return null;

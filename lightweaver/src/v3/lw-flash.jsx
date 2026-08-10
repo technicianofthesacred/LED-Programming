@@ -466,9 +466,11 @@ import {
       installed: installedFirmware,
       available: releaseState.state === 'ready' ? releaseState.release.manifest : null,
     }), [installedFirmware, releaseState]);
-    const installedEvidenceLabel = installedFirmware === cardLink?.card
-      ? 'live card connection'
-      : installedFirmware ? 'last verified for this exact card' : '';
+    const installedEvidenceLabel = installedFirmware?.source === 'usb-flash'
+      ? 'read directly from this card over USB'
+      : installedFirmware === cardLink?.card
+        ? 'live card connection'
+        : installedFirmware ? 'last verified for this exact card' : '';
     const loaderRef = useRef(null);
     const transportRef = useRef(null);
     const inspectionRef = useRef(null);
@@ -743,7 +745,7 @@ import {
               <p>Studio will ask which USB device to use, then confirm it is the correct ESP32-S3 card with 16 MB of flash.</p>
             </div>
             <button className="btn-lg" type="button" onClick={findCard} disabled={!releaseReady || cardState.state === 'finding' || installState === 'installing' || installState === 'observing'}>
-              {cardState.state === 'finding' ? 'Checking card…' : cardState.state === 'ready' ? 'Change connected card' : 'Find connected card'}
+              {cardState.state === 'finding' ? 'Checking card and firmware…' : cardState.state === 'ready' ? 'Change connected card' : 'Find connected card'}
             </button>
             {cardState.state === 'ready' && (
               <div className="install-check-ok" data-testid="install-card-identity">
