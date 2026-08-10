@@ -16,10 +16,13 @@ import { prepareCardDeployment, waitForCardDeploymentVerification } from '../lib
 import { normalizePatchBoard } from '../lib/patchBoard.js';
 import { evaluateCardInstallGate, readCardCommissioningVerification } from '../lib/cardInstallGate.js';
 import { normalizeSavedLooks } from '../lib/sectionLookModel.js';
+import { getCardWiringStatus } from '../lib/cardWiringSafety.js';
 import { normalizeCardVisualLook } from '../lib/cardVisualLook.js';
 import {
   applyTestStripToRuntimePackage,
+  captureTestStripCandidate,
   readTestStrip,
+  runtimePackageForCardOperation,
   TEST_STRIP_ZONE_ID,
 } from '../lib/testStrip.js';
 import {
@@ -82,13 +85,24 @@ function downloadJson(filename, content) {
 // only pushes when it's missing).
 async function ensureTestStripLayoutOnCard(host, runtimePackage, length) {
   const testPackage = applyTestStripToRuntimePackage(runtimePackage, length);
-  await ensureCardSectionsForPreview({
-    host,
-    requiredZoneIds: [TEST_STRIP_ZONE_ID],
-    runtimePackage: testPackage,
-    allowLayoutChange: true,
-    allowProjectChange: true,
-  });
+  const before = await getCardWiringStatus({ host }).catch(() => null);
+  try {
+    await ensureCardSectionsForPreview({
+      host,
+      requiredZoneIds: [TEST_STRIP_ZONE_ID],
+      runtimePackage: testPackage,
+      allowLayoutChange: true,
+      allowProjectChange: true,
+    });
+  } catch (error) {
+    if (before) {
+      await captureTestStripCandidate({
+        host,
+        previousActivationId: before.activationId,
+      }).catch(() => {});
+    }
+    throw error;
+  }
   return testPackage;
 }
 
@@ -479,41 +493,34 @@ function realPatternShape(patternId) {
       setHandoffUrl('');
       setPlaylistStatus(makePlaylistPushPendingState());
       setPlaylistSyncing(true);
-      // Test strip mode is a deliberate, session-only override: everything
-      // pushed to the card targets the collapsed single N-LED output, and the
-      // wiring/project guard is bypassed on purpose (the user knows they're on
-      // a bench strip). The saved project (playlist/zones/patchBoard) is
-      // never touched — only what's sent to the card.
-      const testStrip = readTestStrip();
       let packageForCard = runtimePackage;
       try {
         const validRuntimePackage = requireRuntimePackage();
-        packageForCard = testStrip.enabled
-          ? applyTestStripToRuntimePackage(validRuntimePackage, testStrip.length)
-          : validRuntimePackage;
+        // Loading the playlist is an authoritative Save operation. Test-strip
+        // mode is limited to explicit live previews and can never substitute
+        // its short wiring package here.
+        packageForCard = runtimePackageForCardOperation(validRuntimePackage, { operation: 'save' });
         prepareCardStoragePayload(packageForCard);
         const before = await readCardProjectEvidence({ host });
         const response = await syncRuntimePackageToCard({
           host,
           runtimePackage: packageForCard,
-          allowLayoutChange: testStrip.enabled ? true : allowLayoutChange,
-          allowProjectChange: testStrip.enabled ? true : allowProjectChange,
+          allowLayoutChange,
+          allowProjectChange,
         });
         if (!installIsCurrent()) return;
-        if (!testStrip.enabled) {
-          const exactPrepared = { ...runtimeBuild.prepared, cardId: before.cardId };
-          const verification = await waitForCardDeploymentVerification(
-            exactPrepared,
-            { readEvidence: () => readCardProjectEvidence({ host }) },
-          );
-          markProjectInstalled({
-            revision: projectLifecycle.editedRevision,
-            generation: projectGeneration,
-            cardId: verification.cardId,
-            projectRevision: exactPrepared.config.projectRevision,
-            projectFingerprint: exactPrepared.config.projectFingerprint,
-          });
-        }
+        const exactPrepared = { ...runtimeBuild.prepared, cardId: before.cardId };
+        const verification = await waitForCardDeploymentVerification(
+          exactPrepared,
+          { readEvidence: () => readCardProjectEvidence({ host }) },
+        );
+        markProjectInstalled({
+          revision: projectLifecycle.editedRevision,
+          generation: projectGeneration,
+          cardId: verification.cardId,
+          projectRevision: exactPrepared.config.projectRevision,
+          projectFingerprint: exactPrepared.config.projectFingerprint,
+        });
         setPlaylistStatus(makePlaylistPushSuccessState(response));
       } catch (error) {
         if (!installIsCurrent()) return;

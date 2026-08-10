@@ -66,7 +66,7 @@ import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard, readCardP
 import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
 import { prepareCardDeployment, waitForCardDeploymentVerification } from '../lib/cardDeployment.js';
 import { ensureCardSectionsForPreview } from '../lib/cardSectionSync.js';
-import { applyTestStripToRuntimePackage, readTestStrip } from '../lib/testStrip.js';
+import { runtimePackageForCardOperation } from '../lib/testStrip.js';
 import { decideLiveControlProjectAuthority, pushLivePreviewToCard, recoverCardLights } from '../lib/cardLiveControl.js';
 import {
   cardActionReducer,
@@ -1383,18 +1383,9 @@ import { PatternPreview } from './PatternPreview.jsx';
           standaloneController: nextController,
         });
         const nextPackage = prepared.runtimePackage;
-        // Test strip mode (see src/lib/testStrip.js): the saved design (project
-        // state below) is untouched — only what actually goes to the card is
-        // collapsed to the single bench-strip output/zone.
-        // TODO(test-strip): checkCardLayoutWriteSafety's pixel-mismatch guard
-        // was written for "default template vs. real card" detection and isn't
-        // test-strip aware; it can misfire if the card is already on a test
-        // strip of the same length as a previous session. Revisit if that
-        // proves to be a real annoyance on the bench.
-        const testStrip = readTestStrip();
-        packageForCard = testStrip.enabled
-          ? applyTestStripToRuntimePackage(nextPackage, testStrip.length)
-          : nextPackage;
+        // Saving a pattern is authoritative project installation. The
+        // test-strip override is reserved for explicit previews only.
+        packageForCard = runtimePackageForCardOperation(nextPackage, { operation: 'save' });
         setHandoffUrl('');
         setStatusKind('');
         setStatus('');
@@ -1416,8 +1407,8 @@ import { PatternPreview } from './PatternPreview.jsx';
           host: safety.host || cardHost,
           timeoutMs: 6000,
           reboot: 'if-needed',
-          allowLayoutChange: testStrip.enabled || undefined,
-          allowProjectChange: testStrip.enabled || undefined,
+          allowLayoutChange: undefined,
+          allowProjectChange: undefined,
         });
         if (response?.state === 'staged') {
           throw new Error('The card kept this hardware change staged. Open Test & Install and confirm it on the real LEDs before it can be installed.');
@@ -1442,30 +1433,23 @@ import { PatternPreview } from './PatternPreview.jsx';
             || JSON.stringify(currentLook) !== JSON.stringify(requestedDraftLooks[targetId])
           )),
         ));
-        if (!testStrip.enabled) {
-          markProjectInstalled({
-            revision: requestedRevision,
-            generation: requestedGeneration,
-            cardId: verification.cardId,
-            projectRevision: exactPrepared.config.projectRevision,
-            projectFingerprint: exactPrepared.config.projectFingerprint,
-          });
-        }
+        markProjectInstalled({
+          revision: requestedRevision,
+          generation: requestedGeneration,
+          cardId: verification.cardId,
+          projectRevision: exactPrepared.config.projectRevision,
+          projectFingerprint: exactPrepared.config.projectFingerprint,
+        });
         markCardLookConfirmed({
           ...nextLook,
-          zone: testStrip.enabled ? '' : (selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : ''),
-          syncZones: testStrip.enabled || selectedTarget?.kind !== 'section',
+          zone: selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '',
+          syncZones: selectedTarget?.kind !== 'section',
         });
         if (!response.rebooting) {
-          // A test-strip card only has the one collapsed zone, so there is no
-          // real per-section target to preview against — just sync the whole
-          // (short) strip to the look that was just saved.
-          const zone = testStrip.enabled
-            ? ''
-            : (selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '');
+          const zone = selectedTarget?.kind === 'section' ? selectedTarget.zoneId || selectedTarget.id : '';
           if (currentPatternCardAccess() === 'ready') {
             await pushLivePreviewToCard(
-              { ...nextLook, zone, syncZones: testStrip.enabled || nextLook.syncZones },
+              { ...nextLook, zone, syncZones: nextLook.syncZones },
               { host: safety.host || cardHost, timeoutMs: 2200 },
             ).catch(() => null);
           }

@@ -3,8 +3,8 @@
 // on the bench) instead of the full saved design (e.g. 94 LEDs across several
 // outputs). This is deliberately NOT part of the project: it never touches
 // strips/patchBoard/zones/playlist, and it is never written into a saved or
-// exported project file. It lives in localStorage only, following the same
-// idiom as the card host store in cardConnection.js.
+// exported project file. It lives in sessionStorage so an abandoned bench
+// override cannot silently affect a later Studio session.
 
 export const TEST_STRIP_STORAGE_KEY = 'lw:test-strip';
 export const TEST_STRIP_CHANGED_EVENT = 'lightweaver-test-strip-changed';
@@ -19,14 +19,24 @@ function sanitizeLength(value) {
   return Number.isFinite(n) && n > 0 ? Math.min(n, 2000) : DEFAULT_TEST_STRIP.length;
 }
 
+function testStripStorage() {
+  return typeof window === 'undefined' ? null : window.sessionStorage;
+}
+
+function sessionId() {
+  return globalThis.crypto?.randomUUID?.() || `test-strip-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 export function readTestStrip() {
   if (typeof window === 'undefined') return { ...DEFAULT_TEST_STRIP };
   try {
-    const raw = JSON.parse(window.localStorage.getItem(TEST_STRIP_STORAGE_KEY) || 'null');
+    const raw = JSON.parse(testStripStorage()?.getItem(TEST_STRIP_STORAGE_KEY) || 'null');
     if (!raw || typeof raw !== 'object') return { ...DEFAULT_TEST_STRIP };
     return {
       enabled: Boolean(raw.enabled),
       length: sanitizeLength(raw.length),
+      ...(raw.sessionId ? { sessionId: String(raw.sessionId) } : {}),
+      ...(raw.activationId ? { activationId: String(raw.activationId) } : {}),
     };
   } catch {
     return { ...DEFAULT_TEST_STRIP };
@@ -34,19 +44,72 @@ export function readTestStrip() {
 }
 
 export function writeTestStrip(next = {}) {
+  const current = readTestStrip();
   const value = {
-    enabled: Boolean(next.enabled),
-    length: sanitizeLength(next.length),
+    enabled: next.enabled === undefined ? current.enabled : Boolean(next.enabled),
+    length: sanitizeLength(next.length === undefined ? current.length : next.length),
+    ...(next.sessionId !== undefined || current.sessionId
+      ? { sessionId: String(next.sessionId ?? current.sessionId ?? '') }
+      : {}),
+    ...(next.activationId !== undefined || current.activationId
+      ? { activationId: String(next.activationId ?? current.activationId ?? '') }
+      : {}),
   };
   if (typeof window !== 'undefined') {
     try {
-      window.localStorage.setItem(TEST_STRIP_STORAGE_KEY, JSON.stringify(value));
-      window.dispatchEvent?.(new CustomEvent(TEST_STRIP_CHANGED_EVENT, { detail: value }));
+      testStripStorage()?.setItem(TEST_STRIP_STORAGE_KEY, JSON.stringify(value));
+      if (typeof CustomEvent !== 'undefined') {
+        window.dispatchEvent?.(new CustomEvent(TEST_STRIP_CHANGED_EVENT, { detail: value }));
+      }
     } catch {
       /* quota */
     }
   }
   return value;
+}
+
+export function startTestStripSession({ length = readTestStrip().length, sessionId: exactSessionId = sessionId() } = {}) {
+  return writeTestStrip({
+    enabled: true,
+    length,
+    sessionId: exactSessionId,
+    activationId: '',
+  });
+}
+
+export function recordTestStripCandidate(activationId) {
+  const current = readTestStrip();
+  const exactActivationId = String(activationId || '').trim();
+  if (!current.enabled || !current.sessionId || !exactActivationId) return current;
+  return writeTestStrip({ activationId: exactActivationId });
+}
+
+export async function captureTestStripCandidate({ host, readStatus, previousActivationId } = {}) {
+  const wiring = readStatus ? null : await import('./cardWiringSafety.js');
+  const status = await (readStatus || (() => wiring.getCardWiringStatus({ host })))();
+  if ((status?.state !== 'staged' && status?.state !== 'testing') || !status?.activationId) return '';
+  if (previousActivationId !== undefined && String(status.activationId) === String(previousActivationId || '')) return '';
+  recordTestStripCandidate(status.activationId);
+  return String(status.activationId);
+}
+
+export async function stopTestStripSession({ host, readStatus, rollback } = {}) {
+  const current = readTestStrip();
+  // Disable first. A failed card read must never leave the silent override on.
+  writeTestStrip({ enabled: false, sessionId: '', activationId: '' });
+  if (!current.enabled || !current.activationId) return { rolledBack: false };
+
+  const wiring = (!readStatus || !rollback)
+    ? await import('./cardWiringSafety.js')
+    : null;
+  const read = readStatus || (() => wiring.getCardWiringStatus({ host }));
+  const rollbackCandidate = rollback || (activationId => wiring.rollbackCardWiringCandidate(activationId, { host }));
+  const status = await read();
+  const ownsActiveCandidate = status?.activationId === current.activationId
+    && (status?.state === 'staged' || status?.state === 'testing');
+  if (!ownsActiveCandidate) return { rolledBack: false };
+  await rollbackCandidate(current.activationId);
+  return { rolledBack: true, activationId: current.activationId };
 }
 
 // Simple subscribe helper (cardConnection.js has no subscribe of its own —
@@ -136,4 +199,10 @@ export function applyTestStripToRuntimePackage(runtimePackage = {}, length = DEF
       syncZones: true,
     },
   };
+}
+
+export function runtimePackageForCardOperation(runtimePackage, { operation = 'save', testStrip = readTestStrip() } = {}) {
+  return operation === 'preview' && testStrip?.enabled
+    ? applyTestStripToRuntimePackage(runtimePackage, testStrip.length)
+    : runtimePackage;
 }

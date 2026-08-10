@@ -1,5 +1,6 @@
 import { CardPushError, pushConfigToCard } from './cardPushClient.js';
 import { readCardZonesFromCard } from './cardLiveControl.js';
+import { prepareCardDeployment, verifyCardPostSaveState } from './cardDeployment.js';
 
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -80,6 +81,8 @@ export async function syncRuntimePackageToCard({
   pushConfig = pushConfigToCard,
   readZones = readCardZonesFromCard,
   sleep = delay,
+  expectedCardId = '',
+  verifyPostSave = verifyCardPostSaveState,
   allowLayoutChange = false,
   allowProjectChange = false,
 } = {}) {
@@ -98,12 +101,28 @@ export async function syncRuntimePackageToCard({
   }
   let verifiedZones = null;
   if (requiredZoneIds.length) {
-    verifiedZones = await waitForCardZones({
-      host,
-      requiredZoneIds,
-      readZones,
-      sleep,
-    });
+    const exactCardId = String(expectedCardId || response?.cardId || '').trim();
+    if (exactCardId && verifyPostSave) {
+      const config = runtimePackage?.config || runtimePackage || {};
+      const prepared = prepareCardDeployment({
+        ...config,
+        projectId: config?.piece?.id || config?.projectId,
+        projectName: config?.piece?.name || config?.projectName,
+        projectRevision: config?.projectRevision,
+        projectFingerprint: config?.projectFingerprint,
+        standaloneController: config,
+      }, { cardId: exactCardId });
+      const verified = await verifyPostSave({
+        prepared,
+        host,
+        expectedCardId: exactCardId,
+        requiredPatternIds: (config.looks || config.patterns || []).map(item => item?.id).filter(Boolean),
+        requiredZoneIds,
+      });
+      verifiedZones = verified.zones;
+    } else {
+      verifiedZones = await waitForCardZones({ host, requiredZoneIds, readZones, sleep });
+    }
   }
   return {
     ...(response && typeof response === 'object' ? response : { ok: true }),

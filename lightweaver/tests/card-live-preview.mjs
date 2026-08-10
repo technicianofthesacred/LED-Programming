@@ -390,7 +390,7 @@ await assert.rejects(
     readCardZonesFromCard({ host: 'lightweaver.local', expectedCardId: 'lw-expected', timeoutMs: 50 }),
     error => error?.reason === 'wrong-card',
   );
-  assert.deepEqual(identityCalls, ['http://lightweaver.local/api/firmware-info'], 'wrong-card identity stops before the zone read');
+  assert.deepEqual(identityCalls, ['http://lightweaver.local/api/status'], 'fresh exact-card authority stops a wrong card before the zone read');
   delete globalThis.window;
   delete globalThis.localStorage;
 }

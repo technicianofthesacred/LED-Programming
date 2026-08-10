@@ -371,6 +371,73 @@ test('does not report a deployment installed until exact-card read-back verifies
   }).ok, true);
 });
 
+test('post-save verification reacquires one exact-card authority and verifies every installed section', async () => {
+  const { prepareCardDeployment, verifyCardPostSaveState } = await deploymentApi();
+  const calls = [];
+  const authority = { cardId: 'lw-aabbccddeeff', request: async path => {
+    calls.push(path);
+    if (path === '/api/status') return {
+      cardId: 'lw-aabbccddeeff', projectRevision: 7, projectFingerprint: 'a'.repeat(64),
+      runtimePhase: 'ready', playbackReady: true, outputReady: true,
+      knownGoodProject: true, commandReady: true,
+    };
+    if (path === '/api/wiring/status') return { cardId: 'lw-aabbccddeeff', state: 'known-good', hasCandidate: false };
+    if (path === '/api/patterns') return { cardId: 'lw-aabbccddeeff', patterns: [{ id: 'ocean' }] };
+    if (path === '/api/zones') return { cardId: 'lw-aabbccddeeff', zones: [{ id: 'outer' }] };
+    throw new Error(`unexpected path ${path}`);
+  } };
+  let acquisitions = 0;
+
+  const result = await verifyCardPostSaveState({
+    prepared: prepareCardDeployment(projectFixture(), { cardId: 'lw-aabbccddeeff' }),
+    host: '192.168.18.70',
+    requiredPatternIds: ['ocean'],
+    requiredZoneIds: ['outer'],
+    acquireAuthority: async options => {
+      acquisitions += 1;
+      assert.deepEqual(options, { host: '192.168.18.70', expectedCardId: 'lw-aabbccddeeff' });
+      return authority;
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(acquisitions, 1);
+  assert.deepEqual(calls.sort(), ['/api/patterns', '/api/status', '/api/wiring/status', '/api/zones']);
+});
+
+test('post-save verification rejects stale or incomplete exact-card state', async () => {
+  const { prepareCardDeployment, verifyCardPostSaveState } = await deploymentApi();
+  const prepared = prepareCardDeployment(projectFixture(), { cardId: 'lw-aabbccddeeff' });
+  const base = {
+    '/api/status': {
+      cardId: 'lw-aabbccddeeff', projectRevision: 7, projectFingerprint: 'a'.repeat(64),
+      runtimePhase: 'ready', playbackReady: true, outputReady: true,
+      knownGoodProject: true, commandReady: true,
+    },
+    '/api/wiring/status': { cardId: 'lw-aabbccddeeff', state: 'known-good', hasCandidate: false },
+    '/api/patterns': { cardId: 'lw-aabbccddeeff', patterns: [{ id: 'ocean' }] },
+    '/api/zones': { cardId: 'lw-aabbccddeeff', zones: [{ id: 'outer' }] },
+  };
+  for (const [changedPath, changedValue, reason] of [
+    ['/api/status', { ...base['/api/status'], projectRevision: 6 }, 'read-back-mismatch'],
+    ['/api/wiring/status', { ...base['/api/wiring/status'], hasCandidate: true }, 'wiring-not-known-good'],
+    ['/api/patterns', { ...base['/api/patterns'], patterns: [] }, 'patterns-missing'],
+    ['/api/zones', { ...base['/api/zones'], zones: [] }, 'zones-missing'],
+  ]) {
+    await assert.rejects(
+      verifyCardPostSaveState({
+        prepared, host: '192.168.18.70', requiredPatternIds: ['ocean'], requiredZoneIds: ['outer'],
+        acquireAuthority: async () => ({
+          cardId: 'lw-aabbccddeeff',
+          request: async path => path === changedPath ? changedValue : base[path],
+        }),
+      }),
+      error => error?.reason === reason,
+      changedPath,
+    );
+  }
+});
+
 test('installed verification requires exact known-good command and playback readiness', async () => {
   const { prepareCardDeployment, verifyCardDeployment } = await deploymentApi();
   const prepared = prepareCardDeployment(projectFixture(), { cardId: 'lw-aabbccddeeff' });

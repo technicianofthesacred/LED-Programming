@@ -355,6 +355,10 @@ test('complete playlist sync writes and verifies all card sections', async ({ pa
   await page.goto('/#screen=playlist', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('card-link-status')).toContainText(/connected|direct/i, { timeout: 5000 });
 
+  // A bench preview session must not silently replace an authoritative Save
+  // with its short-strip runtime package.
+  await page.getByRole('button', { name: 'Test strip', exact: true }).click();
+
   card.operations.length = 0;
   await page.getByRole('button', { name: 'Install playlist on card' }).click();
   await expect.poll(() => card.savedConfig).not.toBeNull();

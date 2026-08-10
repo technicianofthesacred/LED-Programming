@@ -185,4 +185,22 @@ await assert.rejects(
   error => error === projectMismatch,
 );
 
+let postSaveVerificationCalls = 0;
+const verifiedAfterHeadChange = await syncRuntimePackageToCard({
+  host: '192.168.18.70',
+  runtimePackage,
+  expectedCardId: 'lw-exact-card',
+  pushConfig: async () => ({ ok: true, cardId: 'lw-exact-card', projectHead: 'head-2' }),
+  verifyPostSave: async options => {
+    postSaveVerificationCalls += 1;
+    assert.equal(options.host, '192.168.18.70');
+    assert.equal(options.expectedCardId, 'lw-exact-card');
+    assert.deepEqual(options.requiredZoneIds, ['outer', 'inner']);
+    return { ok: true, zones: { zones: [{ id: 'outer' }, { id: 'inner' }] } };
+  },
+  sleep: async () => {},
+});
+assert.equal(postSaveVerificationCalls, 1);
+assert.deepEqual(verifiedAfterHeadChange.verifiedZones.zones.map(zone => zone.id), ['outer', 'inner']);
+
 console.log('card-section-sync tests passed');
