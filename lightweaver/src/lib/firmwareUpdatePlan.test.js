@@ -73,6 +73,20 @@ test('an unnumbered card is replaced, not "updated" — the direction is unprova
   assert.match(plan.headline, /replaces it with/);
 });
 
+test('direct USB stable semver proves an update when build numbers are unavailable', () => {
+  const plan = describeFirmwareUpdate({
+    installed: {
+      firmwareVersion: '1.1.1', buildId: '1'.repeat(40), source: 'usb-flash',
+    },
+    available: {
+      firmwareVersion: '1.1.3', buildNumber: 1223, buildId: '3'.repeat(40),
+    },
+  });
+  assert.equal(plan.state, 'update');
+  assert.match(plan.headline, /updates it to 1\.1\.3 · Build 1223/);
+  assert.doesNotMatch(plan.headline, /replaces/);
+});
+
 test('every outcome keeps the erase warning', () => {
   const cases = [
     { installed: card(1084, 'b'.repeat(40)), available: card(1092) },

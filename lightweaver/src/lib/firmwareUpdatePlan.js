@@ -29,6 +29,20 @@ function versionOf(source) {
   return String(source?.firmwareVersion || '').trim();
 }
 
+function stableSemverOf(source) {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(versionOf(source));
+  if (!match) return null;
+  const parts = match.slice(1).map(Number);
+  return parts.every(Number.isSafeInteger) ? parts : null;
+}
+
+function compareStableSemver(left, right) {
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) return left[index] < right[index] ? -1 : 1;
+  }
+  return 0;
+}
+
 /**
  * A short label for one firmware: "Build 1092", or the short revision when the
  * build predates numbered builds, or '' when nothing is known.
@@ -89,6 +103,23 @@ export function describeFirmwareUpdate({ installed = null, available = null } = 
   }
   if (installedNumber && availableNumber) {
     const newer = availableNumber > installedNumber;
+    return {
+      state: newer ? 'update' : 'downgrade',
+      installedLabel,
+      availableLabel,
+      headline: newer
+        ? `This card is on ${installedLabel}. This updates it to ${target}.`
+        : `This card is on ${installedLabel}, which is NEWER than the ${availableLabel} available here. Installing takes it backwards.`,
+      caution,
+    };
+  }
+  const installedSemver = installed?.source === 'usb-flash' ? stableSemverOf(installed) : null;
+  const availableSemver = stableSemverOf(available);
+  const semverDirection = installedSemver && availableSemver
+    ? compareStableSemver(installedSemver, availableSemver)
+    : 0;
+  if (semverDirection !== 0) {
+    const newer = semverDirection < 0;
     return {
       state: newer ? 'update' : 'downgrade',
       installedLabel,

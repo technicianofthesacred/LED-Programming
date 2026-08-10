@@ -251,6 +251,8 @@ export function CardConnectionCenter({
         const version = result.observedCard.firmwareVersion ? ` firmware v${result.observedCard.firmwareVersion}` : ' firmware';
         const build = cardBuildLabel(result.observedCard);
         setFailure(`Found card ${result.observedCard.id} running${version}${build ? ` · ${build}` : ''}, but it cannot provide the exact safety evidence this Studio requires. Update this card to continue.`);
+      } else if (result.reason === 'direct-unavailable') {
+        setFailure('Studio received no reply from the card. It cannot yet tell whether the cause is Wi-Fi or local-network permission, or older firmware. Nothing has been changed.');
       } else {
         setFailure('Studio could not reach the card directly. Check that this device is on the same Wi-Fi and that local-network access is allowed.');
       }
@@ -554,6 +556,9 @@ export function CardConnectionCenter({
               >
                 Open local Studio
               </button>
+            )}
+            {directAttempt?.connected === false && directAttempt.reason === 'direct-unavailable' && (
+              <button type="button" className="btn primary" onClick={onOpenFirmwareUpdate || openInstall}>Check or update firmware</button>
             )}
             {incompatibleFirmware && (
               <button type="button" className="btn primary" onClick={onOpenFirmwareUpdate || openInstall}>Install current firmware</button>

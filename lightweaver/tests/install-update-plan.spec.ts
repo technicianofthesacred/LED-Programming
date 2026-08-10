@@ -112,7 +112,8 @@ test('USB discovery names the exact card and separates last-verified installed f
   await expect(identity).toContainText(`v${manifest.firmwareVersion} · Build ${manifest.buildNumber}`);
 });
 
-test('USB flash identity outranks remembered firmware and is labeled as a direct card read', async ({ page }) => {
+test('USB flash identity outranks remembered firmware and clearly recommends a proven semver update', async ({ page, request }) => {
+  const manifest = await (await request.get('/firmware/release-manifest.json')).json();
   await page.addInitScript(({ card }) => {
     localStorage.clear();
     localStorage.setItem('lw_card_identity_v1', JSON.stringify(card));
@@ -122,7 +123,7 @@ test('USB flash identity outranks remembered firmware and is labeled as a direct
       hardware: {
         cardId: card.id, chipName: 'ESP32-S3', chipDescription: 'ESP32-S3',
         flashSize: '16MB', flashBytes: 16 * 1024 * 1024,
-        firmwareVersion: '1.1.3', buildId: 'c80ba832eebe0b681112753b32d24001d01bf56f',
+        firmwareVersion: '1.1.1', buildId: '1366faf23a29a815044bae2e50405ff14b424e42',
         source: 'usb-flash',
       },
     });
@@ -131,8 +132,11 @@ test('USB flash identity outranks remembered firmware and is labeled as a direct
   await page.getByRole('button', { name: 'Find connected card' }).click();
 
   const identity = page.getByTestId('install-card-identity');
-  await expect(identity).toContainText('v1.1.3 · Build c80ba832eebe (read directly from this card over USB)');
+  await expect(identity).toContainText('v1.1.1 · Build 1366faf23a29 (read directly from this card over USB)');
   await expect(identity).not.toContainText('v1.0.0');
+  const plan = page.getByTestId('install-update-plan');
+  await expect(plan).toContainText(`This updates it to ${manifest.firmwareVersion} · Build ${manifest.buildNumber}.`);
+  await expect(plan).not.toContainText('replaces it with');
 });
 
 test('LAN connection explains and releases an active USB inspection before any status probe', async ({ page }) => {

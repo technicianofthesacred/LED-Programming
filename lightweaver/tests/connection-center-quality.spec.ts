@@ -273,11 +273,17 @@ test('an unreachable card stays a network or permission failure and does not gue
   await dialog.getByRole('button', { name: 'Connect this card' }).click();
 
   const alert = dialog.getByRole('alert');
-  await expect(alert).toContainText('same Wi-Fi');
-  await expect(alert).toContainText('local-network access');
-  await expect(alert).not.toContainText(/firmware|out of date|update/i);
+  await expect(alert).toContainText('Studio received no reply from the card');
+  await expect(alert).toContainText('cannot yet tell');
+  await expect(alert).toContainText('Wi-Fi or local-network permission');
+  await expect(alert).toContainText('older firmware');
+  await expect(alert).not.toContainText(/firmware is (?:old|out of date)|firmware needs an update/i);
   await expect(dialog.getByRole('button', { name: 'Install current firmware' })).toHaveCount(0);
   await expect(dialog.getByRole('button', { name: 'Open local Studio' })).toBeVisible();
+  const checkFirmware = dialog.getByRole('button', { name: 'Check or update firmware' });
+  await expect(checkFirmware).toBeVisible();
+  await checkFirmware.click();
+  await expect(page).toHaveURL(/#screen=card&section=install$/);
 });
 
 test('ready-browser-usb opens the fixed local install screen', async ({ page }) => {
