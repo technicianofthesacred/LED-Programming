@@ -324,16 +324,27 @@ export function SetupScreen({
   const renderActiveTask = phase => {
     if (phase.id === 'connect') {
       const blocker = journey.blockers[0]?.id;
+      const taskId = journey.taskId;
+      const connectionLabel = taskId === 'pair-card' ? 'Pair this card'
+        : taskId === 'reconnect-card' ? 'Reconnect this card'
+          : taskId === 'recover-operation' ? 'Recover card operation'
+            : 'Find my card';
       return (
         <div className="lw-setup-task" data-testid="setup-active-task">
           {blocker === 'firmware' && <p role="status">This exact card needs Lightweaver firmware before setup can continue.</p>}
           {blocker === 'wifi' && <p role="status">The exact card is on its setup network. Finish Wi-Fi, then return here.</p>}
-          <button type="button" className="btn primary" data-testid="setup-connect-card" onClick={() => onOpenConnectionCenter?.()}>
-            Find my card
-          </button>
-          <button type="button" className="btn" data-testid="setup-connect-manual" onClick={() => onOpenConnectionCenter?.()}>Connect by address</button>
-          {blocker === 'firmware' && <button type="button" className="btn" onClick={() => go('#screen=card&section=install')}>Install or update firmware</button>}
-          {blocker === 'wifi' && <button type="button" className="btn" onClick={() => onOpenConnectionCenter?.()}>Continue Wi-Fi setup</button>}
+          {taskId === 'update-firmware' ? (
+            <button type="button" className="btn primary" onClick={() => go('#screen=card&section=install')}>Install or update firmware</button>
+          ) : taskId === 'install-project' ? (
+            <button type="button" className="btn primary" onClick={() => go('#screen=card&section=install')}>Install project on card</button>
+          ) : taskId === 'configure-wifi' ? (
+            <button type="button" className="btn primary" onClick={() => go('#screen=card&section=install')}>Continue Wi-Fi setup</button>
+          ) : (
+            <>
+              <button type="button" className="btn primary" data-testid="setup-connect-card" onClick={() => onOpenConnectionCenter?.()}>{connectionLabel}</button>
+              {taskId === 'connect-card' && <button type="button" className="btn" data-testid="setup-connect-manual" onClick={() => onOpenConnectionCenter?.()}>Connect by address</button>}
+            </>
+          )}
         </div>
       );
     }

@@ -329,7 +329,7 @@ test.describe('a blank card whose firmware applies its first config', () => {
 
     await page.getByTestId('card-setup-close').click();
     await expect(setup).toHaveCount(0);
-    await expect(page).toHaveURL(/#screen=card&section=setup$/);
+    await expect(page).toHaveURL(/#screen=card&section=setup&task=discover-lights$/);
   });
 
   test('Test & Install sends a blank card to discovery instead of an LED check it cannot run', async ({ page }) => {

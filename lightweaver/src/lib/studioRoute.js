@@ -20,6 +20,12 @@
 export const DEFAULT_CARD_SECTION = 'overview';
 export const FIRST_RUN_CARD_SECTION = 'setup';
 const CARD_SECTION_KEYS = new Set(['setup', 'overview', 'install', 'settings', 'workshop', 'support', 'preferences']);
+const SETUP_TASK_KEYS = new Set([
+  'connect-card', 'pair-card', 'reconnect-card', 'recover-operation',
+  'update-firmware', 'configure-wifi', 'install-project', 'discover-lights',
+  'place-lights', 'verify-direction', 'test-and-save', 'confirm-visible-lights',
+  'load-matching-project', 'open-patterns',
+]);
 
 // Screens that were their own rail destination before the card workspace
 // absorbed them. Every link, bookmark and printed handoff card carrying one
@@ -59,7 +65,12 @@ export function cardRouteFromHash(hash = '') {
   // #screen=setup was its own rail destination before the merge.
   if (screen === 'setup') return { section: 'setup', supportTool: '' };
   const section = params.get('section');
-  return { section: CARD_SECTION_KEYS.has(section) ? section : DEFAULT_CARD_SECTION, supportTool: '' };
+  const safeSection = CARD_SECTION_KEYS.has(section) ? section : DEFAULT_CARD_SECTION;
+  if (safeSection === 'setup') {
+    const task = String(params.get('task') || '');
+    return { section: safeSection, supportTool: '', task: SETUP_TASK_KEYS.has(task) ? task : '' };
+  }
+  return { section: safeSection, supportTool: '' };
 }
 
 export function normalizeStudioView(value, { screenKeys = [], fallbackView = 'layout' } = {}) {
@@ -89,8 +100,10 @@ export function canonicalStudioHash(hash, view) {
   if (view === 'card') {
     if (!isCardSection(params.get('section'))) params.set('section', DEFAULT_CARD_SECTION);
     params.delete('mode');
+    if (params.get('section') !== 'setup' || !SETUP_TASK_KEYS.has(params.get('task'))) params.delete('task');
   } else {
     params.delete('section');
+    params.delete('task');
   }
   // `mode` is the Layout screen's deep link (#screen=layout&mode=draw|wire) and
   // means nothing anywhere else. `install` is not one of the two modes.

@@ -10,6 +10,18 @@ export const SETUP_STEP_IDS = SETUP_PHASE_IDS;
 
 export const CONNECTED_CARD_LINK_STATES = Object.freeze(['connected-direct', 'connected-bridge']);
 
+export const SETUP_TASK_IDS = Object.freeze([
+  'connect-card', 'pair-card', 'reconnect-card', 'recover-operation',
+  'update-firmware', 'configure-wifi', 'install-project', 'discover-lights',
+  'place-lights', 'verify-direction', 'test-and-save', 'confirm-visible-lights',
+  'load-matching-project', 'open-patterns',
+]);
+
+export function setupTaskRoute(taskId) {
+  const safeTask = SETUP_TASK_IDS.includes(taskId) ? taskId : 'connect-card';
+  return `#screen=card&section=setup&task=${safeTask}`;
+}
+
 const SETUP_MODE_HOST = '192.168.4.1';
 
 const PHASE_COPY = Object.freeze({
@@ -53,12 +65,34 @@ function commissioningStage(commissioningFlow) {
 
 function connectBlockers({ cardLink, commissioningFlow }) {
   const stage = commissioningStage(commissioningFlow);
+  if (cardLink?.activity === 'failed' || cardLink?.reason === 'operation-uncertain') {
+    return [{ id: 'recover-operation', phaseId: 'connect' }];
+  }
   if (cardLink?.reason === 'firmware-too-old' || stage === 'install-safely') {
     return [{ id: 'firmware', phaseId: 'connect' }];
   }
+  if (stage === 'set-up-card'
+    && ['setup-required', 'setup-joined'].includes(commissioningFlow?.networkState)) {
+    return [{ id: 'wifi', phaseId: 'connect' }];
+  }
+  if (cardLink?.reason === 'found-unpaired') return [{ id: 'pair-card', phaseId: 'connect' }];
+  if (cardLink?.state === 'reconnecting' || cardLink?.state === 'reconnecting-bridge') {
+    return [{ id: 'reconnect-card', phaseId: 'connect' }];
+  }
   if (!connectedExactCard(cardLink)) return [{ id: 'connect-card', phaseId: 'connect' }];
+  if (stage === 'set-up-card') return [{ id: 'install-project', phaseId: 'connect' }];
   if (normalizeHost(cardLink?.host) === SETUP_MODE_HOST) return [{ id: 'wifi', phaseId: 'connect' }];
   return [];
+}
+
+function withTask(result) {
+  const taskId = result.nextAction?.taskId || result.nextAction?.id || 'connect-card';
+  return {
+    ...result,
+    taskId,
+    route: setupTaskRoute(taskId),
+    nextAction: { ...result.nextAction, taskId, route: setupTaskRoute(taskId) },
+  };
 }
 
 function stripOutputs(project) {
@@ -161,12 +195,24 @@ export function deriveSetupJourney({
   const progress = lightProgress(project);
   const currentLayoutProgress = layoutProgress(project);
 
+  if (commissioningStage(commissioningFlow) === 'check-lights') {
+    return withTask({
+      diagnosis: { state: 'setup-required' },
+      phases: phasesFor('verify', progress, currentLayoutProgress),
+      blockers: [],
+      currentPhaseId: 'verify',
+      nextAction: { id: 'test-and-save', taskId: 'test-and-save', phaseId: 'verify' },
+      resumeDestination: null,
+      setupComplete: false,
+    });
+  }
+
   const installedMatch = blockers.length === 0
     && resolution?.matchesCurrentProject === true
     && resolution?.playbackAccess === 'ready'
     && resolution?.provisionalSetup !== true;
   if (installedMatch) {
-    return {
+    return withTask({
       diagnosis: { state: 'installed-match' },
       phases: phasesFor(null, progress, currentLayoutProgress, true),
       blockers: [],
@@ -174,14 +220,14 @@ export function deriveSetupJourney({
       nextAction: { id: 'open-patterns' },
       resumeDestination: 'patterns',
       setupComplete: true,
-    };
+    });
   }
 
   const savedMatch = blockers.length === 0
     && resolution?.savedProjectMatch === true
     && resolution?.provisionalSetup !== true;
   if (savedMatch) {
-    return {
+    return withTask({
       diagnosis: { state: 'saved-match' },
       phases: phasesFor('connect', progress, currentLayoutProgress),
       blockers: [],
@@ -189,7 +235,7 @@ export function deriveSetupJourney({
       nextAction: { id: 'load-matching-project' },
       resumeDestination: null,
       setupComplete: false,
-    };
+    });
   }
 
   let currentPhaseId;
@@ -197,11 +243,12 @@ export function deriveSetupJourney({
   if (blockers.length > 0) {
     currentPhaseId = 'connect';
     nextAction = {
-      id: blockers[0].id === 'connect-card'
-        ? 'connect-card'
-        : blockers[0].id === 'firmware'
-          ? 'install-firmware'
-          : 'configure-wifi',
+      id: blockers[0].id === 'firmware' ? 'install-firmware' : blockers[0].id,
+      taskId: blockers[0].id === 'firmware'
+        ? 'update-firmware'
+        : blockers[0].id === 'wifi'
+          ? 'configure-wifi'
+          : blockers[0].id,
       phaseId: 'connect',
     };
   } else if (!lightsComplete(progress, resolution)) {
@@ -217,7 +264,7 @@ export function deriveSetupJourney({
     currentPhaseId = 'verify';
     nextAction = nextVerificationAction(verification);
   } else {
-    return {
+    return withTask({
       diagnosis: { state: 'setup-complete' },
       phases: phasesFor(null, progress, currentLayoutProgress, true),
       blockers: [],
@@ -225,10 +272,10 @@ export function deriveSetupJourney({
       nextAction: { id: 'open-patterns' },
       resumeDestination: 'patterns',
       setupComplete: true,
-    };
+    });
   }
 
-  return {
+  return withTask({
     diagnosis: {
       state: blockers[0]?.id === 'connect-card' ? 'needs-card' : currentPhaseId === 'connect' ? 'connect-blocked' : 'setup-required',
     },
@@ -238,7 +285,7 @@ export function deriveSetupJourney({
     nextAction,
     resumeDestination: null,
     setupComplete: false,
-  };
+  });
 }
 
 export function isSetupComplete(journey) {

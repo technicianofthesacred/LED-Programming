@@ -58,6 +58,16 @@ product direction, not cleanup after feature work.
 11. Zone color control can accept a global acknowledgement after changing a
     specific zone. Require targeted readback of hue, saturation, speed, and hue
     shift before showing the control as applied.
+12. Software-only firmware updates need a one-use owner grant, not a bypass of
+    the physical gate. Bind a card-generated challenge to card ID, boot ID,
+    project head, Studio origin, release build, and ticket digest; have the
+    signed-in owner service sign only that short-lived update scope. Keep the
+    account cookie and every secret off the card, and retain physical presence
+    for guests, commissioning, and offline use.
+13. Four surfaces still diagnose the same card independently. Setup should emit
+    one stable task and route; the footer and Card Status should link to that
+    exact task, while Connection Center and Install/update only execute the
+    requested operation.
 
 ## Ordered work
 
@@ -72,7 +82,11 @@ product direction, not cleanup after feature work.
 6. Carry discovered GPIO/count truth into a ready-to-place provisional Layout
    without touching an existing design.
 7. Make zone color acknowledgements and readback exact and testable.
-8. Run the live loop twice from a fresh browser state: reconnect, recover,
+8. Make Setup the only diagnosis controller and remove the duplicate Card Status
+   setup ladder.
+9. Add the one-use, update-only owner grant with a dedicated signing key and
+   physical fallback.
+10. Run the live loop twice from a fresh browser state: reconnect, recover,
    direct pattern/color control, edit/save playlist, reload, navigate looks, and
    preserving firmware update.
 

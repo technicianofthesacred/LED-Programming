@@ -83,6 +83,18 @@ test('the card workspace keeps its section, and defaults only when the hash name
   assert.equal(reconcile('#screen=pattern&section=install'), '#screen=pattern');
 });
 
+test('Setup preserves a validated journey task and discards task parameters everywhere else', () => {
+  assert.deepEqual(cardRouteFromHash('#screen=card&section=setup&task=update-firmware'), {
+    section: 'setup', supportTool: '', task: 'update-firmware',
+  });
+  assert.deepEqual(cardRouteFromHash('#screen=card&section=setup&task=made-up'), {
+    section: 'setup', supportTool: '', task: '',
+  });
+  assert.equal(reconcile('#screen=card&section=setup&task=reconnect-card'), '#screen=card&section=setup&task=reconnect-card');
+  assert.equal(reconcile('#screen=card&section=overview&task=reconnect-card'), '#screen=card&section=overview');
+  assert.equal(reconcile('#screen=pattern&task=reconnect-card'), '#screen=pattern');
+});
+
 test('layout keeps its mode deep link and no other screen does', () => {
   assert.equal(reconcile('#screen=layout&mode=wire'), '#screen=layout&mode=wire');
   assert.equal(reconcile('#screen=layout&mode=draw'), '#screen=layout&mode=draw');

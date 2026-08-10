@@ -384,15 +384,14 @@ test('Card overview persists WiFi progress, gates the setup address, and resumes
   await seedCommissioningFlow(page, 'wifi');
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  const steps = page.getByTestId('card-setup-steps').locator('li');
-  await expect(steps.nth(0)).toHaveAttribute('data-step-state', 'complete');
-  await expect(steps.nth(1)).toHaveAttribute('data-step-state', 'complete');
-  await expect(steps.nth(2)).toHaveAttribute('data-step-state', 'current');
-  await expect(steps.nth(3)).toHaveAttribute('data-step-state', 'upcoming');
-  await expect(steps.nth(4)).toHaveAttribute('data-step-state', 'upcoming');
+  await expect(page.getByTestId('card-setup-steps')).toHaveCount(0);
+  await expect(page.getByTestId('card-setup-diagnosis')).toContainText('Finish connecting this card to Wi-Fi.');
+  await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+  await expect(page).toHaveURL(/#screen=card&section=setup&task=configure-wifi$/);
 
-  await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
-  await expect(page).toHaveURL(/#screen=card&section=install$/);
+  // The preserving installer remains the execution surface. The overview now
+  // proves that every entrance resolves through the same exact Setup task first.
+  await page.goto('/#screen=card&section=install', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('button', { name: 'I’ve joined Lightweaver-EEFF', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /Open 192\.168\.4\.1 Wi-Fi setup/i })).toHaveCount(0);
   await page.getByRole('button', { name: 'I’ve joined Lightweaver-EEFF', exact: true }).click();
@@ -590,7 +589,8 @@ test('reality-driven detection replaces the dead 192.168.4.1 link with the resto
   await seedCommissioningFlow(page, 'wifi');
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue Wi-Fi setup', exact: true }).click();
   await page.getByRole('button', { name: 'I’ve joined Lightweaver-EEFF', exact: true }).click();
 
   // While the card is still on its setup AP (unreachable on the LAN — the
@@ -627,7 +627,8 @@ test('a wrong card answering on the LAN never auto-advances setup past the ident
   await seedCommissioningFlow(page, 'wifi');
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue Wi-Fi setup', exact: true }).click();
   await page.getByRole('button', { name: 'I’ve joined Lightweaver-EEFF', exact: true }).click();
 
   // A different card (mismatched identity) answers /api/status in station
@@ -668,7 +669,8 @@ test('retained pre-install card identity cannot bypass the explicit WiFi handoff
   }]);
   await seedCommissioningFlow(page, 'wifi');
 
-  await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue Wi-Fi setup', exact: true }).click();
   await page.getByRole('button', { name: 'I’ve joined Lightweaver-EEFF', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Reconnect installed card', exact: true })).toBeVisible();
@@ -688,15 +690,16 @@ test('retained pre-install card identity cannot bypass the explicit WiFi handoff
   await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeVisible();
 });
 
-test('Card overview keeps Load project and Test as resumable commissioning steps', async ({ page }) => {
+test('Card overview delegates resumable install and test work to exact Setup tasks', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await seedCommissioningFlow(page, 'load-project');
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await connectCommissioningCard(page);
 
-  let steps = page.getByTestId('card-setup-steps').locator('li');
-  await expect(steps.nth(2)).toHaveAttribute('data-step-state', 'complete');
-  await expect(steps.nth(3)).toHaveAttribute('data-step-state', 'current');
-  await expect(steps.nth(4)).toHaveAttribute('data-step-state', 'upcoming');
+  await expect(page.getByTestId('card-setup-steps')).toHaveCount(0);
+  await expect(page.getByTestId('card-setup-diagnosis')).toContainText('Install the current project on this exact card.');
+  await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+  await expect(page).toHaveURL(/#screen=card&section=setup&task=install-project$/);
   await page.getByRole('button', { name: 'Install project on card', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Restore saved project', exact: true })).toBeVisible();
 
@@ -704,9 +707,7 @@ test('Card overview keeps Load project and Test as resumable commissioning steps
   await seedCommissioningFlow(page, 'test');
   await page.reload({ waitUntil: 'domcontentloaded' });
   await connectCommissioningCard(page);
-  steps = page.getByTestId('card-setup-steps').locator('li');
-  await expect(steps.nth(3)).toHaveAttribute('data-step-state', 'complete');
-  await expect(steps.nth(4)).toHaveAttribute('data-step-state', 'current');
+  await expect(page.getByTestId('card-setup-diagnosis')).toContainText('Test and save the project to the card.');
   await page.evaluate(async () => {
     const commissioning = await import('/src/lib/cardCommissioningFlow.js');
     const flow = commissioning.readCardCommissioning();
@@ -732,7 +733,10 @@ test('Card overview keeps Load project and Test as resumable commissioning steps
       outputs: expected.outputs,
     });
   });
-  await page.getByRole('button', { name: 'Test lights', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+  await expect(page).toHaveURL(/#screen=card&section=setup&task=test-and-save$/);
+  await page.evaluate(() => { window.location.hash = '#screen=card&section=install'; });
+  await expect(page).toHaveURL(/#screen=card&section=install$/);
   await expect(page).toHaveURL(/#screen=card&section=install$/);
   await page.getByRole('button', { name: 'Start 90-second light test', exact: true }).click();
   await expect(page.getByText(/blue first pixel and red final pixel/i)).toBeVisible();
@@ -746,7 +750,8 @@ test('Card overview keeps Load project and Test as resumable commissioning steps
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await seedCommissioningFlow(page, 'test');
   await connectCommissioningCard(page);
-  await page.getByRole('button', { name: 'Test lights', exact: true }).click();
+  await page.evaluate(() => { window.location.hash = '#screen=card&section=install'; });
+  await expect(page).toHaveURL(/#screen=card&section=install$/);
   await page.getByRole('button', { name: 'Start 90-second light test', exact: true }).click();
   await page.getByRole('button', { name: 'No, restore working setup', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Set up card', exact: true })).toBeVisible();
@@ -766,7 +771,8 @@ test('installed check-lights progress runs a bounded marker test and restores th
     };
   });
 
-  await page.getByRole('button', { name: 'Test lights', exact: true }).click();
+  await page.evaluate(() => { window.location.hash = '#screen=card&section=install'; });
+  await expect(page).toHaveURL(/#screen=card&section=install$/);
   await page.getByRole('button', { name: 'Start bounded marker test', exact: true }).click();
   await expect(page.getByText(/blue first pixel and red final pixel/i)).toBeVisible();
   const markers = await page.evaluate(() => (window as any).__commissioningMarkerStarts[0]);
@@ -811,7 +817,8 @@ test('commissioning requires an independent exact final wiring GET before cleari
     };
   });
 
-  await page.getByRole('button', { name: 'Test lights', exact: true }).click();
+  await page.evaluate(() => { window.location.hash = '#screen=card&section=install'; });
+  await expect(page).toHaveURL(/#screen=card&section=install$/);
   await page.getByRole('button', { name: 'Start 90-second light test', exact: true }).click();
   await page.getByRole('button', { name: 'Yes, every output is correct', exact: true }).click();
 
@@ -836,7 +843,8 @@ test('legacy staged wiring without authoritative identity cannot confirm and rem
     (window as any).__LW_ROLLBACK_COMMISSIONING_WIRING_FOR_TEST__ = async (activationId: string) => ({ state: 'known-good', activationId });
   });
 
-  await page.getByRole('button', { name: 'Test lights', exact: true }).click();
+  await page.evaluate(() => { window.location.hash = '#screen=card&section=install'; });
+  await expect(page).toHaveURL(/#screen=card&section=install$/);
   await page.getByRole('button', { name: 'Start 90-second light test', exact: true }).click();
   const confirm = page.getByRole('button', { name: 'Yes, every output is correct', exact: true });
   await expect(confirm).toBeDisabled();
@@ -944,7 +952,8 @@ test('an exact nonzero commissioning flow resumed after reload marks the restore
     };
   });
 
-  await page.getByRole('button', { name: 'Test lights', exact: true }).click();
+  await page.evaluate(() => { window.location.hash = '#screen=card&section=install'; });
+  await expect(page).toHaveURL(/#screen=card&section=install$/);
   await page.getByRole('button', { name: 'Start 90-second light test', exact: true }).click();
   await page.getByRole('button', { name: 'Yes, every output is correct', exact: true }).click();
 
@@ -972,8 +981,12 @@ test('light-check hardware mutations stay locked after loss until two stable exa
       return { state: 'known-good', activationId };
     };
   });
-  await page.getByRole('button', { name: 'Test lights', exact: true }).click();
+  await page.evaluate(() => { window.location.hash = '#screen=card&section=install'; });
+  await expect(page).toHaveURL(/#screen=card&section=install$/);
 
+  // Keep the background monitor from immediately healing the synthetic loss;
+  // this test owns recovery explicitly with the two envelopes below.
+  await page.route('**/api/status', route => route.abort());
   await dispatchCardLink(page, [{ type: 'direct-ping-missed', host: 'lightweaver.local' }]);
   const start = page.getByRole('button', { name: 'Start 90-second light test', exact: true });
   await expect(start).toBeDisabled();
@@ -987,6 +1000,10 @@ test('light-check hardware mutations stay locked after loss until two stable exa
     expectedCard: { id: stable.cardId, firmwareVersion: stable.firmwareVersion, buildId: stable.buildId },
   };
   await dispatchCardLink(page, [recovery, recovery]);
+  await page.unroute('**/api/status');
+  await page.route('**/api/status', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(stable),
+  }));
   await expect(start).toBeEnabled();
   await start.click();
   await expect.poll(() => page.evaluate(() => (window as any).__lightMutationCalls.activate)).toBe(1);
@@ -1345,20 +1362,17 @@ test('Card section navigation becomes one compact switcher on a 390px viewport',
   expect(pageWidth.scrollWidth).toBeLessThanOrEqual(pageWidth.viewportWidth);
 });
 
-test('disconnected Card overview shows the ordered setup path and Connect as primary', async ({ page }) => {
+test('disconnected Card overview delegates to one exact Setup task without a second ladder', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
 
   await expect(page.getByRole('heading', { name: 'Your Lightweaver hardware' })).toBeVisible();
   await dispatchCardLink(page, [{ type: 'bridge-lost', reason: 'never-connected', host: 'lightweaver.local' }]);
   await expect(page.getByTestId('card-detected-state')).toContainText(/not detected|not connected/i);
-  const steps = page.getByTestId('card-setup-steps').locator('li');
-  await expect(steps).toHaveCount(5);
-  await expect(steps.locator('.card-setup-label')).toHaveText(['Connect', 'Install firmware', 'WiFi', 'Install on card', 'Test lights']);
-  await expect(page.getByRole('button', { name: 'Connect card', exact: true })).toHaveClass(/primary/);
-
-  const batch = page.getByTestId('card-batch-link');
-  await expect(batch).toContainText('Making many cards?');
-  await expect(batch.getByRole('button', { name: 'Batch production', exact: true })).toBeVisible();
+  await expect(page.getByTestId('card-setup-steps')).toHaveCount(0);
+  const diagnosis = page.getByTestId('card-setup-diagnosis');
+  await expect(diagnosis).toContainText(/connect/i);
+  await diagnosis.getByRole('button', { name: 'Continue setup', exact: true }).click();
+  await expect(page).toHaveURL(/#screen=card&section=setup&task=connect-card$/);
 });
 
 test('direct discovery never auto-adopts; only the explicit pair action persists identity', async ({ page }) => {
@@ -1379,7 +1393,7 @@ test('direct discovery never auto-adopts; only the explicit pair action persists
   await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
 });
 
-test('connect actions prefer onOpenConnectionCenter and fall back to onConnectCard when absent', async ({ page }) => {
+test('overview connection recovery delegates to one exact Setup task while Support keeps the connection center', async ({ page }) => {
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Your Lightweaver hardware' })).toBeVisible();
 
@@ -1400,7 +1414,7 @@ test('connect actions prefer onOpenConnectionCenter and fall back to onConnectCa
     const createRoot = domModule.createRoot ?? domModule.default?.createRoot;
     if (typeof createRoot !== 'function') throw new Error('could not resolve createRoot');
 
-    const result = { overviewCenter: 0, overviewProbe: 0, recoveryCenter: 0, fallbackProbe: 0 };
+    const result = { overviewTask: '', overviewCenter: 0, recoveryCenter: 0 };
     const disconnectedLink = { state: 'disconnected', reason: 'card-unreachable', activity: 'idle' };
     const renderOnce = async props => {
       const host = document.createElement('div');
@@ -1408,8 +1422,8 @@ test('connect actions prefer onOpenConnectionCenter and fall back to onConnectCa
       const root = createRoot(host);
       root.render(React.createElement(CardScreen, props));
       await new Promise(resolve => setTimeout(resolve, 50));
-      const button = [...host.querySelectorAll('button')].find(node => node.textContent.trim() === 'Reconnect card');
-      if (!button) throw new Error('Reconnect card action not rendered');
+      const button = [...host.querySelectorAll('button')].find(node => ['Continue setup', 'Reconnect card'].includes(node.textContent.trim()));
+      if (!button) throw new Error('connection recovery action not rendered');
       button.click();
       root.unmount();
       host.remove();
@@ -1420,8 +1434,9 @@ test('connect actions prefer onOpenConnectionCenter and fall back to onConnectCa
       connected: false,
       cardHost: 'lightweaver.local',
       cardLink: disconnectedLink,
-      onConnectCard: () => { result.overviewProbe += 1; },
+      onConnectCard: () => {},
       onOpenConnectionCenter: () => { result.overviewCenter += 1; },
+      onOpenSetupTask: task => { result.overviewTask = task; },
       onOpenSection: () => {},
       route: { section: 'overview', supportTool: '' },
     });
@@ -1435,25 +1450,15 @@ test('connect actions prefer onOpenConnectionCenter and fall back to onConnectCa
       onOpenSection: () => {},
       route: { section: 'support', supportTool: 'recovery' },
     });
-    // Prop absent (current app.jsx wiring): must fall back to onConnectCard.
-    await renderOnce({
-      connected: false,
-      cardHost: 'lightweaver.local',
-      cardLink: disconnectedLink,
-      onConnectCard: () => { result.fallbackProbe += 1; },
-      onOpenSection: () => {},
-      route: { section: 'overview', supportTool: '' },
-    });
     return result;
   });
 
-  expect(calls.overviewCenter).toBe(1);
-  expect(calls.overviewProbe).toBe(0);
+  expect(calls.overviewTask).toBe('connect-card');
+  expect(calls.overviewCenter).toBe(0);
   expect(calls.recoveryCenter).toBe(1);
-  expect(calls.fallbackProbe).toBe(1);
 });
 
-test('connected Card overview identifies the card and makes Install on card primary', async ({ page }) => {
+test('connected Card overview identifies the card and keeps one primary Setup continuation', async ({ page }) => {
   const status = readyStatus('lw-gallery-card');
   await page.addInitScript(identity => {
     localStorage.setItem('lw_card_identity_v1', JSON.stringify(identity));
@@ -1476,7 +1481,7 @@ test('connected Card overview identifies the card and makes Install on card prim
   await expect(page.getByTestId('card-detected-state')).toContainText('Gallery card');
   await expect(page.getByTestId('card-detected-state')).toContainText(/connected/i);
   await expect(page.getByTestId('card-detected-state')).not.toContainText(/has not changed|nothing changed/i);
-  await expect(page.getByRole('button', { name: 'Install on card', exact: true })).toHaveClass(/primary/);
+  await expect(page.getByRole('button', { name: 'Continue setup', exact: true })).toHaveClass(/primary/);
   await expect(page.getByRole('button', { name: 'Verify in workshop', exact: true })).toHaveCount(0);
 });
 
@@ -1508,9 +1513,9 @@ test('Card overview distinguishes checking, blank, and ready evidence', async ({
     mode: 'factory-flash', source: 'defaults',
   });
   await expect(page.getByTestId('card-detected-state')).toContainText('Blank — load a project');
-  await expect(page.getByRole('button', { name: 'Install current project', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Start a new project', exact: true }).click();
-  await expect(page).toHaveURL(/#screen=layout/);
+  await expect(page.getByTestId('card-setup-diagnosis')).toContainText('Find and count the connected lights.');
+  await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+  await expect(page).toHaveURL(/#screen=card&section=setup&task=discover-lights$/);
 
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
 
@@ -1518,7 +1523,7 @@ test('Card overview distinguishes checking, blank, and ready evidence', async ({
   await expect(page.getByTestId('card-detected-state')).toContainText('ready for light check');
 });
 
-test('Card overview flags the temporary bench discovery project and offers Find my strips', async ({ page }) => {
+test('Card overview flags the temporary bench discovery project and delegates to discovery Setup', async ({ page }) => {
   const status = readyStatus('lw-bench-card', {
     projectId: 'lightweaver-bench-discovery-v1',
     projectRevision: 1,
@@ -1542,8 +1547,10 @@ test('Card overview flags the temporary bench discovery project and offers Find 
   await expect(page.getByTestId('card-detected-state')).toContainText('temporary Find-my-strips setup');
   // The card is not presented as a commissioned project…
   await expect(page.getByTestId('card-detected-state')).not.toContainText('ready for light check');
-  // …and discovery is one tap away without the connection popover.
-  await page.getByRole('button', { name: 'Find my strips', exact: true }).click();
+  // …and discovery stays in the one Setup journey instead of a competing overview action.
+  await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+  await expect(page).toHaveURL(/#screen=card&section=setup&task=discover-lights$/);
+  await page.getByTestId('setup-lights-action').click();
   await expect(page).toHaveURL(/#screen=discovery/);
 });
 
@@ -1683,14 +1690,11 @@ test('reachable recovering factory card uses URL IP and offers blank setup witho
   expect(statusRequests[0]).toBe(cardHost);
   await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_chip_card_host'))).toBe(cardHost);
   await expect(page.getByTestId('card-detected-state')).toContainText('Blank — load a project');
-  const setupSteps = page.getByTestId('card-setup-steps').locator('li');
-  await expect(setupSteps.nth(0)).toHaveAttribute('data-step-state', 'complete');
-  await expect(setupSteps.nth(3)).toHaveAttribute('data-step-state', 'current');
-  await expect(page.getByRole('button', { name: 'Install current project', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Start a new project', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Install current project', exact: true }).click();
-  await expect(page).toHaveURL(/#screen=card&section=settings$/);
-  await expect(page.getByRole('button', { name: 'Install on card', exact: true })).toBeVisible();
+  await expect(page.getByTestId('card-setup-steps')).toHaveCount(0);
+  await expect(page.getByTestId('card-setup-diagnosis')).toContainText('Find and count the connected lights.');
+  await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+  await expect(page).toHaveURL(/#screen=card&section=setup&task=discover-lights$/);
+  await expect(page.getByTestId('setup-active-task')).toBeVisible();
   await page.waitForTimeout(500);
   expect(writes.filter(entry => /\/api\/(?:control|config)$/.test(entry))).toEqual([]);
 });
@@ -1714,10 +1718,10 @@ test('ready overview offers Batch production as a low-emphasis link, not a setup
     expectedCard: { id: 'lw-gallery-card', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40) },
     readiness: status,
   }]);
-  await expect(page.getByRole('button', { name: 'Install on card', exact: true })).toHaveClass(/primary/);
+  await expect(page.getByRole('button', { name: 'Continue setup', exact: true })).toHaveClass(/primary/);
   await expect(page.getByRole('button', { name: 'Verify in workshop', exact: true })).toHaveCount(0);
 
-  await expect(page.getByTestId('card-setup-steps')).not.toContainText('Batch production');
+  await expect(page.getByTestId('card-setup-steps')).toHaveCount(0);
   const batch = page.getByTestId('card-batch-link').getByRole('button', { name: 'Batch production', exact: true });
   await expect(batch).toHaveClass(/link-btn/);
   await expect(batch).not.toHaveClass(/primary/);
@@ -1798,7 +1802,10 @@ for (const cardState of [
 
     await expect(page.getByTestId('card-detected-state')).toContainText(cardState.copy);
     await expect(page.getByTestId('card-detected-state')).not.toContainText('A Lightweaver card is not connected');
-    await expect(page.getByRole('button', { name: cardState.action, exact: true })).toBeVisible();
+    const continuation = page.getByRole('button', { name: 'Continue setup', exact: true });
+    await expect(continuation).toBeVisible();
+    await continuation.click();
+    await expect(page).toHaveURL(/#screen=card&section=setup&task=[a-z-]+$/);
   });
 }
 
@@ -2267,7 +2274,8 @@ test('HTTPS Studio keeps a blank replacement card config-only across an ambiguou
     initialConfigAuthority: true,
     handoffFlowId: 'flow-browser-wifi-123456789',
   });
-  await page.getByRole('button', { name: 'Continue WiFi setup', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue setup', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue Wi-Fi setup', exact: true }).click();
   await expect.poll(() => page.evaluate(async () => {
     const bridge = await import('/src/lib/cardBridge.js');
     const link = await import('/src/lib/cardLink.js');

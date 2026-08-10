@@ -56,6 +56,29 @@ test('automatic diagnosis precedes four numbered outcome phases', () => {
   assert.equal(phaseMap(journey).connect.status, 'current');
   assert.equal(phaseMap(journey).lights.status, 'upcoming');
   assert.equal(isSetupComplete(journey), false);
+  assert.equal(journey.taskId, 'connect-card');
+  assert.equal(journey.route, '#screen=card&section=setup&task=connect-card');
+});
+
+test('every actionable diagnosis owns one stable Setup task and route', () => {
+  const cases = [
+    [{ cardLink: { reason: 'found-unpaired' } }, 'pair-card'],
+    [{ cardLink: { state: 'reconnecting', expectedCard: { id: 'lw-setup-test' } } }, 'reconnect-card'],
+    [{ cardLink: { activity: 'failed', reason: 'operation-uncertain' } }, 'recover-operation'],
+    [{ commissioningFlow: { stage: 'install-safely' } }, 'update-firmware'],
+    [{ commissioningFlow: { stage: 'set-up-card', networkState: 'setup-required' } }, 'configure-wifi'],
+    [{ cardLink: connectedCard(), commissioningFlow: { stage: 'set-up-card', networkState: 'station-detected', cardAcknowledgedAt: 'now' } }, 'install-project'],
+    [{ cardLink: connectedCard(), commissioningFlow: { stage: 'check-lights' } }, 'test-and-save'],
+    [{ cardLink: connectedCard(FACTORY_STATUS, '192.168.4.1') }, 'configure-wifi'],
+    [{ cardLink: connectedCard() }, 'discover-lights'],
+  ];
+
+  for (const [input, taskId] of cases) {
+    const journey = deriveSetupJourney(input);
+    assert.equal(journey.taskId, taskId);
+    assert.equal(journey.nextAction.taskId, taskId);
+    assert.equal(journey.route, `#screen=card&section=setup&task=${taskId}`);
+  }
 });
 
 test('firmware and Wi-Fi are conditional blockers inside connect', () => {
@@ -123,6 +146,7 @@ test('existing discovery evidence unlocks Layout without a second direction stor
   assert.equal(phaseMap(journey).layout.status, 'current');
   assert.equal(journey.currentPhaseId, 'layout');
   assert.equal(journey.nextAction.id, 'place-lights');
+  assert.equal(journey.taskId, 'place-lights');
 });
 
 test('Layout is required before final test and save', () => {
@@ -145,6 +169,7 @@ test('Layout is required before final test and save', () => {
   assert.equal(phaseMap(journey).verify.status, 'current');
   assert.equal(journey.currentPhaseId, 'verify');
   assert.equal(journey.nextAction.id, 'test-and-save');
+  assert.equal(journey.route, '#screen=card&section=setup&task=test-and-save');
 });
 
 test('placed artwork stays in Layout until canonical wiring direction is physically verified', () => {
@@ -183,6 +208,7 @@ test('API success and exact readback still require visible confirmation', () => 
 
   assert.equal(journey.currentPhaseId, 'verify');
   assert.equal(journey.nextAction.id, 'confirm-visible-lights');
+  assert.equal(journey.taskId, 'confirm-visible-lights');
   assert.equal(isSetupComplete(journey), false);
 });
 

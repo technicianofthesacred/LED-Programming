@@ -63,6 +63,19 @@ test('Setup presents four outcome phases with one active task', async ({ page })
   await expect(page.getByTestId('setup-phase-verify')).toContainText('Test and save to card');
 });
 
+test('bottom-left attention opens the exact Setup task instead of a competing connection screen', async ({ page }) => {
+  await page.evaluate(async () => {
+    const { getSharedCardLink } = await import('/src/lib/cardLink.js');
+    getSharedCardLink().dispatch({ type: 'operation-failed' });
+  });
+  const status = page.getByTestId('card-link-status');
+  await expect(status).toHaveAccessibleName(/Needs attention/);
+  await status.click();
+  await expect(page).toHaveURL(/#screen=card&section=setup&task=recover-operation$/);
+  await expect(page.getByTestId('setup-phase-connect')).toHaveAttribute('aria-current', 'step');
+  await expect(page.getByTestId('setup-active-task')).toBeVisible();
+});
+
 test('blank card enters shared light discovery before Layout', async ({ page }) => {
   await page.getByTestId('setup-lights-action').click();
   await expect(page.getByTestId('card-setup-overlay')).toBeVisible();
