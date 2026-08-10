@@ -314,9 +314,10 @@ test.describe('a blank card whose firmware applies its first config', () => {
     await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
     await dispatchBlankCard(page, { routeToDiscovery: false });
     await page.getByTestId('card-link-status').click();
-    const findStrips = page.getByTestId('connection-find-strips');
+    // A card that needs a project now enters the single Setup flow instead of
+    // opening a second connection dialog with overlapping setup actions.
+    const findStrips = page.getByRole('button', { name: 'Find and count the lights' });
     await expect(findStrips).toBeVisible();
-    await expect(findStrips).toHaveText('Find my strips');
     await findStrips.click();
     await expect(page).toHaveURL(/#screen=discovery/);
     const setup = page.getByTestId('card-setup-overlay');
@@ -328,7 +329,7 @@ test.describe('a blank card whose firmware applies its first config', () => {
 
     await page.getByTestId('card-setup-close').click();
     await expect(setup).toHaveCount(0);
-    await expect(page).toHaveURL(/#screen=layout$/);
+    await expect(page).toHaveURL(/#screen=card&section=setup$/);
   });
 
   test('Test & Install sends a blank card to discovery instead of an LED check it cannot run', async ({ page }) => {
@@ -770,6 +771,7 @@ test.describe('the colour-proof quiz (ui-repair B-COLOUR)', () => {
 
     await page.getByTestId('discovery-color-skip').click();
     await expect(page.getByTestId('discovery-color-proof')).toHaveCount(0);
+    await expect(page.getByTestId('discovery-more')).toBeEnabled();
     await page.getByTestId('discovery-more').click();
     await expect(page.getByTestId('discovery-lit-count')).toHaveText('16');
   });
