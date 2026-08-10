@@ -59,31 +59,6 @@
 .card-overview-signal.connected { background: var(--ok); box-shadow: 0 0 8px color-mix(in srgb, var(--ok) 60%, transparent); }
 .card-overview-signal.connecting { background: var(--accent); box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 55%, transparent); }
 .card-overview-signal.failure { background: var(--danger); }
-.card-setup-steps {
-  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0;
-  margin: 0; padding: 0; overflow: hidden; list-style: none;
-  border: 1px solid var(--border-soft); border-radius: var(--r-md); background: var(--bg-panel);
-}
-.card-setup-steps li {
-  min-width: 0; display: flex; align-items: center; gap: 8px; padding: 13px 11px;
-  border-right: 1px solid var(--border-soft); color: var(--text-mid); font-size: 12px;
-}
-.card-setup-steps li:last-child { border-right: 0; }
-.card-setup-steps li[data-step-state="complete"] { color: var(--text-lo); }
-.card-setup-steps li[data-step-state="complete"] .card-setup-number {
-  border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); color: var(--ok);
-}
-.card-setup-steps li[data-step-state="current"] {
-  color: var(--text-hi); background: color-mix(in srgb, var(--accent) 9%, transparent);
-}
-.card-setup-steps li[data-step-state="current"] .card-setup-number {
-  border-color: var(--accent); background: var(--accent); color: var(--on-accent);
-}
-.card-setup-steps li[data-step-state="upcoming"] { color: var(--text-faint); }
-.card-setup-number {
-  display: grid; place-items: center; width: 22px; height: 22px; flex: 0 0 auto;
-  border: 1px solid var(--border); border-radius: 50%; color: var(--accent); font-family: var(--font-mono); font-size: 10px;
-}
 .card-overview-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .card-support { display: grid; gap: 22px; }
 .card-support-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
@@ -137,9 +112,6 @@
     color: var(--accent); pointer-events: none;
   }
   .card-workspace-body { padding: 18px 12px 42px; }
-  .card-setup-steps { grid-template-columns: minmax(0, 1fr); }
-  .card-setup-steps li { border-right: 0; border-bottom: 1px solid var(--border-soft); }
-  .card-setup-steps li:last-child { border-bottom: 0; }
   .card-support-grid { grid-template-columns: minmax(0, 1fr); }
   .card-support-grid > button { min-height: 80px; }
 }
