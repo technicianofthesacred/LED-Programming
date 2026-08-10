@@ -18,7 +18,7 @@ const {
   parseVersion,
 } = await import(helperPath);
 
-assert.equal(readFileSync(versionPath, 'utf8').trim(), '1.1.4');
+assert.equal(readFileSync(versionPath, 'utf8').trim(), '1.1.5');
 
 assert.deepEqual(parseVersion('1.2.3'), [1, 2, 3]);
 for (const malformed of ['', '1', '1.2', 'v1.2.3', '1.2.3-beta', '01.2.3', '1.02.3', '1.2.03']) {
