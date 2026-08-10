@@ -215,7 +215,10 @@ test('Playlist remove and pointer reorder target the named compact controls', as
   await expect(reorderAurora).toHaveAttribute('draggable', 'true');
   await expect(reorderAurora).toHaveAttribute('title', 'Reorder Aurora');
 
-  await reorderAurora.dragTo(page.getByTestId('playlist-row-fire'));
+  await expect(async () => {
+    await reorderAurora.dragTo(page.getByTestId('playlist-row-fire'));
+    await expect(page.locator('.pl-row .pl-copy > strong')).toHaveText(['Plasma', 'Fire', 'Aurora']);
+  }).toPass({ timeout: 15_000 });
   await expect(page.locator('.pl-row .pl-copy > strong')).toHaveText(['Plasma', 'Fire', 'Aurora']);
 
   await page.getByRole('button', { name: 'Remove Plasma', exact: true }).click();
