@@ -58,6 +58,36 @@ test('discoveryProjectParts commits a multi-port walk into outputs, port roles a
   assert.equal(parts.portRoles.find(entry => entry.pin === 18).role, 'unused');
 });
 
+test('discoveryProjectParts creates proportional provisional layout strips and wiring', () => {
+  const parts = discoveryProjectParts(discoveredSession(), {
+    channelMap: { red: 1, green: 0, blue: 2 },
+  });
+
+  assert.equal(parts.strips.length, 2);
+  assert.deepEqual(parts.strips.map(strip => [strip.id, strip.pixelCount]), [
+    ['strip-16', 354],
+    ['strip-17', 120],
+  ]);
+  assert.equal(parts.strips[0].svgLength > parts.strips[1].svgLength, true);
+  assert.equal(
+    Math.round((parts.strips[0].svgLength / parts.strips[1].svgLength) * 100),
+    Math.round((354 / 120) * 100),
+    'provisional line lengths preserve the relative measured counts',
+  );
+  assert.notEqual(parts.strips[0].pixels[0].y, parts.strips[1].pixels[0].y);
+  assert.deepEqual(parts.wiring.outputs, [
+    { id: 'out1', name: 'GPIO 16', pin: 16, runIds: ['run-strip-16'] },
+    { id: 'out2', name: 'GPIO 17', pin: 17, runIds: ['run-strip-17'] },
+  ]);
+  assert.deepEqual(parts.wiring.runs.map(run => [run.id, run.source.stripId, run.source.to]), [
+    ['run-strip-16', 'strip-16', 353],
+    ['run-strip-17', 'strip-17', 119],
+  ]);
+  assert.equal(parts.wiring.locked, false);
+  assert.equal(parts.wiring.verified, false);
+  assert.equal(parts.patchBoard.physicalLocked, false);
+});
+
 test('a port that ended with no count is omitted from outputs', () => {
   // Port 17 is skipped (nothing lit up), so only GPIO 16 becomes an output.
   const session = runDiscovery([

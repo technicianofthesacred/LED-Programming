@@ -65,6 +65,29 @@ assert.equal(requireLivePreviewAcknowledgement(
 ).brightness, 0.4);
 assert.throws(
   () => requireLivePreviewAcknowledgement(
+    { ok: true, cardId: 'lw-expected', revision: 42, appliedPatternId: 'ocean', hue: 32 },
+    { patternId: 'ocean', customHue: 160, zone: 'patch-inner' },
+    { expectedCardId: 'lw-expected', revision: 42, expectedControlPatch: { customHue: 160 } },
+  ),
+  error => error?.reason === 'control-field-unconfirmed',
+  'a global hue acknowledgement must not confirm a targeted zone hue change',
+);
+assert.equal(requireLivePreviewAcknowledgement(
+  { ok: true, cardId: 'lw-expected', revision: 42, appliedPatternId: 'ocean', hue: 160 },
+  { patternId: 'ocean', customHue: 160, zone: 'patch-inner' },
+  { expectedCardId: 'lw-expected', revision: 42, expectedControlPatch: { customHue: 160 } },
+).hue, 160);
+assert.throws(
+  () => requireLivePreviewAcknowledgement(
+    { ok: true, cardId: 'lw-expected', revision: 42, appliedPatternId: 'ocean', hue: 32 },
+    { patternId: 'ocean', customHue: 32, zone: 'patch-inner' },
+    { expectedCardId: 'lw-expected', revision: 42, expectedControlPatch: { customHue: 160 } },
+  ),
+  error => error?.reason === 'control-field-unconfirmed',
+  'the changed-control patch should remain the source of truth if a stale look reaches acknowledgement validation',
+);
+assert.throws(
+  () => requireLivePreviewAcknowledgement(
     { ok: true, cardId: 'lw-expected', revision: 41, patternId: 'bench-warm' },
     { patternId: 'bench-warm' },
     { expectedCardId: 'lw-expected', revision: 41, exactCardPatternId: 'bench-warm', expectedControlPatch: { patternId: 'bench-warm' } },

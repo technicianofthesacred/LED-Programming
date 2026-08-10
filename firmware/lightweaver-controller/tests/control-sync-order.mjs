@@ -205,6 +205,36 @@ assert.match(
   /out\s*\[\s*"brightness"\s*\]\s*=\s*runtimeGetBrightnessZ\s*\(\s*zoneTarget\s*\)/,
   'card controls should echo the addressed zone brightness after applying a zone write',
 );
+assert.match(
+  responseBody,
+  /appendTargetedZoneControlAcknowledgement\s*\(\s*out\s*,\s*zoneTarget\s*\)/,
+  'the control response should read targeted color and motion values from the addressed zone',
+);
+const targetedAck = extractFunction(source, 'appendTargetedZoneControlAcknowledgement');
+assert.match(targetedAck, /runtimeZonesJson\s*\(\s*\)/,
+  'targeted acknowledgements should read card-owned zone state after mutation');
+assert.match(targetedAck, /zone\s*\[\s*"id"\s*\][\s\S]*zoneTarget/,
+  'targeted acknowledgements should select the exact addressed zone');
+for (const [responseField, zoneField] of [
+  ['speed', 'speed'],
+  ['hueShift', 'hueShift'],
+  ['hue', 'customHue'],
+  ['saturation', 'customSaturation'],
+]) {
+  assert.match(
+    targetedAck,
+    new RegExp(`out\\s*\\[\\s*"${responseField}"\\s*\\]\\s*=\\s*zone\\s*\\[\\s*"${zoneField}"\\s*\\]`),
+    `${responseField} acknowledgement should come from the addressed zone's ${zoneField}`,
+  );
+}
+
+// Worked contract example: a targeted response must prefer zone hue 160 over
+// unrelated global hue 32. This literal fixture is the wire behavior Studio
+// relies on when validating a section color edit.
+const globalHue = 32;
+const zonesPayload = { zones: [{ id: 'patch-inner', customHue: 160 }] };
+const addressedHue = zonesPayload.zones.find(zone => zone.id === 'patch-inner')?.customHue ?? globalHue;
+assert.equal(addressedHue, 160, 'targeted /api/control acknowledgement must report zone hue 160, not global hue 32');
 
 const jsonApi = readFileSync(resolve(here, '../src/LightweaverWledJsonApi.cpp'), 'utf8');
 const jsonStatePost = extractFunction(jsonApi, 'handleStatePost');

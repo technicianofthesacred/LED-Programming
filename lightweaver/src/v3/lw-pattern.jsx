@@ -851,7 +851,7 @@ import { PatternPreview } from './PatternPreview.jsx';
       }
     };
 
-    const scheduleLivePreview = useCallback((nextLook, target = selectedTarget, delayMs = 80, { bridgeAuthority = null } = {}) => {
+    const scheduleLivePreview = useCallback((nextLook, target = selectedTarget, delayMs = 80, { bridgeAuthority = null, expectedControlPatch = null } = {}) => {
       const hasCurrentAuthority = () => {
         if (currentPatternCardAccess() !== 'ready') return false;
         if (patternAccessRef.current === 'ready') return true;
@@ -881,7 +881,7 @@ import { PatternPreview } from './PatternPreview.jsx';
       setHandoffUrl('');
       if (livePreviewTimer.current) clearTimeout(livePreviewTimer.current);
       const sequence = ++livePreviewSeq.current;
-      latestPreviewIntent.current = { look: nextLook, target };
+      latestPreviewIntent.current = { look: nextLook, target, expectedControlPatch };
       dispatchPreviewAction({ type: 'start', revision: sequence });
       setPreviewFailure(null);
       const zone = target?.kind === 'section' ? target.zoneId || target.id : '';
@@ -919,6 +919,7 @@ import { PatternPreview } from './PatternPreview.jsx';
               fallbackMissingZoneToAll: false,
               preferBridge: localCard || (typeof window !== 'undefined' && window.location?.protocol === 'https:'),
               revision: sequence,
+              ...(expectedControlPatch ? { expectedControlPatch } : {}),
             },
           );
           if (sequence === livePreviewSeq.current && hasCurrentAuthority()) {
@@ -949,7 +950,7 @@ import { PatternPreview } from './PatternPreview.jsx';
     const retryLatestPreview = useCallback(() => {
       const latest = latestPreviewIntent.current;
       if (!latest) return;
-      scheduleLivePreview(latest.look, latest.target, 0);
+      scheduleLivePreview(latest.look, latest.target, 0, { expectedControlPatch: latest.expectedControlPatch });
     }, [scheduleLivePreview]);
 
     const openConnectionCenter = useCallback(() => {
@@ -1068,7 +1069,7 @@ import { PatternPreview } from './PatternPreview.jsx';
       const nextLook = normalizeSectionVisualLook({ ...look, ...patch });
       setDraftLooks(prev => ({ ...prev, [selectedTarget.id]: nextLook }));
       markProjectEdited();
-      if (push) scheduleLivePreview(nextLook, selectedTarget);
+      if (push) scheduleLivePreview(nextLook, selectedTarget, 80, { expectedControlPatch: patch });
       return nextLook;
     };
 

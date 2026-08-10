@@ -48,6 +48,16 @@ product direction, not cleanup after feature work.
 8. Setup, footer attention, Connection Center, Install or update, and the card
    page still overlap. Keep Setup as the owner of diagnosis and deep-link every
    other surface to its exact active step.
+9. Discovery records the real GPIO and light count but currently stops before
+   Layout, forcing the same physical truth to be entered again. On untouched
+   projects, create proportional, non-overlapping provisional strips and wiring
+   runs automatically, then ask only for artwork placement.
+10. Starter, add-strip, and existing-strip count controls use different size
+    behavior. Converge them on one visible rule: light count is electrical truth;
+    physical artwork length changes only when the user deliberately rescales it.
+11. Zone color control can accept a global acknowledgement after changing a
+    specific zone. Require targeted readback of hue, saturation, speed, and hue
+    shift before showing the control as applied.
 
 ## Ordered work
 
@@ -59,7 +69,10 @@ product direction, not cleanup after feature work.
    card-page bridge only as a bounded fallback.
 4. Extend card reconstruction to recover installed looks and startup state.
 5. Add authenticated software-owner authorization for preserving updates.
-6. Run the live loop twice from a fresh browser state: reconnect, recover,
+6. Carry discovered GPIO/count truth into a ready-to-place provisional Layout
+   without touching an existing design.
+7. Make zone color acknowledgements and readback exact and testable.
+8. Run the live loop twice from a fresh browser state: reconnect, recover,
    direct pattern/color control, edit/save playlist, reload, navigate looks, and
    preserving firmware update.
 

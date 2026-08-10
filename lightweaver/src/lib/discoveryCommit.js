@@ -25,6 +25,67 @@ function outputsFromStrips(portRoles) {
     .map(entry => ({ id: `strip-${entry.pin}`, pin: entry.pin, pixels: entry.pixelCount }));
 }
 
+function provisionalLayoutFromOutputs(outputs) {
+  const strips = outputs.map((output, index) => {
+    const count = Math.max(1, Math.trunc(Number(output.pixels) || 1));
+    const startX = 80;
+    const y = 100 + index * 90;
+    const span = count * 2;
+    const endX = startX + span;
+    const pixels = Array.from({ length: count }, (_, pixelIndex) => ({
+      x: count === 1 ? startX : startX + (span * pixelIndex) / (count - 1),
+      y,
+      index: pixelIndex,
+    }));
+    return {
+      id: output.id,
+      name: `GPIO ${output.pin}`,
+      pathData: `M ${startX} ${y} L ${endX} ${y}`,
+      closed: false,
+      svgLength: span,
+      pixelCount: count,
+      pixels,
+      color: 'oklch(80% 0.13 72)',
+      x: 0,
+      y: 0,
+      emit: 'omni',
+      angle: 0,
+      reversed: false,
+      speed: 1,
+      brightness: 1,
+      hueShift: 0,
+      patternId: null,
+    };
+  });
+  const runs = outputs.map(output => ({
+    id: `run-${output.id}`,
+    type: 'strip',
+    source: { stripId: output.id, from: 0, to: output.pixels - 1 },
+    directionPolicy: 'flexible',
+    physicalDirection: 'source-forward',
+    seamLed: null,
+    verified: false,
+  }));
+  const wiringOutputs = outputs.map((output, index) => ({
+    id: `out${index + 1}`,
+    name: `GPIO ${output.pin}`,
+    pin: output.pin,
+    runIds: [`run-${output.id}`],
+  }));
+  return {
+    strips,
+    patchBoard: createDefaultPatchBoard(strips),
+    wiring: {
+      version: 1,
+      locked: false,
+      verified: false,
+      controllerAnchor: null,
+      outputs: wiringOutputs,
+      runs,
+    },
+  };
+}
+
 /**
  * The project parts a discovery session has landed on: the port roles exactly
  * as portRoles.js would persist them, the named colour order the proof measured
@@ -32,10 +93,12 @@ function outputsFromStrips(portRoles) {
  */
 export function discoveryProjectParts(session, channelProof) {
   const portRoles = normalizePortRoles(discoveryPortRoleUpdates(session));
+  const outputs = outputsFromStrips(portRoles);
   return {
     portRoles,
     colorOrder: namedColorOrderFromChannelMap(channelProof?.channelMap),
-    outputs: outputsFromStrips(portRoles),
+    outputs,
+    ...provisionalLayoutFromOutputs(outputs),
   };
 }
 
