@@ -721,6 +721,21 @@ button.sb-firmware:hover { background: var(--bg-elev-2); color: var(--text-hi); 
 }
 .card-acknowledged-facts dt { color: var(--text-mid); }
 .card-acknowledged-facts dd { margin: 0; color: var(--text-hi); overflow-wrap: anywhere; }
+.card-direct-firmware-facts { display: grid; grid-template-columns: 1fr; gap: 6px; }
+.card-direct-firmware-facts .card-fact-row {
+  display: grid; grid-template-columns: 86px minmax(0, 1fr); gap: 12px; align-items: center;
+}
+.card-direct-firmware-facts .card-fact-value-with-action {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center;
+}
+.card-direct-firmware-facts .card-firmware-version {
+  min-width: 0; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.card-inline-firmware-slot { width: 112px; }
+.card-inline-firmware-update {
+  justify-self: end; width: 112px; min-height: 32px; padding: 5px 9px;
+  font-size: 11.5px; white-space: nowrap;
+}
 .card-firmware-update {
   display: grid; gap: 5px; margin-top: 12px; padding: 11px 12px;
   border: 1px solid var(--accent-line); border-radius: var(--r-md); background: var(--bg-sel);
@@ -875,6 +890,9 @@ button.sb-firmware:hover { background: var(--bg-elev-2); color: var(--text-hi); 
   .card-connection-details summary,
   .card-connection-details input { min-height: 44px; }
   .card-connection-details summary { display: flex; align-items: center; }
+  .card-direct-firmware-facts .card-fact-value-with-action { grid-template-columns: minmax(0, 1fr); }
+  .card-direct-firmware-facts .card-inline-firmware-slot { display: none; }
+  .card-direct-firmware-facts .card-inline-firmware-update { justify-self: end; }
 }
 
 @media (min-width: 641px) and (max-width: 720px) {

@@ -19,6 +19,7 @@ import { nextCardConnectionAction } from '../../lib/cardConnectionFlow.js';
 import { cardBuildLabel, readPersistedCardIdentity, setupNetworkLabelForCardId } from '../../lib/cardIdentity.js';
 import { adoptDiscoveredDirectCard, connectCardLink } from '../../lib/cardLink.js';
 import { connectCardTransport, getActiveCardTransportAuthority } from '../../lib/cardTransport.js';
+import { classifyFooterFirmwareStatus } from '../../lib/footerFirmwareStatus.js';
 import {
   SECURE_INSTALLER_URL,
   detectPlatformCapabilities,
@@ -119,6 +120,9 @@ export function CardConnectionCenter({
     ? directAttempt.observedCard : null;
   const connectedIdentity = directAttempt?.connected ? (directAttempt.card || link.card) : null;
   const directIdentity = incompatibleFirmware || connectedIdentity;
+  const directFirmwareStatus = classifyFooterFirmwareStatus(directIdentity, firmwareRelease);
+  const showDirectFirmwareUpdate = directAttempt?.connected
+    && directFirmwareStatus.state === 'update-available';
 
   useEffect(() => {
     if (!open) return undefined;
@@ -565,10 +569,26 @@ export function CardConnectionCenter({
             )}
           </div>
           {directIdentity?.id && (
-            <dl className="card-acknowledged-facts" data-testid="direct-card-identity">
-              <dt>Card</dt><dd>{directIdentity.id}</dd>
-              <dt>Installed</dt><dd>{directIdentity.firmwareVersion ? `v${directIdentity.firmwareVersion}` : 'Version unknown'}{cardBuildLabel(directIdentity) ? ` · ${cardBuildLabel(directIdentity)}` : ''}</dd>
-              <dt>Current</dt><dd>{firmwareRelease?.firmwareVersion ? `v${firmwareRelease.firmwareVersion}` : 'Version unknown'}{cardBuildLabel(firmwareRelease) ? ` · ${cardBuildLabel(firmwareRelease)}` : ''}</dd>
+            <dl className="card-acknowledged-facts card-direct-firmware-facts" data-testid="direct-card-identity">
+              <div className="card-fact-row">
+                <dt>Card</dt><dd>{directIdentity.id}</dd>
+              </div>
+              <div className="card-fact-row">
+                <dt>Installed</dt>
+                <dd className="card-fact-value-with-action">
+                  <span className="card-firmware-version">{directIdentity.firmwareVersion ? `v${directIdentity.firmwareVersion}` : 'Version unknown'}{cardBuildLabel(directIdentity) ? ` · ${cardBuildLabel(directIdentity)}` : ''}</span>
+                  <span className="card-inline-firmware-slot" aria-hidden="true" />
+                </dd>
+              </div>
+              <div className="card-fact-row">
+                <dt>Current</dt>
+                <dd className="card-fact-value-with-action">
+                  <span className="card-firmware-version">{firmwareRelease?.firmwareVersion ? `v${firmwareRelease.firmwareVersion}` : 'Version unknown'}{cardBuildLabel(firmwareRelease) ? ` · ${cardBuildLabel(firmwareRelease)}` : ''}</span>
+                  {showDirectFirmwareUpdate ? (
+                    <button type="button" className="btn card-inline-firmware-update" onClick={onOpenFirmwareUpdate || openInstall}>Update firmware</button>
+                  ) : <span className="card-inline-firmware-slot" aria-hidden="true" />}
+                </dd>
+              </div>
             </dl>
           )}
           {directAttempt?.reason === 'wrong-card' && (

@@ -246,6 +246,48 @@ test('connected current firmware does not show an update prompt', async ({ page 
   await expect(dialog.getByRole('button', { name: 'Done', exact: true })).toBeVisible();
 });
 
+test('direct older firmware puts a quiet update action beside the right-aligned current version', async ({ page }) => {
+  await page.route('http://lightweaver.local/api/status', route => route.fulfill({ json: {
+    app: 'Lightweaver', provisioningContractVersion: 1,
+    cardId: 'lw-b0fe81f61b44', firmwareVersion: '1.1.3',
+    buildNumber: signedRelease.buildNumber - 10, buildId: 'a'.repeat(40),
+    bootId: 'boot-direct-older', runtimePhase: 'ready', knownGoodProject: true,
+    commandReady: true, playbackReady: true, outputReady: true,
+  } }));
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  await dialog.getByRole('button', { name: 'Connect this card' }).click();
+
+  const identity = dialog.getByTestId('direct-card-identity');
+  await expect(identity).toContainText('lw-b0fe81f61b44');
+  await expect(identity.locator('.card-firmware-version')).toHaveCount(2);
+  await expect(identity.locator('.card-firmware-version').first()).toHaveCSS('text-align', 'right');
+  await expect(identity.locator('.card-firmware-version').last()).toHaveCSS('text-align', 'right');
+  const update = identity.getByRole('button', { name: 'Update firmware' });
+  await expect(update).toBeVisible();
+  await expect(update).not.toHaveClass(/primary/);
+  await expect(update).toHaveCSS('justify-self', 'end');
+  await update.click();
+  await expect(page).toHaveURL(/#screen=card&section=install$/);
+});
+
+test('direct current firmware keeps the inline update action hidden', async ({ page }) => {
+  await page.route('http://lightweaver.local/api/status', route => route.fulfill({ json: {
+    app: 'Lightweaver', provisioningContractVersion: 1,
+    cardId: 'lw-b0fe81f61b44', firmwareVersion: signedRelease.firmwareVersion,
+    buildNumber: signedRelease.buildNumber, buildId: signedRelease.buildId,
+    bootId: 'boot-direct-current', runtimePhase: 'ready', knownGoodProject: true,
+    commandReady: true, playbackReady: true, outputReady: true,
+  } }));
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  await dialog.getByRole('button', { name: 'Connect this card' }).click();
+
+  const identity = dialog.getByTestId('direct-card-identity');
+  await expect(identity).toContainText(`v${signedRelease.firmwareVersion} · Build ${signedRelease.buildNumber}`);
+  await expect(identity.getByRole('button', { name: 'Update firmware' })).toHaveCount(0);
+});
+
 test('identified incompatible firmware shows the found card, installed versus current release, and the update route', async ({ page }) => {
   await page.route('http://lightweaver.local/api/status', route => route.fulfill({ json: {
     app: 'Lightweaver', provisioningContractVersion: 0,
