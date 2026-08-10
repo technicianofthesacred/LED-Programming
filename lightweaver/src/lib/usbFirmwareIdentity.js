@@ -7,6 +7,13 @@ const CONTRACT_MARKER_BEFORE = 'lw-%012llx';
 const CONTRACT_MARKER_AFTER = 'provisioningContractVersion';
 const CONTRACT_MARKER_DISTANCE = 256;
 const IDENTITY_PATTERN = /((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]{1,32})?)\x00([a-f0-9]{40})\x00/g;
+// These numbers are the Git commit counts for the exact signed historical
+// build IDs whose factory images are committed in this repository. The build
+// ID is read from card flash first; no version-only guess is ever made.
+const SIGNED_HISTORICAL_BUILD_NUMBERS = Object.freeze({
+  '1366faf23a29a815044bae2e50405ff14b424e42': 1198,
+  c80ba832eebe0b681112753b32d24001d01bf56f: 1223,
+});
 
 function bytesOf(value) {
   if (value instanceof Uint8Array) return value;
@@ -34,9 +41,11 @@ export function parseLightweaverFirmwareIdentity(value) {
     if (before < 0 || identityStart - (before + CONTRACT_MARKER_BEFORE.length) > CONTRACT_MARKER_DISTANCE) continue;
     const after = text.indexOf(CONTRACT_MARKER_AFTER, identityEnd);
     if (after < 0 || after - identityEnd > CONTRACT_MARKER_DISTANCE) continue;
+    const buildNumber = SIGNED_HISTORICAL_BUILD_NUMBERS[match[2]];
     return Object.freeze({
       firmwareVersion: match[1],
       buildId: match[2],
+      ...(buildNumber ? { buildNumber } : {}),
       source: 'usb-flash',
     });
   }

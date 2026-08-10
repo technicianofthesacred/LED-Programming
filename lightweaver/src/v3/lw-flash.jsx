@@ -1,7 +1,7 @@
 /* Lightweaver v3 — safe automatic installer + technician diagnostics. */
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { I } from './lw-shared.jsx';
-import { connectESP, disconnectESP, flashFirmware, inspectConnectedESP } from '../lib/flash.js';
+import { connectESP, disconnectESP, flashFirmware, inspectConnectedESP, writeApplicationWithoutReset } from '../lib/flash.js';
 import {
   FLASH_COMPLETE_RELEASED_LOG,
   FLASH_COMPLETE_RELEASED_STATUS,
@@ -33,9 +33,25 @@ import {
   writeCardCommissioning,
 } from '../lib/cardCommissioningFlow.js';
 import { observePostFlashNetwork } from '../lib/cardPostFlashNetwork.js';
-import { describeFirmwareUpdate, resolveInstalledFirmware } from '../lib/firmwareUpdatePlan.js';
+import {
+  cardSupportsNetworkFirmwareUpdate,
+  describeFirmwareUpdate,
+  normalizeFirmwareUpdateCard,
+  resolveInstalledFirmware,
+} from '../lib/firmwareUpdatePlan.js';
 import { readPersistedCardIdentity } from '../lib/cardIdentity.js';
 import { openInChrome } from '../lib/openInChrome.js';
+import { loadVerifiedFirmwareUpdateRelease } from '../lib/firmwareUpdateRelease.js';
+import {
+  clearFirmwareUpdateSession,
+  correlateFirmwareUpdateRecovery,
+  createCardFirmwareUpdater,
+  readFirmwareUpdateSession,
+  readFirmwareUpdateStatus,
+  saveFirmwareUpdateSession,
+} from '../lib/cardFirmwareUpdater.js';
+import { runPreservingUsbBootstrap } from '../lib/preservingUsbBootstrap.js';
+import { getActiveCardTransportAuthority } from '../lib/cardTransport.js';
 import {
   clearActiveUsbInspection,
   registerActiveUsbInspection,
@@ -408,14 +424,17 @@ import {
               onClick={async () => {
                 setBridgeState('opening');
                 try {
-                  await onLaunchBridge('install-current-release');
+                  // Unsupported browsers may hand the card to Bridge for a
+                  // read-only inspection, but must never turn a routine update
+                  // into the legacy destructive factory installer.
+                  await onLaunchBridge('inspect-compatible-card');
                   setBridgeState('waiting-for-bridge');
                 } catch { setBridgeState('error'); }
               }}
             >
               {bridgeState === 'opening' || bridgeState === 'waiting-for-bridge' ? 'Waiting for Lightweaver Bridge…' : bridgeState === 'return-pending' ? 'Return pending…' : 'Open Lightweaver Bridge'}
             </button>
-            {bridgeState === 'waiting-for-bridge' && <p>Studio sent the launch request but cannot confirm whether Bridge opened. Keep this tab available, or paste the one-time return code below.</p>}
+            {bridgeState === 'waiting-for-bridge' && <p>Bridge can inspect the exact card without erasing it. Complete the preserving update in Chrome or another browser with USB support. Keep this tab available, or paste the one-time return code below.</p>}
             {bridgeState === 'return-pending' && <p>Return pending while Studio validates the code and acknowledges the saved Bridge result.</p>}
             <form onSubmit={async event => {
                 event.preventDefault();
@@ -443,11 +462,245 @@ import {
     );
   }
 
+  const UPDATE_PHASE_LABELS = Object.freeze({
+    idle: '', confirming: '', preflight: 'Preparing card', sending: 'Sending signed update',
+    verifying: 'Verifying update', restarting: 'Restarting card', reconnected: 'Reconnected',
+    probation: 'Checking card health', valid: 'Update valid',
+  });
+
+  function PreservingUpdatePanel({
+    mode,
+    card,
+    readiness,
+    release,
+    loaderRef,
+    transportRef,
+    onUsbReleased,
+    onReconnectCard,
+    reconnectHost = '',
+  }) {
+    const [confirming, setConfirming] = useState(false);
+    const [physicalConfirmed, setPhysicalConfirmed] = useState(false);
+    const [phase, setPhase] = useState('idle');
+    const [acknowledgedBytes, setAcknowledgedBytes] = useState(0);
+    const [error, setError] = useState('');
+    const [rollback, setRollback] = useState(null);
+    const [observedUpdateStatus, setObservedUpdateStatus] = useState(null);
+    const rolledBackRef = useRef(false);
+    const target = release?.manifest;
+    const actionLabel = mode === 'wifi' ? 'Update over Wi-Fi' : 'Update once over USB';
+    const phaseLabel = UPDATE_PHASE_LABELS[phase] || '';
+    const installedLabel = card.recovering
+      ? 'Checking restarted card…'
+      : `${card.firmwareVersion || 'unknown'} · ${formatFirmwareBuildLabel(card)}`;
+    const targetLabel = target ? `${target.firmwareVersion} · ${formatFirmwareBuildLabel(target)}` : 'Verifying signed release…';
+    const onProgress = event => {
+      setAcknowledgedBytes(Number(event?.acknowledgedBytes || 0));
+      if (event?.phase === 'preflight') setPhase('preflight');
+      else if (event?.phase === 'sending') setPhase('sending');
+      else if (event?.phase === 'verifying') setPhase('verifying');
+      else if (event?.phase === 'restarting' || event?.phase === 'pending-reboot') setPhase('restarting');
+      else if (event?.phase === 'probation') setPhase('probation');
+      else if (event?.phase === 'valid') setPhase('restarting');
+      else if (event?.phase === 'rolled-back') {
+        rolledBackRef.current = true;
+        setRollback({
+          restoredBuildNumber: Number(event.restoredBuildNumber) || null,
+          reason: String(event.rollbackReason || 'health-check-failed').slice(0, 96),
+        });
+        setPhase('rolled-back');
+      }
+    };
+
+    useEffect(() => {
+      if (!target) return;
+      const session = readFirmwareUpdateSession();
+      if (!session || session.cardId !== card.id
+        || session.targetBuildId !== target.buildId
+        || session.targetFirmwareVersion !== target.firmwareVersion) return;
+      const result = correlateFirmwareUpdateRecovery(
+        session,
+        readiness?.firmwareUpdate || observedUpdateStatus || {},
+        readiness || {},
+      );
+      if (result.phase === 'rolled-back') {
+        rolledBackRef.current = true;
+        setRollback({ restoredBuildNumber: result.restoredBuildNumber, reason: result.reason });
+        setPhase('rolled-back');
+      } else if (result.phase === 'probation') {
+        setPhase('probation');
+      } else if (result.ok && result.phase === 'valid') {
+        setPhase('reconnected');
+        clearFirmwareUpdateSession();
+      } else if (['restarting', 'pending-reboot', 'probation', 'valid', 'rolled-back'].includes(session.phase)) {
+        setPhase(session.phase === 'probation' ? 'probation' : 'restarting');
+      }
+    }, [card.id, observedUpdateStatus, readiness, target]);
+
+    useEffect(() => {
+      const session = readFirmwareUpdateSession();
+      if (!session || !target || session.cardId !== card.id || session.targetBuildId !== target.buildId) return undefined;
+      const authority = getActiveCardTransportAuthority(readiness?.host || '')
+        || getActiveCardTransportAuthority();
+      if (!authority) return undefined;
+      let active = true;
+      readFirmwareUpdateStatus(authority)
+        .then(status => { if (active) setObservedUpdateStatus(status); })
+        .catch(() => {});
+      return () => { active = false; };
+    }, [card.id, readiness?.host, target]);
+
+    useEffect(() => {
+      if (phase !== 'restarting') return undefined;
+      const configured = import.meta.env.DEV ? Number(window.__LW_PRESERVING_RECONNECT_TIMEOUT_MS__) : 0;
+      const timeoutMs = Number.isFinite(configured) && configured > 0 ? configured : 45_000;
+      const timer = window.setTimeout(() => {
+        setError('Studio could not verify the restarted card in time. Keep the card powered, reconnect this exact card, and resume the preserving update check. Your saved card data was not erased.');
+        setConfirming(false);
+        setPhysicalConfirmed(false);
+        setPhase('idle');
+      }, timeoutMs);
+      return () => window.clearTimeout(timer);
+    }, [phase]);
+
+    const start = async () => {
+      if (!physicalConfirmed || !release) return;
+      setError('');
+      setPhase('preflight');
+      try {
+        if (mode === 'wifi') {
+          const testFactory = import.meta.env.DEV && window.__LW_CREATE_FIRMWARE_UPDATER_FOR_TEST__;
+          const authority = getActiveCardTransportAuthority(readiness?.host || '')
+            || getActiveCardTransportAuthority();
+          if (!testFactory && !authority) throw new Error('Reconnect this exact card before updating over Wi-Fi.');
+          if (!testFactory && !authority.ownerCapability) {
+            await authority.issueOwnerCapability({
+              commissioningProof: 'owner-confirmed-physical-control',
+              expectedProjectHead: readiness?.projectHead || authority.projectHead,
+            });
+          }
+          const makeUpdater = testFactory || createCardFirmwareUpdater;
+          const physicalConfirmationNonce = globalThis.crypto?.randomUUID?.()
+            || `physical-${Date.now()}-${Math.random()}`;
+          const updater = makeUpdater({
+            authority,
+            release,
+            physicalConfirmation: physicalConfirmationNonce,
+            projectFingerprint: readiness?.projectFingerprint || '',
+            onProgress,
+          });
+          await updater.preflight();
+          await updater.begin();
+          await updater.send();
+          setPhase('verifying');
+          await updater.commit();
+          if (!rolledBackRef.current) {
+            setPhase('restarting');
+            try { await updater.readStatus(); } catch { /* reboot can close the committed request path */ }
+          }
+        } else {
+          const usbSession = {
+            mode: 'usb',
+            cardId: card.id,
+            previousBootId: readiness?.cardId === card.id ? readiness.bootId || '' : '',
+            expectedProjectHead: readiness?.cardId === card.id ? readiness.projectHead || '' : '',
+            expectedProjectFingerprint: readiness?.cardId === card.id ? readiness.projectFingerprint || '' : '',
+            targetFirmwareVersion: target.firmwareVersion,
+            targetBuildId: target.buildId,
+            targetBuildNumber: target.buildNumber,
+            ticketSha256: release.ticketSha256,
+            phase: 'sending',
+            acknowledgedBytes: 0,
+          };
+          saveFirmwareUpdateSession(usbSession);
+          const testBootstrap = import.meta.env.DEV && window.__LW_RUN_PRESERVING_USB_BOOTSTRAP_FOR_TEST__;
+          const runBootstrap = testBootstrap || runPreservingUsbBootstrap;
+          await runBootstrap({
+            loader: loaderRef.current,
+            transport: transportRef.current,
+            evidence: {
+              ...card,
+              chipName: card.chipName,
+              flashBytes: card.flashBytes,
+              source: card.source,
+              installedAppOffset: 0x10000,
+            },
+            release,
+            writeApplication: writeApplicationWithoutReset,
+            resetIntoApp: resetEspIntoApp,
+            disconnect: disconnectESP,
+            onProgress: event => {
+              setPhase(event.phase === 'updating' ? 'sending' : event.phase);
+              setAcknowledgedBytes(Math.round((event.progress || 0) * release.imageBytes.byteLength));
+            },
+          });
+          saveFirmwareUpdateSession({
+            ...usbSession,
+            phase: 'restarting',
+            acknowledgedBytes: release.imageBytes.byteLength,
+          });
+          loaderRef.current = null;
+          transportRef.current = null;
+          onUsbReleased?.();
+          setPhase('restarting');
+          try { await onReconnectCard?.(reconnectHost); } catch { /* bounded status wait reports the actionable failure */ }
+        }
+      } catch (cause) {
+        setError(cause?.message || String(cause));
+        setPhase('idle');
+      }
+    };
+
+    return (
+      <section className="card install-action-card preserving-update-panel" data-testid="preserving-update-panel" aria-live="polite">
+        <div className="install-action-copy">
+          <div className="eyebrow">Preserving firmware update</div>
+          <h2>{mode === 'wifi' ? 'Update this card over Wi-Fi' : 'One-time USB update for this card'}</h2>
+          <p><strong>Keeps Wi-Fi, project, patterns, wiring, and settings.</strong>{mode === 'usb' ? ' Future updates use Wi-Fi.' : ''}</p>
+          <dl className="card-acknowledged-facts">
+            <dt>Card</dt><dd>{card.id}</dd>
+            <dt>Installed</dt><dd>{installedLabel}</dd>
+            <dt>Update</dt><dd>{targetLabel}</dd>
+            {readiness?.projectHead && <><dt>Project head</dt><dd>{readiness.projectHead}</dd></>}
+          </dl>
+        </div>
+        {!confirming && phase === 'idle' && (
+          <button className="btn-lg" type="button" disabled={!release} onClick={() => setConfirming(true)}>{actionLabel}</button>
+        )}
+        {confirming && phase === 'idle' && (
+          <div className="install-confirm-action">
+            <p>Press the card control once, then confirm below. Studio binds this update to this exact card and project.</p>
+            <label>
+              <input type="checkbox" checked={physicalConfirmed} onChange={event => setPhysicalConfirmed(event.target.checked)} />
+              <span>I physically confirmed this exact Lightweaver card.</span>
+            </label>
+            <button className="btn-lg" type="button" disabled={!physicalConfirmed} onClick={start}>Start preserving update</button>
+          </div>
+        )}
+        {phaseLabel && (
+          <div className="install-release ready" role="status">
+            <strong>{phaseLabel}</strong>
+            {phase === 'sending' && release && <span> · {acknowledgedBytes} of {release.imageBytes.byteLength} bytes acknowledged by the card</span>}
+            {phase === 'reconnected' && <span> to Card {card.id} on firmware {targetLabel}</span>}
+          </div>
+        )}
+        {error && <div className="install-check-error" role="alert">{error}</div>}
+        {rollback && (
+          <div className="install-check-error" role="alert">
+            <strong>Update rolled back.</strong> The card restored Build {rollback.restoredBuildNumber || 'unknown'}. Reason: {rollback.reason}.
+          </div>
+        )}
+      </section>
+    );
+  }
+
   function AutomaticInstallScreen({ cardLink = {}, onConnectCard, onCommissioningComplete, persistCurrentProjectToBrowser, embedded = false }) {
     const { serializeProject, flushProjectAutosave, markProjectPersisted, projectLifecycle } = useProject();
     const capabilities = detectInstallerCapabilities();
+    const preservingFixture = import.meta.env.DEV ? window.__LW_PRESERVING_UPDATE_FIXTURE__ || null : null;
     const handoff = nextCardConnectionAction({ intent: 'blank-card', capabilities });
     const [releaseState, setReleaseState] = useState({ state: 'loading', release: null, error: '' });
+    const [updateReleaseState, setUpdateReleaseState] = useState({ state: 'loading', release: null, error: '' });
     const [cardState, setCardState] = useState({ state: 'idle', hardware: null, error: '' });
     const [eraseConfirmed, setEraseConfirmed] = useState(false);
     const [progress, setProgress] = useState(0);
@@ -471,6 +724,38 @@ import {
       : installedFirmware === cardLink?.card
         ? 'live card connection'
         : installedFirmware ? 'last verified for this exact card' : '';
+    const updateReadiness = preservingFixture?.readiness || cardLink?.readiness || null;
+    const connectedCardCandidate = preservingFixture?.card || cardLink?.card || null;
+    const connectedUpdateCard = cardSupportsNetworkFirmwareUpdate(updateReadiness) && connectedCardCandidate
+      ? { ...connectedCardCandidate, bootId: updateReadiness.bootId, projectHead: updateReadiness.projectHead }
+      : null;
+    const usbUpdateCard = (cardState.state === 'ready' || cardState.state === 'reconnecting')
+      && cardState.hardware?.source === 'usb-flash'
+      ? normalizeFirmwareUpdateCard({ ...cardState.hardware, ...installedFirmware })
+      : null;
+    const recoverySession = readFirmwareUpdateSession();
+    const recoveryTarget = updateReleaseState.state === 'ready' ? updateReleaseState.release.manifest : null;
+    const recoveryCard = recoverySession && recoveryTarget
+      && recoverySession.targetBuildId === recoveryTarget.buildId
+      && recoverySession.targetFirmwareVersion === recoveryTarget.firmwareVersion
+      ? normalizeFirmwareUpdateCard({
+          cardId: recoverySession.cardId,
+          firmwareVersion: recoverySession.targetFirmwareVersion,
+          buildId: recoverySession.targetBuildId,
+          buildNumber: recoverySession.targetBuildNumber,
+          bootId: recoverySession.previousBootId,
+          projectHead: recoverySession.expectedProjectHead,
+          projectFingerprint: recoverySession.expectedProjectFingerprint,
+          recovering: true,
+        })
+      : null;
+    const preservingMode = preservingFixture?.mode
+      || (connectedUpdateCard ? 'wifi'
+        : usbUpdateCard && updateReleaseState.state === 'ready' ? 'usb'
+          : recoveryCard ? (recoverySession.mode === 'usb' ? 'usb' : 'wifi') : '');
+    const preservingCard = connectedUpdateCard || usbUpdateCard
+      || (preservingFixture?.mode === 'usb' ? preservingFixture.card : null)
+      || recoveryCard;
     const loaderRef = useRef(null);
     const transportRef = useRef(null);
     const inspectionRef = useRef(null);
@@ -533,6 +818,16 @@ import {
     }, [capabilities.canWebSerialInstall, releaseAttempt]);
 
     useEffect(() => {
+      let active = true;
+      const testLoader = import.meta.env.DEV && window.__LW_LOAD_UPDATE_RELEASE_FOR_TEST__;
+      const loading = testLoader ? testLoader() : loadVerifiedFirmwareUpdateRelease();
+      Promise.resolve(loading)
+        .then(release => { if (active) setUpdateReleaseState({ state: 'ready', release, error: '' }); })
+        .catch(error => { if (active) setUpdateReleaseState({ state: 'error', release: null, error: error?.message || String(error) }); });
+      return () => { active = false; };
+    }, [releaseAttempt]);
+
+    useEffect(() => {
       mountedRef.current = true;
       return () => {
         mountedRef.current = false;
@@ -567,7 +862,9 @@ import {
       },
     });
 
-    if (!capabilities.canWebSerialInstall) return <UnsupportedInstall action={handoff} onLaunchBridge={launchBridge} embedded={embedded} />;
+    if (!capabilities.canWebSerialInstall && !preservingFixture && preservingMode !== 'wifi') {
+      return <UnsupportedInstall action={handoff} onLaunchBridge={launchBridge} embedded={embedded} />;
+    }
 
     const findCard = async () => {
       if (findingRef.current || installingRef.current) return;
@@ -719,8 +1016,10 @@ import {
 
           <header className="install-intro">
             <div className="eyebrow">Safe automatic installer</div>
-            <InstallHeading>Install Lightweaver</InstallHeading>
-            <p>Plug the card into this computer by USB. Studio verifies the official firmware and checks the card before it can erase anything.</p>
+            <InstallHeading>{preservingMode ? 'Update Lightweaver' : 'Install Lightweaver'}</InstallHeading>
+            <p>{preservingMode
+              ? 'Studio verifies the signed update and keeps this card’s Wi-Fi, project, patterns, wiring, and settings.'
+              : 'Plug the card into this computer by USB. Studio verifies the official firmware and checks the card before it can erase anything.'}</p>
             <div className={`install-release ${releaseState.state}`} role="status">
               {releaseState.state === 'loading' && 'Verifying the official Lightweaver release…'}
               {releaseState.state === 'ready' && `Official Lightweaver ${releaseState.release.manifest.firmwareVersion} · ${formatFirmwareBuildLabel(releaseState.release.manifest)} verified and ready.`}
@@ -731,14 +1030,34 @@ import {
             )}
           </header>
 
+          {preservingMode && preservingCard && (
+            <PreservingUpdatePanel
+              mode={preservingMode}
+              card={preservingCard}
+              readiness={updateReadiness}
+              release={updateReleaseState.state === 'ready' ? updateReleaseState.release : null}
+              loaderRef={loaderRef}
+              transportRef={transportRef}
+              onUsbReleased={() => setCardState(previous => ({
+                state: 'reconnecting', hardware: previous.hardware, error: '',
+              }))}
+              onReconnectCard={onConnectCard}
+              reconnectHost={cardLink?.host || updateReadiness?.host || ''}
+            />
+          )}
+          {preservingMode && updateReleaseState.state === 'error' && (
+            <div className="install-check-error" role="alert">Signed preserving update unavailable. {updateReleaseState.error}</div>
+          )}
+
           {/* Explain exactly what this install does to the connected card. */}
-          {updatePlan.headline && (
+          {!preservingMode && updatePlan.headline && (
             <div className={`install-update-plan is-${updatePlan.state}`} data-testid="install-update-plan" role="status">
               <p className="install-update-headline">{updatePlan.headline}</p>
               <p className="install-update-caution">{updatePlan.caution}</p>
             </div>
           )}
 
+          {preservingMode !== 'wifi' && (
           <section className="card install-action-card install-card-check">
             <div className="install-action-copy">
               <h2>Find your connected card</h2>
@@ -766,8 +1085,9 @@ import {
             )}
             {cardState.state === 'error' && <div className="install-check-error" role="alert">{cardState.error}</div>}
           </section>
+          )}
 
-          {cardState.state === 'ready' && (
+          {cardState.state === 'ready' && !preservingMode && (
             <section className="card install-action-card install-confirm">
               <div className="install-action-copy">
                 <h2>Confirm the reset</h2>
@@ -792,6 +1112,24 @@ import {
                 )}
               </div>
             </section>
+          )}
+
+          {preservingMode && (
+            <details className="card install-action-card install-factory-recovery">
+              <summary>Factory reset and reinstall</summary>
+              <p><strong>Destructive recovery:</strong> this permanently removes Wi-Fi, projects, patterns, wiring, and settings from the card. Preserving update failures never start this automatically.</p>
+              {cardState.state === 'ready' && (
+                <div className="install-confirm">
+                  <label>
+                    <input type="checkbox" checked={eraseConfirmed} onChange={(event) => setEraseConfirmed(event.target.checked)} />
+                    <span>I understand this factory recovery erases everything currently stored on this card.</span>
+                  </label>
+                  <button className="btn" type="button" onClick={install} disabled={!eraseConfirmed || installState === 'installing' || installState === 'observing'}>
+                    {installState === 'installing' ? `Factory reinstalling… ${Math.round(progress * 100)}%` : 'Erase card and reinstall'}
+                  </button>
+                </div>
+              )}
+            </details>
           )}
 
           {installState === 'observing' && (

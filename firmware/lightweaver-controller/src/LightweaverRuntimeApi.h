@@ -122,6 +122,7 @@ void runtimeMarkRestartPending();
 void runtimeArmConfigRestartFallback();
 void runtimeSetWifiTransitionPending(bool pending);
 String runtimeFirmwareInfo();
+String runtimeFirmwareUpdateStatusJson();
 void serializeKaleidoscopeMappings(JsonArray target, const RuntimeConfig& config);
 String runtimeRecipeCapabilities();
 FactoryResetResult runtimeFactoryReset();

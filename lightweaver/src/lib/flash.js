@@ -67,6 +67,23 @@ export async function flashFirmware(loader, file, address, eraseAll, onProgress)
   await loader.after('hard_reset');
 }
 
+// Preserving bootstrap needs to read back the exact application bytes before
+// reset. Keep that bounded write separate from the technician/factory helper,
+// which intentionally resets as soon as its write completes.
+export async function writeApplicationWithoutReset(loader, data, address, eraseAll, onProgress) {
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data || 0);
+  if (address !== 0x10000 || eraseAll !== false || bytes.byteLength < 1) {
+    throw new Error('Preserving firmware writes are restricted to app0 with erase disabled.');
+  }
+  await writeVerifiedFlash(loader, {
+    fileArray: [{ data: bytes, address }],
+    flashMode: 'keep', flashFreq: 'keep', flashSize: 'keep', eraseAll: false, compress: true,
+    reportProgress(_fileIndex, written, total) {
+      onProgress?.(total > 0 ? written / total : 0);
+    },
+  });
+}
+
 export async function fetchLatestWLEDRelease() {
   const res = await fetch(WLED_API_URL, {
     headers: { Accept: 'application/vnd.github+json' },

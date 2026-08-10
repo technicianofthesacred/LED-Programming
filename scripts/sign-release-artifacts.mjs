@@ -6,9 +6,11 @@ import { fileURLToPath } from 'node:url';
 
 import {
   FIRMWARE_INSTALLER_VERSION,
+  canonicalFirmwareUpdateTicketBytes,
   canonicalFirmwareManifestBytes,
+  validateFirmwareUpdateTicket,
   validateFirmwareManifest,
-} from '../lightweaver/src/lib/firmwareRelease.js';
+} from '../packages/installer-core/src/firmware-release.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -33,6 +35,10 @@ if (!privateKeyPem?.trim()) {
 }
 
 const args = argumentsMap(process.argv.slice(2));
+const kind = args.get('kind') ?? 'manifest';
+if (kind !== 'manifest' && kind !== 'ticket' && kind !== 'all') {
+  throw new Error('--kind must be manifest, ticket, or all');
+}
 const manifestPath = resolve(args.get('manifest') ?? resolve(
   repoRoot,
   'lightweaver/public/firmware/release-manifest.json',
@@ -45,9 +51,6 @@ const publicKeyPath = resolve(args.get('public-key') ?? resolve(
   repoRoot,
   'release/keys/lightweaver-release-public.pem',
 ));
-
-const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-validateFirmwareManifest(manifest, { installerVersion: FIRMWARE_INSTALLER_VERSION });
 
 let privateKey;
 try {
@@ -65,11 +68,45 @@ if (derivedPublicKey !== expectedPublicKey) {
   throw new Error('LIGHTWEAVER_RELEASE_SIGNING_KEY does not match the pinned public key');
 }
 
-const signature = sign(
-  'sha256',
-  Buffer.from(canonicalFirmwareManifestBytes(manifest)),
-  { key: privateKey, dsaEncoding: 'ieee-p1363' },
-);
-if (signature.byteLength !== 64) throw new Error('Release signer produced an invalid P-256 signature');
-await writeFile(signaturePath, `${signature.toString('base64url')}\n`, { mode: 0o644 });
-console.log(JSON.stringify({ manifestPath, signaturePath }));
+async function writeSignature(bytes, path) {
+  const signature = sign(
+    'sha256',
+    bytes,
+    { key: privateKey, dsaEncoding: 'ieee-p1363' },
+  );
+  if (signature.byteLength !== 64) throw new Error('Release signer produced an invalid P-256 signature');
+  await writeFile(path, `${signature.toString('base64url')}\n`, { mode: 0o644 });
+}
+
+const output = {};
+if (kind === 'manifest' || kind === 'all') {
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  validateFirmwareManifest(manifest, { installerVersion: FIRMWARE_INSTALLER_VERSION });
+  await writeSignature(Buffer.from(canonicalFirmwareManifestBytes(manifest)), signaturePath);
+  Object.assign(output, { manifestPath, signaturePath });
+}
+if (kind === 'ticket' || kind === 'all') {
+  const ticketPath = resolve(args.get('ticket') ?? resolve(
+    repoRoot,
+    'lightweaver/public/firmware/firmware-update-ticket.json',
+  ));
+  const ticketSignaturePath = resolve(args.get('ticket-signature') ?? resolve(
+    repoRoot,
+    'lightweaver/public/firmware/firmware-update-ticket.sig',
+  ));
+  const ticketBytes = await readFile(ticketPath);
+  let ticket;
+  try {
+    ticket = JSON.parse(ticketBytes.toString('utf8'));
+  } catch {
+    throw new Error('Firmware update ticket is not valid JSON');
+  }
+  validateFirmwareUpdateTicket(ticket);
+  const canonicalBytes = Buffer.from(canonicalFirmwareUpdateTicketBytes(ticket));
+  if (!ticketBytes.equals(canonicalBytes)) {
+    throw new Error('Firmware update ticket bytes are not canonical');
+  }
+  await writeSignature(ticketBytes, ticketSignaturePath);
+  Object.assign(output, { ticketPath, ticketSignaturePath });
+}
+console.log(JSON.stringify(output));

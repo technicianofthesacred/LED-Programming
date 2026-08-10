@@ -26,6 +26,10 @@ physical card; an HTTP success never substitutes for observing the lights.
 - [ ] **UNPERFORMED — conflict/handoff:** fragment-only ciphertext is exact-card-bound, expiring, single-use; return-online conflicts require compare/keep-both/replace.
 - [ ] **UNPERFORMED — power loss:** interruption at every staging/hash/readback/head-promotion boundary retains the prior known-good project.
 - [ ] **UNPERFORMED — signed combined release:** exact factory offset/size/hash/readback and card-Studio build/schema/API/assets match card-reported identity.
+- [ ] **UNPERFORMED — preserving USB bootstrap:** on a supported older configured card, the only write is the signed application range at `0x10000`; exact readback succeeds and Wi-Fi/project/pattern/wiring/settings hashes remain unchanged.
+- [ ] **UNPERFORMED — interrupted preserving USB:** disconnect/reset at bounded write/readback/reconnect points retains data and the same non-erasing bootstrap remains repeatable.
+- [ ] **UNPERFORMED — A/B update:** exact-card owner authority, ticket/app verification, inactive-slot transfer, probation, success, cancel, router loss, and rollback all preserve project/configuration.
+- [ ] **UNPERFORMED — update power loss:** cuts during receive, verify, boot selection, reboot, probation, and mark-valid return either the old known-good application or the new proven application without selecting a partial image.
 
 Never substitute a local build, direct HTTP request, terminal command, green
 board LED, API acknowledgement, or mocked browser test for the live erased-card
@@ -54,7 +58,7 @@ terminal revision, run `PROD_CHECK_REQUIRED=1 npm run check:prod` in
 `https://led.mandalacodes.com/studio-release.json` to be HTTP 200 with
 `Cache-Control: no-store`, match its full source revision, short build ID, and
 build number to the running bundle, and verify every file and digest in the
-staged build graph against live production. Record the build number, revision,
+   staged Studio and firmware release graphs against live production. Record the build number, revision,
 deploy workflow run, marker, and checker result. The build number is the
 comparable one: it is what the Studio footer shows (`Studio current · Build
 412`) and what a handoff report must quote. This independent proof—not the deploy job's own green badge—is
@@ -80,8 +84,10 @@ keys:
    lane, and deleted files are classified the same as added or edited files.
 3. When that exact tested revision is firmware-sensitive, protected
    `build-firmware.yml` checks out `workflow_run.head_sha`, recompiles the
-   ESP32-S3 factory image with that identity, signs its manifest/provenance,
-   regenerates every production job, and commits the complete release set to
+   ESP32-S3 factory and application images once with that identity, hashes the
+   exact raw partition-table flash range, signs the exact update ticket before
+   building/signing manifest schema 2 and provenance, regenerates every
+   production job, and commits the complete release set to
    `main`. It refuses to publish if a signing input changed while it ran and
    dispatches deployment with the exact signed commit SHA. Generated
    artifact-only commits never re-trigger signing.
@@ -103,7 +109,8 @@ keys:
    requires the Access denial. After cutover it requires public Studio HTTP 200,
    native account and library session HTTP 401 responses with `no-store`, and a
    reachable public login Function, as well as the signed release, job, cache,
-   build-graph, and JS/CSS proofs.
+   Studio build-graph, firmware release-graph, immutable update artifact, and
+   JS/CSS proofs.
 7. One fully erased physical card completes the live Production Setup route and
    [`new-card-checklist.md`](new-card-checklist.md). Only then may a batch begin.
 
@@ -122,14 +129,19 @@ steps 5–7. A human manual deploy with missing credentials fails loudly.
 
 - [ ] Reviewed source commit is on `main`; record commit: `____________`.
 - [ ] `Tests / gate` passed for that exact main revision; record run: `____________`.
-- [ ] Protected signer committed the image, manifest, signature, provenance,
-      regenerated job source, content-addressed job, and job index.
+- [ ] Protected signer committed the unchanged factory alias and immutable
+      factory image, immutable application image, exact update ticket and P-256
+      signature, manifest schema 2 and signature, provenance, regenerated job
+      source, content-addressed job, and job index.
 - [ ] Signed release commit is current; record commit: `____________`.
 - [ ] The most recent nightly/manual `Exhaustive launch check` is green on
       current `main`; if not, this shipment remains blocked.
 - [ ] Deploy workflow says the Cloudflare upload ran—not **NOT RUN**.
 - [ ] `PROD_CHECK_REQUIRED=1 npm run check:prod` passed after publish, including
       every file in the live Studio build graph.
+- [ ] The staged and live `firmware/release-build-graph.json` match exactly and
+      every listed factory/app/ticket/signature/manifest/provenance byte matches
+      its recorded size and SHA-256.
 - [ ] Live `https://led.mandalacodes.com/#screen=production` opens the current
       root Studio and verified `bench-fixture-44` job.
 

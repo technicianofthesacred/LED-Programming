@@ -22,10 +22,11 @@ struct LightweaverProjectHead {
 
 class LightweaverProjectRepository {
  public:
-  bool begin(String& message);
+  bool begin(String& message, bool readOnlyProbation = false);
   bool available() const { return available_; }
   String currentHead() const { return head_.current; }
   String currentProjectId() const { return head_.projectId; }
+  bool stagingActive() const { return stagedProjectId_.length() > 0; }
   const LightweaverProjectHead& head() const { return head_; }
   size_t quotaBytes() const { return LW_PROJECT_REPOSITORY_QUOTA_BYTES; }
   size_t usedBytes() const;

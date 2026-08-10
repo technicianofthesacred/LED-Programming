@@ -54,10 +54,18 @@ test('tampered release is blocked before the card can be selected', async ({ pag
 test('desktop without browser USB offers Lightweaver Bridge and keeps the canonical Studio URL', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
+    (window as any).__LW_BRIDGE_NAVIGATE_FOR_TEST__ = (url: string) => {
+      (window as any).__LW_UNSUPPORTED_BRIDGE_URL__ = url;
+    };
   });
   await page.goto('/#screen=flash&mode=install');
 
   await expect(page.getByRole('button', { name: 'Open Lightweaver Bridge' })).toBeVisible();
+  await page.getByRole('button', { name: 'Open Lightweaver Bridge' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__LW_UNSUPPORTED_BRIDGE_URL__ || '')).toContain('inspect-compatible-card');
+  const bridgeUrl = await page.evaluate(() => (window as any).__LW_UNSUPPORTED_BRIDGE_URL__ || '');
+  expect(bridgeUrl).toContain('inspect-compatible-card');
+  expect(bridgeUrl).not.toContain('install-current-release');
   await expect(page.getByRole('button', { name: 'Find connected card' })).toHaveCount(0);
   await expect(page).toHaveURL(/#screen=flash&mode=install$/);
   await expect(page.locator('body')).not.toContainText('/design');
@@ -113,7 +121,7 @@ test('a blocked card-page popup on the install-to-card handoff shows visible pop
   await page.getByRole('button', { name: /My card already lights up/ }).click();
   await expect(page.getByText(/Join the card’s own Wi-Fi network \(its name starts with “Lightweaver-”\)/)).toBeVisible();
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('The browser could not open the card page. Allow popups, then try again.');
+  await expect(page.getByRole('alert')).toContainText('The browser could not open the legacy card page. Allow popups, then try again.');
 });
 
 test('technician controls remain separately labelled outside install mode', async ({ page }) => {

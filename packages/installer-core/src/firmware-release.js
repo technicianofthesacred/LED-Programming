@@ -12,6 +12,17 @@ export const MAX_FACTORY_IMAGE_SIZE = 0x650000;
 export const PRODUCTION_FIRMWARE_ORIGIN = 'https://led.mandalacodes.com';
 export const PRODUCTION_MANIFEST_URL = '/firmware/release-manifest.json';
 export const PRODUCTION_SIGNATURE_URL = '/firmware/release-manifest.sig';
+export const LIGHTWEAVER_PARTITION_LAYOUT = Object.freeze({
+  layout: 'default_16MB.csv',
+  // The signed digest covers this exact raw range from the merged factory
+  // image, including all padding bytes. It is not a digest of the CSV source
+  // or the shorter partitions.bin artifact.
+  tableOffset: 0x8000,
+  tableSize: 0x1000,
+  app0Offset: 0x10000,
+  app1Offset: 0x650000,
+  slotSize: 0x640000,
+});
 
 // This non-secret key is intentionally pinned in the installer bundle. Release
 // signing uses the matching private key held only in the protected CI secret.
@@ -36,7 +47,7 @@ const MANIFEST_KEYS = [
 // LW_BUILD_NUMBER so a card, this manifest, and GitHub all agree. Optional only so the one already-signed
 // release that predates it still verifies; the builder always emits it, and
 // `assertFirmwareManifestBuildNumber` enforces that for anything it produces.
-const OPTIONAL_MANIFEST_KEYS = ['buildNumber', 'cardStudio'];
+const OPTIONAL_MANIFEST_KEYS = ['buildNumber', 'cardStudio', 'update'];
 
 function sortForCanonicalJson(value) {
   if (Array.isArray(value)) return value.map(sortForCanonicalJson);
@@ -50,6 +61,73 @@ function sortForCanonicalJson(value) {
 
 export function canonicalFirmwareManifestBytes(manifest) {
   return encoder.encode(JSON.stringify(sortForCanonicalJson(manifest)));
+}
+
+export function validateFirmwareUpdateTicket(ticket) {
+  assertExactKeys(ticket, [
+    'buildId', 'buildNumber', 'compatibility', 'firmwareVersion', 'image',
+    'partition', 'preservation', 'schemaVersion', 'target',
+  ], 'firmware update ticket');
+  assertExactKeys(ticket.image, ['sha256', 'size', 'url'], 'firmware update ticket image');
+  assertExactKeys(ticket.partition, [
+    'app0Offset', 'app1Offset', 'layout', 'slotSize', 'tableSha256',
+  ], 'firmware update ticket partition');
+  assertExactKeys(ticket.compatibility, [
+    'firmwareApiMax', 'firmwareApiMin', 'minimumBootstrapBuild',
+    'minimumUpdaterVersion', 'projectSchemaMax', 'projectSchemaMin',
+  ], 'firmware update ticket compatibility');
+  assertExactKeys(ticket.preservation, ['dataPartitionsIncluded'], 'firmware update ticket preservation');
+
+  if (ticket.schemaVersion !== 1) throw new Error('Unsupported firmware update ticket schema');
+  if (ticket.target !== EXPECTED_FIRMWARE_TARGET) throw new Error('Firmware update ticket target is invalid');
+  parseSemver(ticket.firmwareVersion, 'firmware update ticket firmwareVersion');
+  if (!/^[a-f0-9]{40}$/.test(ticket.buildId)) {
+    throw new Error('Firmware update ticket buildId must be the immutable source revision');
+  }
+  if (!isPositiveSafeInteger(ticket.buildNumber)) {
+    throw new Error('Firmware update ticket buildNumber must be a positive integer');
+  }
+  if (!isPositiveSafeInteger(ticket.image.size) || ticket.image.size > LIGHTWEAVER_PARTITION_LAYOUT.slotSize) {
+    throw new Error('Firmware update ticket image must fit one application slot');
+  }
+  if (!/^[a-f0-9]{64}$/.test(ticket.image.sha256)) {
+    throw new Error('Firmware update ticket image SHA-256 is invalid');
+  }
+  const expectedImageUrl = `/firmware/releases/${ticket.firmwareVersion}/${ticket.buildId}/lightweaver-controller-esp32s3-app.bin`;
+  if (ticket.image.url !== expectedImageUrl) {
+    throw new Error('Firmware update ticket image URL must be an immutable versioned release path');
+  }
+  for (const key of ['layout', 'app0Offset', 'app1Offset', 'slotSize']) {
+    if (ticket.partition[key] !== LIGHTWEAVER_PARTITION_LAYOUT[key]) {
+      throw new Error(`Firmware update ticket partition ${key} is invalid`);
+    }
+  }
+  if (!/^[a-f0-9]{64}$/.test(ticket.partition.tableSha256)) {
+    throw new Error('Firmware update ticket partition table SHA-256 is invalid');
+  }
+  for (const [minimum, maximum, label] of [
+    ['firmwareApiMin', 'firmwareApiMax', 'firmware API'],
+    ['projectSchemaMin', 'projectSchemaMax', 'project schema'],
+  ]) {
+    if (!isPositiveSafeInteger(ticket.compatibility[minimum])
+      || !isPositiveSafeInteger(ticket.compatibility[maximum])
+      || ticket.compatibility[minimum] > ticket.compatibility[maximum]) {
+      throw new Error(`Firmware update ticket compatibility ${label} range is invalid`);
+    }
+  }
+  if (!isPositiveSafeInteger(ticket.compatibility.minimumUpdaterVersion)
+    || !isPositiveSafeInteger(ticket.compatibility.minimumBootstrapBuild)) {
+    throw new Error('Firmware update ticket compatibility minimums are invalid');
+  }
+  if (ticket.preservation.dataPartitionsIncluded !== false) {
+    throw new Error('Firmware update ticket must not include data partitions');
+  }
+  return ticket;
+}
+
+export function canonicalFirmwareUpdateTicketBytes(ticket) {
+  validateFirmwareUpdateTicket(ticket);
+  return encoder.encode(JSON.stringify(ticket));
 }
 
 function assertExactKeys(value, expected, label, optional = []) {
@@ -92,7 +170,15 @@ export function validateFirmwareManifest(
   assertExactKeys(manifest.image, ['sha256', 'size', 'url'], 'firmware image', ['cardStudioReadback']);
   assertExactKeys(manifest.configSchema, ['max', 'min'], 'config schema range');
 
-  if (manifest.schemaVersion !== 1) throw new Error('Unsupported firmware manifest schema');
+  if (manifest.schemaVersion !== 1 && manifest.schemaVersion !== 2) {
+    throw new Error('Unsupported firmware manifest schema');
+  }
+  if (manifest.schemaVersion === 1 && manifest.update !== undefined) {
+    throw new Error('Legacy firmware manifest schema 1 cannot contain an update release');
+  }
+  if (manifest.schemaVersion === 2 && manifest.update === undefined) {
+    throw new Error('Firmware manifest schema 2 requires an update release');
+  }
   if (manifest.target !== EXPECTED_FIRMWARE_TARGET) throw new Error('Firmware target is not ESP32-S3 16MB');
   const firmwareVersion = parseSemver(manifest.firmwareVersion, 'firmwareVersion');
   const minimumFirmware = parseSemver(minimumFirmwareVersion, 'minimumFirmwareVersion');
@@ -135,6 +221,33 @@ export function validateFirmwareManifest(
   );
   if (!immutablePath.test(manifest.image.url)) {
     throw new Error('Firmware image URL must be an immutable versioned release path');
+  }
+
+  if (manifest.update !== undefined) {
+    assertExactKeys(manifest.update, ['image', 'signature', 'ticket'], 'firmware update release');
+    const releaseRoot = `/firmware/releases/${manifest.firmwareVersion}/${manifest.buildId}/`;
+    for (const [label, descriptor, fileName] of [
+      ['image', manifest.update.image, 'lightweaver-controller-esp32s3-app.bin'],
+      ['ticket', manifest.update.ticket, 'firmware-update-ticket.json'],
+      ['signature', manifest.update.signature, 'firmware-update-ticket.sig'],
+    ]) {
+      assertExactKeys(descriptor, ['sha256', 'size', 'url'], `firmware update ${label}`);
+      if (!isPositiveSafeInteger(descriptor.size)) {
+        throw new Error(`Firmware update ${label} size is invalid`);
+      }
+      if (!/^[a-f0-9]{64}$/.test(descriptor.sha256)) {
+        throw new Error(`Firmware update ${label} SHA-256 is invalid`);
+      }
+      if (descriptor.url !== `${releaseRoot}${fileName}`) {
+        throw new Error(`Firmware update ${label} URL must be an immutable versioned release path`);
+      }
+    }
+    if (manifest.update.image.size > 0x640000) {
+      throw new Error('Firmware update image exceeds the application slot');
+    }
+    if (manifest.update.signature.size !== 87) {
+      throw new Error('Firmware update signature must be an exact P-256 descriptor');
+    }
   }
 
   const { min, max } = manifest.configSchema;
@@ -317,6 +430,55 @@ async function readBoundedFirmwareImage(response, expectedSize) {
   return bytes;
 }
 
+async function readBoundedReleaseArtifact(response, descriptor, label, maximumSize) {
+  const { size: expectedSize } = descriptor;
+  if (expectedSize > maximumSize) throw new Error(`Firmware update ${label} exceeds its safe size limit`);
+  const lengthHeader = response.headers?.get?.('content-length');
+  if (lengthHeader != null) {
+    const declaredSize = Number(lengthHeader);
+    if (!Number.isSafeInteger(declaredSize) || declaredSize < 0) {
+      throw new Error(`Firmware update ${label} Content-Length is invalid`);
+    }
+    if (declaredSize !== expectedSize) {
+      throw new Error(`Firmware update ${label} size mismatch: expected ${expectedSize}, received ${declaredSize}`);
+    }
+  }
+  const reader = response.body?.getReader?.();
+  if (!reader) throw new Error(`Firmware update ${label} cannot be read as a bounded stream`);
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+      total += chunk.byteLength;
+      if (total > expectedSize || total > maximumSize) {
+        await reader.cancel();
+        throw new Error(`Firmware update ${label} size mismatch: expected ${expectedSize}, received more data`);
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  if (total !== expectedSize) {
+    throw new Error(`Firmware update ${label} size mismatch: expected ${expectedSize}, received ${total}`);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+async function sha256Hex(cryptoImpl, bytes) {
+  const digest = new Uint8Array(await cryptoImpl.subtle.digest('SHA-256', bytes));
+  return [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 export async function loadProductionFirmwareManifest(
   fetchImpl = globalThis.fetch,
   cryptoImpl = globalThis.crypto,
@@ -385,4 +547,98 @@ export async function loadProductionFirmwareRelease(
   if (sha256 !== manifest.image.sha256) throw new Error('Firmware image SHA-256 mismatch');
 
   return { manifest, bytes };
+}
+
+export async function loadProductionFirmwareUpdateRelease(
+  fetchImpl = globalThis.fetch,
+  cryptoImpl = globalThis.crypto,
+  options = {},
+) {
+  const { runtime = 'browser', publicKeyPem = LIGHTWEAVER_RELEASE_PUBLIC_KEY_PEM } = options;
+  const manifest = await loadProductionFirmwareManifest(fetchImpl, cryptoImpl, options);
+  if (manifest.schemaVersion !== 2 || !manifest.update) {
+    throw new Error('Signed firmware manifest does not publish a preserving update release');
+  }
+  const ticketUrl = resolveProductionReleaseUrl(manifest.update.ticket.url, 'update ticket', runtime);
+  const signatureUrl = resolveProductionReleaseUrl(manifest.update.signature.url, 'update ticket signature', runtime);
+  const imageUrl = resolveProductionReleaseUrl(manifest.update.image.url, 'update image', runtime);
+  const [ticketResponse, signatureResponse, imageResponse] = await Promise.all([
+    fetchRequired(fetchImpl, ticketUrl, 'update ticket'),
+    fetchRequired(fetchImpl, signatureUrl, 'update ticket signature'),
+    fetchRequired(fetchImpl, imageUrl, 'update image'),
+  ]);
+  const [ticketBytes, signatureFileBytes, imageBytes] = await Promise.all([
+    readBoundedReleaseArtifact(ticketResponse, manifest.update.ticket, 'ticket', 64 * 1024),
+    readBoundedReleaseArtifact(signatureResponse, manifest.update.signature, 'ticket signature', 87),
+    readBoundedReleaseArtifact(imageResponse, manifest.update.image, 'image', LIGHTWEAVER_PARTITION_LAYOUT.slotSize),
+  ]);
+  const [ticketSha256, signatureSha256, imageSha256] = await Promise.all([
+    sha256Hex(cryptoImpl, ticketBytes),
+    sha256Hex(cryptoImpl, signatureFileBytes),
+    sha256Hex(cryptoImpl, imageBytes),
+  ]);
+  if (ticketSha256 !== manifest.update.ticket.sha256) throw new Error('Firmware update ticket SHA-256 mismatch');
+  if (signatureSha256 !== manifest.update.signature.sha256) throw new Error('Firmware update ticket signature SHA-256 mismatch');
+  if (imageSha256 !== manifest.update.image.sha256) throw new Error('Firmware update image SHA-256 mismatch');
+
+  let ticket;
+  try {
+    ticket = JSON.parse(new TextDecoder().decode(ticketBytes));
+  } catch {
+    throw new Error('Firmware update ticket is not valid JSON');
+  }
+  validateFirmwareUpdateTicket(ticket);
+  const canonicalTicketBytes = canonicalFirmwareUpdateTicketBytes(ticket);
+  if (canonicalTicketBytes.byteLength !== ticketBytes.byteLength
+    || canonicalTicketBytes.some((byte, index) => byte !== ticketBytes[index])) {
+    throw new Error('Firmware update ticket bytes are not canonical');
+  }
+  if (ticket.target !== manifest.target
+    || ticket.firmwareVersion !== manifest.firmwareVersion
+    || ticket.buildId !== manifest.buildId
+    || ticket.buildNumber !== manifest.buildNumber) {
+    throw new Error('Firmware update ticket identity does not match the signed manifest');
+  }
+  if (ticket.image.url !== manifest.update.image.url
+    || ticket.image.size !== manifest.update.image.size
+    || ticket.image.sha256 !== manifest.update.image.sha256) {
+    throw new Error('Firmware update ticket image descriptor does not match the signed manifest');
+  }
+  if (manifest.cardStudio
+    && (ticket.compatibility.firmwareApiMin !== manifest.cardStudio.firmwareApi.min
+      || ticket.compatibility.firmwareApiMax !== manifest.cardStudio.firmwareApi.max
+      || ticket.compatibility.projectSchemaMin !== manifest.cardStudio.projectSchema.min
+      || ticket.compatibility.projectSchemaMax !== manifest.cardStudio.projectSchema.max)) {
+    throw new Error('Firmware update ticket compatibility does not match the signed card Studio');
+  }
+
+  const signatureText = new TextDecoder().decode(signatureFileBytes);
+  if (!/^[A-Za-z0-9_-]{86}\n$/.test(signatureText)) {
+    throw new Error('Firmware update ticket signature encoding is invalid');
+  }
+  const ticketSignature = decodeBase64Url(signatureText.trim());
+  if (ticketSignature.byteLength !== 64) throw new Error('Firmware update ticket signature has an invalid length');
+  const publicKey = await cryptoImpl.subtle.importKey(
+    'spki',
+    pemToDer(publicKeyPem),
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['verify'],
+  );
+  const signatureValid = await cryptoImpl.subtle.verify(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    publicKey,
+    ticketSignature,
+    ticketBytes,
+  );
+  if (!signatureValid) throw new Error('Firmware update ticket signature verification failed');
+
+  return {
+    manifest,
+    ticket,
+    ticketBytes,
+    ticketSha256,
+    ticketSignature,
+    imageBytes,
+  };
 }

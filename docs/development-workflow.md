@@ -96,8 +96,8 @@ Then use the existing production chain:
 3. For firmware-sensitive changes, wait for the protected signer and its new
    signed-artifact commit.
 4. Wait for the real Cloudflare deploy, not the short deferred run.
-5. Prove `/studio-release.json`, the build graph, and the signed firmware
-   manifest against terminal `origin/main`.
+5. Prove `/studio-release.json`, the Studio build graph, the firmware release
+   graph, and the signed factory/update manifest against terminal `origin/main`.
 6. Report both the Studio build and firmware build.
 7. Perform only the hardware checks required by the changed boundary. Never
    mark a visual hardware gate passed without real observation.
@@ -107,9 +107,12 @@ evidence. It is deliberately outside the editing loop.
 
 ## Firmware and configured cards
 
-The public release is a full factory image. The factory image erases the card's
-Wi-Fi, installed project, patterns, and settings; this is intentional for a new
-or explicitly erased installation, but it is not a safe routine update format.
+Each protected firmware release publishes two formats from the same compiled
+source identity. The existing combined factory image remains the recovery/new-
+card format and erases Wi-Fi, installed projects, patterns, and settings. The
+immutable application-only image is the preserving update format; its exact
+ticket bytes and detached P-256 signature bind its size/hash, compatibility,
+and the SHA-256 of raw factory bytes `[0x8000,0x9000)`, including padding.
 
 Never flash a configured card with the factory image merely to prove a browser
 change. Before any required factory flash, record or export enough information
@@ -119,9 +122,17 @@ current limit, and known-good look. If that recovery material is unavailable,
 stop before erasing.
 
 Firmware versions are release identifiers, not progress counters. Accumulate
-firmware changes, bump the semantic version once at the release boundary, let the
-protected signer create the immutable release, and flash that exact signed image
-only when hardware proof is necessary.
+firmware changes, bump the semantic version once at the release boundary, and
+let the protected signer create the factory image, application image, exact-byte
+ticket/signature, schema-2 manifest/signature, provenance, and release graph.
+The commit count of the tested source revision is compiled once and carried
+unchanged through every artifact; the signer commit never recalculates it.
+
+Configured cards use only the verified preserving path: update-capable cards use
+A/B Wi-Fi update, and eligible older cards may receive the explicit app0-only
+USB bootstrap without erase. Factory erase remains an owner-selected recovery
+action and is never an automatic fallback. Machine tests cannot pass the real-
+card preservation, interruption, probation, rollback, or power-cut gates.
 
 ## Browser discipline
 

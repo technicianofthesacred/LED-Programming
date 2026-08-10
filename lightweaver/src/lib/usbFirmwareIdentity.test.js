@@ -14,11 +14,13 @@ const releases = [
   {
     version: '1.1.1',
     buildId: '1366faf23a29a815044bae2e50405ff14b424e42',
+    buildNumber: 1198,
     path: '../../public/firmware/releases/1.1.1/1366faf23a29a815044bae2e50405ff14b424e42/lightweaver-controller-esp32s3-factory.bin',
   },
   {
     version: '1.1.3',
     buildId: 'c80ba832eebe0b681112753b32d24001d01bf56f',
+    buildNumber: 1223,
     path: '../../public/firmware/releases/1.1.3/c80ba832eebe0b681112753b32d24001d01bf56f/lightweaver-controller-esp32s3-factory.bin',
   },
 ];
@@ -29,6 +31,7 @@ for (const release of releases) {
     const expected = {
       firmwareVersion: release.version,
       buildId: release.buildId,
+      buildNumber: release.buildNumber,
       source: 'usb-flash',
     };
     assert.deepEqual(parseLightweaverFirmwareIdentity(image), expected);

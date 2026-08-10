@@ -21,6 +21,20 @@ function buildNumberOf(source) {
   return Number.isSafeInteger(value) && value > 0 ? value : 0;
 }
 
+// `/api/status` publishes updater support inside the canonical capabilities
+// envelope. A similarly named top-level object is not authority to expose a
+// network mutation path.
+export function cardSupportsNetworkFirmwareUpdate(readiness = {}) {
+  const capability = readiness?.capabilities?.firmwareUpdate;
+  return capability?.version === 1 && capability.network === true;
+}
+
+export function normalizeFirmwareUpdateCard(card = null) {
+  if (!card || typeof card !== 'object' || Array.isArray(card)) return null;
+  const id = String(card.id || card.cardId || '').trim().toLowerCase();
+  return { ...card, id, cardId: id };
+}
+
 function buildIdOf(source) {
   return String(source?.buildId || '').trim().toLowerCase();
 }

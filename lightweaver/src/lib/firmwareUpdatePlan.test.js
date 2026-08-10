@@ -1,10 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  cardSupportsNetworkFirmwareUpdate,
   describeFirmwareUpdate,
   firmwareLabel,
+  normalizeFirmwareUpdateCard,
   resolveInstalledFirmware,
 } from './firmwareUpdatePlan.js';
+
+test('network update capability is read from the exact firmware status envelope', () => {
+  assert.equal(cardSupportsNetworkFirmwareUpdate({
+    capabilities: { firmwareUpdate: { version: 1, network: true } },
+  }), true);
+  assert.equal(cardSupportsNetworkFirmwareUpdate({ firmwareUpdate: { version: 1, network: true } }), false);
+  assert.equal(cardSupportsNetworkFirmwareUpdate({ capabilities: { firmwareUpdate: { version: 1, network: false } } }), false);
+});
+
+test('a directly inspected USB card uses its canonical cardId as the update panel id', () => {
+  assert.deepEqual(normalizeFirmwareUpdateCard({
+    cardId: 'lw-b0fe81f61b44', source: 'usb-flash', firmwareVersion: '1.1.1',
+  }), {
+    id: 'lw-b0fe81f61b44', cardId: 'lw-b0fe81f61b44', source: 'usb-flash', firmwareVersion: '1.1.1',
+  });
+  assert.equal(normalizeFirmwareUpdateCard({ id: 'lw-existing', cardId: 'lw-other' }).id, 'lw-existing');
+});
 
 const card = (buildNumber, buildId = 'a'.repeat(40), firmwareVersion = '1.0.0') => ({
   buildNumber, buildId, firmwareVersion,
