@@ -46,7 +46,7 @@ export function SetupScreen({
   browserProjects = [],
   replaceProject,
 }) {
-  const { setProjectId, setPortRoles, setStandaloneController } = useProject();
+  const { setProjectId, setPortRoles, setStandaloneController, replaceLayoutGeometry } = useProject();
   const [commissioningFlow, setCommissioningFlow] = useState(() => inspectCardCommissioning().flow);
   const [cardState, setCardState] = useState({ evidence: null, status: null, read: false });
   const [resolution, setResolution] = useState({ kind: 'unknown' });
@@ -68,19 +68,55 @@ export function SetupScreen({
     };
   }, []);
 
-  const applyCardParts = (parts, status = null) => {
+  const applyCardParts = async (parts, status = null) => {
+    const nextOutputs = Array.isArray(parts?.outputs) ? parts.outputs : null;
+    const nextController = {
+      ...(currentProject?.devices?.standaloneController || {}),
+      ...(nextOutputs ? { outputs: nextOutputs } : {}),
+      led: {
+        ...(currentProject?.devices?.standaloneController?.led || {}),
+        ...(parts?.led || {}),
+        ...(parts?.colorOrder ? { colorOrder: parts.colorOrder, colorOrderConfirmed: true } : {}),
+        ...(nextOutputs ? {
+          outputs: nextOutputs,
+          pixels: nextOutputs.reduce((sum, output) => sum + Number(output.pixels || 0), 0),
+        } : {}),
+      },
+    };
+    if (replaceProject && Array.isArray(parts?.strips) && parts.strips.length) {
+      await replaceProject({
+        ...currentProject,
+        ...(status?.projectId ? { id: status.projectId } : {}),
+        ...(Array.isArray(parts?.portRoles) ? { portRoles: parts.portRoles } : {}),
+        layout: {
+          ...(currentProject?.layout || {}),
+          strips: parts.strips,
+          starterPending: false,
+          patchBoard: parts.patchBoard,
+          wiring: parts.wiring,
+        },
+        devices: {
+          ...(currentProject?.devices || {}),
+          standaloneController: nextController,
+        },
+      }, { confirmDiscard: () => true });
+      return;
+    }
     if (status?.projectId) setProjectId(status.projectId);
     if (Array.isArray(parts?.portRoles)) setPortRoles(parts.portRoles);
-    if (Array.isArray(parts?.outputs) || parts?.colorOrder) {
+    if (Array.isArray(parts?.strips) && parts.strips.length) {
+      replaceLayoutGeometry(parts.strips, { patchBoard: parts.patchBoard, wiring: parts.wiring });
+    }
+    if (nextOutputs || parts?.colorOrder) {
       setStandaloneController(previous => ({
         ...previous,
-        ...(Array.isArray(parts.outputs) ? { outputs: parts.outputs } : {}),
+        ...(nextOutputs ? { outputs: nextOutputs } : {}),
         led: {
           ...(previous?.led || {}),
           ...(parts.colorOrder ? { colorOrder: parts.colorOrder, colorOrderConfirmed: true } : {}),
-          ...(Array.isArray(parts.outputs) ? {
-            outputs: parts.outputs,
-            pixels: parts.outputs.reduce((sum, output) => sum + Number(output.pixels || 0), 0),
+          ...(nextOutputs ? {
+            outputs: nextOutputs,
+            pixels: nextOutputs.reduce((sum, output) => sum + Number(output.pixels || 0), 0),
           } : {}),
         },
       }));
@@ -96,7 +132,7 @@ export function SetupScreen({
     const alreadyDescribed = (currentProject?.portRoles || [])
       .some(output => output?.role === 'strip' && Number(output.pixelCount) > 0);
     adoptedCardRef.current = signature;
-    if (!alreadyDescribed) applyCardParts(skeleton, status);
+    if (!alreadyDescribed) void applyCardParts(skeleton, status);
   };
 
   useEffect(() => {
@@ -171,10 +207,26 @@ export function SetupScreen({
 
   const go = hash => { window.location.hash = hash; };
 
-  const startFromCard = () => applyCardParts(
-    projectSkeletonFromCardStatus(cardState.status || cardLink?.readiness || {}),
-    cardState.status,
-  );
+  const startFromCard = async () => {
+    const readHost = cardLink?.host || cardHost || '';
+    let status = cardState.status;
+    try {
+      status = await readCardStatusEnvelope({ host: readHost, transport: cardLink?.transport });
+      if ((!Array.isArray(status?.outputs) || !status.outputs.length)
+        && typeof window !== 'undefined'
+        && window.location.protocol === 'http:') {
+        status = await readCardStatusEnvelope({ host: readHost, transport: 'direct' });
+      }
+      setCardState(previous => ({ ...previous, status, read: true }));
+    } catch {
+      // A recently completed background read is still authoritative. The
+      // readiness summary is intentionally last because it may omit geometry.
+      status = status || cardLink?.readiness || null;
+    }
+    const skeleton = projectSkeletonFromCardStatus(status || {});
+    if (!skeleton.strips.length) return;
+    await applyCardParts(skeleton, status);
+  };
 
   const loadResolvedProject = async () => {
     if (!resolution?.resolved?.project) return;

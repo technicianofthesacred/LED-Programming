@@ -454,13 +454,13 @@ export function ProjectProvider({ children, repository = null, initialProjectEnv
     if (recordHistory) dispatchLayout({ type: 'layout/pushHistory' });
     dispatchLayout(layoutActions.updateKaleidoscope(id, kaleidoscope));
   }, []);
-  const replaceLayoutGeometry = useCallback((nextStrips) => {
+  const replaceLayoutGeometry = useCallback((nextStrips, options = {}) => {
     const normalized = Array.isArray(nextStrips) ? nextStrips : [];
     dispatchLayout({
       type: 'layout/replaceGeometry',
       strips: normalized,
-      patchBoard: createDefaultPatchBoard(normalized),
-      wiring: makeDefaultWiring(normalized),
+      patchBoard: options.patchBoard || createDefaultPatchBoard(normalized),
+      wiring: options.wiring || makeDefaultWiring(normalized),
       nextStripSeq: normalized.reduce((max, strip) => {
         const match = /^strip-(\d+)$/.exec(strip?.id || '');
         return match ? Math.max(max, Number(match[1]) + 1) : max;

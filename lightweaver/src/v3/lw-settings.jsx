@@ -356,9 +356,8 @@ const SettingsFieldContext = createContext(null);
       } catch (error) {
         dispatchCardWrite({ type: 'fail', error: error?.message });
         setStatusKind('err');
-        setStatus(error?.reason === 'project-mismatch' || error?.reason === 'config-too-large'
-          ? error.message
-          : 'Could not reach the card. Copy or download the card settings and paste them on the card page.');
+        setStatus(error?.message
+          || 'Could not reach the card. Copy or download the card settings and paste them on the card page.');
       }
     };
 

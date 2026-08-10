@@ -1,13 +1,20 @@
 import { prepareCardDeployment } from './cardDeployment.js';
+import { normalizePatchBoard } from './patchBoard.js';
 
 export function cardProjectFingerprint(project) {
   try {
+    const strips = project?.layout?.strips || [];
     return prepareCardDeployment({
       projectId: project?.id,
       projectName: project?.name,
       projectRevision: 0,
-      strips: project?.layout?.strips || [],
-      patchBoard: project?.layout?.patchBoard || null,
+      strips,
+      // The live install surface always normalizes the patch board before it
+      // builds the runtime package. Matching must hash that same canonical
+      // board or a reconstructed card project can never appear installed.
+      patchBoard: project?.layout?.patchBoard
+        ? normalizePatchBoard(project.layout.patchBoard, strips)
+        : null,
       wiring: project?.layout?.wiring || null,
       standaloneController: project?.devices?.standaloneController || {},
     }).config.projectFingerprint;
