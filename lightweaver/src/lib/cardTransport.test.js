@@ -12,6 +12,16 @@ function response(body, ok = true) {
   return { ok, status: ok ? 200 : 503, json: async () => body };
 }
 
+function readyStatus(overrides = {}) {
+  return {
+    app: 'Lightweaver', provisioningContractVersion: 1,
+    cardId: 'lw-card-a', firmwareVersion: '1.1.3', buildId: 'b'.repeat(40),
+    bootId: 'boot-2', runtimePhase: 'ready', knownGoodProject: true,
+    commandReady: true, playbackReady: true, outputReady: true,
+    ...overrides,
+  };
+}
+
 function linkFor(status) {
   let state = {
     host: '192.168.18.70',
@@ -37,7 +47,7 @@ function linkFor(status) {
 }
 
 test('direct transport is selected only after an exact fresh status probe', async () => {
-  const status = { cardId: 'lw-card-a', bootId: 'boot-2', commandReady: true, playbackReady: true };
+  const status = readyStatus();
   const calls = [];
   const link = linkFor(status);
   const authority = await connectCardTransport({
@@ -51,7 +61,39 @@ test('direct transport is selected only after an exact fresh status probe', asyn
   assert.equal(authority.bootId, 'boot-2');
   assert.equal(calls[0].url, 'http://192.168.18.70/api/status');
   assert.equal(calls[0].init.targetAddressSpace, 'local');
+  assert.deepEqual(calls[0].init.headers, { Accept: 'application/json' },
+    'a read-only status GET must stay CORS-safelisted so released cards can answer it');
   assert.ok(Object.isFrozen(authority));
+});
+
+test('identified firmware that predates exact boot identity is an actionable incompatibility', async () => {
+  const result = await connectCardTransport({
+    host: '192.168.18.70', expectedCardId: 'lw-card-a',
+    fetchImpl: async () => response({
+      app: 'Lightweaver', cardId: 'lw-card-a', firmwareVersion: '1.1.1',
+      buildNumber: 1198, buildId: 'a'.repeat(40), bootId: 'boot-old-contract',
+      provisioningContractVersion: 0, commandReady: true,
+    }),
+  });
+  assert.equal(result.connected, false);
+  assert.equal(result.reason, 'firmware-incompatible');
+  assert.deepEqual(result.observedCard, {
+    id: 'lw-card-a', firmwareVersion: '1.1.1', buildNumber: 1198,
+    buildId: 'a'.repeat(40),
+  });
+});
+
+test('a non-Lightweaver JSON response never becomes a firmware diagnosis', async () => {
+  const result = await connectCardTransport({
+    host: '192.168.18.70',
+    fetchImpl: async () => response({
+      app: 'Other device', cardId: 'lw-card-a', firmwareVersion: '1.1.1',
+      buildNumber: 1198, buildId: 'a'.repeat(40),
+    }),
+  });
+  assert.equal(result.connected, false);
+  assert.equal(result.reason, 'identity-missing');
+  assert.notEqual(result.reason, 'firmware-incompatible');
 });
 
 test('wrong card is a blocked result with expected and observed evidence', async () => {
@@ -78,7 +120,7 @@ test('failed probe returns same-tab local fallback and never opens a window', as
 });
 
 test('authority is revoked immediately when its cardLink generation changes', async () => {
-  const status = { cardId: 'lw-card-a', bootId: 'boot-2', commandReady: true, playbackReady: true };
+  const status = readyStatus();
   const link = linkFor(status);
   const authority = await connectCardTransport({
     host: '192.168.18.70', expectedCardId: 'lw-card-a', link,
@@ -89,7 +131,7 @@ test('authority is revoked immediately when its cardLink generation changes', as
 });
 
 test('owner capability issuance is explicit, bounded, and bound to the probed project head', async () => {
-  const status = { cardId: 'lw-card-a', bootId: 'boot-2', projectHead: 'a'.repeat(64), commandReady: true, playbackReady: true };
+  const status = readyStatus({ projectHead: 'a'.repeat(64) });
   const calls = [];
   const link = linkFor(status);
   const authority = await connectCardTransport({

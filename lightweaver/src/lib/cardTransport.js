@@ -70,13 +70,28 @@ async function parseJsonResponse(response) {
 function exactStatus(status, { expectedCardId = '', host = '' } = {}) {
   const observed = normalizeCardIdentity(status || {}, host);
   const observedCardId = String(observed?.id || status?.cardId || '').trim();
-  if (!observedCardId) return { ok: false, reason: 'identity-missing', observedCardId: '' };
-  if (expectedCardId && observedCardId !== expectedCardId) return { ok: false, reason: 'wrong-card', observedCardId };
+  const observedCard = observedCardId ? {
+    id: observedCardId,
+    firmwareVersion: observed.firmwareVersion,
+    buildNumber: observed.buildNumber,
+    buildId: observed.buildId,
+  } : null;
+  if (!observedCardId) return { ok: false, reason: 'identity-missing', observedCardId: '', observedCard };
+  if (expectedCardId && observedCardId !== expectedCardId) return { ok: false, reason: 'wrong-card', observedCardId, observedCard };
   const classified = classifyCardReadiness(status || {}, {
     expectedCard: expectedCardId ? { id: expectedCardId } : null,
   });
-  if (classified.state === 'identity-mismatch') return { ok: false, reason: 'wrong-card', observedCardId };
-  if (!classified.bootId) return { ok: false, reason: 'identity-missing', observedCardId };
+  if (classified.state === 'identity-mismatch') return { ok: false, reason: 'wrong-card', observedCardId, observedCard };
+  if (!classified.contractSupported || !classified.identityValid || !classified.bootId) {
+    return {
+      ok: false,
+      reason: classified.identityValid && observed.firmwareVersion && observed.buildId
+        ? 'firmware-incompatible'
+        : 'identity-missing',
+      observedCardId,
+      observedCard,
+    };
+  }
   return { ok: true, card: observed, bootId: classified.bootId, readiness: status };
 }
 
@@ -150,6 +165,8 @@ export function createTransportAuthority({
   const authority = {
     connected: true,
     transport,
+    card,
+    readiness: status,
     ...immutableSnapshot,
     get ownerCapability() { return capability && Date.now() < capabilityExpiresAt ? capability : ''; },
     get ownerCapabilityExpectedHead() { return capabilityExpectedHead; },
@@ -225,12 +242,16 @@ export async function connectCardTransport({
     const response = await fetchImpl(`${baseUrl}/api/status`, {
       method: 'GET', cache: 'no-store', credentials: 'omit',
       ...(transport === CARD_TRANSPORTS.DIRECT ? { targetAddressSpace: 'local' } : {}),
-      headers: { Accept: 'application/json', 'X-Lightweaver-Probe': '1' },
+      // Keep this read-only probe CORS-safelisted. Released cards accept an
+      // ordinary JSON GET, but did not advertise the former custom header, so
+      // browsers rejected that preflight before identity could be read.
+      headers: { Accept: 'application/json' },
     });
     const status = await parseJsonResponse(response);
     const exact = exactStatus(status, { expectedCardId, host: normalizedHost });
     if (!exact.ok) return failure(exact.reason, normalizedHost, {
       expectedCardId: String(expectedCardId || ''), observedCardId: exact.observedCardId,
+      ...(exact.observedCard ? { observedCard: exact.observedCard, readiness: status } : {}),
     });
     link?.dispatch?.({
       type: 'direct-status', connected: true, host: normalizedHost,

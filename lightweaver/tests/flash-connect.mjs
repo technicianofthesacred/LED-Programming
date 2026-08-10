@@ -168,6 +168,8 @@ assert.match(flashSource, /writeVerifiedFlash/);
   );
   assert.match(screen, /findingRef\.current/, 'card selection should have a synchronous single-flight guard');
   assert.match(screen, /beforeunload/, 'active erase/write should guard accidental page unload');
+  assert.match(screen, /resetEspIntoApp/, 'leaving USB inspection must restart the card application before releasing USB');
+  assert.match(screen, /releaseInspectedConnection/, 'every non-flashing USB inspection exit must use the restart release path');
   assert.match(
     technicianScreen,
     /loadProductionFirmwareRelease\(\)/,

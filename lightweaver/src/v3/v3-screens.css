@@ -609,6 +609,14 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .install-check-error::before { content: ""; width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; }
 .install-check-ok { color: var(--ok); }
 .install-check-ok::before { background: var(--ok); }
+.install-check-ok { align-items: flex-start; flex-wrap: wrap; }
+.install-check-ok > strong { color: var(--ok); line-height: 1.4; }
+.install-check-ok dl {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 12px;
+  flex: 1 1 100%; margin: 2px 0 0 15px; color: var(--text-mid); line-height: 1.45;
+}
+.install-check-ok dt { color: var(--text-lo); }
+.install-check-ok dd { margin: 0; color: var(--text-hi); overflow-wrap: anywhere; }
 .install-check-error { color: var(--danger); }
 .install-check-error::before { background: var(--danger); }
 .install-confirm { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 14px 20px; }

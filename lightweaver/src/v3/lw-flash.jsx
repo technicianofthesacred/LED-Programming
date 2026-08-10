@@ -6,6 +6,7 @@ import {
   FLASH_COMPLETE_RELEASED_LOG,
   FLASH_COMPLETE_RELEASED_STATUS,
   flashFirmwareAndRelease,
+  resetEspIntoApp,
 } from '../lib/flashWorkflow.js';
 import {
   DEFAULT_LIGHTWEAVER_FACTORY_FLASH_ADDRESS,
@@ -35,6 +36,10 @@ import { observePostFlashNetwork } from '../lib/cardPostFlashNetwork.js';
 import { describeFirmwareUpdate, resolveInstalledFirmware } from '../lib/firmwareUpdatePlan.js';
 import { readPersistedCardIdentity } from '../lib/cardIdentity.js';
 import { openInChrome } from '../lib/openInChrome.js';
+import {
+  clearActiveUsbInspection,
+  registerActiveUsbInspection,
+} from '../lib/usbInspection.js';
 
   const STEPS = [
     { n: 1, label: "Hold BOOT", sub: "GPIO0 pin", kbd: "BOOT ↓" },
@@ -52,6 +57,15 @@ import { openInChrome } from '../lib/openInChrome.js';
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+  }
+
+  // Inspection runs in the ESP ROM loader. Closing Web Serial without a reset
+  // leaves the card application and Wi-Fi stopped, so every non-flash exit
+  // restarts the app before releasing the browser's port handle.
+  async function releaseInspectedConnection(loader, transport) {
+    if (!loader && !transport) return true;
+    try { await resetEspIntoApp(transport, loader); } catch { /* reset may tear down USB after succeeding */ }
+    return disconnectESP(loader, transport);
   }
 
   function TechnicianFlashScreen({ embedded = false } = {}) {
@@ -443,21 +457,41 @@ import { openInChrome } from '../lib/openInChrome.js';
     // What the card is running NOW, so the screen can say which direction this
     // install moves it. A live link is the best account; a remembered identity
     // is used only when it belongs to the card actually plugged in.
-    const updatePlan = useMemo(() => describeFirmwareUpdate({
-      installed: resolveInstalledFirmware({
+    const installedFirmware = useMemo(() => resolveInstalledFirmware({
         linkedCard: cardLink?.card,
         rememberedCard: readPersistedCardIdentity(),
         hardware: cardState.hardware,
-      }),
+      }), [cardLink?.card, cardState.hardware]);
+    const updatePlan = useMemo(() => describeFirmwareUpdate({
+      installed: installedFirmware,
       available: releaseState.state === 'ready' ? releaseState.release.manifest : null,
-    }), [cardLink?.card, cardState.hardware, releaseState]);
+    }), [installedFirmware, releaseState]);
+    const installedEvidenceLabel = installedFirmware === cardLink?.card
+      ? 'live card connection'
+      : installedFirmware ? 'last verified for this exact card' : '';
     const loaderRef = useRef(null);
     const transportRef = useRef(null);
+    const inspectionRef = useRef(null);
     const mountedRef = useRef(true);
     const findingRef = useRef(false);
     const installingRef = useRef(false);
     const browserAssociationRef = useRef(null);
     const InstallHeading = embedded ? 'h2' : 'h1';
+
+    const releaseHeldInspection = async ({ clearRegistry = false } = {}) => {
+      if (installingRef.current) return false;
+      const token = inspectionRef.current;
+      if (clearRegistry && token) clearActiveUsbInspection(token);
+      const loader = loaderRef.current;
+      const transport = transportRef.current;
+      const released = await releaseInspectedConnection(loader, transport);
+      if (!released) return false;
+      if (inspectionRef.current === token) inspectionRef.current = null;
+      if (loaderRef.current === loader) loaderRef.current = null;
+      if (transportRef.current === transport) transportRef.current = null;
+      if (mountedRef.current) setCardState({ state: 'idle', hardware: null, error: '' });
+      return true;
+    };
 
     const persistProject = async () => {
       const project = serializeProject();
@@ -500,9 +534,7 @@ import { openInChrome } from '../lib/openInChrome.js';
       mountedRef.current = true;
       return () => {
         mountedRef.current = false;
-        if (!installingRef.current) disconnectESP(loaderRef.current, transportRef.current);
-        loaderRef.current = null;
-        transportRef.current = null;
+        if (!installingRef.current) void releaseHeldInspection({ clearRegistry: true });
       };
     }, []);
 
@@ -544,25 +576,38 @@ import { openInChrome } from '../lib/openInChrome.js';
         const previous = transportRef.current
           ? { loader: loaderRef.current, transport: transportRef.current }
           : null;
+        if (inspectionRef.current) clearActiveUsbInspection(inspectionRef.current);
+        inspectionRef.current = null;
         loaderRef.current = null;
         transportRef.current = null;
-        const { connection, hardware } = await replaceInstallConnection({
+        const testFindCard = import.meta.env.DEV && typeof window.__LW_FIND_INSTALL_CARD_FOR_TEST__ === 'function'
+          ? window.__LW_FIND_INSTALL_CARD_FOR_TEST__
+          : null;
+        const { connection, hardware } = testFindCard
+          ? await testFindCard()
+          : await replaceInstallConnection({
           previous,
           connect: () => connectESP(),
           verify: async candidate => {
             const inspected = await inspectConnectedESP(candidate.loader, candidate.chip);
             return { ...inspected, ...validateInstallHardware(inspected) };
           },
-          disconnect: candidate => disconnectESP(candidate?.loader, candidate?.transport),
-        });
+          disconnect: candidate => releaseInspectedConnection(candidate?.loader, candidate?.transport),
+          });
         if (!mountedRef.current) {
-          await disconnectESP(connection.loader, connection.transport);
+          await releaseInspectedConnection(connection.loader, connection.transport);
           return;
         }
         loaderRef.current = connection.loader;
         transportRef.current = connection.transport;
+        inspectionRef.current = registerActiveUsbInspection({
+          cardId: hardware.cardId,
+          release: () => releaseHeldInspection(),
+        });
         setCardState({ state: 'ready', hardware, error: '' });
       } catch (error) {
+        if (inspectionRef.current) clearActiveUsbInspection(inspectionRef.current);
+        inspectionRef.current = null;
         loaderRef.current = null;
         transportRef.current = null;
         setCardState({ state: 'error', hardware: null, error: error?.message || String(error) });
@@ -574,10 +619,13 @@ import { openInChrome } from '../lib/openInChrome.js';
     const install = async () => {
       if (!eraseConfirmed || cardState.state !== 'ready' || releaseState.state !== 'ready' || installingRef.current) return;
       installingRef.current = true;
+      if (inspectionRef.current) clearActiveUsbInspection(inspectionRef.current);
+      inspectionRef.current = null;
       const { manifest, bytes } = releaseState.release;
       const file = new File([bytes], `lightweaver-${manifest.firmwareVersion}.bin`, { type: 'application/octet-stream' });
       setInstallState('installing');
       setProgress(0);
+      let handedToFlashWorkflow = false;
       try {
         const record = await persistProject();
         const started = beginCardCommissioning({
@@ -599,6 +647,7 @@ import { openInChrome } from '../lib/openInChrome.js';
         // esptool transport, but the permission survives, so the same port can
         // be reopened at 115200 to watch the card narrate its own boot.
         const serialPort = transportRef.current?.device || null;
+        handedToFlashWorkflow = true;
         await flashFirmwareAndRelease({
           loader: loaderRef.current,
           transport: transportRef.current,
@@ -632,6 +681,9 @@ import { openInChrome } from '../lib/openInChrome.js';
         setCommissioning(completed);
         setInstallState('complete');
       } catch (error) {
+        if (!handedToFlashWorkflow) {
+          await releaseInspectedConnection(loaderRef.current, transportRef.current);
+        }
         loaderRef.current = null;
         transportRef.current = null;
         installingRef.current = false;
@@ -694,7 +746,21 @@ import { openInChrome } from '../lib/openInChrome.js';
               {cardState.state === 'finding' ? 'Checking card…' : cardState.state === 'ready' ? 'Change connected card' : 'Find connected card'}
             </button>
             {cardState.state === 'ready' && (
-              <div className="install-check-ok">Correct card found · ESP32-S3 · 16 MB</div>
+              <div className="install-check-ok" data-testid="install-card-identity">
+                <strong>Correct card found</strong>
+                <dl>
+                  <dt>Card</dt><dd>{cardState.hardware.cardId}</dd>
+                  <dt>Hardware</dt><dd>ESP32-S3 · 16 MB</dd>
+                  <dt>Installed firmware</dt>
+                  <dd>{installedFirmware
+                    ? `v${installedFirmware.firmwareVersion || 'unknown'} · ${formatFirmwareBuildLabel(installedFirmware)} (${installedEvidenceLabel})`
+                    : 'Unknown — USB confirms the card hardware, not the firmware stored on it.'}</dd>
+                  <dt>Current firmware</dt>
+                  <dd>{releaseState.state === 'ready'
+                    ? `v${releaseState.release.manifest.firmwareVersion} · ${formatFirmwareBuildLabel(releaseState.release.manifest)}`
+                    : 'Unavailable'}</dd>
+                </dl>
+              </div>
             )}
             {cardState.state === 'error' && <div className="install-check-error" role="alert">{cardState.error}</div>}
           </section>
