@@ -37,6 +37,10 @@ assert.match(source, /api/i);
 assert.match(source, /sha256/i);
 assert.match(source, /mutationsEnabled/,
   'bundle validation gates project/stream mutations');
+assert.match(source, /LW_PROJECT_SCHEMA_VERSION\s*<\s*LW_CARD_STUDIO_PROJECT_SCHEMA_MIN/,
+  'bundle validation compares the Studio project schema with the firmware project schema');
+assert.doesNotMatch(source, /LW_CONFIG_SCHEMA_VERSION\s*<\s*LW_CARD_STUDIO_PROJECT_SCHEMA_MIN/,
+  'configuration schema must never be mistaken for the Studio project schema');
 assert.match(source, /fallback|recovery/i,
   'invalid bundle deliberately falls through to the existing small recovery page');
 assert.match(web, /registerLightweaverCardStudio/);
