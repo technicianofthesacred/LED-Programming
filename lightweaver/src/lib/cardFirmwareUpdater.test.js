@@ -178,6 +178,58 @@ test('reload recovery distinguishes probation, valid, and rollback without weake
   }).reason, 'update-capability-missing');
 });
 
+test('blank-card Wi-Fi update binds an exact empty project head without treating it as a wildcard', async () => {
+  const storage = new Map();
+  const storageAdapter = {
+    getItem: key => storage.get(key) || null,
+    setItem: (key, value) => storage.set(key, value),
+    removeItem: key => storage.delete(key),
+  };
+  const blankAuthority = {
+    ...authority([]),
+    projectHead: '',
+    ownerCapabilityExpectedHead: '',
+  };
+  const updater = createCardFirmwareUpdater({
+    authority: blankAuthority,
+    release: release(8),
+    physicalConfirmation: 'owner-confirmed-physical-control',
+    storage: storageAdapter,
+  });
+
+  await updater.preflight();
+  const session = readFirmwareUpdateSession({ storage: storageAdapter });
+  assert.equal(session.expectedProjectHead, '');
+  const readiness = {
+    cardId: CARD_ID,
+    bootId: 'boot-new',
+    firmwareVersion: '1.2.0',
+    buildId: TARGET_BUILD,
+    projectHead: '',
+    capabilities: { firmwareUpdate: { version: 1, network: true } },
+  };
+  assert.equal(correlateFirmwareUpdateRecovery(session, { phase: 'valid' }, readiness).ok, true);
+  assert.equal(correlateFirmwareUpdateRecovery(session, { phase: 'valid' }, {
+    ...readiness,
+    projectHead: 'f'.repeat(64),
+  }).reason, 'project-changed');
+  assert.throws(() => createCardFirmwareUpdater({
+    authority: { ...blankAuthority, projectHead: 'not-a-project-head', ownerCapabilityExpectedHead: 'not-a-project-head' },
+    release: release(8),
+    physicalConfirmation: 'owner-confirmed-physical-control',
+  }), /exact-card owner authority/i);
+});
+
+test('Wi-Fi updater rejects a zero operation generation before any card mutation', () => {
+  const calls = [];
+  assert.throws(() => createCardFirmwareUpdater({
+    authority: { ...authority(calls), operationGeneration: 0 },
+    release: release(8),
+    physicalConfirmation: 'owner-confirmed-physical-control',
+  }), /exact-card owner authority/i);
+  assert.deepEqual(calls, []);
+});
+
 test('USB bootstrap can save the same redacted correlation envelope without update authority secrets', () => {
   const storage = new Map();
   const storageAdapter = {

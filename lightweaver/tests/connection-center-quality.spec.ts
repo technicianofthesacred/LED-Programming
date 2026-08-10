@@ -246,7 +246,7 @@ test('connected current firmware does not show an update prompt', async ({ page 
   await expect(dialog.getByRole('button', { name: 'Done', exact: true })).toBeVisible();
 });
 
-test('direct older firmware puts a quiet update action beside the right-aligned current version', async ({ page }) => {
+test('direct older firmware puts a quiet update action beneath the right-aligned build values', async ({ page }) => {
   await page.route('http://lightweaver.local/api/status', route => route.fulfill({ json: {
     app: 'Lightweaver', provisioningContractVersion: 1,
     cardId: 'lw-b0fe81f61b44', firmwareVersion: '1.1.3',
@@ -267,6 +267,12 @@ test('direct older firmware puts a quiet update action beside the right-aligned 
   await expect(update).toBeVisible();
   await expect(update).not.toHaveClass(/primary/);
   await expect(update).toHaveCSS('justify-self', 'end');
+  const currentBox = await identity.locator('.card-firmware-version').last().boundingBox();
+  const updateBox = await update.boundingBox();
+  expect(currentBox).not.toBeNull();
+  expect(updateBox).not.toBeNull();
+  expect(updateBox!.y).toBeGreaterThan(currentBox!.y + currentBox!.height);
+  expect(Math.abs((updateBox!.x + updateBox!.width) - (currentBox!.x + currentBox!.width))).toBeLessThanOrEqual(1);
   await update.click();
   await expect(page).toHaveURL(/#screen=card&section=install$/);
 });

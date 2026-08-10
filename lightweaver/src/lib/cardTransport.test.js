@@ -7,6 +7,7 @@ import {
   cardLocalStudioUrl,
   connectCardTransport,
 } from './cardTransport.js';
+import { initialCardLinkState } from './cardLink.js';
 
 function response(body, ok = true) {
   return { ok, status: ok ? 200 : 503, json: async () => body };
@@ -128,6 +129,54 @@ test('authority is revoked immediately when its cardLink generation changes', as
   });
   link.replace({ ...link.getState(), operationGeneration: 5 });
   await assert.rejects(() => authority.request('/api/control', { method: 'POST', body: {} }), /revoked/i);
+});
+
+test('first card authority has a positive generation and a later generation still revokes it', async () => {
+  const status = readyStatus();
+  const link = linkFor(status);
+  link.replace({
+    ...link.getState(),
+    operationGeneration: initialCardLinkState('192.168.18.70').operationGeneration,
+  });
+  const authority = await connectCardTransport({
+    host: '192.168.18.70', expectedCardId: 'lw-card-a', link,
+    fetchImpl: async () => response(status),
+  });
+
+  assert.ok(authority.operationGeneration > 0);
+  link.replace({
+    ...link.getState(),
+    operationGeneration: authority.operationGeneration + 1,
+  });
+  await assert.rejects(() => authority.request('/api/control', { method: 'POST', body: {} }), /revoked/i);
+});
+
+test('authority surfaces the card owner-binding error from an HTTP response', async () => {
+  const status = readyStatus();
+  const link = linkFor(status);
+  const authority = await connectCardTransport({
+    host: '192.168.18.70', expectedCardId: 'lw-card-a', link,
+    fetchImpl: async url => url.endsWith('/api/status')
+      ? response(status)
+      : {
+          ok: false,
+          status: 400,
+          json: async () => ({
+            ok: false,
+            error: 'owner binding is incomplete',
+          }),
+        },
+  });
+
+  await assert.rejects(
+    () => authority.request('/api/owner/capability', { method: 'POST', body: {} }),
+    error => {
+      assert.equal(error.message, 'owner binding is incomplete');
+      assert.equal(error.code, 'owner binding is incomplete');
+      assert.equal(error.status, 400);
+      return true;
+    },
+  );
 });
 
 test('owner capability issuance is explicit, bounded, and bound to the probed project head', async () => {

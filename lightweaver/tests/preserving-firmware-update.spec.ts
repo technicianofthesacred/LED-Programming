@@ -52,7 +52,12 @@ async function openPreservingFixture(page: any, mode: 'wifi' | 'usb', outcome = 
       return { ok: true };
     };
     (window as any).__LW_CREATE_FIRMWARE_UPDATER_FOR_TEST__ = ({ onProgress }: any) => ({
-      preflight: async () => { onProgress({ phase: 'preflight', acknowledgedBytes: 0, totalBytes: 3 }); },
+      preflight: async () => {
+        if (outcome === 'http-400') throw Object.assign(new Error('owner binding is incomplete'), {
+          status: 400, code: 'owner binding is incomplete',
+        });
+        onProgress({ phase: 'preflight', acknowledgedBytes: 0, totalBytes: 3 });
+      },
       begin: async () => { onProgress({ phase: 'sending', acknowledgedBytes: 0, totalBytes: 3 }); },
       send: async () => { onProgress({ phase: 'sending', acknowledgedBytes: 3, totalBytes: 3 }); },
       commit: async () => { onProgress({ phase: 'restarting', acknowledgedBytes: 3, totalBytes: 3 }); },
@@ -84,7 +89,17 @@ test('preserving update: capable card uses Wi-Fi with exact preservation facts a
   await expect(panel).not.toContainText(/SSID|password|flash address|partition/i);
   await expect(page.getByRole('button', { name: 'Find connected card' })).toHaveCount(0);
 
-  await panel.getByRole('button', { name: 'Update over Wi-Fi' }).click();
+  const updateAction = panel.getByRole('button', { name: 'Update over Wi-Fi' });
+  const targetBuild = panel.getByText('1.2.0 · Build 1300');
+  await expect(updateAction).not.toHaveClass(/btn-lg|primary/);
+  await expect(updateAction).toHaveCSS('justify-self', 'end');
+  const targetBox = await targetBuild.boundingBox();
+  const actionBox = await updateAction.boundingBox();
+  expect(targetBox).not.toBeNull();
+  expect(actionBox).not.toBeNull();
+  expect(actionBox!.y).toBeGreaterThan(targetBox!.y + targetBox!.height);
+  expect(Math.abs((actionBox!.x + actionBox!.width) - (targetBox!.x + targetBox!.width))).toBeLessThanOrEqual(1);
+  await updateAction.click();
   await expect(panel).toContainText('Press the card control once');
   await panel.getByRole('checkbox', { name: /physically confirmed/i }).check();
   await panel.getByRole('button', { name: 'Start preserving update' }).click();
@@ -94,6 +109,16 @@ test('preserving update: capable card uses Wi-Fi with exact preservation facts a
 test('preserving update: a legacy top-level capability cannot unlock network firmware update', async ({ page }) => {
   await openPreservingFixture(page, 'wifi', 'progress', 'legacy');
   await expect(page.getByRole('button', { name: 'Update over Wi-Fi' })).toHaveCount(0);
+});
+
+test('preserving update: Wi-Fi panel surfaces the card response detail for a rejected request', async ({ page }) => {
+  await openPreservingFixture(page, 'wifi', 'http-400');
+  const panel = page.getByTestId('preserving-update-panel');
+  await panel.getByRole('button', { name: 'Update over Wi-Fi' }).click();
+  await panel.getByRole('checkbox', { name: /physically confirmed/i }).check();
+  await panel.getByRole('button', { name: 'Start preserving update' }).click();
+  await expect(panel.getByRole('alert')).toHaveText('owner binding is incomplete');
+  await expect(panel.getByRole('alert')).not.toContainText('Card returned HTTP 400');
 });
 
 test('preserving update: rollback names the restored build and a redacted reason', async ({ page }) => {
