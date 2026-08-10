@@ -173,7 +173,7 @@ function nextProbePin(session, afterPin) {
 }
 
 function firstPendingConfirmPin(session) {
-  return session.ports.find(port => port.probed && !port.skipped && !port.confirmed && port.count > 0)?.pin ?? null;
+  return session.ports.find(port => port.probed && !port.skipped && !port.confirmed)?.pin ?? null;
 }
 
 /**
@@ -298,7 +298,9 @@ export function advance(session, event = {}) {
     }
     case 'set-count': {
       if (pin === null) return session;
-      const count = Math.max(0, Math.trunc(Number(event?.count) || 0));
+      const port = session.ports.find(item => item.pin === pin);
+      if (!port) return session;
+      const count = Math.min(port.provisioned, Math.max(0, Math.trunc(Number(event?.count) || 0)));
       return patchPort(session, pin, { count, confirmed: false });
     }
     case 'counts-entered': {
@@ -309,6 +311,8 @@ export function advance(session, event = {}) {
     }
     case 'end-marker-yes': {
       if (session.phase !== 'end-marker' || pin === null) return session;
+      const port = session.ports.find(item => item.pin === pin);
+      if (!port || port.count < 1 || port.count > port.provisioned) return session;
       const confirmed = patchPort(session, pin, { confirmed: true });
       const next = firstPendingConfirmPin(confirmed);
       if (next === null) return Object.freeze({ ...confirmed, phase: 'record', activePin: null });

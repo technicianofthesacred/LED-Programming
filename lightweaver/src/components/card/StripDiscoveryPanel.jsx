@@ -403,7 +403,7 @@ export function StripDiscoveryPanel({
         // playback first, then drive the port.
         await stopCardPlayback(host);
         const frame = new Array(Number(existing.pixels)).fill(PROBE_LIGHT_COLOR);
-        probeStreamRef.current = createCardFrameStream({ host });
+        probeStreamRef.current = createCardFrameStream({ host, transport: cardLink?.transport });
         probeStreamRef.current.start();
         probeStreamRef.current.push(frame);
         setPinnedPort(pin);
@@ -425,7 +425,7 @@ export function StripDiscoveryPanel({
       setPinnedPort(null);
       setProbeError(`Could not light GPIO ${pin}: ${error?.message || 'the card did not answer'}. You can still tick it below if you know your strip is there.`);
     }
-  }, [host, pinnedPort, serializeProject, projectRevision]);
+  }, [host, cardLink?.transport, pinnedPort, serializeProject, projectRevision]);
 
   const noteStreamHealth = useCallback(report => {
     setStreamHealth(current => {
@@ -468,11 +468,11 @@ export function StripDiscoveryPanel({
       // Without onHealth a strip receiving nothing looks exactly like a strip
       // that ends where the light stops — the one confusion this whole screen
       // exists to remove.
-      streamRef.current = createCardFrameStream({ host, onHealth: noteStreamHealth });
+      streamRef.current = createCardFrameStream({ host, transport: cardLink?.transport, onHealth: noteStreamHealth });
       streamRef.current.start();
     }
     return undefined;
-  }, [session?.phase, host, noteStreamHealth]);
+  }, [session?.phase, host, cardLink?.transport, noteStreamHealth]);
 
   // onHealth only fires after a pump that actually tried to send. A stream that
   // has never been handed a frame stays silent forever, which is precisely the
@@ -606,6 +606,7 @@ export function StripDiscoveryPanel({
         config: bench.config,
         flowId: flowIdRef.current,
         initial: true,
+        transport: cardLink?.transport,
         // The card's own pre-install claim. A staged answer on a card that
         // showed a project means "clear the card", never "update the
         // firmware" (ui-repair B0).
@@ -620,9 +621,7 @@ export function StripDiscoveryPanel({
       setFailureReason(error?.reason || '');
       // Size numbers explain a size refusal; on the existing-project cause
       // they would only bury the one action that helps.
-      if (error?.reason !== 'staged-existing-project') {
-        setFailureDetail(benchSizeSentence(bench, cardMaxPixels));
-      }
+      if (error?.reason === 'refused') setFailureDetail(benchSizeSentence(bench, cardMaxPixels));
       setSession(current => advance(current, { type: 'bench-failed', error: message }));
     } finally {
       setBusy(false);
@@ -659,13 +658,16 @@ export function StripDiscoveryPanel({
     setBenchNotice('');
     let larger = null;
     try {
+      const activePin = session.activePin;
       const pixelsPerPort = Object.fromEntries(session.ports
         .filter(port => port.role !== PORT_ROLE_CONTROL)
-        .map(port => [port.pin, Math.max(port.provisioned * 2, DISCOVERY_BENCH_HEADROOM)]));
+        .map(port => [port.pin, port.pin === activePin
+          ? Math.max(port.provisioned * 2, DISCOVERY_BENCH_HEADROOM)
+          : port.provisioned]));
       larger = buildBenchConfig(portRoles, { pixelsPerPort, maxPixels: cardMaxPixels });
       // The card restarts to pick up the bigger pixel buffers, so the stream's
       // failure counters from the gap are stale the moment it returns.
-      await installBenchConfig({ host, config: larger.config, flowId: flowIdRef.current });
+      await installBenchConfig({ host, config: larger.config, flowId: flowIdRef.current, transport: cardLink?.transport });
       setStreamHealth(null);
       // This restart is deliberate; do not report it as the card changing
       // underneath the owner.
@@ -682,7 +684,7 @@ export function StripDiscoveryPanel({
       dispatch({ type: 'bench-resized', benchLayout: larger.layout });
     } catch (error) {
       setFailure(error?.message || 'Studio could not extend the card setup.');
-      if (larger) setFailureDetail(benchSizeSentence(larger, cardMaxPixels));
+      if (larger && error?.reason === 'refused') setFailureDetail(benchSizeSentence(larger, cardMaxPixels));
     } finally {
       setBusy(false);
     }
@@ -1103,6 +1105,7 @@ export function StripDiscoveryPanel({
                   <input
                     type="number"
                     min="0"
+                    max={port.provisioned}
                     inputMode="numeric"
                     aria-label={`${portLabel(port)} LED count`}
                     data-testid={`discovery-count-${port.pin}`}

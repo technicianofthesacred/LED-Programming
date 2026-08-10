@@ -146,6 +146,16 @@ test('probe -> decade -> end marker -> recorded counts is the full happy path', 
   assert.equal(advance(state, { type: 'recorded' }).phase, 'done');
 });
 
+test('a typed count is clamped to the exact provisioned pixels that can be verified', () => {
+  let state = advance(session(), { type: 'bench-installed' });
+  state = advance(state, { type: 'probe-enough' });
+  state = advance(state, { type: 'probe-enough' });
+  state = advance(state, { type: 'set-count', pin: 16, count: 5000 });
+  assert.equal(state.ports.find(port => port.pin === 16).count, 600);
+  state = advance(state, { type: 'counts-entered' });
+  assert.deepEqual(litIndexes(discoveryFrame(state), DISCOVERY_END_MARKER_COLOR), [599]);
+});
+
 test('"that was not the last LED" reopens only that port and keeps the other confirmations', () => {
   let state = advance(session(), { type: 'bench-installed' });
   state = advance(state, { type: 'probe-enough' });
@@ -208,6 +218,27 @@ test('the end marker lights exactly one pixel', () => {
     .every(value => value === DISCOVERY_OFF_COLOR), true, 'an out-of-range index lights nothing');
 });
 
+test('entered counts are capped to the pixels provisioned on that port', () => {
+  let state = advance(session(), { type: 'bench-installed' });
+  state = advance(state, { type: 'probe-enough' });
+  state = advance(state, { type: 'probe-enough' });
+  state = advance(state, { type: 'set-count', pin: 16, count: 9999 });
+  assert.equal(state.ports.find(port => port.pin === 16).count, 600);
+});
+
+test('a dark or out-of-range end marker cannot be confirmed', () => {
+  let state = advance(session(), { type: 'bench-installed' });
+  state = advance(state, { type: 'probe-enough' });
+  state = advance(state, { type: 'probe-enough' });
+  state = advance(state, { type: 'set-count', pin: 16, count: 0 });
+  state = advance(state, { type: 'set-count', pin: 17, count: 12 });
+  state = advance(state, { type: 'counts-entered' });
+  assert.equal(state.activePin, 16);
+  const refused = advance(state, { type: 'end-marker-yes' });
+  assert.equal(refused, state);
+  assert.equal(refused.ports.find(port => port.pin === 16).confirmed, false);
+});
+
 test('discoveryFrame follows the phase', () => {
   let state = advance(session(), { type: 'bench-installed' });
   assert.equal(discoveryFrame(state)[0], DISCOVERY_PROBE_COLOR);
@@ -222,7 +253,10 @@ test('discoveryFrame follows the phase', () => {
 });
 
 test('a long strip warns about frame rate and never blocks the flow', () => {
-  let state = advance(session(), { type: 'bench-installed' });
+  let state = advance(createStripDiscoverySession({
+    portRoles,
+    benchLayout: [{ pin: 16, start: 0, count: 2000 }, { pin: 17, start: 2000, count: 2000 }],
+  }), { type: 'bench-installed' });
   state = advance(state, { type: 'probe-enough' });
   state = advance(state, { type: 'probe-enough' });
   state = advance(state, { type: 'set-count', pin: 16, count: DISCOVERY_FRAME_RATE_WARN_PIXELS + 1 });

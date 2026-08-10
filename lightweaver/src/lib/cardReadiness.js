@@ -12,6 +12,10 @@ function positiveInteger(value) {
   return Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
+function nonNegativeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
 function hasBoundedText(value, maxLength) {
   if (typeof value !== 'string') return false;
   const text = value.trim();
@@ -49,6 +53,13 @@ export function normalizeCardReadiness(raw = {}) {
     : null;
   const contractSupported = contractVersion === CARD_READINESS_CONTRACT_VERSION;
   const limits = source.limits && typeof source.limits === 'object' ? source.limits : {};
+  const capacity = source.capacity && typeof source.capacity === 'object' ? source.capacity : {};
+  const pixelCapacity = source.pixelCapacity && typeof source.pixelCapacity === 'object'
+    ? source.pixelCapacity
+    : {};
+  const outputInitialization = source.outputInitialization && typeof source.outputInitialization === 'object'
+    ? source.outputInitialization
+    : {};
   // The firmware publishes this as `safeMode` on both /api/status and
   // /api/firmware-info (runtimeSafeModeActive, LightweaverRuntimeApi.h). Cards
   // flashed before that omit it entirely, and their silence must keep
@@ -92,6 +103,22 @@ export function normalizeCardReadiness(raw = {}) {
     // its own contract bound instead of quietly adopting this Studio build's
     // ceiling as if the card had claimed it.
     maxPixels: positiveInteger(limits.pixels),
+    schemaMaxPixels: positiveInteger(pixelCapacity.schemaLimit)
+      ?? positiveInteger(capacity.schemaMaxPixels)
+      ?? positiveInteger(limits.pixels),
+    requestedPixels: nonNegativeInteger(source.led?.pixels)
+      ?? nonNegativeInteger(capacity.requestedPixels),
+    allocatedPixels: positiveInteger(pixelCapacity.allocatedBoot)
+      ?? positiveInteger(capacity.allocatedPixels),
+    driverReady: explicitBoolean(source.outputDriverReady)
+      ?? explicitBoolean(capacity.driverReady),
+    projectOutputReady: explicitBoolean(source.projectOutputReady)
+      ?? explicitBoolean(capacity.projectOutputReady),
+    outputInitialization: Object.freeze({
+      ok: explicitBoolean(outputInitialization.ok),
+      code: cleanText(outputInitialization.code, 64),
+      message: cleanText(outputInitialization.message, 192),
+    }),
     // True only when the card explicitly says it booted safe defaults because
     // it could not READ a project it still holds (RuntimeLoadResult.safeMode,
     // LightweaverStorage.h — the same state /api/wiring/status already reports

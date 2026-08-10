@@ -98,6 +98,7 @@ test('a staged answer without any project knowledge fails with neutral advice', 
       flowId: 'discoveryabc',
       initial: true,
       direct: false,
+      guardImpl: async () => { throw new Error('direct card unavailable'); },
       authorizeImpl: () => ({ ok: true }),
       bridgeRequestImpl: bridge.impl,
       rebootImpl: async () => { rebooted += 1; },
@@ -194,6 +195,7 @@ test('the bridge path does not double-reboot a card the relay already restarted'
     flowId: 'discoveryabc',
     initial: true,
     direct: false,
+    guardImpl: async () => { throw new Error('direct card unavailable'); },
     authorizeImpl: () => ({ ok: true }),
     bridgeRequestImpl: bridge.impl,
     rebootImpl: async () => { rebooted += 1; },
@@ -206,6 +208,74 @@ test('the bridge path does not double-reboot a card the relay already restarted'
   assert.equal(rebooted, 0);
   assert.equal(bridge.calls[0].options.commissioningFlowId, 'discoveryabc', 'the one-shot authority is threaded');
   assert.equal(bridge.calls[0].options.reboot, true);
+});
+
+test('HTTPS discovery uses direct HTTP when exact-card preflight succeeds', async () => {
+  const bridge = recordingBridge({ ok: true });
+  const calls = [];
+  let waitedTransport = '';
+
+  const response = await installBenchConfig({
+    host: HOST,
+    config: CONFIG,
+    flowId: 'discoveryabc',
+    initial: true,
+    transport: 'direct',
+    guardImpl: async host => { calls.push(`guard:${host}`); return { id: 'lw-bench-1' }; },
+    fetchImpl: async url => {
+      calls.push(`post:${url}`);
+      return { ok: true, json: async () => ({ ok: true }) };
+    },
+    bridgeRequestImpl: bridge.impl,
+    waitForPlaybackImpl: async ({ transport }) => { waitedTransport = transport; },
+  });
+
+  assert.deepEqual(response, { ok: true });
+  assert.deepEqual(calls, [`guard:${HOST}`, `post:http://${HOST}/api/config`]);
+  assert.equal(bridge.calls.length, 0);
+  assert.equal(waitedTransport, 'direct');
+});
+
+test('HTTPS discovery falls back to the bridge only when direct preflight fails before mutation', async () => {
+  const bridge = recordingBridge({ ok: true, rebooting: true });
+  let directPosts = 0;
+  let waitedTransport = '';
+
+  await installBenchConfig({
+    host: HOST,
+    config: CONFIG,
+    flowId: 'discoveryabc',
+    initial: true,
+    transport: 'direct',
+    guardImpl: async () => { throw new Error('private network preflight blocked'); },
+    fetchImpl: async () => { directPosts += 1; throw new Error('must not POST'); },
+    authorizeImpl: () => ({ ok: true }),
+    bridgeRequestImpl: bridge.impl,
+    waitForPlaybackImpl: async ({ transport }) => { waitedTransport = transport; },
+  });
+
+  assert.equal(directPosts, 0);
+  assert.equal(bridge.calls.length, 1);
+  assert.equal(waitedTransport, 'bridge');
+});
+
+test('a direct config refusal never falls back to a second ambiguous bridge mutation', async () => {
+  const bridge = recordingBridge({ ok: true });
+  await assert.rejects(
+    () => installBenchConfig({
+      host: HOST,
+      config: CONFIG,
+      flowId: 'discoveryabc',
+      initial: true,
+      transport: 'direct',
+      guardImpl: async () => ({ id: 'lw-bench-1' }),
+      fetchImpl: async () => ({ ok: false, json: async () => ({ ok: false, error: 'config too large' }) }),
+      authorizeImpl: () => ({ ok: true }),
+      bridgeRequestImpl: bridge.impl,
+    }),
+    error => error.reason === 'refused',
+  );
+  assert.equal(bridge.calls.length, 0);
 });
 
 test('a re-size never asks for the one-shot blank-card authority again', async () => {
@@ -331,12 +401,81 @@ test('a blank card that cannot prove itself over the bridge is refused before an
       flowId: 'discoveryabc',
       initial: true,
       direct: false,
+      guardImpl: async () => { throw new Error('direct card unavailable'); },
       authorizeImpl: () => ({ ok: false, reason: 'card-not-blank' }),
       bridgeRequestImpl: bridge.impl,
     }),
     error => error.reason === 'authority',
   );
   assert.equal(bridge.calls.length, 0);
+});
+
+test('bridge authority failures preserve the actionable reason', async () => {
+  const expected = {
+    'bridge-missing': /local card page is not connected/i,
+    'identity-missing': /identity/i,
+    'stale-host': /different card address/i,
+    'handoff-active': /Wi-Fi setup is already in progress/i,
+    'authority-spent': /setup write was already used/i,
+    'card-not-blank': /already has a project/i,
+  };
+  for (const [reason, message] of Object.entries(expected)) {
+    await assert.rejects(
+      () => installBenchConfig({
+        host: HOST,
+        config: CONFIG,
+        flowId: 'discoveryabc',
+        initial: true,
+        direct: false,
+        guardImpl: async () => { throw new Error('direct unavailable'); },
+        authorizeImpl: () => ({ ok: false, reason }),
+      }),
+      error => error.reason === 'authority' && message.test(error.message),
+      reason,
+    );
+  }
+});
+
+test('verified direct transport is allowed from HTTPS and falls back to the bridge only when its preflight fails', async () => {
+  const bridge = recordingBridge({ ok: true, requiresReboot: true, rebooting: true });
+  let directPosts = 0;
+  await installBenchConfig({
+    host: HOST, config: CONFIG, flowId: 'discoveryabc', initial: true, transport: 'direct',
+    guardImpl: async () => { throw new Error('direct card HTTP blocked'); },
+    fetchImpl: async () => { directPosts += 1; throw new Error('must not POST after failed preflight'); },
+    authorizeImpl: () => ({ ok: true }), bridgeRequestImpl: bridge.impl,
+    waitForPlaybackImpl: async ({ transport }) => assert.equal(transport, 'bridge'),
+  });
+  assert.equal(directPosts, 0);
+  assert.equal(bridge.calls.length, 1);
+});
+
+test('a direct config POST with an uncertain outcome is never retried over the bridge', async () => {
+  const bridge = recordingBridge({ ok: true });
+  let directPosts = 0;
+  await assert.rejects(() => installBenchConfig({
+    host: HOST, config: CONFIG, flowId: 'discoveryabc', initial: true, transport: 'direct',
+    guardImpl: async () => ({ id: 'lw-bench-1' }),
+    fetchImpl: async () => { directPosts += 1; throw new Error('connection closed after send'); },
+    authorizeImpl: () => ({ ok: true }), bridgeRequestImpl: bridge.impl,
+  }), /connection closed after send/);
+  assert.equal(directPosts, 1);
+  assert.equal(bridge.calls.length, 0);
+});
+
+test('blank-card authority refusals explain their distinct causes', async () => {
+  const cases = [
+    ['card-not-blank', /already has a project/], ['bridge-missing', /card page is not connected/],
+    ['identity-missing', /identity/], ['stale-host', /different card address/],
+    ['authority-spent', /already used/], ['handoff-active', /Wi-Fi setup/], ['invalid-flow', /discovery session/],
+  ];
+  for (const [reason, pattern] of cases) {
+    await assert.rejects(() => installBenchConfig({
+      host: HOST, config: CONFIG, flowId: 'discoveryabc', initial: true, direct: false,
+      guardImpl: async () => { throw new Error('direct card unavailable'); },
+      authorizeImpl: () => ({ ok: false, reason }), bridgeRequestImpl: async () => { throw new Error('must not write'); },
+    }), error => error.reason === 'authority' && pattern.test(error.message), reason);
+  }
 });
 
 test('a staged answer on a card that showed a project blames the project, not the firmware', async () => {
@@ -353,6 +492,7 @@ test('a staged answer on a card that showed a project blames the project, not th
       flowId: 'discoveryabc',
       initial: true,
       direct: false,
+      guardImpl: async () => { throw new Error('direct card unavailable'); },
       cardShowsProject: true,
       authorizeImpl: () => ({ ok: true }),
       bridgeRequestImpl: bridge.impl,

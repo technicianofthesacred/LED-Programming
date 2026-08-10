@@ -199,8 +199,8 @@ async function seedBlankCardLink(page: any) {
   }, CARD_ID);
 }
 
-async function dispatchBlankCard(page: any) {
-  await page.evaluate(async status => {
+async function dispatchBlankCard(page: any, { routeToDiscovery = true } = {}) {
+  await page.evaluate(async ({ status, routeToDiscovery }) => {
     const { getSharedCardLink } = await import('/src/lib/cardLink.js');
     const link = getSharedCardLink();
     const event = {
@@ -212,7 +212,13 @@ async function dispatchBlankCard(page: any) {
     };
     link.dispatch(event);
     link.dispatch(event);
-  }, blankStatus());
+    // A fresh Studio may route away from discovery before the asynchronous
+    // card-link event arrives. Return to the requested screen once the exact
+    // blank-card evidence is installed so every test is independent of order.
+    if (routeToDiscovery && !window.location.hash.includes('screen=discovery')) {
+      window.location.hash = 'screen=discovery';
+    }
+  }, { status: blankStatus(), routeToDiscovery });
 }
 
 // Walk the port picker to the point where the one card write has happened and
@@ -306,7 +312,7 @@ test.describe('a blank card whose firmware applies its first config', () => {
 
   test('a blank card is offered discovery, not the Layout dead end', async ({ page }) => {
     await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
-    await dispatchBlankCard(page);
+    await dispatchBlankCard(page, { routeToDiscovery: false });
     await page.getByTestId('card-link-status').click();
     const findStrips = page.getByTestId('connection-find-strips');
     await expect(findStrips).toBeVisible();
@@ -327,7 +333,7 @@ test.describe('a blank card whose firmware applies its first config', () => {
 
   test('Test & Install sends a blank card to discovery instead of an LED check it cannot run', async ({ page }) => {
     await page.goto('/#screen=layout&mode=wire', { waitUntil: 'domcontentloaded' });
-    await dispatchBlankCard(page);
+    await dispatchBlankCard(page, { routeToDiscovery: false });
     await expect(page.getByTestId('wire-blank-card-message'))
       .toHaveText('This card has no strips recorded yet. Find its strips first.');
     // The LED check is not offered, because it provably cannot complete here.
@@ -409,27 +415,50 @@ test.describe('a blank card whose firmware applies its first config', () => {
     expect(recorded).toContainEqual({ pin: 16, role: 'strip', pixelCount: 47, controlKind: '' });
   });
 
-  test('a strip past the frame-rate threshold warns and keeps going', async ({ page }) => {
+  test('extending discovery grows only the active port', async ({ page }) => {
+    await page.goto('/#screen=discovery', { waitUntil: 'domcontentloaded' });
+    await dispatchBlankCard(page);
+    await page.getByTestId('discovery-probe-16').click();
+    await page.getByTestId('discovery-claim-16').check();
+    await page.getByTestId('discovery-probe-17').click();
+    await page.getByTestId('discovery-claim-17').check();
+    await page.getByTestId('discovery-start').click();
+    await expect(page.getByTestId('discovery-probe')).toBeVisible({ timeout: 15000 });
+
+    // Wait for each rendered count before the next click. This exercises the
+    // real owner interaction without allowing several clicks to race the same
+    // React render and collapse into one state transition.
+    for (const expected of [16, 32, 64, 128, 256]) {
+      await page.getByTestId('discovery-more').click();
+      await expect(page.getByTestId('discovery-lit-count')).toContainText(String(expected));
+    }
+    await page.getByTestId('discovery-more').click();
+    await expect(page.getByTestId('discovery-bench-ceiling')).toBeVisible();
+    await page.getByRole('button', { name: 'Extend and keep looking' }).click();
+    await expect.poll(() => card.configs.length).toBe(2);
+
+    const outputs = card.configs[1].led.outputs;
+    expect(outputs.find((output: any) => output.pin === 16).pixels).toBe(512);
+    expect(outputs.find((output: any) => output.pin === 17).pixels).toBe(256);
+  });
+
+  test('a typed count cannot exceed the provisioned pixels the card can verify', async ({ page }) => {
     await page.goto('/#screen=discovery', { waitUntil: 'domcontentloaded' });
     await dispatchBlankCard(page);
     await startDiscoveryOnGpio16(page);
     await expect(page.getByTestId('discovery-probe')).toBeVisible({ timeout: 15000 });
     await page.getByTestId('discovery-enough').click();
 
-    await page.getByTestId('discovery-count-16').fill('1400');
-    const warning = page.getByTestId('discovery-warning-frame-rate');
-    await expect(warning).toBeVisible();
-    await expect(warning).toContainText('refreshes slower than 30 frames a second');
-    await expect(warning).toContainText('It still works');
-
-    // Warn, never block: the flow completes with the warning showing and the
-    // oversized count is what gets recorded.
+    const count = page.getByTestId('discovery-count-16');
+    await expect(count).toHaveAttribute('max', '256');
+    await count.fill('1400');
+    await expect(count).toHaveValue('256');
     await page.getByTestId('discovery-counts-done').click();
     await page.getByTestId('discovery-end-yes').click();
-    await expect(page.getByTestId('discovery-result-16')).toHaveText('GPIO 16 · 1400 LEDs');
+    await expect(page.getByTestId('discovery-result-16')).toHaveText('GPIO 16 · 256 LEDs');
     await page.getByTestId('discovery-record-save').click();
     const recorded = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_port_roles_v1') || 'null'));
-    expect(recorded).toContainEqual({ pin: 16, role: 'strip', pixelCount: 1400, controlKind: '' });
+    expect(recorded).toContainEqual({ pin: 16, role: 'strip', pixelCount: 256, controlKind: '' });
   });
 
   test('the 4-output limit is stated before it is hit and folds into one line', async ({ page }) => {
@@ -495,6 +524,7 @@ test.describe('a blank card on firmware that still stages the first config', () 
     const failure = page.getByTestId('discovery-failure');
     await expect(failure).toBeVisible({ timeout: 15000 });
     await expect(failure).toContainText(/update the card firmware/i);
+    await expect(page.getByTestId('discovery-failure-size')).toHaveCount(0);
 
     // Never silently treated as success: the probe phase is refused outright,
     // and Studio does not try to reboot a card that applied nothing.

@@ -131,9 +131,28 @@ assert.match(firmwareInfo, /doc\["commandReady"\]\s*=\s*runtimeCommandReady\(\)/
 assert.match(runtimeApi, /bool\s+runtimeCommandReady\s*\(\)/);
 assert.match(runtimeApi, /bool\s+runtimePlaybackReady\s*\(\)/);
 assert.match(runtimeApi, /bool\s+runtimeOutputReady\s*\(\)/);
+assert.match(runtimeApi, /bool\s+runtimeProjectOutputReady\s*\(\)/);
+assert.match(runtimeApi, /bool\s+runtimeOutputDriverReady\s*\(\)/);
+assert.match(runtimeApi, /uint16_t\s+runtimeAllocatedPixelCapacity\s*\(\)/);
+assert.match(runtimeApi, /const char\*\s+runtimeOutputInitializationCode\s*\(\)/);
+assert.match(runtimeApi, /const char\*\s+runtimeOutputInitializationMessage\s*\(\)/);
 const readiness = functionBody(main, /bool\s+readinessFor\s*\(/);
 assert.match(readiness, /inputs\.outputReady\s*=\s*runtimeOutputReady\(\)/,
   'command readiness must consume public project-output readiness, not controller-only state');
+for (const [name, payload] of [['/api/status', status], ['/api/firmware-info', firmwareInfo]]) {
+  assert.match(payload, /doc\["projectOutputReady"\]\s*=\s*runtimeProjectOutputReady\(\)/,
+    `${name} must separate project readiness from driver readiness`);
+  assert.match(payload, /doc\["outputDriverReady"\]\s*=\s*runtimeOutputDriverReady\(\)/,
+    `${name} must expose a healthy factory-blank output driver`);
+  assert.match(payload, /doc\["pixelCapacity"\]\["schemaLimit"\]\s*=\s*LW_MAX_PIXELS/,
+    `${name} must label the schema limit separately`);
+  assert.match(payload, /doc\["pixelCapacity"\]\["allocatedBoot"\]\s*=\s*runtimeAllocatedPixelCapacity\(\)/,
+    `${name} must expose the boot allocation separately`);
+  assert.match(payload, /outputInitialization[\s\S]*runtimeOutputInitializationCode\(\)[\s\S]*runtimeOutputInitializationMessage\(\)/,
+    `${name} must expose structured output initialization detail`);
+  assert.doesNotMatch(payload, /doc\["capacity"\]/,
+    `${name} must not publish a duplicate competing capacity object`);
+}
 
 // Playback and mutation are gated separately. Local pattern/brightness control
 // stays available while the radio is unsettled; configuration, wiring, and
@@ -269,6 +288,11 @@ assert.ok(
 
 assert.match(setup, /startLook\(currentLookIndex\)[\s\S]*startWiringProbation\(loadResult\.bootedCandidate\)/,
   'candidate physical startup frame must remain independent from the web command-admission gate');
+const probationFrame = functionBody(main, /void\s+showWiringProbationFrame\s*\(/);
+assert.match(probationFrame, /CRGB::Blue[\s\S]*CRGB::Red[\s\S]*showLeds\(115\)/,
+  'candidate probation must render its endpoint proof locally at bounded brightness');
+assert.match(functionBody(main, /void\s+loop\s*\(/), /if \(wiringProbationActive\)[\s\S]*showWiringProbationFrame\(\)[\s\S]*return;/,
+  'candidate probation must own the physical output before blocked external playback paths');
 
 // A card that booted safe defaults over a project it STILL HOLDS publishes the
 // same absence a factory-erased one does — no project identity, knownGoodProject

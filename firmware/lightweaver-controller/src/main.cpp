@@ -164,6 +164,8 @@ uint8_t currentLookIndex = 0;
 String activePatternId;
 bool blackedOut = false;
 bool ledOutputsReady = false;
+const char* outputInitializationCode = "not-started";
+const char* outputInitializationMessage = "output initialization has not started";
 bool wiringProbationActive = false;
 uint32_t wiringProbationDeadlineMs = 0;
 bool safeDiscoveryMode = false;
@@ -325,8 +327,11 @@ uint32_t readLe32(const uint8_t* bytes);
 uint16_t clampPixels(int value);
 float clampUnit(float value);
 void startWiringProbation(bool bootedCandidate);
+void showWiringProbationFrame();
 void rollbackCandidateBeforeRestart(const char* reason);
 void initializeBootIdentity();
+void setOutputInitializationFailure(const char* code, const char* message);
+void setOutputInitializationReady(const char* message);
 
 template<uint8_t DATA_PIN>
 bool addLedsForOrder(CRGB* start, uint16_t count) {
@@ -376,6 +381,8 @@ void setup() {
   // The floor covers the blank-card beacon, which renders with no config at all.
   if (!allocatePixelBuffers(configTotalPixels(runtimeConfig))) {
     fail(ERROR_CONFIG, "pixel buffer allocation failed");
+    setOutputInitializationFailure("pixel-buffer-allocation",
+                                   "pixel buffers could not be allocated for this boot");
     return;
   }
   applyRuntimeConfig(runtimeConfig);
@@ -583,6 +590,17 @@ void loop() {
     clearPhysicalLeds();
     blinkError();
     delay(5);
+    return;
+  }
+
+  // Candidate probation must prove the new physical outputs without relying
+  // on browser streaming: external playback is intentionally blocked while
+  // the wiring is unconfirmed. Render the safety frame on-card for the entire
+  // probation window so every output visibly shows blue first, green middle,
+  // and red last before Studio is allowed to confirm it.
+  if (wiringProbationActive) {
+    showWiringProbationFrame();
+    delay(10);
     return;
   }
 
@@ -943,12 +961,14 @@ bool allocatePixelBuffers(uint16_t requestedPixels) {
 bool setupLedOutputs() {
   ledOutputsReady = false;
   if (!pixelBuffersReady()) {
+    setOutputInitializationFailure("project-output", "pixel buffers unavailable");
     // Never hand FastLED a null slice: it would keep the pointer forever and
     // write through it on every show().
     fail(ERROR_CONFIG, "pixel buffers unavailable");
     return false;
   }
   if (outputCount == 0) {
+    setOutputInitializationFailure("project-output", "no LED outputs configured");
     fail(ERROR_CONFIG, "no LED outputs configured");
     return false;
   }
@@ -973,6 +993,7 @@ bool setupLedOutputs() {
   for (uint8_t i = 0; i < outputCount; i++) {
     OutputConfig& output = outputs[i];
     if (!addLedsForPin(output.pin, physicalLeds + output.start, output.pixels)) {
+      setOutputInitializationFailure("project-output", "an LED output pin could not be initialized");
       if (Serial) {
         Serial.print("Unsupported LED output pin: ");
         Serial.println(output.pin);
@@ -993,6 +1014,7 @@ bool setupLedOutputs() {
   }
 
   ledOutputsReady = true;
+  setOutputInitializationReady("configured project outputs initialized");
   FastLED.setDither(false);
   clearPhysicalLeds();
   return true;
@@ -1001,7 +1023,10 @@ bool setupLedOutputs() {
 bool setupFactoryBeaconOutputs() {
   ledOutputsReady = false;
   factoryBeaconStepCount = 0;
-  if (!pixelBuffersReady()) return false;
+  if (!pixelBuffersReady()) {
+    setOutputInitializationFailure("factory-beacon", "pixel buffers unavailable");
+    return false;
+  }
   FastLED.setDither(false);
   FastLED.setCorrection(TypicalLEDStrip);
   FastLED.setMaxPowerInVoltsAndMilliamps(5, LW_FACTORY_BEACON_MAX_MILLIAMPS);
@@ -1010,6 +1035,7 @@ bool setupFactoryBeaconOutputs() {
     uint16_t bufferStart = uint16_t(i) * LW_FACTORY_BEACON_PIXEL_LIMIT;
     if (!addLedsForPin(LW_APPROVED_OUTPUT_GPIOS[i], physicalLeds + bufferStart,
                        LW_FACTORY_BEACON_PIXEL_LIMIT)) {
+      setOutputInitializationFailure("factory-beacon", "a beacon output pin could not be initialized");
       return false;
     }
     // Admitting the beacon step and registering the controller are deliberately
@@ -1019,28 +1045,43 @@ bool setupFactoryBeaconOutputs() {
   }
   // Every approved GPIO is claimed by a control pin: there is no port left to
   // pulse, and reporting ready would leave the beacon silently showing nothing.
-  if (factoryBeaconStepCount == 0) return false;
+  if (factoryBeaconStepCount == 0) {
+    setOutputInitializationFailure("factory-beacon", "no output GPIO is available for the factory beacon");
+    return false;
+  }
   FastLED.clear(false);
   ledOutputsReady = true;
+  setOutputInitializationReady("factory beacon output driver initialized");
   clearPhysicalLeds();
   return true;
 }
 
 bool setupSafeDiscoveryOutputs(uint8_t stepIndex) {
   ledOutputsReady = false;
-  if (!pixelBuffersReady()) return false;
-  if (stepIndex >= LW_DISCOVERY_STEP_COUNT) return false;
+  if (!pixelBuffersReady()) {
+    setOutputInitializationFailure("safe-discovery", "pixel buffers unavailable");
+    return false;
+  }
+  if (stepIndex >= LW_DISCOVERY_STEP_COUNT) {
+    setOutputInitializationFailure("safe-discovery", "discovery step is out of range");
+    return false;
+  }
   uint8_t pin = factoryBeaconPinForStep(stepIndex);
-  if (!discoveryPinAvailable(pin)) return false;
+  if (!discoveryPinAvailable(pin)) {
+    setOutputInitializationFailure("safe-discovery", "discovery GPIO is assigned to a control");
+    return false;
+  }
 
   FastLED.setDither(false);
   FastLED.setCorrection(TypicalLEDStrip);
   FastLED.setMaxPowerInVoltsAndMilliamps(5, LW_FACTORY_BEACON_MAX_MILLIAMPS);
   if (!addLedsForPin(pin, physicalLeds, LW_FACTORY_BEACON_PIXEL_LIMIT)) {
+    setOutputInitializationFailure("safe-discovery", "discovery output pin could not be initialized");
     return false;
   }
   FastLED.clear(false);
   ledOutputsReady = true;
+  setOutputInitializationReady("safe discovery output driver initialized");
   safeDiscoveryStartedAtMs = millis();
   clearPhysicalLeds();
   showSafeDiscoveryFrame();
@@ -1197,6 +1238,16 @@ bool addLedsForPin(uint8_t pin, CRGB* start, uint16_t count) {
     default:
       return false;
   }
+}
+
+void setOutputInitializationFailure(const char* code, const char* message) {
+  outputInitializationCode = code;
+  outputInitializationMessage = message;
+}
+
+void setOutputInitializationReady(const char* message) {
+  outputInitializationCode = "ready";
+  outputInitializationMessage = message;
 }
 
 void handleControlEvent(ControlEventType event) {
@@ -1941,6 +1992,19 @@ void startWiringProbation(bool bootedCandidate) {
   wiringProbationDeadlineMs = millis() + LW_WIRING_PROBATION_MS;
 }
 
+void showWiringProbationFrame() {
+  fill_solid(leds, totalPixels, CRGB::Black);
+  for (uint8_t index = 0; index < outputCount; index++) {
+    const OutputConfig& output = outputs[index];
+    if (!output.enabled || output.pixels == 0 || output.start >= totalPixels) continue;
+    const uint16_t count = min<uint16_t>(output.pixels, totalPixels - output.start);
+    fill_solid(leds + output.start, count, CRGB(0, 40, 0));
+    leds[output.start] = CRGB::Blue;
+    leds[output.start + count - 1] = CRGB::Red;
+  }
+  showLeds(115);
+}
+
 void rollbackCandidateBeforeRestart(const char* reason) {
   WiringSafetyStatus status = getRuntimeWiringSafetyStatus();
   String message;
@@ -2411,8 +2475,15 @@ const char* runtimeProvisioningPhase() {
 }
 
 bool runtimeOutputReady() {
+  return runtimeProjectOutputReady();
+}
+bool runtimeProjectOutputReady() {
   return provisioningOutputReady(ledOutputsReady, outputCount);
 }
+bool runtimeOutputDriverReady() { return ledOutputsReady; }
+uint16_t runtimeAllocatedPixelCapacity() { return allocatedPixels; }
+const char* runtimeOutputInitializationCode() { return outputInitializationCode; }
+const char* runtimeOutputInitializationMessage() { return outputInitializationMessage; }
 bool runtimeConfigValid() { return runtimeConfig.configValid; }
 bool runtimeKnownGoodProject() { return runtimeConfig.knownGoodProject; }
 // Mirrors the flag /api/wiring/status already reports as the 'safe-mode' state,
@@ -2551,6 +2622,13 @@ String runtimeFirmwareInfo() {
   // "busy reassociating" apart from "cannot drive the lights".
   doc["playbackReady"] = runtimePlaybackReady();
   doc["outputReady"] = runtimeOutputReady();
+  doc["projectOutputReady"] = runtimeProjectOutputReady();
+  doc["outputDriverReady"] = runtimeOutputDriverReady();
+  doc["pixelCapacity"]["schemaLimit"] = LW_MAX_PIXELS;
+  doc["pixelCapacity"]["allocatedBoot"] = runtimeAllocatedPixelCapacity();
+  doc["outputInitialization"]["ok"] = runtimeOutputDriverReady();
+  doc["outputInitialization"]["code"] = runtimeOutputInitializationCode();
+  doc["outputInitialization"]["message"] = runtimeOutputInitializationMessage();
   doc["configValid"] = runtimeConfigValid();
   doc["knownGoodProject"] = runtimeKnownGoodProject();
   doc["provisionalSetup"] = runtimeConfig.provisionalProject;

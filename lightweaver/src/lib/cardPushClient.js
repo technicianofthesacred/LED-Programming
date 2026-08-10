@@ -180,6 +180,11 @@ function cardConfigProjectMismatchFromInfo(current = {}, runtimePackage = {}) {
   return Boolean(currentPieceId && targetPieceId && currentPieceId !== targetPieceId);
 }
 
+function isPromotableDiscoveryBench(current = {}) {
+  return current?.provisionalSetup === true
+    && normalizePieceId(current?.piece?.id) === 'lightweaver-bench-discovery-v1';
+}
+
 function summarizeOutputs(outputs = []) {
   const normalized = normalizeOutputsForCompare(outputs);
   const total = normalized.reduce((sum, output) => sum + output.pixels, 0);
@@ -409,7 +414,8 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
   }
   const rebootPlan = await resolveConfigRebootForCard(host, runtimePackage, options);
   assertFreshKaleidoscopeEvidence(runtimePackage, rebootPlan.current, exactIdentity);
-  if (rebootPlan.projectChanged && options.allowProjectChange !== true) {
+  if (rebootPlan.projectChanged && options.allowProjectChange !== true
+      && !isPromotableDiscoveryBench(rebootPlan.current)) {
     throw projectMismatchError(rebootPlan.current, runtimePackage);
   }
   if (rebootPlan.layoutChanged && options.allowLayoutChange !== true) {
@@ -473,7 +479,8 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
           await guardDirectCardMutation(found.host, { fetchImpl: options.fetchImpl, timeoutMs: Math.min(options.timeoutMs || 6000, 1500) });
           const retryRebootPlan = await resolveConfigRebootForCard(found.host, runtimePackage, options);
           assertFreshKaleidoscopeEvidence(runtimePackage, retryRebootPlan.current);
-          if (retryRebootPlan.projectChanged && options.allowProjectChange !== true) {
+          if (retryRebootPlan.projectChanged && options.allowProjectChange !== true
+              && !isPromotableDiscoveryBench(retryRebootPlan.current)) {
             throw projectMismatchError(retryRebootPlan.current, runtimePackage);
           }
           if (retryRebootPlan.layoutChanged && options.allowLayoutChange !== true) {

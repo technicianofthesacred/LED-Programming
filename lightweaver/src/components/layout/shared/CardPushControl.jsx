@@ -36,6 +36,13 @@ const LOCAL_BRIDGE_RECOVERY_REASONS = new Set([
   'bridge-post-failed',
 ]);
 
+export function validateCardPushAttempt(attempt, projectLifecycle) {
+  if (!attempt || attempt.revision !== projectLifecycle.editedRevision ||
+      attempt.generation !== projectLifecycle.generation) {
+    throw new CardPushError('project-changed', 'The project changed after this card attempt was prepared. Start a new install so the card receives the current project.');
+  }
+}
+
 async function readReadyDeploymentEvidence(host) {
   const [project, status] = await Promise.all([
     readCardProjectEvidence({ host }),
@@ -70,6 +77,7 @@ export function CardPushControl({
   const [wiringCandidate, setWiringCandidate] = useState(null);
   const [wiringTestState, setWiringTestState] = useState('idle');
   const failedAttemptRef = useRef(null);
+  const assertCurrentAttempt = attempt => validateCardPushAttempt(attempt, projectLifecycle);
 
   // Serialize the current patch board into the firmware's runtime contract.
   // Direct push is only for local HTTP/file Studio sessions; hosted HTTPS
@@ -145,6 +153,7 @@ export function CardPushControl({
           readStatus: () => readCardStatusEnvelope({ host: attempt.host }),
           readWiringStatus: () => getCardWiringStatus({ host: attempt.host }),
           config: async () => {
+            assertCurrentAttempt(attempt);
             setPushStatus(`Sending revision ${attempt.revision} to ${cleanHost}...`);
             return pushConfigToCard(attempt.pkg, { host: attempt.host, allowLayoutChange: true });
           },
@@ -214,6 +223,7 @@ export function CardPushControl({
     setWiringTestState('starting');
     setPushStatus('Restarting the card with the test wiring…');
     try {
+      assertCurrentAttempt(wiringCandidate.attempt);
       await activateAndWaitForCardWiring(wiringCandidate.activationId, {
         host: wiringCandidate.attempt.host,
         timeoutMs: 18000,
@@ -231,6 +241,7 @@ export function CardPushControl({
     setWiringTestState(visible ? 'confirming' : 'rolling-back');
     try {
       if (visible) {
+        assertCurrentAttempt(wiringCandidate.attempt);
         await confirmCardWiringCandidate(wiringCandidate.activationId, { host: wiringCandidate.attempt.host });
         setPushStatus('Verifying the confirmed wiring on the card…');
         const verification = await waitForCardDeploymentVerification(wiringCandidate.attempt.prepared, {
@@ -249,6 +260,7 @@ export function CardPushControl({
         setPushStatus(`Wiring confirmed. Revision ${wiringCandidate.attempt.revision} is now the card’s working setup.`);
         setWiringTestState('confirmed');
       } else {
+        assertCurrentAttempt(wiringCandidate.attempt);
         await rollbackCardWiringCandidate(wiringCandidate.activationId, { host: wiringCandidate.attempt.host });
         failedAttemptRef.current = wiringCandidate.attempt;
         dispatchAction({ type: 'fail', error: 'Wiring test rolled back.' });

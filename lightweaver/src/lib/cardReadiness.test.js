@@ -384,6 +384,47 @@ test('the card-reported pixel ceiling is normalized from the firmware limits blo
   }
 });
 
+test('truthful capacity separates schema, requested, allocated, and driver readiness', () => {
+  const normalized = normalizeCardReadiness(readyEnvelope({
+    limits: { pixels: 65535 },
+    pixelCapacity: {
+      schemaLimit: 65535,
+      allocatedBoot: 512,
+    },
+    led: { pixels: 41 },
+    outputDriverReady: true,
+    projectOutputReady: false,
+    outputInitialization: { ok: true, code: 'ready', message: 'factory beacon output driver initialized' },
+  }));
+  assert.equal(normalized.schemaMaxPixels, 65535);
+  assert.equal(normalized.requestedPixels, 41);
+  assert.equal(normalized.allocatedPixels, 512);
+  assert.equal(normalized.driverReady, true);
+  assert.equal(normalized.projectOutputReady, false);
+  assert.deepEqual(normalized.outputInitialization, {
+    ok: true,
+    code: 'ready',
+    message: 'factory beacon output driver initialized',
+  });
+});
+
+test('legacy capacity diagnostics remain normalized for existing cards', () => {
+  const normalized = normalizeCardReadiness(readyEnvelope({
+    capacity: {
+      schemaMaxPixels: 1024,
+      requestedPixels: 41,
+      allocatedPixels: 512,
+      driverReady: true,
+      projectOutputReady: false,
+    },
+  }));
+  assert.equal(normalized.schemaMaxPixels, 1024);
+  assert.equal(normalized.requestedPixels, 41);
+  assert.equal(normalized.allocatedPixels, 512);
+  assert.equal(normalized.driverReady, true);
+  assert.equal(normalized.projectOutputReady, false);
+});
+
 // ── safeMode (a damaged card must never be mistaken for an erased one) ───────
 // The firmware boots safe defaults when it cannot READ a project it still
 // holds. That card publishes the same absence a freshly flashed one does, and

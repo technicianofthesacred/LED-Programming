@@ -346,7 +346,7 @@ test('does not report a deployment installed until exact-card read-back verifies
   let installed = 0;
   const transport = {
     async install() { return { ok: true }; },
-    async readBack() { return { cardId: 'lw-aabbccddeeff', config: structuredClone(prepared.config), knownGoodProject: true, commandReady: true, playbackReady: true }; },
+    async readBack() { return { cardId: 'lw-aabbccddeeff', config: structuredClone(prepared.config), knownGoodProject: true, commandReady: true, runtimePhase: 'ready', playbackReady: true, outputReady: true }; },
   };
 
   const result = await runCardDeployment(prepared, transport, {
@@ -365,7 +365,9 @@ test('does not report a deployment installed until exact-card read-back verifies
     projectFingerprint: 'a'.repeat(64),
     knownGoodProject: true,
     commandReady: true,
+    runtimePhase: 'ready',
     playbackReady: true,
+    outputReady: true,
   }).ok, true);
 });
 
@@ -378,21 +380,45 @@ test('installed verification requires exact known-good command and playback read
     projectFingerprint: prepared.config.projectFingerprint,
     knownGoodProject: true,
     commandReady: true,
+    runtimePhase: 'ready',
     playbackReady: true,
+    outputReady: true,
   };
   assert.equal(verifyCardDeployment(prepared, ready, { requireReady: true }).ok, true);
-  for (const field of ['knownGoodProject', 'commandReady', 'playbackReady']) {
+  for (const [field, reason] of [
+    ['knownGoodProject', 'card-not-ready'],
+    ['commandReady', 'card-not-ready'],
+    ['playbackReady', 'playback-not-ready'],
+  ]) {
     assert.deepEqual(verifyCardDeployment(prepared, { ...ready, [field]: false }, { requireReady: true }), {
       ok: false,
-      reason: 'card-not-ready',
+      reason,
     });
     const missing = { ...ready };
     delete missing[field];
     assert.deepEqual(verifyCardDeployment(prepared, missing, { requireReady: true }), {
       ok: false,
-      reason: 'card-not-ready',
+      reason,
     });
   }
+});
+
+test('installed verification also requires runtime and output readiness', async () => {
+  const { prepareCardDeployment, verifyCardDeployment } = await deploymentApi();
+  const prepared = prepareCardDeployment(projectFixture(), { cardId: 'lw-aabbccddeeff' });
+  const ready = {
+    cardId: prepared.cardId,
+    projectRevision: prepared.config.projectRevision,
+    projectFingerprint: prepared.config.projectFingerprint,
+    knownGoodProject: true,
+    commandReady: true,
+    runtimePhase: 'ready',
+    playbackReady: true,
+    outputReady: true,
+  };
+  assert.equal(verifyCardDeployment(prepared, ready, { requireReady: true }).ok, true);
+  assert.deepEqual(verifyCardDeployment(prepared, { ...ready, runtimePhase: 'recovering' }, { requireReady: true }), { ok: false, reason: 'runtime-not-ready' });
+  assert.deepEqual(verifyCardDeployment(prepared, { ...ready, outputReady: false }, { requireReady: true }), { ok: false, reason: 'output-not-ready' });
 });
 
 test('readiness evidence must carry its own exact card build and project identity', async () => {
@@ -410,13 +436,17 @@ test('readiness evidence must carry its own exact card build and project identit
     projectFingerprint: project.projectFingerprint,
     knownGoodProject: true,
     commandReady: true,
+    runtimePhase: 'ready',
     playbackReady: true,
+    outputReady: true,
   };
   assert.deepEqual(correlateCardDeploymentReadinessEvidence(project, readiness), {
     ...project,
     knownGoodProject: true,
     commandReady: true,
+    runtimePhase: 'ready',
     playbackReady: true,
+    outputReady: true,
   });
   assert.throws(
     () => correlateCardDeploymentReadinessEvidence(project, {
@@ -525,7 +555,7 @@ test('starts the candidate test before asking and confirms only after the user s
     async confirm() { order.push('confirm'); },
     async readBack() {
       order.push('read-back');
-      return { cardId: 'lw-aabbccddeeff', config: structuredClone(prepared.config), knownGoodProject: true, commandReady: true, playbackReady: true };
+      return { cardId: 'lw-aabbccddeeff', config: structuredClone(prepared.config), knownGoodProject: true, commandReady: true, runtimePhase: 'ready', playbackReady: true, outputReady: true };
     },
   }, {
     confirmHardware: async () => { order.push('ask-user'); return true; },

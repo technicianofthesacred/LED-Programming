@@ -17,6 +17,8 @@
     "pi:build": "npm run build",
     "pi:start": "npm run build && npm run serve:pi",
     "doctor:wled": "node scripts/wled-doctor.mjs",
+    "commission:real-card": "node scripts/real-card-commissioning.mjs",
+    "test:real-card-harness": "node --test tests/real-card-commissioning.test.mjs",
     "launch:source": "npm run test:core:source && npm run test:projects && npm run test:projects:browser && npm run test:mapper && npm run test:production-jobs && npm run test:prod-deploy && npm run test:build-graph && npm run test:studio-release && npm run test:show && npm run test:screen-recovery && npm run test:production && npm run test:unit && npm run test:release-ui && node scripts/ensure-rollup-native.mjs && npm run build && npm run stage:pages && npm run verify:pages",
     "launch:check": "npm run launch:source && npm run firmware:check-bin",
     "ci:source-build": "npm run test:core:source && npm run test:projects && npm run test:mapper && npm run test:prod-deploy && npm run test:build-graph && npm run test:studio-release && npm run test:unit && node scripts/ensure-rollup-native.mjs && npm run build && npm run stage:pages && npm run verify:pages",

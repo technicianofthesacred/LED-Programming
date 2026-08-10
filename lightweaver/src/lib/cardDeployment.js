@@ -104,7 +104,9 @@ export function correlateCardDeploymentReadinessEvidence(project = {}, status = 
     ...project,
     knownGoodProject: status.knownGoodProject,
     commandReady: status.commandReady,
+    runtimePhase: status.runtimePhase,
     playbackReady: status.playbackReady,
+    outputReady: status.outputReady,
   };
 }
 
@@ -184,11 +186,12 @@ export function verifyCardDeployment(prepared, readBack = {}, { requireReady = f
     readBack.projectRevision !== prepared.config.projectRevision ||
     readBack.projectFingerprint !== prepared.config.projectFingerprint
   )) return { ok: false, reason: 'read-back-mismatch' };
-  if (requireReady && (
-    readBack.knownGoodProject !== true ||
-    readBack.commandReady !== true ||
-    readBack.playbackReady !== true
-  )) return { ok: false, reason: 'card-not-ready' };
+  if (requireReady && readBack.runtimePhase !== 'ready') return { ok: false, reason: 'runtime-not-ready' };
+  if (requireReady && readBack.playbackReady !== true) return { ok: false, reason: 'playback-not-ready' };
+  if (requireReady && readBack.outputReady !== true) return { ok: false, reason: 'output-not-ready' };
+  if (requireReady && (readBack.knownGoodProject !== true || readBack.commandReady !== true)) {
+    return { ok: false, reason: 'card-not-ready' };
+  }
   if (runtimeConfigUsesKaleidoscope(prepared.config)) {
     const appliedMappings = readBack.config?.kaleidoscopeMappings ?? readBack.kaleidoscopeMappings;
     if (!Array.isArray(appliedMappings)) return { ok: false, reason: 'read-back-mismatch' };

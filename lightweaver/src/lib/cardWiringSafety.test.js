@@ -345,6 +345,27 @@ test('reconnect polling ignores outages and stale activation replies', async () 
   assert.equal(replies.length, 0);
 });
 
+test('reconnect succeeds only for the exact activation in testing state', async () => {
+  for (const [state, reason] of [
+    ['rolled-back', 'activation-rolled-back'],
+    ['known-good', 'activation-not-testing'],
+    ['safe-mode', 'activation-wrong-state'],
+  ]) {
+    let now = 0;
+    await assert.rejects(
+      waitForCardWiringReconnect({
+        activationId: 'current-activation',
+        timeoutMs: 100,
+        pollIntervalMs: 10,
+        nowImpl: () => now,
+        waitImpl: async milliseconds => { now += milliseconds; },
+        statusImpl: async () => normalizeCardWiringStatus({ ok: true, state, activationId: 'current-activation' }),
+      }),
+      error => error instanceof CardWiringSafetyError && error.reason === reason,
+    );
+  }
+});
+
 test('reconnect polling reports a typed timeout with the last failure', async () => {
   let now = 0;
   await assert.rejects(
