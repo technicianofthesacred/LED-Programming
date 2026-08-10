@@ -6,8 +6,62 @@ import { readCardProjectEvidence, readCardStatusEnvelope } from '../lib/cardPush
 import { resolveCardProject, describeResolvedCardProject } from '../lib/cardProjectResolver.js';
 import { isBenchProjectEvidence } from '../lib/benchConfig.js';
 import { projectSkeletonFromCardStatus } from '../lib/discoveryCommit.js';
+import { readCardPatternsFromCard, readCardZonesFromCard } from '../lib/cardLiveControl.js';
 import { cardConnectionStatus } from '../components/card/CardStatusControl.jsx';
 import { useProject } from '../state/ProjectContext.jsx';
+
+function visualLookFromZone(zone = {}, fallbackPatternId = 'aurora') {
+  return {
+    patternId: zone.patternId || fallbackPatternId,
+    ...(Number.isFinite(Number(zone.brightness)) ? { brightness: Number(zone.brightness) } : {}),
+    ...(Number.isFinite(Number(zone.speed)) ? { speed: Number(zone.speed) } : {}),
+    ...(Number.isFinite(Number(zone.hueShift)) ? { hueShift: Number(zone.hueShift) } : {}),
+    ...(Number.isFinite(Number(zone.customHue)) ? { customHue: Number(zone.customHue) } : {}),
+    ...(Number.isFinite(Number(zone.customSaturation)) ? { customSaturation: Number(zone.customSaturation) } : {}),
+    ...(typeof zone.customBreathe === 'boolean' ? { customBreathe: zone.customBreathe } : {}),
+    ...(Number.isFinite(Number(zone.breatheLowerPct)) ? { breatheLowerPct: Number(zone.breatheLowerPct) } : {}),
+    ...(Number.isFinite(Number(zone.breatheUpperPct)) ? { breatheUpperPct: Number(zone.breatheUpperPct) } : {}),
+    ...(Number.isFinite(Number(zone.breatheCycleSeconds)) ? { breatheCycleSeconds: Number(zone.breatheCycleSeconds) } : {}),
+    ...(typeof zone.customDrift === 'boolean' ? { customDrift: zone.customDrift } : {}),
+  };
+}
+
+export function reconstructInstalledCardState({ skeleton = {}, patterns = null, zones = null } = {}) {
+  const installedPatterns = Array.isArray(patterns?.patterns) ? patterns.patterns : [];
+  const installedZones = Array.isArray(zones?.zones) ? zones.zones : [];
+  const startupPatternId = String(zones?.startupPatternId || installedZones[0]?.patternId || installedPatterns[0]?.id || 'aurora');
+  const startupZone = installedZones.find(zone => zone?.patternId === startupPatternId) || installedZones[0] || {};
+  const looks = installedPatterns.map(pattern => ({
+      id: pattern.id,
+      type: 'compound',
+      label: pattern.label || pattern.id,
+      defaultLook: visualLookFromZone(pattern.zones?.[0], pattern.runtimePatternId || pattern.id || startupPatternId),
+      sectionLooks: Object.fromEntries((pattern.zones || [])
+        .filter(zone => zone?.id)
+        .map(zone => [zone.id, visualLookFromZone(zone, pattern.runtimePatternId || pattern.id || startupPatternId)])),
+      updatedAt: 0,
+    }));
+  const playlist = installedPatterns.map((pattern, index) => ({
+    id: pattern.id,
+    type: 'combo',
+    lookId: pattern.id,
+    label: pattern.label || pattern.id,
+    enabled: true,
+    createdAt: index,
+  }));
+  return {
+    ...skeleton,
+    devices: {
+      standaloneController: {
+        defaultLook: visualLookFromZone(startupZone, startupPatternId),
+        activeLookId: String(patterns?.currentId || startupPatternId),
+        looks,
+        playlist,
+        controls: { encoder: { patternCycleIds: looks.map(look => look.defaultLook.patternId) } },
+      },
+    },
+  };
+}
 
 function exactCardName(cardLink, cardHost) {
   return cardLink?.card?.name
@@ -70,11 +124,24 @@ export function SetupScreen({
 
   const applyCardParts = async (parts, status = null) => {
     const nextOutputs = Array.isArray(parts?.outputs) ? parts.outputs : null;
+    const installedController = parts?.devices?.standaloneController || parts?.standaloneController || {};
     const nextController = {
       ...(currentProject?.devices?.standaloneController || {}),
+      ...installedController,
+      ...(installedController.controls ? {
+        controls: {
+          ...(currentProject?.devices?.standaloneController?.controls || {}),
+          ...installedController.controls,
+          encoder: {
+            ...(currentProject?.devices?.standaloneController?.controls?.encoder || {}),
+            ...(installedController.controls.encoder || {}),
+          },
+        },
+      } : {}),
       ...(nextOutputs ? { outputs: nextOutputs } : {}),
       led: {
         ...(currentProject?.devices?.standaloneController?.led || {}),
+        ...(installedController.led || {}),
         ...(parts?.led || {}),
         ...(parts?.colorOrder ? { colorOrder: parts.colorOrder, colorOrderConfirmed: true } : {}),
         ...(nextOutputs ? {
@@ -210,6 +277,8 @@ export function SetupScreen({
   const startFromCard = async () => {
     const readHost = cardLink?.host || cardHost || '';
     let status = cardState.status;
+    let patterns = null;
+    let zones = null;
     try {
       status = await readCardStatusEnvelope({ host: readHost, transport: cardLink?.transport });
       if ((!Array.isArray(status?.outputs) || !status.outputs.length)
@@ -223,9 +292,15 @@ export function SetupScreen({
       // readiness summary is intentionally last because it may omit geometry.
       status = status || cardLink?.readiness || null;
     }
+    const installedState = await Promise.allSettled([
+      readCardPatternsFromCard({ host: readHost }),
+      readCardZonesFromCard({ host: readHost }),
+    ]);
+    patterns = installedState[0].status === 'fulfilled' ? installedState[0].value : null;
+    zones = installedState[1].status === 'fulfilled' ? installedState[1].value : null;
     const skeleton = projectSkeletonFromCardStatus(status || {});
     if (!skeleton.strips.length) return;
-    await applyCardParts(skeleton, status);
+    await applyCardParts(reconstructInstalledCardState({ skeleton, patterns, zones }), status);
   };
 
   const loadResolvedProject = async () => {

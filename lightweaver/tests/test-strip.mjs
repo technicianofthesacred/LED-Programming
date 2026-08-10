@@ -1,8 +1,69 @@
 import assert from 'node:assert/strict';
 import {
+  DEFAULT_TEST_STRIP,
   TEST_STRIP_ZONE_ID,
   applyTestStripToRuntimePackage,
+  captureTestStripCandidate,
+  readTestStrip,
+  recordTestStripCandidate,
+  runtimePackageForCardOperation,
+  startTestStripSession,
+  stopTestStripSession,
+  writeTestStrip,
 } from '../src/lib/testStrip.js';
+
+function memoryStorage() {
+  const values = new Map();
+  return {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: key => values.delete(key),
+  };
+}
+
+const previousWindow = globalThis.window;
+const localStorage = memoryStorage();
+const sessionStorage = memoryStorage();
+globalThis.window = {
+  localStorage,
+  sessionStorage,
+  dispatchEvent() {},
+};
+
+localStorage.setItem('lw:test-strip', JSON.stringify({ enabled: true, length: 17 }));
+assert.deepEqual(readTestStrip(), DEFAULT_TEST_STRIP, 'a stale cross-session override is ignored');
+
+const started = startTestStripSession({ length: 30, sessionId: 'test-session' });
+assert.deepEqual(started, {
+  enabled: true,
+  length: 30,
+  sessionId: 'test-session',
+  activationId: '',
+});
+writeTestStrip({ length: 41 });
+assert.equal(readTestStrip().sessionId, 'test-session', 'editing the length keeps transaction identity');
+
+recordTestStripCandidate('candidate-owned');
+const rollbackCalls = [];
+const projectEditedAfterStart = { playlist: ['aurora', 'fire'] };
+const stopped = await stopTestStripSession({
+  readStatus: async () => ({ state: 'staged', activationId: 'candidate-owned' }),
+  rollback: async activationId => rollbackCalls.push(activationId),
+});
+assert.deepEqual(rollbackCalls, ['candidate-owned']);
+assert.equal(stopped.rolledBack, true);
+assert.equal(readTestStrip().enabled, false);
+assert.deepEqual(projectEditedAfterStart, { playlist: ['aurora', 'fire'] }, 'stopping does not restore a stale project snapshot');
+
+startTestStripSession({ length: 22, sessionId: 'other-session' });
+recordTestStripCandidate('candidate-owned-by-test');
+const foreignRollbackCalls = [];
+const foreign = await stopTestStripSession({
+  readStatus: async () => ({ state: 'testing', activationId: 'candidate-created-elsewhere' }),
+  rollback: async activationId => foreignRollbackCalls.push(activationId),
+});
+assert.deepEqual(foreignRollbackCalls, [], 'Stop never rolls back another workflow candidate');
+assert.equal(foreign.rolledBack, false);
 
 const runtimePackage = {
   app: 'Lightweaver',
@@ -85,5 +146,33 @@ assert.equal(testPackage.config.looks[1].zones[0].patternId, 'aurora');
 // producing a zero/negative-pixel package.
 const fallbackPackage = applyTestStripToRuntimePackage(runtimePackage, 0);
 assert.equal(fallbackPackage.config.led.pixels, 30);
+
+const ordinarySavePackage = runtimePackageForCardOperation(runtimePackage, {
+  operation: 'save',
+  testStrip: { enabled: true, length: 30 },
+});
+assert.equal(ordinarySavePackage, runtimePackage, 'ordinary Save always installs the real project package');
+
+const explicitPreviewPackage = runtimePackageForCardOperation(runtimePackage, {
+  operation: 'preview',
+  testStrip: { enabled: true, length: 30 },
+});
+assert.equal(explicitPreviewPackage.config.led.pixels, 30, 'explicit preview uses the short strip package');
+
+startTestStripSession({ length: 30, sessionId: 'capture-session' });
+assert.equal(await captureTestStripCandidate({
+  readStatus: async () => ({ state: 'staged', activationId: 'candidate-captured' }),
+}), 'candidate-captured');
+assert.equal(readTestStrip().activationId, 'candidate-captured');
+
+startTestStripSession({ length: 30, sessionId: 'preexisting-session' });
+assert.equal(await captureTestStripCandidate({
+  previousActivationId: 'candidate-preexisting',
+  readStatus: async () => ({ state: 'staged', activationId: 'candidate-preexisting' }),
+}), '');
+assert.equal(readTestStrip().activationId, undefined, 'a pre-existing candidate is never claimed by this test session');
+
+if (previousWindow === undefined) delete globalThis.window;
+else globalThis.window = previousWindow;
 
 console.log('test-strip tests passed');

@@ -1,6 +1,7 @@
 import { buildCardRuntimePackageFromProject } from './cardRuntimeProject.js';
 import { runtimeConfigUsesKaleidoscope } from './cardKaleidoscope.js';
 import { normalizeCardKaleidoscopeMappings } from './cardRuntimeContract.js';
+import { connectCardTransport } from './cardTransport.js';
 
 export function prepareCardDeployment(project = {}, cardEvidence = {}) {
   const needsFingerprint = Number.isSafeInteger(project.projectRevision) && project.projectRevision >= 0 && !project.projectFingerprint;
@@ -208,6 +209,59 @@ export function verifyCardDeployment(prepared, readBack = {}, { requireReady = f
     }
   }
   return { ok: true, cardId: prepared.cardId, fingerprint: prepared.fingerprint };
+}
+
+function postSaveVerificationError(reason, message) {
+  const error = new Error(message);
+  error.reason = reason;
+  return error;
+}
+
+function installedIds(items = []) {
+  return new Set(Array.isArray(items) ? items.map(item => String(item?.id || '')).filter(Boolean) : []);
+}
+
+export async function verifyCardPostSaveState({
+  prepared,
+  host,
+  expectedCardId = prepared?.cardId || '',
+  requiredPatternIds = [],
+  requiredZoneIds = [],
+  acquireAuthority = options => connectCardTransport(options),
+} = {}) {
+  if (!prepared || !expectedCardId) {
+    throw postSaveVerificationError('identity-missing', 'Exact card identity is required after saving.');
+  }
+  const authority = await acquireAuthority({ host, expectedCardId });
+  if (!authority?.connected && typeof authority?.request !== 'function') {
+    throw postSaveVerificationError(
+      authority?.reason || 'direct-unavailable',
+      'Studio could not reacquire the exact card after saving.',
+    );
+  }
+  if (String(authority.cardId || authority.card?.id || '') !== expectedCardId) {
+    throw postSaveVerificationError('card-mismatch', 'A different Lightweaver card answered after saving.');
+  }
+  const [status, wiring, patterns, zones] = await Promise.all([
+    authority.request('/api/status'),
+    authority.request('/api/wiring/status'),
+    authority.request('/api/patterns'),
+    authority.request('/api/zones'),
+  ]);
+  const installed = verifyCardDeployment(prepared, status, { requireReady: true });
+  if (!installed.ok) throw postSaveVerificationError(installed.reason, 'The card still reports the previous project after saving.');
+  if (wiring?.hasCandidate === true || String(wiring?.state || '').toLowerCase() !== 'known-good') {
+    throw postSaveVerificationError('wiring-not-known-good', 'The saved wiring is not the card’s known-good setup.');
+  }
+  const patternIds = installedIds(patterns?.patterns);
+  if (requiredPatternIds.some(id => !patternIds.has(String(id)))) {
+    throw postSaveVerificationError('patterns-missing', 'The card did not expose every saved pattern.');
+  }
+  const zoneIds = installedIds(zones?.zones);
+  if (requiredZoneIds.some(id => !zoneIds.has(String(id)))) {
+    throw postSaveVerificationError('zones-missing', 'The card did not expose every saved section.');
+  }
+  return { ...installed, status, wiring, patterns, zones, authority };
 }
 
 export async function waitForCardDeploymentVerification(prepared, {

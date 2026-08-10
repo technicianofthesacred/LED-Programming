@@ -13,7 +13,7 @@ import { useFirmwareReleaseIdentity } from '../hooks/useFirmwareReleaseIdentity.
 import { ProjectLoadDialog, ProjectSaveDialog } from '../components/projects/TopBarProjectDialogs.jsx';
 import { WorkspaceNotice } from '../components/projects/WorkspaceNotice.jsx';
 import { releaseCardBridge } from '../lib/cardBridge.js';
-import { bootstrapCardHostFromLocation, canPushDirectlyToCard } from '../lib/cardConnection.js';
+import { bootstrapCardHostFromLocation, canPushDirectlyToCard, readStoredCardHost } from '../lib/cardConnection.js';
 import {
   bootstrapBridgeCallback,
   clearStoredBridgeResult,
@@ -50,7 +50,13 @@ import {
   inspectCardCommissioning,
   writeCardCommissioning,
 } from '../lib/cardCommissioningFlow.js';
-import { readTestStrip, writeTestStrip, TEST_STRIP_CHANGED_EVENT } from '../lib/testStrip.js';
+import {
+  readTestStrip,
+  startTestStripSession,
+  stopTestStripSession,
+  writeTestStrip,
+  TEST_STRIP_CHANGED_EVENT,
+} from '../lib/testStrip.js';
 import { LayoutScreen } from './lw-layout.jsx';
 import { markCardSectionNavigation } from './cardWorkspaceRoute.js';
 import {
@@ -942,7 +948,16 @@ function Shell({ offlineUpdateController = null }) {
     return () => window.removeEventListener(TEST_STRIP_CHANGED_EVENT, sync);
   }, []);
   const onToggleTestStrip = useCallback((enabled) => {
-    setTestStripState(writeTestStrip({ enabled, length: readTestStrip().length }));
+    if (enabled) {
+      setTestStripState(startTestStripSession({ length: readTestStrip().length }));
+      return;
+    }
+    void stopTestStripSession({ host: readStoredCardHost() })
+      .catch(() => {
+        // The override is already disabled. A candidate that cannot be proven
+        // as ours is deliberately left for the card's normal safety flow.
+      });
+    setTestStripState(readTestStrip());
   }, []);
   const onTestStripLengthChange = useCallback((rawLength) => {
     const length = Number(rawLength);

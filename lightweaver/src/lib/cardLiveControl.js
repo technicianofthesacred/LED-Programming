@@ -21,7 +21,7 @@ import {
   readPersistedCardIdentity,
 } from './cardIdentity.js';
 import { reclaimCardFrameStreams } from './cardFrameStream.js';
-import { getActiveCardTransportAuthority } from './cardTransport.js';
+import { connectCardTransport, getActiveCardTransportAuthority } from './cardTransport.js';
 import { discoverCardWiring, getCardWiringStatus, rollbackCardWiringCandidate } from './cardWiringSafety.js';
 import { CUSTOMER_CONTROL_WIRE_FIELDS } from './cardCustomerControlContract.js';
 
@@ -716,7 +716,16 @@ async function postIdentifyToHost(host, options = {}) {
 async function readCardZones(host, input = {}) {
   const options = typeof input === 'number' ? { timeoutMs: input } : input;
   const timeoutMs = options.timeoutMs || 1200;
-  const authority = options.authority || getActiveCardTransportAuthority(host);
+  let authority = options.authority || getActiveCardTransportAuthority(host);
+  if (!authority && options.expectedCardId) {
+    const acquired = await (options.connectTransportImpl || connectCardTransport)({
+      host,
+      expectedCardId: options.expectedCardId,
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+    });
+    if (acquired?.connected) authority = acquired;
+    else if (acquired?.reason === 'wrong-card') throw new CardPushError('wrong-card', 'A different Lightweaver card answered.');
+  }
   if (authority) return requireBoundedControlObject(await authority.request('/api/zones'));
   if (hasVerifiedBridgeForHost(host) || isMixedContentBlocked()) {
     return requireBoundedControlObject(await sendCardBridgeRequest('zones', {}, { host, timeoutMs }));
@@ -819,7 +828,16 @@ function normalizeCardPatternsPayload(payload) {
 
 async function readCardPatterns(host, options = {}) {
   const timeoutMs = options.timeoutMs || 1200;
-  const authority = options.authority || getActiveCardTransportAuthority(host);
+  let authority = options.authority || getActiveCardTransportAuthority(host);
+  if (!authority && options.expectedCardId) {
+    const acquired = await (options.connectTransportImpl || connectCardTransport)({
+      host,
+      expectedCardId: options.expectedCardId,
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+    });
+    if (acquired?.connected) authority = acquired;
+    else if (acquired?.reason === 'wrong-card') throw new CardPushError('wrong-card', 'A different Lightweaver card answered.');
+  }
   if (authority) return normalizeCardPatternsPayload(requireBoundedControlObject(await authority.request('/api/patterns')));
   if (hasVerifiedBridgeForHost(host)) {
     return normalizeCardPatternsPayload(requireBoundedControlObject(await sendCardBridgeRequest('patterns', {}, { host, timeoutMs })));
