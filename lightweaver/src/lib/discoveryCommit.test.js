@@ -104,6 +104,31 @@ test('projectSkeletonFromCardStatus maps a real status blob into a project skele
   assert.equal(skeleton.portRoles.find(entry => entry.pin === 16).pixelCount, 300);
 });
 
+test('projectSkeletonFromCardStatus reconstructs exact installed segment geometry and wiring', () => {
+  const skeleton = projectSkeletonFromCardStatus({
+    knownGoodProject: true,
+    outputReady: true,
+    led: { colorOrder: 'RGB', type: 'WS2815', maxMilliamps: 1500 },
+    outputs: [{
+      id: 'out1', pin: 18, pixels: 41,
+      segments: [{ id: 'run-strip-1', count: 41, direction: 'forward' }],
+    }],
+  });
+
+  assert.equal(skeleton.colorOrder, 'RGB');
+  assert.deepEqual(skeleton.led, { type: 'WS2815', maxMilliamps: 1500 });
+  assert.deepEqual(skeleton.outputs, [{ id: 'out1', pin: 18, pixels: 41 }]);
+  assert.equal(skeleton.strips.length, 1);
+  assert.equal(skeleton.strips[0].id, 'strip-1');
+  assert.equal(skeleton.strips[0].pixelCount, 41);
+  assert.equal(skeleton.strips[0].pixels.length, 41);
+  assert.deepEqual(skeleton.wiring.outputs, [{ id: 'out1', name: 'Output 1', pin: 18, runIds: ['run-strip-1'] }]);
+  assert.equal(skeleton.wiring.runs[0].source.stripId, 'strip-1');
+  assert.equal(skeleton.wiring.runs[0].source.to, 40);
+  assert.equal(skeleton.wiring.verified, true);
+  assert.equal(skeleton.patchBoard.physicalLocked, true);
+});
+
 test('a status output with no pixels does not become a strip', () => {
   const skeleton = projectSkeletonFromCardStatus({
     outputs: [{ id: 'x', pin: 16, pixels: 0 }],

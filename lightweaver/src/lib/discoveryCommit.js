@@ -14,6 +14,7 @@ import {
   normalizePortRoles,
 } from './portRoles.js';
 import { normalizeUsbLedColorOrder } from './usbLedColorOrder.js';
+import { createDefaultPatchBoard } from './patchBoard.js';
 
 // One entry per discovered strip port, in the shape standaloneController.led.
 // outputs expects (cardRuntimeProject.js): id, pin, pixels. Ports with no pixel
@@ -51,9 +52,96 @@ export function projectSkeletonFromCardStatus(status = {}) {
     pixelCount: entry?.pixels,
     controlKind: '',
   })));
+  const verified = status?.knownGoodProject === true && status?.outputReady === true;
+  const strips = [];
+  const runs = [];
+  const wiringOutputs = [];
+  for (const [outputIndex, output] of reportedOutputs.entries()) {
+    const outputPixels = Math.max(0, Math.trunc(Number(output?.pixels) || 0));
+    if (!outputPixels) continue;
+    const outputId = /^out\d+$/i.test(String(output?.id || '')) ? String(output.id) : `out${outputIndex + 1}`;
+    const reportedSegments = Array.isArray(output?.segments) && output.segments.length
+      ? output.segments
+      : [{ id: `run-strip-${strips.length + 1}`, count: outputPixels, direction: 'forward' }];
+    const runIds = [];
+    for (const segment of reportedSegments) {
+      const count = Math.max(0, Math.trunc(Number(segment?.count) || 0));
+      if (!count) continue;
+      const runId = String(segment?.id || `run-strip-${strips.length + 1}`);
+      const stripId = runId.replace(/^run-/, '') || `strip-${strips.length + 1}`;
+      const y = 100 + strips.length * 70;
+      const startX = 80;
+      const endX = 560;
+      const span = endX - startX;
+      const pixels = Array.from({ length: count }, (_, index) => ({
+        x: count === 1 ? startX : startX + (span * index) / (count - 1),
+        y,
+        index,
+      }));
+      strips.push({
+        id: stripId,
+        name: reportedSegments.length === 1 ? (status?.piece?.name || 'Line') : `Line ${strips.length + 1}`,
+        pathData: `M ${startX} ${y} L ${endX} ${y}`,
+        closed: false,
+        svgLength: span,
+        pixelCount: count,
+        pixels,
+        color: 'oklch(80% 0.13 72)',
+        x: 0,
+        y: 0,
+        emit: 'omni',
+        angle: 0,
+        reversed: segment?.direction === 'reverse',
+        speed: 1,
+        brightness: 1,
+        hueShift: 0,
+        patternId: null,
+      });
+      runs.push({
+        id: runId,
+        type: 'strip',
+        source: { stripId, from: 0, to: count - 1 },
+        directionPolicy: 'flexible',
+        physicalDirection: segment?.direction === 'reverse' ? 'source-reverse' : 'source-forward',
+        seamLed: null,
+        verified,
+      });
+      runIds.push(runId);
+    }
+    wiringOutputs.push({
+      id: outputId,
+      name: String(output?.name || `Output ${outputIndex + 1}`),
+      pin: Number(output?.pin),
+      runIds,
+    });
+  }
+  const patchBoard = createDefaultPatchBoard(strips);
+  patchBoard.physicalLocked = verified;
   return {
     portRoles,
-    colorOrder: normalizeUsbLedColorOrder(status?.outputColor?.colorOrder, ''),
-    outputs: outputsFromStrips(portRoles),
+    colorOrder: normalizeUsbLedColorOrder(status?.led?.colorOrder || status?.outputColor?.colorOrder, ''),
+    led: {
+      ...(status?.led?.type ? { type: String(status.led.type) } : {}),
+      ...(Number.isSafeInteger(Number(status?.led?.maxMilliamps ?? status?.maxMilliamps))
+        ? { maxMilliamps: Number(status?.led?.maxMilliamps ?? status?.maxMilliamps) }
+        : {}),
+    },
+    outputs: reportedOutputs
+      .filter(output => Number(output?.pixels) > 0)
+      .map(output => ({
+        id: /^out\d+$/i.test(String(output?.id || '')) ? String(output.id) : `strip-${output.pin}`,
+        pin: Number(output.pin),
+        pixels: Math.trunc(Number(output.pixels)),
+      })),
+    strips,
+    patchBoard,
+    wiring: {
+      version: 1,
+      locked: verified,
+      verified,
+      controllerAnchor: null,
+      outputs: wiringOutputs,
+      runs,
+    },
   };
 }
