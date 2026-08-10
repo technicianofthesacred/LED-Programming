@@ -1818,7 +1818,16 @@ test('a slider changes its readout and sends a tuned color modifier', async ({ p
   await page.route('**/api/control', async route => {
     const request = JSON.parse(route.request().postData() || '{}');
     controlRequests.push(request);
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, cardId: 'lw-slider-test', patternId: request.patternId, revision: request.revision }) });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      ok: true,
+      cardId: 'lw-slider-test',
+      patternId: request.patternId,
+      appliedPatternId: request.patternId,
+      revision: request.revision,
+      brightness: request.brightness,
+      speed: request.speed,
+      hue: request.hue,
+    }) });
   });
 
   await gotoFreshPatterns(page);
@@ -1838,8 +1847,32 @@ test('a slider changes its readout and sends a tuned color modifier', async ({ p
 
   // The tuned look is pushed to the card.
   await expect.poll(() => controlRequests.some(r => (
-    r.patternId === 'ocean' && r.brightness === 0.42 && r.speed === 1.75
+    r.patternId === 'ocean'
+      && r.brightness === 0.42
+      && r.speed === 1.75
+      && r.hue === 160
+      && r.zone === 'patch-default-outer-circle'
   ))).toBe(true);
+});
+
+test('a targeted hue edit is not confirmed by a stale global hue acknowledgement', async ({ page }) => {
+  await pairReadyPatternCard(page, 'lw-targeted-hue-test');
+  await page.route('**/api/control', async route => {
+    const request = JSON.parse(route.request().postData() || '{}');
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      ok: true,
+      cardId: 'lw-targeted-hue-test',
+      appliedPatternId: request.patternId,
+      revision: request.revision,
+      hue: request.hue === 160 ? 32 : request.hue,
+    }) });
+  });
+
+  await gotoFreshPatterns(page);
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+  await setRangeValue(page.getByTestId('look-hue-slider'), '160');
+
+  await expect(page.getByRole('alert')).toContainText('The preview command could not be verified.');
 });
 
 test('the advanced hue-shift slider exposes its testids', async ({ page }) => {

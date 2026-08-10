@@ -295,7 +295,10 @@ export function requireLivePreviewAcknowledgement(response, look = {}, options =
   }
   const expectedPatch = options.expectedControlPatch;
   if (expectedPatch && typeof expectedPatch === 'object') {
-    const payload = buildLivePreviewControlPayload(look, options);
+    // The caller's changed-control patch is the intent being confirmed. Merge
+    // it over the look so stale render state cannot make a wrong applied value
+    // appear valid during a rapid slider update.
+    const payload = buildLivePreviewControlPayload({ ...look, ...expectedPatch }, options);
     for (const key of Object.keys(expectedPatch)) {
       const field = CUSTOMER_CONTROL_WIRE_FIELDS.find(candidate => candidate.control === key);
       const expected = payload[field?.wire];

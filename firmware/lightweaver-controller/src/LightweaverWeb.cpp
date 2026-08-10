@@ -1907,6 +1907,22 @@ class BoundedControlRequestHandler final : public RequestHandler {
   }
 };
 
+void appendTargetedZoneControlAcknowledgement(JsonDocument& out, const String& zoneTarget) {
+  if (zoneTarget.length() == 0) return;
+
+  JsonDocument zonesDoc;
+  if (deserializeJson(zonesDoc, runtimeZonesJson())) return;
+  JsonArray zones = zonesDoc["zones"].as<JsonArray>();
+  for (JsonObject zone : zones) {
+    if (String(zone["id"] | "") != zoneTarget) continue;
+    out["speed"] = zone["speed"];
+    out["hueShift"] = zone["hueShift"];
+    out["hue"] = zone["customHue"];
+    out["saturation"] = zone["customSaturation"];
+    return;
+  }
+}
+
 void handleControlPost() {
   sendCors();
   if (!provisioningControlAdmitted(runtimePlaybackReady())) {
@@ -2156,6 +2172,7 @@ void handleControlPost() {
   out["blackout"] = runtimeIsBlackedOut();
   out["hue"] = runtimeGetCustomHue();
   out["saturation"] = runtimeGetCustomSaturation();
+  appendTargetedZoneControlAcknowledgement(out, zoneTarget);
   out["colorOrder"] = runtimeGetLedColorOrder();
   out["breathe"] = runtimeGetCustomBreatheZ(zoneTarget);
   out["breatheLowerPct"] = runtimeGetBreatheLowerPctZ(zoneTarget);

@@ -406,11 +406,32 @@ test.describe('a blank card whose firmware applies its first config', () => {
     await expect(page.getByTestId('discovery-install')).toHaveCount(0);
     await expect(page.getByTestId('discovery-open-patterns')).toHaveCount(0);
     await expect(page.getByTestId('discovery-continue-layout')).toBeVisible();
+    await expect(page.getByTestId('discovery-done')).toContainText('Move this strip onto your artwork');
     await expect(page.getByTestId('card-setup-close')).toBeEnabled();
     await expect(page.getByTestId('card-setup-disconnect')).toBeEnabled();
 
+    await expect.poll(() => page.evaluate(() => {
+      const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
+      const strip = saved.layout?.strips?.[0];
+      const output = saved.layout?.wiring?.outputs?.[0];
+      const run = saved.layout?.wiring?.runs?.[0];
+      return {
+        starterPending: saved.layout?.starterPending,
+        strip: strip ? [strip.id, strip.pixelCount] : null,
+        output: output ? [output.pin, output.runIds] : null,
+        run: run ? [run.source?.stripId, run.source?.to] : null,
+      };
+    })).toEqual({
+      starterPending: false,
+      strip: ['strip-16', 47],
+      output: [16, ['run-strip-16']],
+      run: ['strip-16', 46],
+    });
+
     await page.getByTestId('discovery-continue-layout').click();
     await expect(page).toHaveURL(/#screen=layout&mode=draw$/);
+    await expect(page.locator('.la-strip-row')).toHaveCount(1);
+    await expect(page.locator('.la-strip-row')).toHaveClass(/sel/);
 
     const recorded = await page.evaluate(() => JSON.parse(localStorage.getItem('lw_port_roles_v1') || 'null'));
     expect(recorded).toContainEqual({ pin: 16, role: 'strip', pixelCount: 47, controlKind: '' });

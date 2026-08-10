@@ -208,6 +208,9 @@ export function StripDiscoveryPanel({
   const {
     setPortRoles: setProjectPortRoles,
     setStandaloneController: setProjectStandaloneController,
+    starterPending,
+    replaceLayoutGeometry,
+    selectStrips,
     serializeProject,
     projectRevision,
     projectLifecycle,
@@ -225,6 +228,7 @@ export function StripDiscoveryPanel({
   const [failureDetail, setFailureDetail] = useState('');
   const [benchNotice, setBenchNotice] = useState('');
   const [recorded, setRecorded] = useState(false);
+  const [layoutPrepared, setLayoutPrepared] = useState(false);
   // Whether the real project (not the provisional bench config) is on the card
   // and verified (T3: discovery install). Pending until the owner presses
   // "Put this setup on the card".
@@ -716,6 +720,21 @@ export function StripDiscoveryPanel({
       } : {}),
       outputs: parts.outputs,
     }));
+    // Discovery already knows the exact physical outputs. On an untouched
+    // starter project, turn those measurements into a ready-to-place drawing
+    // instead of asking the owner to enter the same counts and GPIOs again.
+    // starterPending is the safety boundary: an existing artwork is never
+    // replaced, even when discovery is repeated for its card.
+    if (starterPending && parts.strips.length) {
+      replaceLayoutGeometry(parts.strips, {
+        patchBoard: parts.patchBoard,
+        wiring: parts.wiring,
+      });
+      selectStrips(parts.strips.map(strip => strip.id));
+      setLayoutPrepared(true);
+    } else {
+      setLayoutPrepared(false);
+    }
     setRecorded(true);
     dispatch({ type: 'recorded' });
     void streamRef.current?.stop();
@@ -1166,6 +1185,13 @@ export function StripDiscoveryPanel({
                 Studio saved the output, color order, light count, and final-light boundary in this project.
                 The card is still running a temporary low-power setup; place the lights in the artwork before the final test and card install.
               </p>
+              {layoutPrepared && (
+                <p className="strip-discovery-note" data-testid="discovery-layout-guidance">
+                  {Number(committedPartsRef.current?.strips?.length) > 1
+                    ? 'Move these strips onto your artwork. Their counts and GPIO wiring are already filled in.'
+                    : 'Move this strip onto your artwork. Its count and GPIO wiring are already filled in.'}
+                </p>
+              )}
               <button
                 type="button"
                 className="btn primary"
