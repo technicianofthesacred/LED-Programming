@@ -95,6 +95,11 @@ bool runtimeCommandReady();
 // playback is safe while the radio is unsettled.
 bool runtimePlaybackReady();
 bool runtimeOutputReady();
+bool runtimeProjectOutputReady();
+bool runtimeOutputDriverReady();
+uint16_t runtimeAllocatedPixelCapacity();
+const char* runtimeOutputInitializationCode();
+const char* runtimeOutputInitializationMessage();
 bool runtimeConfigValid();
 bool runtimeKnownGoodProject();
 // True when this boot fell back to safe defaults because a project that is

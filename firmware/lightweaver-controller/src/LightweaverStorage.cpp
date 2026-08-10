@@ -2447,6 +2447,13 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   // "busy reassociating" apart from "cannot drive the lights".
   doc["playbackReady"] = runtimePlaybackReady();
   doc["outputReady"] = runtimeOutputReady();
+  doc["projectOutputReady"] = runtimeProjectOutputReady();
+  doc["outputDriverReady"] = runtimeOutputDriverReady();
+  doc["pixelCapacity"]["schemaLimit"] = LW_MAX_PIXELS;
+  doc["pixelCapacity"]["allocatedBoot"] = runtimeAllocatedPixelCapacity();
+  doc["outputInitialization"]["ok"] = runtimeOutputDriverReady();
+  doc["outputInitialization"]["code"] = runtimeOutputInitializationCode();
+  doc["outputInitialization"]["message"] = runtimeOutputInitializationMessage();
   doc["configValid"] = config.configValid;
   doc["knownGoodProject"] = config.knownGoodProject;
   // True while the card is running Find-my-strips scaffolding rather than a

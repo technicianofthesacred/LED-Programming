@@ -330,7 +330,18 @@ export async function waitForCardWiringReconnect(options = {}) {
         ...options,
         timeoutMs: Math.min(Number(options.requestTimeoutMs) || 1200, Math.max(1, deadline - nowImpl())),
       });
-      if (status?.activationId === activationId && status.state !== 'staged') return status;
+      if (status?.activationId === activationId) {
+        if (status.state === 'testing') return status;
+        if (status.state === 'rolled-back') {
+          throw wiringError('activation-rolled-back', 'The card rolled back the test wiring before activation completed.', { response: status.raw });
+        }
+        if (status.state === 'known-good') {
+          throw wiringError('activation-not-testing', 'The card returned to its known-good wiring instead of testing the candidate wiring.', { response: status.raw });
+        }
+        if (status.state !== 'staged') {
+          throw wiringError('activation-wrong-state', `The card reconnected in ${status.state || 'an unknown state'} instead of testing the candidate wiring.`, { response: status.raw });
+        }
+      }
       if (status?.activationId && status.activationId !== activationId) {
         lastError = wiringError(
           'activation-mismatch',
@@ -339,6 +350,8 @@ export async function waitForCardWiringReconnect(options = {}) {
         );
       }
     } catch (error) {
+      if (error instanceof CardWiringSafetyError &&
+          ['activation-rolled-back', 'activation-not-testing', 'activation-wrong-state'].includes(error.reason)) throw error;
       lastError = error;
     }
     if (nowImpl() >= deadline) break;

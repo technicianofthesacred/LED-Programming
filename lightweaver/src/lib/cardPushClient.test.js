@@ -338,6 +338,33 @@ test('explicit direct config transport is honored on an HTTPS Studio page', { co
   }
 });
 
+test('a verified discovery bench can be promoted into its measured Studio project', { concurrency: false }, async () => {
+  const originalWindow = globalThis.window;
+  globalThis.window = browserWithIdentity('http:');
+  const calls = [];
+  try {
+    const result = await pushConfigToCard(runtimePackage, {
+      host: '192.168.18.70', transport: 'direct', autoDiscover: false, reboot: false,
+      fetchImpl: async (url, init = {}) => {
+        calls.push({ url: String(url), method: init.method || 'GET' });
+        if (String(url).endsWith('/api/firmware-info')) return response({
+          app: 'Lightweaver', cardId: 'lw-aabbccddeeff', firmwareVersion: '1.2.3', buildId: 'build-123',
+          provisionalSetup: true,
+          piece: { id: 'lightweaver-bench-discovery-v1', name: 'Lightweaver Bench Discovery' },
+          outputs: [{ pin: 16, pixels: 8 }],
+        });
+        if (String(url).endsWith('/api/config')) return response({ ok: true, saved: true });
+        throw new Error(`unexpected request ${url}`);
+      },
+    });
+    assert.equal(result.saved, true);
+    assert.equal(calls.filter(call => call.url.endsWith('/api/config') && call.method === 'POST').length, 1);
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+});
+
 test('direct factory commissioning requires fresh exact blank authority and writes config once', { concurrency: false }, async () => {
   const originalWindow = globalThis.window;
   const originalFetch = globalThis.fetch;

@@ -94,12 +94,12 @@ function benchConfigNeedsReboot(response) {
   return response?.requiresReboot === true;
 }
 
-async function postBenchConfigDirect({ host, config, guardImpl, fetchImpl }) {
+async function postBenchConfigDirect({ host, config, guardImpl, fetchImpl, preflightComplete = false }) {
   // http/file Studio (local dev, or Studio served from the card): the same
   // identity guard every other direct mutation runs, then the ordinary
   // /api/config POST. No bridge authority is involved because there is no
   // bridge.
-  await guardImpl(host, { fetchImpl });
+  if (!preflightComplete) await guardImpl(host, { fetchImpl });
   const doFetch = fetchImpl || globalThis.fetch;
   const response = await doFetch(`${cardHostToUrl(host)}/api/config`, {
     method: 'POST',
@@ -120,9 +120,17 @@ async function postBenchConfigOverBridge({ host, config, flowId, initial, author
   if (initial) {
     const granted = authorizeImpl({ host, flowId });
     if (!granted.ok) {
-      throw new BenchInstallError('authority', granted.reason === 'card-not-blank'
-        ? 'This card already has a project on it, so discovery does not need the one-time setup write. Reconnect the card and try again.'
-        : 'Studio could not verify this card over the local card page. Open the card page once, then try again.');
+      const messages = {
+        'card-not-blank': 'This card already has a project on it, so discovery does not need the one-time setup write. Reconnect the card and try again.',
+        'bridge-missing': 'The local card page is not connected. Open it once, then try again.',
+        'identity-missing': 'Studio could not verify the exact card identity on the local card page. Reconnect the card page, then try again.',
+        'stale-host': 'The local card page belongs to a different card address. Reopen the current card page, then try again.',
+        'handoff-active': 'A Wi-Fi setup is already in progress. Finish or cancel it before starting strip discovery.',
+        'authority-spent': 'The one-time blank-card setup write was already used in this card-page session. Reopen the card page and inspect the card before retrying.',
+        'invalid-flow': 'This strip-discovery session is no longer valid. Return to the port list and start again.',
+      };
+      throw new BenchInstallError('authority', messages[granted.reason]
+        || `Studio could not authorize this blank-card setup (${granted.reason || 'unknown reason'}). Reopen the local card page, then try again.`);
     }
   }
   return bridgeRequestImpl('config', config, {
@@ -244,21 +252,46 @@ export async function installBenchConfig({
   // owners to reflash a working card twice.
   cardShowsProject,
   direct = canPushDirectlyToCard(),
+  transport: requestedTransport,
   fetchImpl,
-  guardImpl = guardDirectCardMutation,
+  guardImpl,
   authorizeImpl = authorizeBlankCardDiscoveryConfig,
   bridgeRequestImpl = sendCardBridgeRequest,
   rebootImpl = requestCardReboot,
   waitForPlaybackImpl = waitForBenchPlayback,
   ...waitOptions
 } = {}) {
+  const hasExplicitDirectPreflight = typeof guardImpl === 'function';
+  guardImpl ||= guardDirectCardMutation;
   if (!config) {
     throw new BenchInstallError('no-config', 'None of the ports you picked can be set up as an LED output, so there is nothing to install.');
   }
-  const transport = direct ? 'direct' : 'bridge';
-  const response = direct
-    ? await postBenchConfigDirect({ host, config, guardImpl, fetchImpl })
-    : await postBenchConfigOverBridge({ host, config, flowId, initial, authorizeImpl, bridgeRequestImpl });
+  let transport = requestedTransport === 'direct' || requestedTransport === 'bridge'
+    ? requestedTransport
+    : (direct ? 'direct' : 'bridge');
+  let response;
+  // The card-link transport can be stale (for example it may still say
+  // "bridge" after Chrome has granted local-network access). A blank card's
+  // one-shot write must therefore always begin with a read-only exact-card
+  // direct preflight. Only a failed preflight may select the bridge.
+  if (initial) {
+    // Keep preflight outside the mutation. Once POST starts, every failure is
+    // delivery-ambiguous and must escape without a bridge retry.
+    try {
+      await guardImpl(host, { fetchImpl });
+    } catch {
+      transport = 'bridge';
+      response = await postBenchConfigOverBridge({ host, config, flowId, initial, authorizeImpl, bridgeRequestImpl });
+    }
+    if (!response) {
+      transport = 'direct';
+      response = await postBenchConfigDirect({ host, config, guardImpl, fetchImpl, preflightComplete: true });
+    }
+  } else if (transport === 'direct') {
+    response = await postBenchConfigDirect({ host, config, guardImpl, fetchImpl });
+  } else {
+    response = await postBenchConfigOverBridge({ host, config, flowId, initial, authorizeImpl, bridgeRequestImpl });
+  }
 
   if (benchConfigWasStaged(response)) {
     if (cardShowsProject === true) {
