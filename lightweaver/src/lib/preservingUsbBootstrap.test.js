@@ -110,6 +110,36 @@ test('bootstrap writes app0 without erase, verifies exact SHA-256 readback, rese
   ]);
 });
 
+test('bootstrap announces readback verification as soon as the full USB write is acknowledged', async () => {
+  const phases = [];
+  let releaseReadback;
+  let markReadbackStarted;
+  const readbackStarted = new Promise(resolve => { markReadbackStarted = resolve; });
+  const readback = new Promise(resolve => { releaseReadback = resolve; });
+  const loader = {
+    async readFlash(address) {
+      if (address === 0x8000) return TABLE;
+      markReadbackStarted();
+      return readback;
+    },
+  };
+  const update = runPreservingUsbBootstrap({
+    loader, transport: {}, evidence: evidence(), release: release(),
+    writeApplication: async (_loader, _bytes, _address, _eraseAll, onProgress) => onProgress?.(1),
+    resetIntoApp: async () => {},
+    disconnect: async () => {},
+    onProgress: event => phases.push(event.phase),
+  });
+
+  await readbackStarted;
+  try {
+    assert.deepEqual(phases, ['updating', 'verifying']);
+  } finally {
+    releaseReadback(IMAGE);
+    await update;
+  }
+});
+
 test('interrupted bootstrap always releases USB and says preserved data remains repeatable', async () => {
   const events = [];
   await assert.rejects(() => runPreservingUsbBootstrap({

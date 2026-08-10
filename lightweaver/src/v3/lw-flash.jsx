@@ -489,7 +489,9 @@ import {
     const rolledBackRef = useRef(false);
     const target = release?.manifest;
     const actionLabel = mode === 'wifi' ? 'Update over Wi-Fi' : 'Update once over USB';
-    const phaseLabel = UPDATE_PHASE_LABELS[phase] || '';
+    const phaseLabel = mode === 'usb' && phase === 'verifying'
+      ? 'Upload complete · checking the saved update'
+      : UPDATE_PHASE_LABELS[phase] || '';
     const installedLabel = card.recovering
       ? 'Checking restarted card…'
       : `${card.firmwareVersion || 'unknown'} · ${formatFirmwareBuildLabel(card)}`;
