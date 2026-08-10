@@ -538,6 +538,7 @@ export function WireModePanel({ state, connected, cardHost }) {
               <CardPushControl
                 connected={connected}
                 board={cardTransportBoard}
+                compiledWiring={compiledWiring}
                 strips={strips}
                 projectId={projectId}
                 projectName={projectName}

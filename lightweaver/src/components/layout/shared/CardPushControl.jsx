@@ -61,6 +61,7 @@ async function readReadyDeploymentEvidence(host) {
 export function CardPushControl({
   connected,
   board,
+  compiledWiring,
   strips,
   projectId,
   projectName,
@@ -98,6 +99,7 @@ export function CardPushControl({
           projectRevision: projectLifecycle.editedRevision,
           strips,
           patchBoard: board,
+          compiledWiring,
           standaloneController,
         };
         prepareCardStoragePayload(prepareCardDeployment(project).runtimePackage);

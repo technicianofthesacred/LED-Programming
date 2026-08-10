@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { fingerprintCommissioningProject } from './cardCommissioningFlow.js';
 import { prepareCardDeployment } from './cardDeployment.js';
 import { createDefaultProject } from './projectModel.js';
+import { projectSkeletonFromCardStatus } from './discoveryCommit.js';
+import { normalizePatchBoard } from './patchBoard.js';
+import { compileWiring } from './wiringCompiler.js';
 import {
   cardProjectFingerprint,
   cardProjectId,
@@ -60,6 +63,60 @@ test('matches the exact current project using the fingerprint written by the rea
   assert.equal(result.status, 'match');
   assert.equal(result.source, 'current');
   assert.equal(result.project, current);
+});
+
+test('matches a project reconstructed from installed card geometry using the install surface canonical board', () => {
+  const base = createDefaultProject();
+  const skeleton = projectSkeletonFromCardStatus({
+    knownGoodProject: true,
+    outputReady: true,
+    projectId: 'installed-piece',
+    led: { colorOrder: 'RGB', type: 'WS2815', maxMilliamps: 1500 },
+    outputs: [{
+      id: 'out1', pin: 18, pixels: 41,
+      segments: [{ id: 'run-strip-1', count: 41, direction: 'forward' }],
+    }],
+  });
+  const current = {
+    ...base,
+    id: 'installed-piece',
+    layout: {
+      ...base.layout,
+      strips: skeleton.strips,
+      patchBoard: skeleton.patchBoard,
+      wiring: skeleton.wiring,
+    },
+    devices: {
+      ...base.devices,
+      standaloneController: {
+        ...base.devices.standaloneController,
+        outputs: skeleton.outputs,
+        led: { ...base.devices.standaloneController.led, ...skeleton.led, colorOrder: skeleton.colorOrder },
+      },
+    },
+  };
+  const board = normalizePatchBoard(current.layout.patchBoard, current.layout.strips);
+  const compiledWiring = compileWiring({ wiring: current.layout.wiring, strips: current.layout.strips });
+  const deployed = prepareCardDeployment({
+    projectId: current.id,
+    projectName: current.name,
+    projectRevision: 0,
+    strips: current.layout.strips,
+    patchBoard: board,
+    compiledWiring,
+    standaloneController: current.devices.standaloneController,
+  });
+
+  assert.equal(cardProjectFingerprint(current), deployed.config.projectFingerprint);
+  assert.equal(resolveCardProject({
+    evidence: {
+      cardId: 'lw-aabbccddeeff',
+      projectId: current.id,
+      projectRevision: 0,
+      projectFingerprint: deployed.config.projectFingerprint,
+    },
+    currentProject: current,
+  }).source, 'current');
 });
 
 test('prefers an exact currently open project over every stored source', () => {

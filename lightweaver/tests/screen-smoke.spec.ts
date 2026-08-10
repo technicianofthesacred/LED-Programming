@@ -294,10 +294,15 @@ test('opening after a blocked popup renders the retry action directly', async ({
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('card-link-status')).toBeVisible();
   await dispatchCardLinkEvents(page, [{ type: 'bridge-lost', reason: 'popup-blocked', host: 'lightweaver.local' }]);
+  await page.evaluate(async () => {
+    const { getSharedCardLink } = await import('/src/lib/cardLink.js');
+    getSharedCardLink().dispatch({ type: 'operation-failed' });
+  });
   await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Needs attention/);
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
-  await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
+  await expect(page).toHaveURL(/#screen=card&section=setup/);
+  await expect(page.getByRole('heading', { name: 'Set up your Lightweaver' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Connect Lightweaver' })).toHaveCount(0);
 });
 
 test('stale pairing offers to take over the card connection', async ({ page }) => {
@@ -338,9 +343,10 @@ test('opening with old firmware renders the card update directly', async ({ page
   await dispatchCardLinkEvents(page, [{ type: 'bridge-lost', reason: 'firmware-too-old', host: 'lightweaver.local' }]);
   await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Needs attention/);
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
-  await expect(page.getByRole('heading', { name: 'Update this Lightweaver card' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Update card' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
+  await expect(page).toHaveURL(/#screen=card&section=setup/);
+  await expect(page.getByRole('heading', { name: 'Set up your Lightweaver' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Install or update firmware' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Connect Lightweaver' })).toHaveCount(0);
 });
 
 test('opening while the card is recovering renders the busy recovery action directly', async ({ page }) => {
@@ -531,10 +537,9 @@ test('a paired card reporting a factory status surfaces "Needs project", not gre
   await expect(status).not.toHaveAccessibleName(/· Connected/);
 
   await status.click();
-  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
-  await expect(dialog).toContainText('Blank — load a project');
-  await dialog.getByRole('button', { name: 'Start layout' }).click();
-  await expect(page).toHaveURL(/#screen=layout/);
+  await expect(page).toHaveURL(/#screen=card&section=setup/);
+  await expect(page.getByRole('heading', { name: 'Set up your Lightweaver' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Connect Lightweaver' })).toHaveCount(0);
 });
 
 test('card status control distinguishes checking, blank, and command-ready states', async ({ page }) => {

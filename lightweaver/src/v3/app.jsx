@@ -842,12 +842,17 @@ function Shell({ offlineUpdateController = null }) {
   const openConnectionCenter = useCallback(() => setConnectionCenterOpen(true), []);
   const closeConnectionCenter = useCallback(() => setConnectionCenterOpen(false), []);
   const openCardControl = useCallback(() => {
-    if (cardConnectionStatus(cardLink) === 'Connected') setCardControlOpen(true);
-    else {
+    const status = cardConnectionStatus(cardLink);
+    if (status === 'Connected') setCardControlOpen(true);
+    else if (status === 'Needs attention' || status === 'Needs project') {
+      setCardControlOpen(false);
+      setConnectionCenterOpen(false);
+      openCardSection('setup');
+    } else {
       setCardControlOpen(false);
       setConnectionCenterOpen(true);
     }
-  }, [cardLink]);
+  }, [cardLink, openCardSection]);
   const closeCardControl = useCallback(() => setCardControlOpen(false), []);
   const reconnectFromCardControl = useCallback(() => {
     setCardControlOpen(false);
