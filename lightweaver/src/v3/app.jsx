@@ -24,7 +24,6 @@ import {
 } from '../lib/bridgeLaunch.js';
 import { classifyFooterFirmwareStatus } from '../lib/footerFirmwareStatus.js';
 import {
-  bootstrapCardLink,
   connectCardLink,
   getCardLinkState,
   isCardLinkConnected,
@@ -69,6 +68,7 @@ import { clearScreenFailure, rememberScreenFailure } from '../lib/screenRecovery
 import { createStudioFreshnessMonitor } from '../lib/studioFreshness.js';
 import { STUDIO_HARDWARE_OPERATION_EVENT } from '../lib/studioHardwareOperation.js';
 import { getRunningStudioRelease } from '../lib/studioRelease.js';
+import { bootstrapStudioCardConnection } from '../lib/studioCardBootstrap.js';
 
 const PatternScreen = lazy(() => import('./lw-pattern.jsx').then(module => ({ default: module.PatternScreen })));
 const PatternLabScreen = lazy(() => import('../pattern-lab/PatternLabScreen.jsx'));
@@ -803,12 +803,12 @@ function Shell({ offlineUpdateController = null }) {
   }, [cloudLibrary.syncState.status, workspaceEvent?.source]);
 
   // real card status — every screen and the footer read the cardLink state
-  // machine, which merges direct HTTP polling (http/file pages) with the
-  // card-page postMessage bridge keepalive (the only live path on HTTPS).
+  // machine. A reload first restores an existing bridge, then safely retries
+  // the exact persisted card over local HTTP when no bridge is available.
   const directCardControl = typeof window === 'undefined' ? false : canPushDirectlyToCard(window.location.protocol);
   const cardStatus = useCardStatus({ enabled: directCardControl });
   const cardLink = useSyncExternalStore(subscribeCardLink, getCardLinkState, getCardLinkState);
-  useEffect(() => { void bootstrapCardLink(); }, []);
+  useEffect(() => { void bootstrapStudioCardConnection(); }, []);
   useEffect(() => {
     if (!directCardControl) return;
     reportDirectCardStatus({
