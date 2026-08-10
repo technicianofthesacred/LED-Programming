@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createHash } from 'node:crypto';
+import { createHash, verify } from 'node:crypto';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,11 +7,14 @@ import { fileURLToPath } from 'node:url';
 import {
   EXPECTED_FIRMWARE_TARGET,
   FIRMWARE_INSTALLER_VERSION,
+  LIGHTWEAVER_PARTITION_LAYOUT,
   assertFirmwareManifestCardStudio,
   assertFirmwareManifestBuildNumber,
+  canonicalFirmwareUpdateTicketBytes,
   canonicalFirmwareManifestBytes,
+  validateFirmwareUpdateTicket,
   validateFirmwareManifest,
-} from '../lightweaver/src/lib/firmwareRelease.js';
+} from '../packages/installer-core/src/firmware-release.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -44,6 +47,11 @@ const cardStudioReleasePath = resolve(required(
   resolve(repoRoot, 'lightweaver/card-dist/card-studio-release.json'),
 ));
 const publicRoot = resolve(required(args, 'public-root', resolve(repoRoot, 'lightweaver/public')));
+const publicKeyPath = resolve(required(
+  args,
+  'public-key',
+  resolve(repoRoot, 'release/keys/lightweaver-release-public.pem'),
+));
 const firmwareVersion = required(args, 'firmware-version', process.env.LW_FIRMWARE_VERSION);
 const buildId = required(args, 'build-id', process.env.LW_BUILD_ID ?? process.env.GITHUB_SHA);
 // The comparable release identity. It must be the SAME value that was compiled
@@ -64,8 +72,44 @@ const minimumInstallerVersion = required(
 const sourceRevision = required(args, 'source-revision', process.env.GITHUB_SHA ?? buildId);
 if (sourceRevision !== buildId) throw new Error('source revision must exactly match build ID');
 
-const imageBytes = await readFile(imagePath);
-const cardStudioReleaseBytes = await readFile(cardStudioReleasePath);
+const releaseDirectory = resolve(publicRoot, 'firmware/releases', firmwareVersion, buildId);
+const updateApplicationPath = resolve(required(
+  args,
+  'update-application',
+  resolve(releaseDirectory, 'lightweaver-controller-esp32s3-app.bin'),
+));
+const updateTicketPath = resolve(required(
+  args,
+  'update-ticket',
+  resolve(releaseDirectory, 'firmware-update-ticket.json'),
+));
+const updateSignaturePath = resolve(required(
+  args,
+  'update-signature',
+  resolve(releaseDirectory, 'firmware-update-ticket.sig'),
+));
+
+const [imageBytes, cardStudioReleaseBytes] = await Promise.all([
+  readFile(imagePath),
+  readFile(cardStudioReleasePath),
+]);
+const explicitUpdate = ['update-application', 'update-ticket', 'update-signature']
+  .some(name => args.has(name));
+let updateApplicationBytes;
+let updateTicketBytes;
+let updateSignatureBytes;
+let publicKeyBytes;
+try {
+  [updateApplicationBytes, updateTicketBytes, updateSignatureBytes, publicKeyBytes] = await Promise.all([
+    readFile(updateApplicationPath),
+    readFile(updateTicketPath),
+    readFile(updateSignaturePath),
+    readFile(publicKeyPath),
+  ]);
+} catch (error) {
+  if (explicitUpdate || error?.code !== 'ENOENT') throw error;
+}
+const hasUpdate = updateApplicationBytes !== undefined;
 const cardStudioRelease = JSON.parse(cardStudioReleaseBytes.toString('utf8'));
 if (cardStudioRelease.buildId !== buildId || cardStudioRelease.buildNumber !== buildNumber) {
   throw new Error('Card Studio release identity must exactly match the compiled firmware identity');
@@ -73,13 +117,58 @@ if (cardStudioRelease.buildId !== buildId || cardStudioRelease.buildNumber !== b
 if (!Array.isArray(cardStudioRelease.assets) || cardStudioRelease.assets.length === 0) {
   throw new Error('Card Studio release must contain compressed asset identities');
 }
+let updateTicket;
+if (hasUpdate) {
+  try {
+    updateTicket = JSON.parse(updateTicketBytes.toString('utf8'));
+  } catch {
+    throw new Error('Firmware update ticket is not valid JSON');
+  }
+  validateFirmwareUpdateTicket(updateTicket);
+  if (!updateTicketBytes.equals(Buffer.from(canonicalFirmwareUpdateTicketBytes(updateTicket)))) {
+    throw new Error('Firmware update ticket bytes are not canonical');
+  }
+  if (updateTicket.firmwareVersion !== firmwareVersion
+    || updateTicket.buildId !== buildId
+    || updateTicket.buildNumber !== buildNumber
+    || updateTicket.target !== EXPECTED_FIRMWARE_TARGET) {
+    throw new Error('Firmware update ticket identity must exactly match the factory release identity');
+  }
+  if (updateTicket.compatibility.firmwareApiMin !== cardStudioRelease.firmwareApi.min
+    || updateTicket.compatibility.firmwareApiMax !== cardStudioRelease.firmwareApi.max
+    || updateTicket.compatibility.projectSchemaMin !== cardStudioRelease.projectSchema.min
+    || updateTicket.compatibility.projectSchemaMax !== cardStudioRelease.projectSchema.max) {
+    throw new Error('Firmware update ticket compatibility must exactly match the card Studio release');
+  }
+  if (updateTicket.image.size !== updateApplicationBytes.byteLength
+    || updateTicket.image.sha256 !== createHash('sha256').update(updateApplicationBytes).digest('hex')) {
+    throw new Error('Firmware update ticket image descriptor does not match the application bytes');
+  }
+  const applicationEnd = LIGHTWEAVER_PARTITION_LAYOUT.app0Offset + updateApplicationBytes.byteLength;
+  if (imageBytes.byteLength < applicationEnd
+    || !imageBytes.subarray(LIGHTWEAVER_PARTITION_LAYOUT.app0Offset, applicationEnd).equals(updateApplicationBytes)) {
+    throw new Error('Factory image app0 payload does not match the signed application update');
+  }
+  const signatureText = updateSignatureBytes.toString('utf8');
+  if (!/^[A-Za-z0-9_-]{86}\n$/.test(signatureText)) {
+    throw new Error('Firmware update ticket signature must be 64-byte P-256 base64url plus newline');
+  }
+  const ticketSignature = Buffer.from(signatureText.trim(), 'base64url');
+  if (!verify(
+    'sha256',
+    updateTicketBytes,
+    { key: publicKeyBytes, dsaEncoding: 'ieee-p1363' },
+    ticketSignature,
+  )) {
+    throw new Error('Firmware update ticket signature verification failed');
+  }
+}
 const imageSha256 = createHash('sha256').update(imageBytes).digest('hex');
 const imageName = 'lightweaver-controller-esp32s3-factory.bin';
-const releaseDirectory = resolve(publicRoot, 'firmware/releases', firmwareVersion, buildId);
 const immutableImagePath = resolve(releaseDirectory, imageName);
 const imageUrl = `/firmware/releases/${firmwareVersion}/${buildId}/${imageName}`;
 const manifest = {
-  schemaVersion: 1,
+  schemaVersion: hasUpdate ? 2 : 1,
   target: EXPECTED_FIRMWARE_TARGET,
   firmwareVersion,
   buildId,
@@ -90,6 +179,19 @@ const manifest = {
     sha256: imageSha256,
     cardStudioReadback: { offset: 0, size: imageBytes.byteLength, sha256: imageSha256 },
   },
+  ...(hasUpdate ? { update: {
+    image: updateTicket.image,
+    ticket: {
+      url: `/firmware/releases/${firmwareVersion}/${buildId}/firmware-update-ticket.json`,
+      size: updateTicketBytes.byteLength,
+      sha256: createHash('sha256').update(updateTicketBytes).digest('hex'),
+    },
+    signature: {
+      url: `/firmware/releases/${firmwareVersion}/${buildId}/firmware-update-ticket.sig`,
+      size: updateSignatureBytes.byteLength,
+      sha256: createHash('sha256').update(updateSignatureBytes).digest('hex'),
+    },
+  } } : {}),
   cardStudio: {
     buildId: cardStudioRelease.buildId,
     buildNumber: cardStudioRelease.buildNumber,
@@ -145,7 +247,7 @@ await writeFile(manifestPath, Buffer.concat([
   Buffer.from('\n'),
 ]));
 await writeFile(provenancePath, `${JSON.stringify({
-  schemaVersion: 1,
+  schemaVersion: hasUpdate ? 2 : 1,
   sourceRevision,
   workflowRun: process.env.GITHUB_RUN_ID ?? null,
   target: EXPECTED_FIRMWARE_TARGET,
@@ -153,6 +255,12 @@ await writeFile(provenancePath, `${JSON.stringify({
   buildId,
   buildNumber,
   image: manifest.image,
+  ...(hasUpdate ? { update: {
+    image: manifest.update.image,
+    ticket: manifest.update.ticket,
+    signature: manifest.update.signature,
+    partition: updateTicket.partition,
+  } } : {}),
   cardStudio: manifest.cardStudio,
   toolchain: manifest.provenance,
 }, null, 2)}\n`);

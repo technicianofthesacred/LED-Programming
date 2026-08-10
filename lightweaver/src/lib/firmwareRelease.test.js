@@ -535,7 +535,7 @@ test('firmware workflow builds, signs, commits, and uploads one release set', as
   );
   assert.equal(
     packageJson.scripts['ci:firmware-sensitive'],
-    'node ../firmware/lightweaver-controller/tests/firmware-version-policy.mjs && npm run test:production-jobs && npm run test:core:source && npm run test:windowless:tooling',
+    'node ../firmware/lightweaver-controller/tests/firmware-version-policy.mjs && npm run test:production-jobs && npm run test:core:source && npm run test:windowless:tooling && npm run test:firmware-update:unit && npm run test:firmware-update:firmware',
   );
   assert.equal(
     packageJson.scripts['test:core:source'],

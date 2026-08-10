@@ -76,6 +76,36 @@ test('canonical firmware VERSION changes select firmware and production contract
   });
 });
 
+test('preserving update release tooling and schemas are firmware-sensitive', () => {
+  for (const path of [
+    'scripts/build-firmware-update-ticket.mjs',
+    'scripts/firmware-update-release.test.mjs',
+    'release/firmware-update-ticket.schema.json',
+  ]) {
+    const lanes = classifyChangedPaths([path]);
+    assert.equal(lanes.firmware, true, `${path} must enter protected firmware signing`);
+    assert.equal(lanes.production, true, `${path} must run production contracts`);
+  }
+});
+
+test('preserving update and boot firmware contracts select the bounded firmware lane', () => {
+  for (const path of [
+    'firmware/lightweaver-controller/tests/firmware-update-ticket.mjs',
+    'firmware/lightweaver-controller/tests/firmware-update-state.mjs',
+    'firmware/lightweaver-controller/tests/firmware-update-web-contract.mjs',
+    'firmware/lightweaver-controller/tests/firmware-boot-health.mjs',
+  ]) {
+    assert.deepEqual(classifyChangedPaths([path]), {
+      source: false,
+      browser: false,
+      cloud: false,
+      production: true,
+      firmware: true,
+      artifact: false,
+    });
+  }
+});
+
 test('signed generated releases select only the artifact lane', () => {
   assert.deepEqual(classifyChangedPaths([
     'lightweaver/public/firmware/release-manifest.json',

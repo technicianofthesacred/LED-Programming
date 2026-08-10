@@ -1,10 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  cardSupportsNetworkFirmwareUpdate,
   describeFirmwareUpdate,
   firmwareLabel,
+  normalizeFirmwareUpdateCard,
   resolveInstalledFirmware,
 } from './firmwareUpdatePlan.js';
+
+test('network update capability is read from the exact firmware status envelope', () => {
+  assert.equal(cardSupportsNetworkFirmwareUpdate({
+    capabilities: { firmwareUpdate: { version: 1, network: true } },
+  }), true);
+  assert.equal(cardSupportsNetworkFirmwareUpdate({ firmwareUpdate: { version: 1, network: true } }), false);
+  assert.equal(cardSupportsNetworkFirmwareUpdate({ capabilities: { firmwareUpdate: { version: 1, network: false } } }), false);
+});
+
+test('a directly inspected USB card uses its canonical cardId as the update panel id', () => {
+  assert.deepEqual(normalizeFirmwareUpdateCard({
+    cardId: 'lw-b0fe81f61b44', source: 'usb-flash', firmwareVersion: '1.1.1',
+  }), {
+    id: 'lw-b0fe81f61b44', cardId: 'lw-b0fe81f61b44', source: 'usb-flash', firmwareVersion: '1.1.1',
+  });
+  assert.equal(normalizeFirmwareUpdateCard({ id: 'lw-existing', cardId: 'lw-other' }).id, 'lw-existing');
+});
 
 const card = (buildNumber, buildId = 'a'.repeat(40), firmwareVersion = '1.0.0') => ({
   buildNumber, buildId, firmwareVersion,
@@ -73,6 +92,20 @@ test('an unnumbered card is replaced, not "updated" — the direction is unprova
   assert.match(plan.headline, /replaces it with/);
 });
 
+test('direct USB stable semver proves an update when build numbers are unavailable', () => {
+  const plan = describeFirmwareUpdate({
+    installed: {
+      firmwareVersion: '1.1.1', buildId: '1'.repeat(40), source: 'usb-flash',
+    },
+    available: {
+      firmwareVersion: '1.1.3', buildNumber: 1223, buildId: '3'.repeat(40),
+    },
+  });
+  assert.equal(plan.state, 'update');
+  assert.match(plan.headline, /updates it to 1\.1\.3 · Build 1223/);
+  assert.doesNotMatch(plan.headline, /replaces/);
+});
+
 test('every outcome keeps the erase warning', () => {
   const cases = [
     { installed: card(1084, 'b'.repeat(40)), available: card(1092) },
@@ -98,6 +131,17 @@ test('a live link is trusted over a remembered one', () => {
     resolveInstalledFirmware({ linkedCard: linked, rememberedCard: remembered, hardware: { cardId: 'lw-1' } }),
     linked,
   );
+});
+
+test('firmware read directly from this USB card outranks browser and LAN history', () => {
+  const hardware = {
+    cardId: 'lw-1', firmwareVersion: '1.1.3', buildId: 'c'.repeat(40), source: 'usb-flash',
+  };
+  assert.equal(resolveInstalledFirmware({
+    hardware,
+    linkedCard: { id: 'lw-1', firmwareVersion: '1.1.1', buildNumber: 1198, buildId: 'a'.repeat(40) },
+    rememberedCard: { id: 'lw-1', firmwareVersion: '1.0.0', buildNumber: 1000, buildId: 'b'.repeat(40) },
+  }), hardware);
 });
 
 // Reporting the last card's firmware for the one on the desk is worse than

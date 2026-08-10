@@ -1267,6 +1267,7 @@ function Shell({ offlineUpdateController = null }) {
         onClearBridgeResult={clearBridgeResult}
         recoverLights={typeof window.__LW_RECOVER_LIGHTS_FOR_TEST__ === 'function' ? window.__LW_RECOVER_LIGHTS_FOR_TEST__ : undefined}
         firmwareStatus={firmwareStatus}
+        firmwareRelease={firmwareReleaseIdentity.state === 'verified' ? firmwareReleaseIdentity.manifest : null}
         onOpenFirmwareUpdate={() => {
           closeConnectionCenter();
           openCardSection('install');

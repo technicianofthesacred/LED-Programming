@@ -5,6 +5,7 @@
 #include <mbedtls/sha256.h>
 
 #include "LightweaverOwnerCapability.h"
+#include "LightweaverFirmwareUpdate.h"
 #include "LightweaverRuntimeApi.h"
 #include "LightweaverWeb.h"
 #include "LightweaverCardStudio.h"
@@ -69,17 +70,18 @@ void LightweaverProjectRepository::cleanupAbandonedStaging() {
   nextChunkIndex_ = 0;
 }
 
-bool LightweaverProjectRepository::begin(String& message) {
+bool LightweaverProjectRepository::begin(String& message, bool readOnlyProbation) {
   available_ = false;
   if (!LittleFS.begin(false)) {
     message = "project filesystem unavailable";
     return false;
   }
-  if (!LittleFS.exists(LW_PROJECT_DIR) && !LittleFS.mkdir(LW_PROJECT_DIR)) {
+  if (!LittleFS.exists(LW_PROJECT_DIR) &&
+      !readOnlyProbation && !LittleFS.mkdir(LW_PROJECT_DIR)) {
     message = "project directory unavailable";
     return false;
   }
-  cleanupAbandonedStaging();
+  if (!readOnlyProbation) cleanupAbandonedStaging();
   if (!loadHead(message)) return false;
   available_ = true;
   message = "project repository ready";
@@ -433,6 +435,9 @@ void handleProjectRead() {
 
 void handleProjectMutation(const String& uri) {
   sendProjectCors();
+  if (lightweaverFirmwareUpdateActive()) {
+    sendProjectError(409, "firmware update owns the card mutation lease"); return;
+  }
   if (!lightweaverCardStudioMutationsEnabled()) {
     sendProjectError(503, lightweaverCardStudioValidationError()); return;
   }

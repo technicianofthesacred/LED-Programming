@@ -12,6 +12,22 @@ const scriptsDirectory = dirname(fileURLToPath(import.meta.url));
 const projectDirectory = resolve(scriptsDirectory, '..');
 const repositoryRoot = resolve(projectDirectory, '..');
 export const DEFAULT_CARD_STUDIO_MAXIMUM_BYTES = 2_500_000;
+export const CARD_STUDIO_FIRMWARE_API = Object.freeze({ min: 2, max: 2 });
+
+export function resolveCardStudioReleaseIdentity(identity, env = process.env) {
+  return {
+    buildId: identity.sourceRevision,
+    buildNumber: identity.buildNumber,
+    projectSchema: {
+      min: Number(env.LW_PROJECT_SCHEMA_MIN || 3),
+      max: Number(env.LW_PROJECT_SCHEMA_MAX || 3),
+    },
+    // This is the card's compiled LW_CAPABILITIES_VERSION contract, not a
+    // caller-selectable compatibility hint. Changing it requires changing the
+    // firmware capability version and its release contracts together.
+    firmwareApi: { ...CARD_STUDIO_FIRMWARE_API },
+  };
+}
 
 const MIME_TYPES = Object.freeze({
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -178,18 +194,7 @@ async function main() {
     rawDir,
     outputDir: resolve(projectDirectory, 'card-dist'),
     headerPath: resolve(repositoryRoot, 'firmware', 'lightweaver-controller', 'src', 'LightweaverCardStudioBundle.h'),
-    identity: {
-      buildId: identity.sourceRevision,
-      buildNumber: identity.buildNumber,
-      projectSchema: {
-        min: Number(process.env.LW_PROJECT_SCHEMA_MIN || 3),
-        max: Number(process.env.LW_PROJECT_SCHEMA_MAX || 3),
-      },
-      firmwareApi: {
-        min: Number(process.env.LW_FIRMWARE_API_MIN || 1),
-        max: Number(process.env.LW_FIRMWARE_API_MAX || 1),
-      },
-    },
+    identity: resolveCardStudioReleaseIdentity(identity),
     maximumBytes: Number(process.env.LW_CARD_STUDIO_MAX_BYTES || DEFAULT_CARD_STUDIO_MAXIMUM_BYTES),
   });
   process.stdout.write(`${JSON.stringify(result.release)}\n`);

@@ -122,6 +122,7 @@ jobs:
         run: |
           npm run ci:browser-smoke
           npm run test:windowless:browser
+          npm run test:firmware-update:browser
 
   cloud:
     needs: classify
@@ -199,6 +200,7 @@ jobs:
           npm ci --prefix lightweaver
       - run: npm run ci:firmware-sensitive
         working-directory: lightweaver
+      - run: node --test scripts/firmware-update-release.test.mjs
       - name: Resolve the release build number
         id: buildnumber
         run: echo "value=$(git rev-list --count "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"

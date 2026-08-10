@@ -246,6 +246,46 @@ test('connected current firmware does not show an update prompt', async ({ page 
   await expect(dialog.getByRole('button', { name: 'Done', exact: true })).toBeVisible();
 });
 
+test('identified incompatible firmware shows the found card, installed versus current release, and the update route', async ({ page }) => {
+  await page.route('http://lightweaver.local/api/status', route => route.fulfill({ json: {
+    app: 'Lightweaver', provisioningContractVersion: 0,
+    cardId: 'lw-b0fe81f61b44', firmwareVersion: '1.1.1',
+    buildNumber: 1198, buildId: 'a'.repeat(40),
+    bootId: 'boot-old-contract',
+    runtimePhase: 'ready', knownGoodProject: true, commandReady: true, outputReady: true,
+  } }));
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  await dialog.getByRole('button', { name: 'Connect this card' }).click();
+
+  const identity = dialog.getByTestId('direct-card-identity');
+  await expect(identity).toContainText('lw-b0fe81f61b44');
+  await expect(identity).toContainText('v1.1.1 · Build 1198');
+  await expect(identity).toContainText(`v${signedRelease.firmwareVersion} · Build ${signedRelease.buildNumber}`);
+  await expect(dialog.getByRole('alert')).toContainText('cannot provide the exact safety evidence');
+  await dialog.getByRole('button', { name: 'Install current firmware' }).click();
+  await expect(page).toHaveURL(/#screen=card&section=install$/);
+});
+
+test('an unreachable card stays a network or permission failure and does not guess its firmware', async ({ page }) => {
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  await dialog.getByRole('button', { name: 'Connect this card' }).click();
+
+  const alert = dialog.getByRole('alert');
+  await expect(alert).toContainText('Studio received no reply from the card');
+  await expect(alert).toContainText('cannot yet tell');
+  await expect(alert).toContainText('Wi-Fi or local-network permission');
+  await expect(alert).toContainText('older firmware');
+  await expect(alert).not.toContainText(/firmware is (?:old|out of date)|firmware needs an update/i);
+  await expect(dialog.getByRole('button', { name: 'Install current firmware' })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Open local Studio' })).toBeVisible();
+  const checkFirmware = dialog.getByRole('button', { name: 'Check or update firmware' });
+  await expect(checkFirmware).toBeVisible();
+  await checkFirmware.click();
+  await expect(page).toHaveURL(/#screen=card&section=install$/);
+});
+
 test('ready-browser-usb opens the fixed local install screen', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: {} });

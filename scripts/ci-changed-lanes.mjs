@@ -62,7 +62,7 @@ export function classifyChangedPaths(paths, { conservative = false, generatedRel
     if (isAnyPath(path, [
       'firmware/lightweaver-controller/src',
       'firmware/lightweaver-controller/scripts',
-    ]) || [
+    ]) || /^firmware\/lightweaver-controller\/tests\/firmware-(?:update|boot-health)(?:\.|-)/.test(path) || [
       'firmware/lightweaver-controller/VERSION',
       'firmware/lightweaver-controller/platformio.ini',
     ].includes(path)) {
@@ -78,11 +78,15 @@ export function classifyChangedPaths(paths, { conservative = false, generatedRel
       'release/keys',
     ]) || [
       'release/firmware-manifest.schema.json',
+      'release/firmware-update-ticket.schema.json',
       'release/production-job.schema.json',
       'scripts/build-firmware-manifest.mjs',
+      'scripts/build-firmware-update-ticket.mjs',
       'scripts/build-production-job.mjs',
+      'scripts/firmware-update-release.test.mjs',
       'scripts/rebuild-production-jobs.mjs',
       'scripts/sign-release-artifacts.mjs',
+      'scripts/verify-production-artifacts.mjs',
     ].includes(path)) {
       lanes.firmware = true;
       lanes.production = true;

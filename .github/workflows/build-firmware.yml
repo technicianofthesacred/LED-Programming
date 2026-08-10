@@ -91,7 +91,9 @@ jobs:
           pip install platformio==6.1.19
           npm ci --prefix lightweaver
       - name: Verify signer-sensitive contracts
-        run: npm run ci:firmware-sensitive --prefix lightweaver
+        run: |
+          npm run ci:firmware-sensitive --prefix lightweaver
+          node --test scripts/firmware-update-release.test.mjs
       - name: Require a progressing firmware version
         env:
           FW_VERSION: ${{ needs.classify.outputs.firmware_version }}
@@ -103,6 +105,8 @@ jobs:
           LW_BUILD_ID: ${{ github.event.workflow_run.head_sha }}
           LW_BUILD_NUMBER: ${{ needs.classify.outputs.build_number }}
           LW_FIRMWARE_VERSION: ${{ needs.classify.outputs.firmware_version }}
+          LW_FIRMWARE_API_MIN: 2
+          LW_FIRMWARE_API_MAX: 2
         run: |
           npm run build:card --prefix lightweaver
           pio run -d firmware/lightweaver-controller -e esp32-s3-n16r8
@@ -151,6 +155,8 @@ jobs:
         env:
           LIGHTWEAVER_SOURCE_REVISION: ${{ env.SOURCE_REVISION }}
           LIGHTWEAVER_BUILD_NUMBER: ${{ env.BUILD_NUMBER }}
+          LW_FIRMWARE_API_MIN: 2
+          LW_FIRMWARE_API_MAX: 2
         run: npm run build:card --prefix lightweaver
       - name: Rebuild tested factory binary with the generated card-local Studio
         env:
@@ -165,6 +171,25 @@ jobs:
           CONFIG_VERSION="$(sed -n 's/.*LW_CONFIG_SCHEMA_VERSION=\([0-9][0-9]*\).*/\1/p' firmware/lightweaver-controller/platformio.ini)"
           test -n "$FW_VERSION"
           test -n "$CONFIG_VERSION"
+          FIRMWARE_API_MIN="$(node -p 'require("./lightweaver/card-dist/card-studio-release.json").firmwareApi.min')"
+          FIRMWARE_API_MAX="$(node -p 'require("./lightweaver/card-dist/card-studio-release.json").firmwareApi.max')"
+          PROJECT_SCHEMA_MIN="$(node -p 'require("./lightweaver/card-dist/card-studio-release.json").projectSchema.min')"
+          PROJECT_SCHEMA_MAX="$(node -p 'require("./lightweaver/card-dist/card-studio-release.json").projectSchema.max')"
+          RELEASE_DIRECTORY="lightweaver/public/firmware/releases/$FW_VERSION/$SOURCE_REVISION"
+          node scripts/build-firmware-update-ticket.mjs \
+            --firmware-version "$FW_VERSION" \
+            --build-id "$SOURCE_REVISION" \
+            --build-number "$BUILD_NUMBER" \
+            --firmware-api-min "$FIRMWARE_API_MIN" \
+            --firmware-api-max "$FIRMWARE_API_MAX" \
+            --project-schema-min "$PROJECT_SCHEMA_MIN" \
+            --project-schema-max "$PROJECT_SCHEMA_MAX" \
+            --minimum-updater-version 1 \
+            --minimum-bootstrap-build 1198
+          node scripts/sign-release-artifacts.mjs \
+            --kind ticket \
+            --ticket "$RELEASE_DIRECTORY/firmware-update-ticket.json" \
+            --ticket-signature "$RELEASE_DIRECTORY/firmware-update-ticket.sig"
           node scripts/build-firmware-manifest.mjs \
             --firmware-version "$FW_VERSION" \
             --build-id "$SOURCE_REVISION" \
@@ -172,8 +197,11 @@ jobs:
             --source-revision "$SOURCE_REVISION" \
             --config-min "$CONFIG_VERSION" \
             --config-max "$CONFIG_VERSION" \
+            --update-application "$RELEASE_DIRECTORY/lightweaver-controller-esp32s3-app.bin" \
+            --update-ticket "$RELEASE_DIRECTORY/firmware-update-ticket.json" \
+            --update-signature "$RELEASE_DIRECTORY/firmware-update-ticket.sig" \
             --minimum-installer 1.4.0
-          node scripts/sign-release-artifacts.mjs
+          node scripts/sign-release-artifacts.mjs --kind manifest
       - name: Rebuild production jobs against the signed release
         run: |
           node scripts/rebuild-production-jobs.mjs
@@ -200,9 +228,12 @@ jobs:
             'firmware/lightweaver-controller/platformio.ini'
             'firmware/lightweaver-controller/scripts/**'
             'scripts/build-firmware-manifest.mjs'
+            'scripts/build-firmware-update-ticket.mjs'
             'scripts/build-production-job.mjs'
             'scripts/rebuild-production-jobs.mjs'
             'scripts/sign-release-artifacts.mjs'
+            'scripts/firmware-update-release.test.mjs'
+            'scripts/verify-production-artifacts.mjs'
             'lightweaver/src/**'
             'lightweaver/card.html'
             'lightweaver/vite.config.js'
@@ -211,6 +242,7 @@ jobs:
             'lightweaver/public/fonts/**'
             'packages/installer-core/**'
             'release/firmware-manifest.schema.json'
+            'release/firmware-update-ticket.schema.json'
             'release/production-job.schema.json'
             'release/job-generators/**'
             'release/job-sources/**'
@@ -258,6 +290,9 @@ jobs:
             lightweaver/public/firmware/release-manifest.json
             lightweaver/public/firmware/release-manifest.sig
             lightweaver/public/firmware/release-provenance.json
+            lightweaver/public/firmware/releases/*/*/lightweaver-controller-esp32s3-app.bin
+            lightweaver/public/firmware/releases/*/*/firmware-update-ticket.json
+            lightweaver/public/firmware/releases/*/*/firmware-update-ticket.sig
             lightweaver/public/firmware/releases/
             firmware/lightweaver-controller/src/LightweaverCardStudioBundle.h
           if-no-files-found: error

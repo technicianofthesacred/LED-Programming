@@ -1,5 +1,6 @@
 #include "LightweaverStorage.h"
 #include "LightweaverRuntimeApi.h"
+#include "LightweaverFirmwareUpdate.h"
 #include "LightweaverOutputColorParser.h"
 #include "LightweaverRecipe.h"
 #include "LightweaverLookModePolicy.h"
@@ -1399,6 +1400,25 @@ ProvisioningStorageState migrateLegacyKnownGood(String& message) {
   return ProvisioningStorageState::Present;
 }
 
+ProvisioningStorageState inspectLegacyKnownGoodReadOnly(
+    bool& useLegacyKey, String& message) {
+  useLegacyKey = false;
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, true)) {
+    message = "nvs read-only probation open failed";
+    return ProvisioningStorageState::Error;
+  }
+  String value;
+  ProvisioningStorageState state = readNvsString(
+      prefs, NVS_KNOWN_GOOD_CONFIG_KEY, value, message);
+  if (state == ProvisioningStorageState::Absent) {
+    state = readNvsString(prefs, NVS_LEGACY_CONFIG_KEY, value, message);
+    useLegacyKey = state == ProvisioningStorageState::Present;
+  }
+  prefs.end();
+  return state;
+}
+
 const char* candidateStateLabel(WiringCandidateState state) {
   switch (state) {
     case WIRING_CANDIDATE_STAGED: return "staged";
@@ -1547,7 +1567,8 @@ void ensureDefaultZone(RuntimeConfig& config) {
   config.syncZones = true;
 }
 
-RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
+RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config,
+                                    RuntimeStorageAccessMode accessMode) {
   struct ActiveRecipeSyncGuard {
     RuntimeConfig& config;
     ~ActiveRecipeSyncGuard() { synchronizeNativeRecipes(config); }
@@ -1558,9 +1579,14 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
   // an accepted sequence profile must keep its assets available for playback.
   bool sdMounted = mountRuntimeSd(message);
 
-  // Upgrade in place: copy the legacy config before consulting candidate
-  // state. The legacy key is intentionally retained as a downgrade fallback.
-  ProvisioningStorageState migrationState = migrateLegacyKnownGood(message);
+  const bool readOnlyProbation =
+      accessMode == RuntimeStorageAccessMode::ReadOnlyProbation;
+  bool useLegacyKnownGoodKey = false;
+  // A pending application reads storage without repair or migration. Only a
+  // valid application may make the existing boot-time canonical copy.
+  ProvisioningStorageState migrationState = readOnlyProbation
+      ? inspectLegacyKnownGoodReadOnly(useLegacyKnownGoodKey, message)
+      : migrateLegacyKnownGood(message);
   if (provisioningStorageReadFailed(migrationState)) {
     applyDefaultRuntimeConfig(config);
     ensureDefaultZone(config);
@@ -1614,7 +1640,7 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
     prefs.end();
   }
 
-  if (state == WIRING_CANDIDATE_NONE) {
+  if (state == WIRING_CANDIDATE_NONE && !readOnlyProbation) {
     Preferences prefs;
     if (!prefs.begin(NVS_NAMESPACE, false)) {
       applyDefaultRuntimeConfig(config);
@@ -1638,6 +1664,17 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
       result.message = "candidate metadata corrupt: committed cleanup failed; safe defaults loaded";
       return result;
     }
+  }
+
+  if (readOnlyProbation && state != WIRING_CANDIDATE_NONE) {
+    applyDefaultRuntimeConfig(config);
+    ensureDefaultZone(config);
+    result.ok = true;
+    result.safeMode = true;
+    result.source = SOURCE_DEFAULTS;
+    setRuntimeLoadTruth(config, result, false, false, true);
+    result.message = "pending wiring transaction blocks firmware probation";
+    return result;
   }
 
   if (state == WIRING_CANDIDATE_BOOTING) {
@@ -1712,8 +1749,15 @@ RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config) {
   }
 
   bool knownGoodValid = false;
-  ProvisioningStorageState knownGoodState = loadNvsConfigKeyStrict(
-      NVS_KNOWN_GOOD_CONFIG_KEY, config, knownGoodValid, message, true);
+  ProvisioningStorageState knownGoodState;
+  if (!readOnlyProbation || !useLegacyKnownGoodKey) {
+    knownGoodState = loadNvsConfigKeyStrict(
+        NVS_KNOWN_GOOD_CONFIG_KEY, config, knownGoodValid, message,
+        !readOnlyProbation);
+  } else {
+    knownGoodState = loadNvsConfigKeyStrict(
+        NVS_LEGACY_CONFIG_KEY, config, knownGoodValid, message, false);
+  }
   if (provisioningStorageReadFailed(knownGoodState)) {
     applyDefaultRuntimeConfig(config);
     ensureDefaultZone(config);
@@ -2416,6 +2460,12 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
   doc["capabilitiesVersion"] = LW_CAPABILITIES_VERSION;
   doc["capabilities"]["kaleidoscopeReflectionPoints"] =
       LW_KALEIDOSCOPE_REFLECTION_POINTS_VERSION;
+  doc["capabilities"]["firmwareUpdate"]["version"] = LW_FIRMWARE_UPDATE_VERSION;
+  doc["capabilities"]["firmwareUpdate"]["network"] = true;
+  JsonDocument updateStatus;
+  if (!deserializeJson(updateStatus, runtimeFirmwareUpdateStatusJson())) {
+    doc["firmwareUpdate"] = updateStatus.as<JsonObject>();
+  }
   doc["ok"] = errorCode == ERROR_NONE;
   doc["errorCode"] = uint8_t(errorCode);
   doc["mode"] = config.mode;

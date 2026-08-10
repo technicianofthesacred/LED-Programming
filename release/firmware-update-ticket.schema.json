@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://led.mandalacodes.com/firmware/firmware-update-ticket.schema.json",
+  "title": "Lightweaver preserving firmware update ticket",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "firmwareVersion",
+    "buildId",
+    "buildNumber",
+    "target",
+    "image",
+    "partition",
+    "compatibility",
+    "preservation"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "firmwareVersion": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+    "buildId": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "buildNumber": { "type": "integer", "minimum": 1 },
+    "target": { "const": "esp32-s3-n16r8" },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "size", "sha256"],
+      "properties": {
+        "url": { "type": "string", "pattern": "^/firmware/releases/[^/]+/[a-f0-9]{40}/lightweaver-controller-esp32s3-app\\.bin$" },
+        "size": { "type": "integer", "minimum": 1, "maximum": 6553600 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "partition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layout", "tableSha256", "app0Offset", "app1Offset", "slotSize"],
+      "properties": {
+        "layout": { "const": "default_16MB.csv" },
+        "tableSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "app0Offset": { "const": 65536 },
+        "app1Offset": { "const": 6619136 },
+        "slotSize": { "const": 6553600 }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "firmwareApiMin",
+        "firmwareApiMax",
+        "projectSchemaMin",
+        "projectSchemaMax",
+        "minimumUpdaterVersion",
+        "minimumBootstrapBuild"
+      ],
+      "properties": {
+        "firmwareApiMin": { "type": "integer", "minimum": 1 },
+        "firmwareApiMax": { "type": "integer", "minimum": 1 },
+        "projectSchemaMin": { "type": "integer", "minimum": 1 },
+        "projectSchemaMax": { "type": "integer", "minimum": 1 },
+        "minimumUpdaterVersion": { "type": "integer", "minimum": 1 },
+        "minimumBootstrapBuild": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "preservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dataPartitionsIncluded"],
+      "properties": {
+        "dataPartitionsIncluded": { "const": false }
+      }
+    }
+  }
+}

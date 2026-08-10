@@ -6,6 +6,7 @@
 #include <esp_system.h>
 
 #include "LightweaverOwnerCapability.h"
+#include "LightweaverFirmwareUpdate.h"
 #include "LightweaverProjectRepository.h"
 #include "LightweaverRuntimeApi.h"
 #include "LightweaverWeb.h"
@@ -98,6 +99,9 @@ bool validateLease(JsonVariantConst source, String& error) {
 
 void handleLease() {
   sendStreamCors(); JsonDocument doc; if (!parseStreamBody(doc)) return;
+  if (lightweaverFirmwareUpdateActive()) {
+    streamError(409, "firmware update owns the card mutation lease"); return;
+  }
   if (!lightweaverCardStudioMutationsEnabled()) {
     streamError(503, lightweaverCardStudioValidationError()); return;
   }

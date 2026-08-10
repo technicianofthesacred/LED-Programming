@@ -5,6 +5,11 @@ import { relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { resolveStudioReleaseIdentity } from './scripts/studio-release-identity.mjs';
 import { serializeStudioRelease } from './src/lib/studioRelease.js';
+import {
+  FIRMWARE_RELEASE_BUILD_GRAPH_PATH,
+  createFirmwareReleaseBuildGraphFromRoot,
+  serializeFirmwareReleaseBuildGraph,
+} from '../scripts/verify-production-artifacts.mjs';
 
 // NOTE: do NOT import server/index.js at the top level. It pulls in native
 // modules (serialport, bonjour-service, …) that break `vite build` in CI and
@@ -23,6 +28,20 @@ function studioReleasePlugin() {
         type: 'asset',
         fileName: 'studio-release.json',
         source: serializeStudioRelease(studioRelease),
+      });
+    },
+  };
+}
+
+function firmwareReleaseBuildGraphPlugin() {
+  return {
+    name: 'lightweaver-firmware-release-build-graph',
+    async generateBundle() {
+      const graph = await createFirmwareReleaseBuildGraphFromRoot(resolve(__dirname, 'public'));
+      this.emitFile({
+        type: 'asset',
+        fileName: FIRMWARE_RELEASE_BUILD_GRAPH_PATH,
+        source: serializeFirmwareReleaseBuildGraph(graph),
       });
     },
   };
@@ -76,7 +95,7 @@ export default defineConfig(({ mode }) => {
     publicDir: cardTarget ? false : 'public',
     plugins: cardTarget
       ? [react(), cardLocalAssetsPlugin()]
-      : [react(), lightweaverApiPlugin(), studioReleasePlugin()],
+      : [react(), lightweaverApiPlugin(), studioReleasePlugin(), firmwareReleaseBuildGraphPlugin()],
     define: {
       __LIGHTWEAVER_STUDIO_RELEASE__: JSON.stringify(studioRelease),
       __LIGHTWEAVER_BUILD_TARGET__: JSON.stringify(cardTarget ? 'card-local' : 'public-https'),

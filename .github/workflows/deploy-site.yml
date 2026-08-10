@@ -308,7 +308,12 @@ jobs:
           MAX_LIBRARY_BODY_BYTES: ${{ vars.MAX_LIBRARY_BODY_BYTES }}
           MAX_LIBRARY_BACKUP_BYTES: ${{ vars.MAX_LIBRARY_BACKUP_BYTES }}
           MAX_LIBRARY_BACKUP_REVISIONS: ${{ vars.MAX_LIBRARY_BACKUP_REVISIONS }}
-        run: npm run deploy:pages
+        run: |
+          # The Vite release-graph plugin validates every signed firmware byte
+          # before staging/upload. Re-read the staged graph after the deploy
+          # wrapper returns so the live proof below has an exact local anchor.
+          npm run deploy:pages
+          node ../scripts/verify-production-artifacts.mjs --root .pages/lightweaver
 
       - name: Verify the live Production Setup release
         id: freshness
@@ -323,7 +328,8 @@ jobs:
           # rollout took just over 60 seconds, so keep the proof strict but
           # allow a bounded two-minute convergence window.
           for attempt in $(seq 1 12); do
-            if npm run check:prod; then
+            if node ../scripts/verify-production-artifacts.mjs --origin https://led.mandalacodes.com --expected-root .pages/lightweaver \
+              && npm run check:prod; then
               exit 0
             fi
             if [ "$attempt" = 12 ]; then

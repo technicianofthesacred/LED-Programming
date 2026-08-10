@@ -21,12 +21,40 @@ function buildNumberOf(source) {
   return Number.isSafeInteger(value) && value > 0 ? value : 0;
 }
 
+// `/api/status` publishes updater support inside the canonical capabilities
+// envelope. A similarly named top-level object is not authority to expose a
+// network mutation path.
+export function cardSupportsNetworkFirmwareUpdate(readiness = {}) {
+  const capability = readiness?.capabilities?.firmwareUpdate;
+  return capability?.version === 1 && capability.network === true;
+}
+
+export function normalizeFirmwareUpdateCard(card = null) {
+  if (!card || typeof card !== 'object' || Array.isArray(card)) return null;
+  const id = String(card.id || card.cardId || '').trim().toLowerCase();
+  return { ...card, id, cardId: id };
+}
+
 function buildIdOf(source) {
   return String(source?.buildId || '').trim().toLowerCase();
 }
 
 function versionOf(source) {
   return String(source?.firmwareVersion || '').trim();
+}
+
+function stableSemverOf(source) {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(versionOf(source));
+  if (!match) return null;
+  const parts = match.slice(1).map(Number);
+  return parts.every(Number.isSafeInteger) ? parts : null;
+}
+
+function compareStableSemver(left, right) {
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) return left[index] < right[index] ? -1 : 1;
+  }
+  return 0;
 }
 
 /**
@@ -99,6 +127,23 @@ export function describeFirmwareUpdate({ installed = null, available = null } = 
       caution,
     };
   }
+  const installedSemver = installed?.source === 'usb-flash' ? stableSemverOf(installed) : null;
+  const availableSemver = stableSemverOf(available);
+  const semverDirection = installedSemver && availableSemver
+    ? compareStableSemver(installedSemver, availableSemver)
+    : 0;
+  if (semverDirection !== 0) {
+    const newer = semverDirection < 0;
+    return {
+      state: newer ? 'update' : 'downgrade',
+      installedLabel,
+      availableLabel,
+      headline: newer
+        ? `This card is on ${installedLabel}. This updates it to ${target}.`
+        : `This card is on ${installedLabel}, which is NEWER than the ${availableLabel} available here. Installing takes it backwards.`,
+      caution,
+    };
+  }
   // One side has no number to compare — say what changes without claiming a
   // direction that cannot be proven.
   return {
@@ -126,6 +171,7 @@ export function resolveInstalledFirmware({ linkedCard = null, rememberedCard = n
     const id = String(candidate.id || candidate.cardId || '').trim().toLowerCase();
     return !id || id === plugged;
   };
+  if (hardware?.source === 'usb-flash' && matches(hardware)) return hardware;
   if (matches(linkedCard)) return linkedCard;
   if (matches(rememberedCard)) return rememberedCard;
   return null;

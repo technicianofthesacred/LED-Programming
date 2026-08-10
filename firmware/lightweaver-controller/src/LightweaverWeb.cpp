@@ -13,6 +13,7 @@
 #include "LightweaverWifiChannelPolicy.h"
 #include "LightweaverOwnerCapability.h"
 #include "LightweaverHttpFrameStream.h"
+#include "LightweaverFirmwareUpdate.h"
 #include "LightweaverProjectRepository.h"
 #include "LightweaverCardStudio.h"
 #include <WiFi.h>
@@ -3006,6 +3007,7 @@ void setupLightweaverWeb(RuntimeConfig& config, ErrorCode& errorCode, uint16_t& 
 
   registerLightweaverOwnerCapability(server);
   registerLightweaverHttpFrameStream(server);
+  registerLightweaverFirmwareUpdate(server);
   registerLightweaverProjectRepository(server);
   registerLightweaverCardStudio(server);
 
@@ -3053,6 +3055,7 @@ void handleLightweaverWeb() {
   if (dnsServerActive) dnsServer.processNextRequest();
   maintainConnectivity();
   handleLightweaverHttpFrameStream();
+  handleLightweaverFirmwareUpdate();
   const uint32_t nowMs = millis();
   if (WiFi.status() == WL_CONNECTED
       && (lastMdnsAnnounceMs == 0 || nowMs - lastMdnsAnnounceMs >= lightweaver::LW_MDNS_REANNOUNCE_MS)) {

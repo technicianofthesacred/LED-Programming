@@ -12,6 +12,8 @@
 #include "LightweaverWeb.h"
 #include "LightweaverRuntimeApi.h"
 #include "LightweaverFrameSource.h"
+#include "LightweaverFirmwareBootHealth.h"
+#include "LightweaverFirmwareUpdate.h"
 #include "LightweaverOutputPolicy.h"
 #include "LightweaverRestartPolicy.h"
 #include "LightweaverSequenceActivationPolicy.h"
@@ -338,6 +340,7 @@ bool addLedsForOrder(CRGB* start, uint16_t count) {
 
 void setup() {
   initializeBootIdentity();
+  const bool firmwareBootProbation = beginLightweaverFirmwareBootHealth();
   Serial.begin(115200);
   uint32_t serialWaitStart = millis();
   while (!Serial && millis() - serialWaitStart < 2000) {
@@ -352,7 +355,10 @@ void setup() {
     Serial.println("Lightweaver standalone controller booting");
   }
   SPI.begin(LW_SPI_SCK, LW_SPI_MISO, LW_SPI_MOSI, LW_SD_CS);
-  RuntimeLoadResult loadResult = loadRuntimeConfig(runtimeConfig);
+  RuntimeLoadResult loadResult = loadRuntimeConfig(
+      runtimeConfig, firmwareBootProbation
+          ? RuntimeStorageAccessMode::ReadOnlyProbation
+          : RuntimeStorageAccessMode::Normal);
   runtimeSafeMode = loadResult.safeMode;
   if (Serial) {
     Serial.print("Runtime source: ");
@@ -386,7 +392,9 @@ void setup() {
   safeDiscoveryBatchIndex = wiringSafety.discoveryBatchIndex;
   setupLightweaverControls(controls, controlState);
   String projectRepositoryMessage;
-  if (!lightweaverProjectRepository().begin(projectRepositoryMessage) && Serial) {
+  const bool projectRepositoryReady = lightweaverProjectRepository().begin(
+      projectRepositoryMessage, firmwareBootProbation);
+  if (!projectRepositoryReady && Serial) {
     Serial.print("Card project repository disabled: ");
     Serial.println(projectRepositoryMessage);
   }
@@ -478,7 +486,19 @@ void setup() {
 #else
   esp_task_wdt_init(LW_WDT_TIMEOUT_S, true);
 #endif
-  esp_task_wdt_add(NULL);
+  const bool watchdogReady = esp_task_wdt_add(NULL) == ESP_OK;
+
+  // A pending A/B image becomes valid only after every card-local subsystem is
+  // ready while storage is still in read-only probation mode. Network/router
+  // reachability is deliberately absent from this health decision.
+  if (firmwareBootProbation) {
+    confirmLightweaverFirmwareBootHealth(
+        loadResult.ok, projectRepositoryReady,
+        loadResult.configValid && loadResult.knownGoodProject && !loadResult.safeMode,
+        projectRepositoryReady, errorCode == ERROR_NONE,
+        true, webRuntimeServing, watchdogReady, runtimeOutputReady(), true,
+        lightweaverProjectRepository().currentHead().c_str());
+  }
 
   if (Serial) {
     Serial.print("Ready: ");
@@ -494,6 +514,7 @@ void loop() {
   esp_task_wdt_reset();  // pet the watchdog every iteration, before any early return
   bool recoveryHoldActive = int32_t(recoveryHoldUntilMs - now) > 0;
   handleLightweaverWeb();
+  handleLightweaverFirmwareBootHealth();
   // A web request can arm recovery inside handleLightweaverWeb(). Re-read the
   // deadline in this same loop tick so no stale stream/error/AP frame can
   // overwrite the recovery frame before the user sees it.
@@ -525,6 +546,12 @@ void loop() {
 
   if (factoryBeaconMode) {
     showFactoryBeaconFrame();
+    delay(10);
+    return;
+  }
+
+  if (lightweaverFirmwareUpdateOutputHeld()) {
+    clearPhysicalLeds();
     delay(10);
     return;
   }
@@ -2356,7 +2383,8 @@ String runtimeBootId() { return bootId; }
 // change. These block local playback as well as configuration.
 bool runtimeLocalTransitionPending() {
   if (restartTransitionPending || runtimeSafeMode || safeDiscoveryMode ||
-      wiringProbationActive || runtimeRecoveryAfterRestartPending()) {
+      wiringProbationActive || runtimeRecoveryAfterRestartPending() ||
+      lightweaverFirmwareUpdateActive()) {
     return true;
   }
   WiringSafetyStatus safety = getRuntimeWiringSafetyStatus();
@@ -2533,6 +2561,12 @@ String runtimeFirmwareInfo() {
   doc["capabilitiesVersion"] = LW_CAPABILITIES_VERSION;
   doc["capabilities"]["kaleidoscopeReflectionPoints"] =
       LW_KALEIDOSCOPE_REFLECTION_POINTS_VERSION;
+  doc["capabilities"]["firmwareUpdate"]["version"] = LW_FIRMWARE_UPDATE_VERSION;
+  doc["capabilities"]["firmwareUpdate"]["network"] = true;
+  JsonDocument updateStatus;
+  if (!deserializeJson(updateStatus, runtimeFirmwareUpdateStatusJson())) {
+    doc["firmwareUpdate"] = updateStatus.as<JsonObject>();
+  }
   doc["build"] = __DATE__ " " __TIME__;
   doc["pixels"] = totalPixels;
   doc["piece"]["id"] = runtimeConfig.pieceId;
@@ -2639,6 +2673,10 @@ String runtimeFirmwareInfo() {
   String out;
   serializeJson(doc, out);
   return out;
+}
+
+String runtimeFirmwareUpdateStatusJson() {
+  return lightweaverFirmwareUpdateStatusJson();
 }
 
 FactoryResetResult runtimeFactoryReset() {

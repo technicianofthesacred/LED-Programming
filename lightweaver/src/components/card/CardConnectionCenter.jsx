@@ -23,6 +23,7 @@ import {
   SECURE_INSTALLER_URL,
   detectPlatformCapabilities,
 } from '../../lib/platformCapabilities.js';
+import { getActiveUsbInspection, releaseActiveUsbInspection } from '../../lib/usbInspection.js';
 import { BridgeResumePanel } from './BridgeResumePanel.jsx';
 
 function platformCapabilities() {
@@ -62,6 +63,7 @@ export function CardConnectionCenter({
   onClearBridgeResult,
   recoverLights,
   firmwareStatus,
+  firmwareRelease,
   onOpenFirmwareUpdate,
   setupEvidence = {},
 }) {
@@ -77,6 +79,8 @@ export function CardConnectionCenter({
   const [pairingBusy, setPairingBusy] = useState(false);
   const [directAttempt, setDirectAttempt] = useState(null);
   const [directBusy, setDirectBusy] = useState(false);
+  const [usbInspection, setUsbInspection] = useState(null);
+  const [usbReleaseState, setUsbReleaseState] = useState('idle');
   const [capabilityBusy, setCapabilityBusy] = useState(false);
   const [capabilityReady, setCapabilityReady] = useState(false);
   const capabilities = useMemo(platformCapabilities, [open]);
@@ -111,6 +115,10 @@ export function CardConnectionCenter({
   });
   const showFirmwareUpdate = action.id === 'ready-local-card'
     && firmwareStatus?.state === 'update-available';
+  const incompatibleFirmware = directAttempt?.reason === 'firmware-incompatible'
+    ? directAttempt.observedCard : null;
+  const connectedIdentity = directAttempt?.connected ? (directAttempt.card || link.card) : null;
+  const directIdentity = incompatibleFirmware || connectedIdentity;
 
   useEffect(() => {
     if (!open) return undefined;
@@ -122,6 +130,8 @@ export function CardConnectionCenter({
     const activeAuthority = getActiveCardTransportAuthority();
     setDirectAttempt(activeAuthority);
     setDirectBusy(false);
+    setUsbInspection(getActiveUsbInspection());
+    setUsbReleaseState('idle');
     setCapabilityBusy(false);
     setCapabilityReady(Boolean(activeAuthority?.ownerCapability));
     const timer = window.setTimeout(() => panelRef.current?.focus(), 0);
@@ -188,8 +198,31 @@ export function CardConnectionCenter({
     goToStripDiscovery();
   };
 
+  const restartUsbCardForWifi = async () => {
+    if (usbReleaseState === 'restarting') return;
+    setFailure('');
+    setUsbReleaseState('restarting');
+    try {
+      const result = await releaseActiveUsbInspection();
+      if (!result.released) {
+        setUsbReleaseState('error');
+        return;
+      }
+      setUsbInspection(null);
+      setDirectAttempt(null);
+      setUsbReleaseState('restarted');
+    } catch {
+      setUsbReleaseState('error');
+    }
+  };
+
   const connect = async (rawHost = '', { bridge = false } = {}) => {
     setFailure('');
+    const activeUsbInspection = getActiveUsbInspection();
+    if (!bridge && activeUsbInspection) {
+      setUsbInspection(activeUsbInspection);
+      return null;
+    }
     const targetHost = normalizeCardHost(rawHost || readStoredCardHost());
     if (!isLocalCardHost(targetHost)) {
       setFailure('Enter a valid local Lightweaver hostname before connecting.');
@@ -214,6 +247,12 @@ export function CardConnectionCenter({
       }
       if (result.reason === 'wrong-card') {
         setFailure(`Wrong card: expected ${result.expectedCardId || 'the paired card'}, but found ${result.observedCardId || 'another Lightweaver'}. Writes remain blocked.`);
+      } else if (result.reason === 'firmware-incompatible' && result.observedCard?.id) {
+        const version = result.observedCard.firmwareVersion ? ` firmware v${result.observedCard.firmwareVersion}` : ' firmware';
+        const build = cardBuildLabel(result.observedCard);
+        setFailure(`Found card ${result.observedCard.id} running${version}${build ? ` · ${build}` : ''}, but it cannot provide the exact safety evidence this Studio requires. Update this card to continue.`);
+      } else if (result.reason === 'direct-unavailable') {
+        setFailure('Studio received no reply from the card. It cannot yet tell whether the cause is Wi-Fi or local-network permission, or older firmware. Nothing has been changed.');
       } else {
         setFailure('Studio could not reach the card directly. Check that this device is on the same Wi-Fi and that local-network access is allowed.');
       }
@@ -471,12 +510,34 @@ export function CardConnectionCenter({
         <button type="button" className="card-connection-close" onClick={closeAndRestore} aria-label="Close connection center">×</button>
       </header>
 
-      {(!['connected-direct', 'connected-bridge'].includes(link.state) || directAttempt?.connected) && (
+      {usbInspection && (
+        <div className="card-windowless-connect" data-testid="active-usb-inspection">
+          <h3>Card is in USB install mode</h3>
+          <p>
+            Card {usbInspection.cardId} is currently held for a USB firmware install.
+            {' '}Its Wi-Fi is temporarily off. This does not mean its firmware is out of date.
+          </p>
+          <div className="card-connection-actions">
+            <button type="button" className="btn primary" onClick={closeAndRestore}>Continue firmware update</button>
+            <button type="button" className="btn" onClick={restartUsbCardForWifi} disabled={usbReleaseState === 'restarting'}>
+              {usbReleaseState === 'restarting' ? 'Restarting card…' : 'Restart card for Wi-Fi connection'}
+            </button>
+          </div>
+          {usbReleaseState === 'error' && (
+            <p role="alert">Studio could not release USB safely. Close other serial tools, then try restarting this card again.</p>
+          )}
+        </div>
+      )}
+
+      {!usbInspection && (!['connected-direct', 'connected-bridge'].includes(link.state) || directAttempt?.connected) && (
         <div className="card-windowless-connect" data-testid="windowless-card-connect">
           <h3>{directAttempt?.connected ? 'Live control permission' : 'Connect this card'}</h3>
           <p>{directAttempt?.connected
             ? 'Touch a physical card control, then enable a short-lived permission for live previews and Stop on this exact card.'
             : 'Your browser may ask whether Lightweaver Studio can find devices on your local network. Choose Allow so Studio can verify this exact card.'}</p>
+          {usbReleaseState === 'restarted' && (
+            <p role="status">Card restarted. Its Wi-Fi may take a moment. Try again when the card rejoins the network.</p>
+          )}
           <div className="card-connection-actions">
             {directAttempt?.connected ? (
               <button type="button" className="btn primary" onClick={enableLiveControl} disabled={capabilityBusy || capabilityReady}>
@@ -487,7 +548,7 @@ export function CardConnectionCenter({
                 {directBusy ? 'Connecting…' : directAttempt ? 'Try again' : 'Connect this card'}
               </button>
             )}
-            {directAttempt?.connected === false && directAttempt.reason !== 'wrong-card' && (
+            {directAttempt?.connected === false && directAttempt.reason === 'direct-unavailable' && (
               <button
                 type="button"
                 className="btn"
@@ -496,14 +557,27 @@ export function CardConnectionCenter({
                 Open local Studio
               </button>
             )}
+            {directAttempt?.connected === false && directAttempt.reason === 'direct-unavailable' && (
+              <button type="button" className="btn primary" onClick={onOpenFirmwareUpdate || openInstall}>Check or update firmware</button>
+            )}
+            {incompatibleFirmware && (
+              <button type="button" className="btn primary" onClick={onOpenFirmwareUpdate || openInstall}>Install current firmware</button>
+            )}
           </div>
+          {directIdentity?.id && (
+            <dl className="card-acknowledged-facts" data-testid="direct-card-identity">
+              <dt>Card</dt><dd>{directIdentity.id}</dd>
+              <dt>Installed</dt><dd>{directIdentity.firmwareVersion ? `v${directIdentity.firmwareVersion}` : 'Version unknown'}{cardBuildLabel(directIdentity) ? ` · ${cardBuildLabel(directIdentity)}` : ''}</dd>
+              <dt>Current</dt><dd>{firmwareRelease?.firmwareVersion ? `v${firmwareRelease.firmwareVersion}` : 'Version unknown'}{cardBuildLabel(firmwareRelease) ? ` · ${cardBuildLabel(firmwareRelease)}` : ''}</dd>
+            </dl>
+          )}
           {directAttempt?.reason === 'wrong-card' && (
             <p role="alert">Expected {directAttempt.expectedCardId || 'the paired card'}; found {directAttempt.observedCardId || 'a different card'}. No card changes are available.</p>
           )}
         </div>
       )}
 
-      {bridgeResult ? (
+      {usbInspection ? null : bridgeResult ? (
         <BridgeResumePanel
           result={bridgeResult}
           link={link}
@@ -513,7 +587,7 @@ export function CardConnectionCenter({
           onComplete={() => onClearBridgeResult?.('complete')}
           recoverLights={recoverLights}
         />
-      ) : initialChoice ? (
+      ) : incompatibleFirmware ? null : initialChoice ? (
         <div className="card-condition-choices">
           <p>Look at the card and its LEDs, then choose what you see.</p>
           <button type="button" className="card-condition-choice" onClick={chooseWorkingCard}>

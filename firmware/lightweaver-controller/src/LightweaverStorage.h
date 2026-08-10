@@ -17,9 +17,16 @@ struct RuntimeLoadResult {
   String message;
 };
 
+enum class RuntimeStorageAccessMode : uint8_t {
+  Normal,
+  ReadOnlyProbation,
+};
+
 void applyDefaultRuntimeConfig(RuntimeConfig& config);
 void ensureDefaultZone(RuntimeConfig& config);
-RuntimeLoadResult loadRuntimeConfig(RuntimeConfig& config);
+RuntimeLoadResult loadRuntimeConfig(
+    RuntimeConfig& config,
+    RuntimeStorageAccessMode accessMode = RuntimeStorageAccessMode::Normal);
 bool saveRuntimeConfigJson(const String& json, RuntimeConfig& config, String& message);
 bool suppressSdProjectAutorunAfterFactoryReset(String& message);
 bool clearRuntimeProjectStorage(String& message);
