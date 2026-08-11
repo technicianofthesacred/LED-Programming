@@ -67,6 +67,35 @@ test('direct transport is selected only after an exact fresh status probe', asyn
   assert.ok(Object.isFrozen(authority));
 });
 
+test('concurrent consumers share one exact-card transport acquisition', async () => {
+  const status = readyStatus();
+  const link = linkFor(status);
+  let releaseStatus;
+  const statusGate = new Promise(resolve => { releaseStatus = resolve; });
+  let probes = 0;
+  const fetchImpl = async () => {
+    probes += 1;
+    await statusGate;
+    return response(status);
+  };
+  const options = {
+    host: '192.168.18.70',
+    expectedCardId: 'lw-card-a',
+    link,
+    fetchImpl,
+  };
+
+  const first = connectCardTransport(options);
+  const second = connectCardTransport(options);
+  await Promise.resolve();
+  releaseStatus();
+  const [left, right] = await Promise.all([first, second]);
+
+  assert.equal(left, right);
+  assert.equal(probes, 1);
+  assert.equal(left.revoked, false);
+});
+
 test('identified firmware that predates exact boot identity is an actionable incompatibility', async () => {
   const result = await connectCardTransport({
     host: '192.168.18.70', expectedCardId: 'lw-card-a',

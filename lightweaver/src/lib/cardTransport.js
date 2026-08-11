@@ -10,6 +10,7 @@ export const CARD_TRANSPORTS = Object.freeze({
 });
 
 let activeTransportAuthority = null;
+const transportAcquisitionFlights = new Map();
 
 export function getActiveCardTransportAuthority(host = '') {
   const authority = activeTransportAuthority;
@@ -229,7 +230,7 @@ export function createTransportAuthority({
   return Object.freeze(authority);
 }
 
-export async function connectCardTransport({
+async function connectCardTransportOnce({
   host,
   expectedCardId = readPersistedCardIdentity()?.id || '',
   fetchImpl = globalThis.fetch,
@@ -267,4 +268,29 @@ export async function connectCardTransport({
     if (cause?.reason === 'wrong-card') throw cause;
     return failure('direct-unavailable', normalizedHost, { cause });
   }
+}
+
+function transportAcquisitionKey(host, expectedCardId, transport) {
+  return `${normalizeCardHost(host)}\n${String(expectedCardId || '').trim()}\n${transport}`;
+}
+
+export function connectCardTransport(options = {}) {
+  const host = normalizeCardHost(options.host);
+  const expectedCardId = options.expectedCardId ?? readPersistedCardIdentity()?.id ?? '';
+  const transport = options.transport || CARD_TRANSPORTS.DIRECT;
+  const key = transportAcquisitionKey(host, expectedCardId, transport);
+  const existing = transportAcquisitionFlights.get(key);
+  if (existing) return existing;
+  const flight = connectCardTransportOnce({
+    ...options,
+    host,
+    expectedCardId,
+    transport,
+  }).finally(() => {
+    if (transportAcquisitionFlights.get(key) === flight) {
+      transportAcquisitionFlights.delete(key);
+    }
+  });
+  transportAcquisitionFlights.set(key, flight);
+  return flight;
 }
