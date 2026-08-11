@@ -49,6 +49,8 @@ assert.match(web, /handleLightweaverFirmwareUpdate\(\)/);
 assert.match(runtime, /runtimeFirmwareUpdateStatusJson\(\)/);
 assert.match(main, /"firmwareUpdate"[\s\S]*"network"/,
   'status and firmware-info advertise preserving network update capability');
+assert.match(main, /"firmwareUpdate"[\s\S]*"softwareGrant"/,
+  'status and firmware-info advertise secure software update grants separately');
 assert.match(main, /runtimeFirmwareUpdateStatusJson\(\)/,
   'status and firmware-info include current transfer/rollback evidence');
 for (const field of ['restoredFirmwareVersion', 'restoredBuildId', 'restoredBuildNumber']) {
