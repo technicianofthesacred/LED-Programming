@@ -1,6 +1,6 @@
 const encoder = new TextEncoder();
 const PINNED_UPDATE_GRANT_PUBLIC_KEY_SPKI =
-  'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE79R+C1CKiCB9LiaBTnyJAzu85npY+PMDVtnLLfKYk7nB14YtoSehIcyx9ScVPtW9uRQHW9FRZgdhCRAeyd4IWw==';
+  'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjN50G723NWLOuZC40+eQbfqKT4XefIFCHB4qescfW6aI+QSI4QAd/mWySAdAIH1108fWO7pvZ+TJY14oii24eQ==';
 const KEY_MATCH_PROBE = encoder.encode('Lightweaver update grant key match v1');
 
 export const FIRMWARE_UPDATE_GRANT_ALGORITHM = 'ECDSA_P256_SHA256_P1363';

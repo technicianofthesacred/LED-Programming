@@ -265,8 +265,8 @@ LightweaverFirmwareUpdateGrant& lightweaverFirmwareUpdateGrant() {
 // the offline release-signing key used by LightweaverFirmwareUpdate.cpp.
 constexpr char LIGHTWEAVER_UPDATE_GRANT_PUBLIC_KEY_PEM[] =
     "-----BEGIN PUBLIC KEY-----\n"
-    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE79R+C1CKiCB9LiaBTnyJAzu85npY\n"
-    "+PMDVtnLLfKYk7nB14YtoSehIcyx9ScVPtW9uRQHW9FRZgdhCRAeyd4IWw==\n"
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjN50G723NWLOuZC40+eQbfqKT4Xe\n"
+    "fIFCHB4qescfW6aI+QSI4QAd/mWySAdAIH1108fWO7pvZ+TJY14oii24eQ==\n"
     "-----END PUBLIC KEY-----\n";
 
 bool verifyLightweaverUpdateGrantSignature(
