@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   cardSupportsNetworkFirmwareUpdate,
+  cardSupportsSoftwareFirmwareUpdateGrant,
   describeFirmwareUpdate,
   firmwareLabel,
   normalizeFirmwareUpdateCard,
@@ -14,6 +15,18 @@ test('network update capability is read from the exact firmware status envelope'
   }), true);
   assert.equal(cardSupportsNetworkFirmwareUpdate({ firmwareUpdate: { version: 1, network: true } }), false);
   assert.equal(cardSupportsNetworkFirmwareUpdate({ capabilities: { firmwareUpdate: { version: 1, network: false } } }), false);
+});
+
+test('software update grants require an explicit nested capability bit', () => {
+  assert.equal(cardSupportsSoftwareFirmwareUpdateGrant({
+    capabilities: { firmwareUpdate: { version: 1, network: true, softwareGrant: true } },
+  }), true);
+  assert.equal(cardSupportsSoftwareFirmwareUpdateGrant({
+    capabilities: { firmwareUpdate: { version: 1, network: true } },
+  }), false);
+  assert.equal(cardSupportsSoftwareFirmwareUpdateGrant({
+    firmwareUpdate: { version: 1, network: true, softwareGrant: true },
+  }), false);
 });
 
 test('a directly inspected USB card uses its canonical cardId as the update panel id', () => {

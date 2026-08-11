@@ -22,7 +22,9 @@ async function openPreservingFixture(page: any, mode: 'wifi' | 'usb', outcome = 
         firmwareVersion: recovering ? '1.2.0' : '1.1.1', buildId: recovering ? targetBuild : oldBuild,
         firmwareUpdate: { phase: recovering ? 'valid' : 'idle', rollbackReason: '' },
         ...(capabilityShape === 'current'
-          ? { capabilities: { firmwareUpdate: { version: 1, network: mode === 'wifi' } } }
+          ? { capabilities: { firmwareUpdate: { version: 1, network: mode === 'wifi', softwareGrant: mode === 'wifi' } } }
+          : capabilityShape === 'network-physical'
+            ? { capabilities: { firmwareUpdate: { version: 1, network: mode === 'wifi' } } }
           : { firmwareUpdate: { version: 1, network: mode === 'wifi' } }),
       },
       }),
@@ -100,9 +102,9 @@ test('preserving update: capable card uses Wi-Fi with exact preservation facts a
   expect(actionBox!.y).toBeGreaterThan(targetBox!.y + targetBox!.height);
   expect(Math.abs((actionBox!.x + actionBox!.width) - (targetBox!.x + targetBox!.width))).toBeLessThanOrEqual(1);
   await updateAction.click();
-  await expect(panel).toContainText('Press the card control once');
-  await panel.getByRole('checkbox', { name: /physically confirmed/i }).check();
-  await panel.getByRole('button', { name: 'Start preserving update' }).click();
+  await expect(panel).toContainText('securely binds this signed update to this exact card');
+  await expect(panel.getByRole('checkbox', { name: /physically confirmed/i })).toHaveCount(0);
+  await panel.getByRole('button', { name: 'Start secure Wi-Fi update' }).click();
   await expect(panel).toContainText('Restarting card');
 });
 
@@ -111,12 +113,34 @@ test('preserving update: a legacy top-level capability cannot unlock network fir
   await expect(page.getByRole('button', { name: 'Update over Wi-Fi' })).toHaveCount(0);
 });
 
+test('preserving update: an older network-capable card retains the one-button bootstrap path', async ({ page }) => {
+  await openPreservingFixture(page, 'wifi', 'progress', 'network-physical');
+  const panel = page.getByTestId('preserving-update-panel');
+  await panel.getByRole('button', { name: 'Update over Wi-Fi' }).click();
+  await expect(panel).toContainText('Briefly press BOOT/control once');
+  await expect(panel.getByRole('checkbox', { name: /physically confirmed/i })).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Start secure Wi-Fi update' })).toHaveCount(0);
+  await panel.getByRole('checkbox', { name: /physically confirmed/i }).check();
+  await panel.getByRole('button', { name: 'Start preserving update' }).click();
+  await expect(panel).toContainText('Restarting card');
+});
+
+test('preserving update: a software-capable card keeps the physical fallback available', async ({ page }) => {
+  await openPreservingFixture(page, 'wifi');
+  const panel = page.getByTestId('preserving-update-panel');
+  await panel.getByRole('button', { name: 'Update over Wi-Fi' }).click();
+  await panel.getByRole('button', { name: 'Use card button instead' }).click();
+  await expect(panel).toContainText('Briefly press BOOT/control once');
+  await expect(panel.getByRole('checkbox', { name: /physically confirmed/i })).toBeVisible();
+  await panel.getByRole('button', { name: 'Use secure software authorization' }).click();
+  await expect(panel.getByRole('button', { name: 'Start secure Wi-Fi update' })).toBeVisible();
+});
+
 test('preserving update: Wi-Fi panel surfaces the card response detail for a rejected request', async ({ page }) => {
   await openPreservingFixture(page, 'wifi', 'http-400');
   const panel = page.getByTestId('preserving-update-panel');
   await panel.getByRole('button', { name: 'Update over Wi-Fi' }).click();
-  await panel.getByRole('checkbox', { name: /physically confirmed/i }).check();
-  await panel.getByRole('button', { name: 'Start preserving update' }).click();
+  await panel.getByRole('button', { name: 'Start secure Wi-Fi update' }).click();
   await expect(panel.getByRole('alert')).toHaveText('owner binding is incomplete');
   await expect(panel.getByRole('alert')).not.toContainText('Card returned HTTP 400');
 });
@@ -125,8 +149,7 @@ test('preserving update: rollback names the restored build and a redacted reason
   await openPreservingFixture(page, 'wifi', 'rollback');
   const panel = page.getByTestId('preserving-update-panel');
   await panel.getByRole('button', { name: 'Update over Wi-Fi' }).click();
-  await panel.getByRole('checkbox', { name: /physically confirmed/i }).check();
-  await panel.getByRole('button', { name: 'Start preserving update' }).click();
+  await panel.getByRole('button', { name: 'Start secure Wi-Fi update' }).click();
   await expect(panel).toContainText('Update rolled back');
   await expect(panel).toContainText('restored Build 1198');
   await expect(panel).toContainText('boot-health-failed');

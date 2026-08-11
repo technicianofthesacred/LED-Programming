@@ -29,6 +29,16 @@ export function cardSupportsNetworkFirmwareUpdate(readiness = {}) {
   return capability?.version === 1 && capability.network === true;
 }
 
+// Software authorization arrived after the preserving network updater. Keep
+// this as a separate advertised bit so Studio can bootstrap older network-
+// capable cards through their existing physical confirmation path.
+export function cardSupportsSoftwareFirmwareUpdateGrant(readiness = {}) {
+  const capability = readiness?.capabilities?.firmwareUpdate;
+  return capability?.version === 1
+    && capability.network === true
+    && capability.softwareGrant === true;
+}
+
 export function normalizeFirmwareUpdateCard(card = null) {
   if (!card || typeof card !== 'object' || Array.isArray(card)) return null;
   const id = String(card.id || card.cardId || '').trim().toLowerCase();
