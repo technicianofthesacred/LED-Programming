@@ -43,8 +43,24 @@ test.beforeEach(async ({ page }) => {
   await page.route('http://192.168.4.1/**', route => route.abort());
 });
 
+async function installMatchingProject(page) {
+  const project = createDefaultProject();
+  const projectFingerprint = cardProjectFingerprint(project);
+  await page.addInitScript(savedProject => {
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
+  }, project);
+  return {
+    playbackReady: true,
+    projectId: project.id,
+    projectRevision: 0,
+    projectFingerprint,
+    piece: { id: project.id },
+  };
+}
+
 async function installCardPopupMock(page, cardId = 'lw-test-card', host = 'lightweaver.local', dropPingResponses = false) {
-  await page.addInitScript(({ id, cardHost, dropPings }) => {
+  const readyProject = await installMatchingProject(page);
+  await page.addInitScript(({ id, cardHost, dropPings, projectEvidence }) => {
     (window as any).__cardPopupCalls = [];
     const originalOpen = window.open.bind(window);
     window.open = ((url?: string | URL, name?: string) => {
@@ -70,6 +86,9 @@ async function installCardPopupMock(page, cardId = 'lw-test-card', host = 'light
                       cardName: 'Gallery card',
                       firmwareVersion: '1.4.0',
                       buildId: 'a'.repeat(40),
+                      projectId: projectEvidence.projectId,
+                      projectRevision: projectEvidence.projectRevision,
+                      projectFingerprint: projectEvidence.projectFingerprint,
                       outputs: [{ gpio: 16, count: 44 }],
                     }
                   : message.type === 'status' || message.type === 'ping'
@@ -78,6 +97,7 @@ async function installCardPopupMock(page, cardId = 'lw-test-card', host = 'light
                         cardId: id, cardName: 'Gallery card', firmwareVersion: '1.4.0',
                         buildId: 'a'.repeat(40), bootId: 'boot-popup-test', runtimePhase: 'ready',
                         knownGoodProject: true, commandReady: true, outputReady: true,
+                        ...projectEvidence,
                         led: { pixels: 44 },
                       }
                   : { ok: true },
@@ -100,7 +120,8 @@ async function installCardPopupMock(page, cardId = 'lw-test-card', host = 'light
       });
       return popup;
     }) as typeof window.open;
-  }, { id: cardId, cardHost: host, dropPings: dropPingResponses });
+  }, { id: cardId, cardHost: host, dropPings: dropPingResponses, projectEvidence: readyProject });
+  return readyProject;
 }
 
 async function dispatchCardLinkEvents(page, events: Record<string, unknown>[]) {
@@ -368,7 +389,7 @@ test('opening while the card is recovering renders the busy recovery action dire
   ]);
   await expect(page.getByTestId('card-link-status')).toContainText('Recovering');
   await page.getByTestId('card-link-status').click();
-  await expect(page.getByRole('button', { name: 'Done', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Continue in Setup' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'My card already lights up' })).toHaveCount(0);
 });
 
@@ -393,7 +414,7 @@ test('working setup card shows AP steps before continuing through the setup host
 });
 
 test('working-card choice opens the card popup path', async ({ page }) => {
-  await installCardPopupMock(page);
+  const readyProject = await installCardPopupMock(page);
   let allowDirect = false;
   const directRequests: string[] = [];
   await page.route('http://lightweaver.local/api/status', async route => {
@@ -403,7 +424,7 @@ test('working-card choice opens the card popup path', async ({ page }) => {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        ...readyStatus('lw-direct-card', { bootId: 'boot-direct-card' }),
+        ...readyStatus('lw-direct-card', { bootId: 'boot-direct-card', ...readyProject }),
         cardName: 'Direct card', led: { pixels: 44 }, source: 'internal-flash',
         wiringRevision: 4, wiringDigest: 'deadbeef',
       }),
@@ -415,6 +436,9 @@ test('working-card choice opens the card popup path', async ({ page }) => {
     body: JSON.stringify({
       cardId: 'lw-direct-card', cardName: 'Direct card',
       firmwareVersion: '1.4.0', buildId: 'a'.repeat(40),
+      projectId: readyProject.projectId,
+      projectRevision: readyProject.projectRevision,
+      projectFingerprint: readyProject.projectFingerprint,
     }),
   }));
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
@@ -432,8 +456,9 @@ test('working-card choice opens the card popup path', async ({ page }) => {
 });
 
 test('background direct discovery stays unpaired until an explicit one-tap pair', async ({ page }) => {
+  const readyProject = await installMatchingProject(page);
   const passiveCard = {
-    ...readyStatus('lw-passive-card', { bootId: 'boot-passive-card' }),
+    ...readyStatus('lw-passive-card', { bootId: 'boot-passive-card', ...readyProject }),
     cardName: 'Passive card', led: { pixels: 44 }, source: 'internal-flash',
     wiringRevision: 4, wiringDigest: 'deadbeef',
   };
@@ -465,12 +490,13 @@ test('background direct discovery stays unpaired until an explicit one-tap pair'
 });
 
 test('direct wrong-card adoption is explicit and reverifies before Connected', async ({ page }) => {
+  const readyProject = await installMatchingProject(page);
   let firmwareChecks = 0;
   await page.route('http://lightweaver.local/api/status', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({
-      ...readyStatus('lw-direct-found', { bootId: 'boot-direct-found' }),
+      ...readyStatus('lw-direct-found', { bootId: 'boot-direct-found', ...readyProject }),
       cardName: 'Found direct card', source: 'internal-flash',
       wiringRevision: 4, wiringDigest: 'deadbeef',
     }),
@@ -483,6 +509,9 @@ test('direct wrong-card adoption is explicit and reverifies before Connected', a
       body: JSON.stringify({
         cardId: 'lw-direct-found', cardName: 'Found direct card',
         firmwareVersion: '1.4.0', buildId: 'a'.repeat(40),
+        projectId: readyProject.projectId,
+        projectRevision: readyProject.projectRevision,
+        projectFingerprint: readyProject.projectFingerprint,
       }),
     });
   });
@@ -544,7 +573,8 @@ test('a paired card reporting a factory status surfaces "Needs project", not gre
   await expect(page.getByRole('dialog', { name: 'Connect Lightweaver' })).toHaveCount(0);
 });
 
-test('card status control distinguishes checking, blank, and command-ready states', async ({ page }) => {
+test('card status control distinguishes verifying, blank, and command-ready states', async ({ page }) => {
+  const readyProject = await installMatchingProject(page);
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   const card = { id: 'lw-status-card', name: 'Status card' };
   await page.unroute('http://lightweaver.local/**');
@@ -565,7 +595,7 @@ test('card status control distinguishes checking, blank, and command-ready state
   await page.reload({ waitUntil: 'domcontentloaded' });
 
   const status = page.getByTestId('card-link-status');
-  await expect(status).toHaveAccessibleName(/Checking card/);
+  await expect(status).toHaveAccessibleName(/Card restarted . verifying/);
   await expect(status).not.toHaveClass(/is-connected/);
 
   await dispatchCardLinkEvents(page, [{
@@ -584,7 +614,7 @@ test('card status control distinguishes checking, blank, and command-ready state
   const readyEvent = {
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local', card,
     blank: false,
-    readiness: readyStatus(card.id, { bootId: 'boot-ready' }),
+    readiness: readyStatus(card.id, { bootId: 'boot-ready', ...readyProject }),
   };
   await dispatchCardLinkEvents(page, [readyEvent, readyEvent]);
   await expect(status).toHaveAccessibleName(/Status card.*Connected/);
