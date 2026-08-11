@@ -6,8 +6,8 @@
   "batch": "rehearsal",
   "firmware": {
     "target": "esp32-s3-n16r8",
-    "version": "1.1.12",
-    "buildId": "18e968cd732a7a7d9fb0cc46d6b20b89ad8133b0",
+    "version": "1.1.13",
+    "buildId": "6805b1f9861bde9a76f0d91f7b12939ad06e0543",
     "minimumVersion": "1.0.0"
   },
   "project": {
