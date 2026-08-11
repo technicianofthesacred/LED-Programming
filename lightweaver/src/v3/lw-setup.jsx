@@ -95,6 +95,7 @@ export function SetupScreen({
   cardHost,
   onOpenConnectionCenter,
   cardLink,
+  cardLifecycle,
   currentProject = {},
   activeCloudProjects = [],
   browserProjects = [],
@@ -257,10 +258,11 @@ export function SetupScreen({
         : null;
   const journey = useMemo(() => deriveSetupJourney({
     cardLink,
+    cardLifecycle,
     commissioningFlow,
     project: currentProject,
     resolution: journeyResolution,
-  }), [cardLink, commissioningFlow, currentProject, resolution.kind]);
+  }), [cardLifecycle, cardLink, commissioningFlow, currentProject, resolution.kind]);
 
   useEffect(() => {
     const previous = previousPhaseRef.current;
@@ -320,7 +322,7 @@ export function SetupScreen({
   };
 
   const evidence = discoveryEvidence(currentProject);
-  const identityStatus = cardConnectionStatus(cardLink || {});
+  const identityStatus = cardConnectionStatus(cardLink || {}, cardLifecycle);
   const renderActiveTask = phase => {
     if (phase.id === 'connect') {
       const blocker = journey.blockers[0]?.id;

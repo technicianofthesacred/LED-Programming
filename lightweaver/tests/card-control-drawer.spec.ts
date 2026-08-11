@@ -13,8 +13,8 @@ async function verifyCard(page: Page, projectFingerprint: string) {
       readiness: {
         app: 'Lightweaver', provisioningContractVersion: 1, cardId: 'lw-drawer-card',
         firmwareVersion: '1.1.1', buildId: 'a'.repeat(40), bootId: 'drawer-boot',
-        runtimePhase: 'ready', knownGoodProject: true, commandReady: true, outputReady: true,
-        projectId: 'drawer-gallery-project', projectFingerprint,
+        runtimePhase: 'ready', knownGoodProject: true, commandReady: true, outputReady: true, playbackReady: true,
+        projectId: 'drawer-gallery-project', projectRevision: 0, projectFingerprint,
       },
     };
     const link = getSharedCardLink();
@@ -26,6 +26,7 @@ async function verifyCard(page: Page, projectFingerprint: string) {
 test('a connected footer opens customer card controls without a popup', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   let controlBody: Record<string, unknown> | null = null;
+  let controlRequestCount = 0;
   let rejectBrightnessOnce = true;
   let releasePendingControl: (() => void) | null = null;
   let projectFingerprint = '';
@@ -41,12 +42,13 @@ test('a connected footer opens customer card controls without a popup', async ({
   } }));
   const cardRuntime = () => ({
     app: 'Lightweaver', provisioningContractVersion: 1, cardId: CARD_ID, firmwareVersion: '1.1.1', buildId: 'a'.repeat(40),
-    bootId: 'drawer-boot', runtimePhase: 'ready', knownGoodProject: true, commandReady: true, outputReady: true,
-    projectId: PROJECT_ID, projectFingerprint, projectRevision: 3, piece: { id: PROJECT_ID, name: 'Gallery Lightweaver' },
+    bootId: 'drawer-boot', runtimePhase: 'ready', knownGoodProject: true, commandReady: true, outputReady: true, playbackReady: true,
+    projectId: PROJECT_ID, projectFingerprint, projectRevision: 0, piece: { id: PROJECT_ID, name: 'Gallery Lightweaver' },
   });
   await page.route('http://lightweaver.local/api/firmware-info', route => route.fulfill({ json: cardRuntime() }));
   await page.route('http://lightweaver.local/api/status', route => route.fulfill({ json: cardRuntime() }));
   await page.route('http://lightweaver.local/api/control', async route => {
+    controlRequestCount += 1;
     controlBody = JSON.parse(route.request().postData() || '{}');
     if (controlBody.brightness === 0.4 && rejectBrightnessOnce) {
       rejectBrightnessOnce = false;
@@ -85,6 +87,18 @@ test('a connected footer opens customer card controls without a popup', async ({
   await footer.click();
   const drawer = page.getByRole('dialog', { name: 'Gallery Lightweaver controls' });
   await expect(drawer).toBeVisible();
+
+  const matchingProjectFingerprint = projectFingerprint;
+  projectFingerprint = 'c'.repeat(64);
+  await verifyCard(page, projectFingerprint);
+  const blockedRequests = controlRequestCount;
+  await expect(drawer.getByRole('slider', { name: 'Brightness' })).toBeDisabled();
+  await expect(drawer).toContainText('exact card and installed project are verified');
+  expect(controlRequestCount).toBe(blockedRequests);
+  projectFingerprint = matchingProjectFingerprint;
+  await verifyCard(page, projectFingerprint);
+  await expect(drawer.getByRole('slider', { name: 'Brightness' })).toBeEnabled();
+
   await expect(drawer).toBeFocused();
   await page.keyboard.press('Shift+Tab');
   await expect(drawer.getByRole('button', { name: 'Blackout' })).toBeFocused();

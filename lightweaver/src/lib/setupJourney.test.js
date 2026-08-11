@@ -97,7 +97,10 @@ test('firmware and Wi-Fi are conditional blockers inside connect', () => {
 });
 
 test('a factory blank exact card goes to light discovery before Layout', () => {
-  const journey = deriveSetupJourney({ cardLink: connectedCard() });
+  const journey = deriveSetupJourney({
+    cardLink: { ...connectedCard(), cardBlank: true },
+    cardLifecycle: { state: 'setup-required', setupTaskId: 'install-project' },
+  });
   const phases = phaseMap(journey);
 
   assert.equal(phases.connect.status, 'done');
@@ -126,6 +129,7 @@ test('light discovery keeps color ahead of count and last-light boundary work', 
 test('temporary bench configuration is not discovery or setup completion', () => {
   const journey = deriveSetupJourney({
     cardLink: connectedCard(READY_STATUS),
+    cardLifecycle: { state: 'attention-required', setupTaskId: 'recover-operation' },
     project: discoveredProject(),
     resolution: { provisionalSetup: true, matchesCurrentProject: true, playbackAccess: 'ready' },
   });
@@ -134,6 +138,17 @@ test('temporary bench configuration is not discovery or setup completion', () =>
   assert.equal(phaseMap(journey).lights.status, 'current');
   assert.equal(phaseMap(journey).verify.status, 'upcoming');
   assert.equal(isSetupComplete(journey), false);
+});
+
+test('a recovering exact factory card resumes discovery instead of generic recovery', () => {
+  const journey = deriveSetupJourney({
+    cardLink: { ...connectedCard(), activity: 'recovering', cardBlank: true },
+    cardLifecycle: { state: 'recovering', setupTaskId: 'recover-operation' },
+  });
+
+  assert.equal(journey.currentPhaseId, 'lights');
+  assert.equal(journey.taskId, 'discover-lights');
+  assert.deepEqual(journey.blockers, []);
 });
 
 test('existing discovery evidence unlocks Layout without a second direction store', () => {
@@ -253,4 +268,47 @@ test('a saved exact match offers adoption instead of blank discovery', () => {
   assert.equal(journey.diagnosis.state, 'saved-match');
   assert.equal(journey.nextAction.id, 'load-matching-project');
   assert.notEqual(journey.nextAction.id, 'discover-lights');
+});
+
+test('shared lifecycle diagnosis overrides stale per-screen link interpretation', () => {
+  const journey = deriveSetupJourney({
+    cardLink: connectedCard(READY_STATUS),
+    cardLifecycle: {
+      state: 'reconnecting',
+      setupTaskId: 'reconnect-card',
+    },
+    project: { id: 'lotus-gate', name: 'Lotus Gate' },
+    resolution: { matchesCurrentProject: true, playbackAccess: 'ready', provisionalSetup: false },
+  });
+
+  assert.equal(journey.currentPhaseId, 'connect');
+  assert.equal(journey.taskId, 'reconnect-card');
+  assert.equal(journey.setupComplete, false);
+});
+
+test('shared lifecycle maps every cross-surface state to the same Setup destination', () => {
+  const cases = [
+    ['reconnecting', 'reconnect-card', 'reconnect-card'],
+    ['verifying', 'reconnect-card', 'reconnect-card'],
+    ['wrong-card', 'connect-card', 'connect-card'],
+    ['target-mismatch', 'update-firmware', 'update-firmware'],
+    ['project-changed', 'load-matching-project', 'load-matching-project'],
+    ['found-unpaired', 'pair-card', 'pair-card'],
+    ['recovering', 'recover-operation', 'recover-operation'],
+    ['updating', 'recover-operation', 'recover-operation'],
+    ['update-recovering', 'recover-operation', 'recover-operation'],
+    ['update-rolled-back', 'recover-operation', 'recover-operation'],
+    ['setup-required', 'install-project', 'install-project'],
+    ['project-mismatch', 'load-matching-project', 'load-matching-project'],
+    ['ready', 'open-patterns', 'open-patterns'],
+  ];
+
+  for (const [state, setupTaskId, expectedTask] of cases) {
+    const journey = deriveSetupJourney({
+      cardLink: connectedCard(READY_STATUS),
+      cardLifecycle: { state, setupTaskId },
+      project: { id: 'lotus-gate', name: 'Lotus Gate' },
+    });
+    assert.equal(journey.taskId, expectedTask, state);
+  }
 });

@@ -28,7 +28,7 @@ function readyStatus(cardId: string, overrides = {}) {
     app: 'Lightweaver', provisioningContractVersion: 1,
     cardId, firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
     bootId: 'boot-1', runtimePhase: 'ready', knownGoodProject: true,
-    commandReady: true, outputReady: true,
+    commandReady: true, outputReady: true, playbackReady: true,
     ...overrides,
   };
 }
@@ -196,6 +196,13 @@ async function renderProjectSwitchCardHarness(page, mode: 'offline' | 'duplicate
           ? { ok: false, reason: 'association-handoff-failed' }
           : { ok: true };
       },
+      onMatchedProjectVerified: ({ evidence: verifiedEvidence, expectedMarker }) => ({
+        ok: verifiedEvidence?.cardId === evidence.cardId
+          && verifiedEvidence?.projectRevision === evidence.projectRevision
+          && verifiedEvidence?.projectFingerprint === evidence.projectFingerprint
+          && expectedMarker?.generation === 8
+          && expectedMarker?.revision === 0,
+      }),
       route: { section: 'overview', supportTool: '' },
     };
     root.render(React.createElement(CardScreen, cardProps));
@@ -341,7 +348,7 @@ test('wide desktop footer keeps card, firmware, Studio, and test controls in ord
       buildId: 'gallery-release-build-with-a-long-identity',
     }),
   }]);
-  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Needs attention/);
   await expect(page.locator('.card-status-summary')).toHaveCount(0);
 
   const regions = await page.locator('.status-bar').evaluate(node => {
@@ -1083,13 +1090,17 @@ test('Hardware loads the verified production project that matches the paired car
     }));
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Needs attention/);
 
   await page.getByRole('region', { name: 'Matching card project' })
     .getByRole('button', { name: /Load .*production job bench-fixture-44, project revision/ }).click();
 
   await expect(page.getByRole('dialog', { name: 'Replace current project?' })).toHaveCount(0);
   await expect(page).toHaveURL(/#screen=pattern$/);
+  await expect.poll(() => page.evaluate(() => (
+    JSON.parse(localStorage.getItem('lw_project_lifecycle_v1') || 'null')?.installation?.projectRevision
+  ))).toBe(job.project.revision);
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
   await expect(page.getByRole('button', { name: 'Install on card' })).toBeEnabled();
   const savedProjects = await page.evaluate(() => {
     const envelope = JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}');
@@ -1375,7 +1386,7 @@ test('disconnected Card overview delegates to one exact Setup task without a sec
   await expect(page).toHaveURL(/#screen=card&section=setup&task=connect-card$/);
 });
 
-test('direct discovery never auto-adopts; only the explicit pair action persists identity', async ({ page }) => {
+test('direct discovery never auto-adopts; explicit pairing persists identity but not project readiness', async ({ page }) => {
   const status = readyStatus('lw-explicit-pair');
   await page.route('**/api/status', route => route.fulfill({
     status: 200, contentType: 'application/json', body: JSON.stringify(status),
@@ -1390,7 +1401,7 @@ test('direct discovery never auto-adopts; only the explicit pair action persists
   await page.getByTestId('card-link-status').click();
   await page.getByRole('button', { name: 'Connect', exact: true }).click();
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lw_card_identity_v1') || 'null')?.id)).toBe('lw-explicit-pair');
-  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Needs attention/);
 });
 
 test('overview connection recovery delegates to one exact Setup task while Support keeps the connection center', async ({ page }) => {

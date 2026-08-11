@@ -54,11 +54,15 @@ async function mockLocalCard(page: any, options: any = {}) {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
     if (pathname === '/api/status') {
+      const installedProjectId = card.savedConfig?.projectId ?? project.id;
+      const installedProjectRevision = card.savedConfig?.projectRevision ?? 0;
+      const installedProjectFingerprint = card.savedConfig?.projectFingerprint ?? projectFingerprint;
       await route.fulfill({ json: {
         app: 'Lightweaver', ok: true, cardId, cardName, firmwareVersion, buildId,
         provisioningContractVersion: 1, bootId, runtimePhase: 'ready',
-        knownGoodProject: true, commandReady: true, outputReady: true,
-        piece: { id: project.id }, projectFingerprint,
+        knownGoodProject: true, commandReady: true, outputReady: true, playbackReady: true,
+        projectId: installedProjectId, projectRevision: installedProjectRevision,
+        piece: { id: installedProjectId }, projectFingerprint: installedProjectFingerprint,
         led: { pixels: 44 }, wifi: { ip: 'lightweaver.local' },
         source: 'internal-flash', wiringRevision: 4, wiringDigest: 'deadbeef',
       } });

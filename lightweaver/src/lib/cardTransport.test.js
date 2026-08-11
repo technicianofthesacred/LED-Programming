@@ -67,6 +67,35 @@ test('direct transport is selected only after an exact fresh status probe', asyn
   assert.ok(Object.isFrozen(authority));
 });
 
+test('concurrent consumers share one exact-card transport acquisition', async () => {
+  const status = readyStatus();
+  const link = linkFor(status);
+  let releaseStatus;
+  const statusGate = new Promise(resolve => { releaseStatus = resolve; });
+  let probes = 0;
+  const fetchImpl = async () => {
+    probes += 1;
+    await statusGate;
+    return response(status);
+  };
+  const options = {
+    host: '192.168.18.70',
+    expectedCardId: 'lw-card-a',
+    link,
+    fetchImpl,
+  };
+
+  const first = connectCardTransport(options);
+  const second = connectCardTransport(options);
+  await Promise.resolve();
+  releaseStatus();
+  const [left, right] = await Promise.all([first, second]);
+
+  assert.equal(left, right);
+  assert.equal(probes, 1);
+  assert.equal(left.revoked, false);
+});
+
 test('identified firmware that predates exact boot identity is an actionable incompatibility', async () => {
   const result = await connectCardTransport({
     host: '192.168.18.70', expectedCardId: 'lw-card-a',
@@ -202,9 +231,10 @@ test('owner capability issuance is explicit, bounded, and bound to the probed pr
   assert.equal(JSON.parse(calls[1].init.body).expectedProjectHead, status.projectHead);
 });
 
-test('Connection Center exposes deliberate physical confirmation for live control', async () => {
+test('Connection Center does not require physical confirmation for ordinary safe controls', async () => {
   const source = await readFile(new URL('../components/card/CardConnectionCenter.jsx', import.meta.url), 'utf8');
-  assert.match(source, /Enable live control/);
-  assert.match(source, /Touch a physical card control/);
-  assert.match(source, /issueOwnerCapability/);
+  assert.doesNotMatch(source, /Enable live control/);
+  assert.doesNotMatch(source, /Touch a physical card control/);
+  assert.doesNotMatch(source, /issueOwnerCapability/);
+  assert.match(source, /Card verified/);
 });

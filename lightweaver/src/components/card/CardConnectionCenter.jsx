@@ -53,11 +53,34 @@ function goToStripDiscovery() {
 
 const SETUP_HOST = '192.168.4.1';
 const NEUTRAL_FIRST_RUN_REASONS = new Set(['never-connected', 'card-unreachable']);
+const LIFECYCLE_OWNED_ACTIONS = new Set([
+  'recovering',
+  'updating',
+  'update-recovering',
+  'update-rolled-back',
+  'target-mismatch',
+  'project-changed',
+  'project-mismatch',
+  'attention-required',
+]);
+
+function lifecycleConnectionAction(lifecycle, flowAction) {
+  if (!lifecycle || lifecycle.state === 'ready') return flowAction;
+  if (lifecycle.state === 'wrong-card' && flowAction.id === 'wrong-card') return flowAction;
+  if (!LIFECYCLE_OWNED_ACTIONS.has(lifecycle.state) && flowAction.id !== 'ready-local-card') return flowAction;
+  return {
+    id: 'lifecycle-attention',
+    title: lifecycle.label,
+    explanation: 'Studio is using the exact card, firmware-update, and installed-project evidence shown in Setup. Finish that recovery step before card controls are available.',
+  };
+}
 
 export function CardConnectionCenter({
   open,
   link,
+  lifecycle = null,
   onClose,
+  onOpenSetup,
   onConnectCard = connectCardLink,
   onLaunchBridge,
   bridgeResult,
@@ -82,8 +105,6 @@ export function CardConnectionCenter({
   const [directBusy, setDirectBusy] = useState(false);
   const [usbInspection, setUsbInspection] = useState(null);
   const [usbReleaseState, setUsbReleaseState] = useState('idle');
-  const [capabilityBusy, setCapabilityBusy] = useState(false);
-  const [capabilityReady, setCapabilityReady] = useState(false);
   const capabilities = useMemo(platformCapabilities, [open]);
   const rememberedCard = readPersistedCardIdentity();
   const hasKnownCard = Boolean(link.card?.id || link.expectedCard?.id || rememberedCard?.id);
@@ -106,7 +127,7 @@ export function CardConnectionCenter({
     ? { state: 'disconnected', reason: link.reason }
     : link;
   const flowIntent = intent || (hasKnownCard ? 'working-card' : '');
-  const action = nextCardConnectionAction({
+  const flowAction = nextCardConnectionAction({
     link: actionLink,
     intent: flowIntent,
     capabilities,
@@ -114,6 +135,7 @@ export function CardConnectionCenter({
     discoveredCard: link.discoveredCard,
     ...flowEvidence,
   });
+  const action = lifecycleConnectionAction(lifecycle, flowAction);
   const showFirmwareUpdate = action.id === 'ready-local-card'
     && firmwareStatus?.state === 'update-available';
   const incompatibleFirmware = directAttempt?.reason === 'firmware-incompatible'
@@ -123,6 +145,7 @@ export function CardConnectionCenter({
   const directFirmwareStatus = classifyFooterFirmwareStatus(directIdentity, firmwareRelease);
   const showDirectFirmwareUpdate = directAttempt?.connected
     && directFirmwareStatus.state === 'update-available';
+  const safeControlsReady = lifecycle?.safeControlAccess === 'ready';
 
   useEffect(() => {
     if (!open) return undefined;
@@ -136,8 +159,6 @@ export function CardConnectionCenter({
     setDirectBusy(false);
     setUsbInspection(getActiveUsbInspection());
     setUsbReleaseState('idle');
-    setCapabilityBusy(false);
-    setCapabilityReady(Boolean(activeAuthority?.ownerCapability));
     const timer = window.setTimeout(() => panelRef.current?.focus(), 0);
     const onKeyDown = (event) => {
       if (event.key === 'Escape') {
@@ -245,7 +266,6 @@ export function CardConnectionCenter({
       });
       setDirectAttempt(result);
       if (result.connected) {
-        setCapabilityReady(Boolean(result.ownerCapability));
         setFailure('');
         return result;
       }
@@ -263,23 +283,6 @@ export function CardConnectionCenter({
       return result;
     } finally {
       setDirectBusy(false);
-    }
-  };
-
-  const enableLiveControl = async () => {
-    if (!directAttempt?.connected || capabilityBusy) return;
-    setCapabilityBusy(true);
-    setFailure('');
-    try {
-      await directAttempt.issueOwnerCapability({ commissioningProof: 'owner-confirmed-physical-control' });
-      setCapabilityReady(true);
-    } catch (error) {
-      setCapabilityReady(false);
-      setFailure(error?.status === 403
-        ? 'Pairing was not confirmed. Touch a physical control on this card, then choose Enable live control again.'
-        : (error?.message || 'The card could not authorize live control.'));
-    } finally {
-      setCapabilityBusy(false);
     }
   };
 
@@ -424,6 +427,8 @@ export function CardConnectionCenter({
     switch (action.id) {
       case 'ready-local-card':
         return <button type="button" className="btn primary" onClick={closeAndRestore}>Done</button>;
+      case 'lifecycle-attention':
+        return <button type="button" className="btn primary" onClick={onOpenSetup}>Continue in Setup</button>;
       case 'pair-local-card':
         return <button type="button" className="btn primary" onClick={useDiscoveredCard} disabled={pairingBusy}>{pairingBusy ? 'Connecting…' : 'Connect'}</button>;
       case 'card-needs-project':
@@ -535,18 +540,20 @@ export function CardConnectionCenter({
 
       {!usbInspection && (!['connected-direct', 'connected-bridge'].includes(link.state) || directAttempt?.connected) && (
         <div className="card-windowless-connect" data-testid="windowless-card-connect">
-          <h3>{directAttempt?.connected ? 'Live control permission' : 'Connect this card'}</h3>
+          <h3>{directAttempt?.connected ? 'Card verified' : 'Connect this card'}</h3>
           <p>{directAttempt?.connected
-            ? 'Touch a physical card control, then enable a short-lived permission for live previews and Stop on this exact card.'
+            ? safeControlsReady
+              ? 'This exact card and installed project are ready for ordinary pattern, color, brightness, and Stop controls. Project saves and firmware changes keep their stronger safety checks.'
+              : 'This exact card answered, but Studio is still verifying its installed project before ordinary controls are enabled.'
             : 'Your browser may ask whether Lightweaver Studio can find devices on your local network. Choose Allow so Studio can verify this exact card.'}</p>
           {usbReleaseState === 'restarted' && (
             <p role="status">Card restarted. Its Wi-Fi may take a moment. Try again when the card rejoins the network.</p>
           )}
           <div className="card-connection-actions">
             {directAttempt?.connected ? (
-              <button type="button" className="btn primary" onClick={enableLiveControl} disabled={capabilityBusy || capabilityReady}>
-                {capabilityBusy ? 'Confirming…' : capabilityReady ? 'Live control enabled' : 'Enable live control'}
-              </button>
+              safeControlsReady
+                ? <button type="button" className="btn primary" onClick={closeAndRestore}>Done</button>
+                : <button type="button" className="btn primary" onClick={onOpenSetup}>Continue in Setup</button>
             ) : (
               <button type="button" className="btn primary" onClick={() => connect()} disabled={directBusy}>
                 {directBusy ? 'Connecting…' : directAttempt ? 'Try again' : 'Connect this card'}

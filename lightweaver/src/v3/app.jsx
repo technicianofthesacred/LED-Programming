@@ -76,6 +76,9 @@ import { STUDIO_HARDWARE_OPERATION_EVENT } from '../lib/studioHardwareOperation.
 import { getRunningStudioRelease } from '../lib/studioRelease.js';
 import { bootstrapStudioCardConnection } from '../lib/studioCardBootstrap.js';
 import { deriveSetupJourney } from '../lib/setupJourney.js';
+import { deriveCardLifecycle } from '../lib/cardLifecycle.js';
+import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
+import { readFirmwareUpdateSession } from '../lib/cardFirmwareUpdater.js';
 
 const PatternScreen = lazy(() => import('./lw-pattern.jsx').then(module => ({ default: module.PatternScreen })));
 const PatternLabScreen = lazy(() => import('../pattern-lab/PatternLabScreen.jsx'));
@@ -423,15 +426,16 @@ function OfflineStatusControl({ state, onActivate }) {
   return <span className={`sb-firmware is-${state.status}`} data-testid="offline-update-status" role="status">{label}</span>;
 }
 
-function StatusBar({ link, connectionCenterOpen, cardControlOpen, onOpenCardControl, firmwareStatus, firmwareRelease, firmwareReleaseError, onOpenFirmwareUpdate, offlineUpdateState, onActivateOfflineUpdate, testStrip, onToggleTestStrip, onTestStripLengthChange, runningStudioRelease, freshness }) {
+function StatusBar({ link, lifecycle, connectionCenterOpen, cardControlOpen, onOpenCardControl, firmwareStatus, firmwareRelease, firmwareReleaseError, onOpenFirmwareUpdate, offlineUpdateState, onActivateOfflineUpdate, testStrip, onToggleTestStrip, onTestStripLengthChange, runningStudioRelease, freshness }) {
   return (
     <footer className="status-bar">
       <div className="sb-card">
         <CardStatusControl
           link={link}
+          lifecycle={lifecycle}
           onOpen={onOpenCardControl}
           open={connectionCenterOpen || cardControlOpen}
-          dialogId={cardConnectionStatus(link) === 'Connected' ? 'card-control-drawer' : 'card-connection-center'}
+          dialogId={cardConnectionStatus(link, lifecycle) === 'Connected' ? 'card-control-drawer' : 'card-connection-center'}
         />
       </div>
 
@@ -539,7 +543,7 @@ function Shell({ offlineUpdateController = null }) {
   }, [routeStore]);
   const {
     projectName, serializeProject, flushProjectAutosave, replaceProject, replaceWithNewProject, requestReplacementConfirmation,
-    projectLifecycle, projectLifecycleLabel, markProjectPersisted, markProjectEdited, isProjectLifecycleMarkerCurrent,
+    projectLifecycle, projectLifecycleLabel, markProjectPersisted, markProjectEdited, markProjectInstalled, isProjectLifecycleMarkerCurrent,
     projectHasUnsavedChanges,
   } = useProject();
   const offlineUpdateState = useSyncExternalStore(
@@ -816,6 +820,47 @@ function Shell({ offlineUpdateController = null }) {
   const directCardControl = typeof window === 'undefined' ? false : canPushDirectlyToCard(window.location.protocol);
   const cardStatus = useCardStatus({ enabled: directCardControl });
   const cardLink = useSyncExternalStore(subscribeCardLink, getCardLinkState, getCardLinkState);
+  const [firmwareRecoveryState, setFirmwareRecoveryState] = useState(() => {
+    const session = readFirmwareUpdateSession();
+    if (!session) return null;
+    if (session.phase === 'rolled-back') return { phase: 'rolled-back' };
+    if (['preflight', 'sending', 'verifying'].includes(session.phase)) return { phase: session.phase };
+    return { phase: 'restarting' };
+  });
+  const retainFirmwareRecoveryState = useCallback(next => {
+    setFirmwareRecoveryState(current => {
+      if (!next) return current;
+      if (next.phase === 'reconnected') return null;
+      return next;
+    });
+  }, []);
+  const lifecycleProject = useMemo(() => {
+    const project = serializeProject();
+    const currentInstallation = projectLifecycle.installedRevision === projectLifecycle.editedRevision
+      && projectLifecycle.installation?.verified === true
+      ? projectLifecycle.installation
+      : null;
+    return {
+      ...project,
+      revision: Number.isSafeInteger(currentInstallation?.projectRevision)
+        ? currentInstallation.projectRevision
+        : projectLifecycle.editedRevision,
+      fingerprint: currentInstallation?.projectFingerprint || cardProjectFingerprint(project),
+    };
+  }, [
+    projectLifecycle.editedRevision,
+    projectLifecycle.generation,
+    projectLifecycle.installation?.projectFingerprint,
+    projectLifecycle.installation?.projectRevision,
+    projectLifecycle.installation?.verified,
+    projectLifecycle.installedRevision,
+    serializeProject,
+  ]);
+  const cardLifecycle = useMemo(() => deriveCardLifecycle({
+    link: cardLink,
+    project: lifecycleProject,
+    update: firmwareRecoveryState,
+  }), [cardLink, firmwareRecoveryState, lifecycleProject]);
   useEffect(() => { void bootstrapStudioCardConnection(); }, []);
   useEffect(() => {
     if (!directCardControl) return;
@@ -853,15 +898,16 @@ function Shell({ offlineUpdateController = null }) {
     flushProjectAutosave();
     const journey = deriveSetupJourney({
       cardLink,
+      cardLifecycle,
       commissioningFlow: inspectCardCommissioning().flow,
       project: serializeProject(),
     });
     routeStore.replace(`#screen=card&section=setup&task=${encodeURIComponent(taskId || journey.taskId)}`);
-  }, [cardLink, flushProjectAutosave, routeStore, serializeProject]);
+  }, [cardLifecycle, cardLink, flushProjectAutosave, routeStore, serializeProject]);
   const openConnectionCenter = useCallback(() => setConnectionCenterOpen(true), []);
   const closeConnectionCenter = useCallback(() => setConnectionCenterOpen(false), []);
   const openCardControl = useCallback(() => {
-    const status = cardConnectionStatus(cardLink);
+    const status = cardConnectionStatus(cardLink, cardLifecycle);
     if (status === 'Connected') setCardControlOpen(true);
     else if (status === 'Needs attention' || status === 'Needs project') {
       setCardControlOpen(false);
@@ -871,7 +917,7 @@ function Shell({ offlineUpdateController = null }) {
       setCardControlOpen(false);
       setConnectionCenterOpen(true);
     }
-  }, [cardLink, openSetupTask]);
+  }, [cardLifecycle, cardLink, openSetupTask]);
   const closeCardControl = useCallback(() => setCardControlOpen(false), []);
   const reconnectFromCardControl = useCallback(() => {
     setCardControlOpen(false);
@@ -1115,6 +1161,28 @@ function Shell({ offlineUpdateController = null }) {
       return { ok: false, reason: 'association-handoff-failed' };
     }
   }, [cloudLibrary, isProjectLifecycleMarkerCurrent, markProjectEdited, markProjectPersisted]);
+  const onMatchedCardProjectVerified = useCallback(({ evidence, expectedMarker }) => {
+    if (!Number.isSafeInteger(expectedMarker?.generation)
+      || !Number.isSafeInteger(expectedMarker?.revision)
+      || !evidence?.cardId
+      || !Number.isSafeInteger(evidence?.projectRevision)
+      || evidence.projectRevision < 0
+      || !/^[a-f0-9]{16,64}$/.test(String(evidence?.projectFingerprint || ''))) {
+      return { ok: false, reason: 'exact-installation-evidence-required' };
+    }
+    const next = markProjectInstalled({
+      generation: expectedMarker.generation,
+      revision: expectedMarker.revision,
+      cardId: evidence.cardId,
+      projectRevision: evidence.projectRevision,
+      projectFingerprint: evidence.projectFingerprint,
+      verified: true,
+    });
+    return next?.installedRevision === expectedMarker.revision
+      && next?.installation?.verified === true
+      ? { ok: true }
+      : { ok: false, reason: 'superseded' };
+  }, [markProjectInstalled]);
   const openBrowserProject = useCallback(async project => {
     const recordId = String(project?.id || '');
     const recordSnapshot = readProjectLibraryRecordSnapshot(recordId);
@@ -1225,11 +1293,13 @@ function Shell({ offlineUpdateController = null }) {
               connected={connected}
               cardHost={cardLink.host || cardStatus.host}
               cardLink={cardLink}
+              cardLifecycle={cardLifecycle}
               onConnectCard={onConnectCard}
               onOpenConnectionCenter={openConnectionCenter}
               go={navigateStudio}
               onOpenSection={openCardSection}
               onOpenSetupTask={openSetupTask}
+              onFirmwareRecoveryState={retainFirmwareRecoveryState}
               replaceProject={replaceProject}
               currentProject={serializeProject()}
               projectGeneration={projectLifecycle.generation}
@@ -1243,6 +1313,7 @@ function Shell({ offlineUpdateController = null }) {
               saveProjectToBrowserGuarded={saveProjectToBrowserGuarded}
               isProjectSwitchSnapshotCurrent={isProjectSwitchSnapshotCurrent}
               onMatchedProjectLoaded={onMatchedCardProjectLoaded}
+              onMatchedProjectVerified={onMatchedCardProjectVerified}
               onStartNewProject={onStartNewProject}
               onSaveProject={onSave}
               route={underlyingCardRoute}
@@ -1276,6 +1347,7 @@ function Shell({ offlineUpdateController = null }) {
 
       <StatusBar
         link={cardLink}
+        lifecycle={cardLifecycle}
         connectionCenterOpen={connectionCenterOpen}
         cardControlOpen={cardControlOpen}
         onOpenCardControl={openCardControl}
@@ -1294,6 +1366,11 @@ function Shell({ offlineUpdateController = null }) {
       <CardConnectionCenter
         open={connectionCenterOpen}
         link={cardLink}
+        lifecycle={cardLifecycle}
+        onOpenSetup={() => {
+          closeConnectionCenter();
+          openSetupTask();
+        }}
         onClose={closeConnectionCenter}
         onConnectCard={onConnectCard}
         onLaunchBridge={onLaunchBridge}
@@ -1315,6 +1392,7 @@ function Shell({ offlineUpdateController = null }) {
       <CardControlDrawer
         open={cardControlOpen}
         link={cardLink}
+        lifecycle={cardLifecycle}
         host={cardLink.host || cardStatus.host}
         onClose={closeCardControl}
         onAdvanced={openAdvancedPattern}
