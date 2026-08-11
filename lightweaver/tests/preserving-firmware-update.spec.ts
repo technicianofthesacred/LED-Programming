@@ -245,6 +245,61 @@ test('preserving update: an in-place disconnect retains the new session and self
   expect(await page.evaluate(() => sessionStorage.getItem('lw_firmware_update_session_v1'))).toBeNull();
 });
 
+test('preserving update: an already healthy exact card clears stale restart evidence outside the update route', async ({ page }) => {
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  const status = await page.evaluate(async ({ cardId, targetBuild }) => {
+    const { createDefaultProject, migrateProject } = await import('/src/lib/projectModel.js');
+    const { cardProjectFingerprint } = await import('/src/lib/cardProjectResolver.js');
+    const project = createDefaultProject();
+    project.id = 'stale-session-project';
+    project.name = 'Stale session project';
+    const migratedProject = migrateProject(project);
+    const fingerprint = cardProjectFingerprint(migratedProject);
+    localStorage.clear();
+    sessionStorage.clear();
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(migratedProject));
+    localStorage.setItem('lw_autosave_v3_backup', JSON.stringify(migratedProject));
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1, id: cardId, firmwareVersion: '1.1.13', buildId: targetBuild,
+    }));
+    localStorage.setItem('lw_chip_card_host', 'lightweaver.local');
+    sessionStorage.setItem('lw_firmware_update_session_v1', JSON.stringify({
+      version: 1, cardId, previousBootId: 'boot-before-update',
+      expectedProjectHead: '', expectedProjectFingerprint: fingerprint,
+      targetFirmwareVersion: '1.1.13', targetBuildId: targetBuild,
+      targetBuildNumber: 1286, ticketSha256: '4'.repeat(64),
+      phase: 'pending-reboot', acknowledgedBytes: 3,
+    }));
+    return {
+      app: 'Lightweaver', provisioningContractVersion: 1, cardId,
+      bootId: 'boot-after-update', firmwareVersion: '1.1.13', buildId: targetBuild, buildNumber: 1286,
+      projectId: project.id, projectRevision: 0, projectHead: '', projectFingerprint: fingerprint,
+      runtimePhase: 'ready', knownGoodProject: true, commandReady: true,
+      outputReady: true, playbackReady: true, provisionalSetup: false,
+      firmwareUpdate: { phase: 'idle' },
+    };
+  }, { cardId: CARD_ID, targetBuild: TARGET_BUILD });
+  await page.route('http://lightweaver.local/api/status', route => route.fulfill({ json: status }));
+  await page.route('http://lightweaver.local/api/firmware-info', route => route.fulfill({ json: status }));
+  // The query change forces a new document so the app boots from the project
+  // and recovery session written above instead of retaining the first mount.
+  await page.goto('/?stale-recovery=1#screen=card&section=support', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(async freshStatus => {
+    const { getSharedCardLink } = await import('/src/lib/cardLink.js');
+    const event = {
+      type: 'card-verified', via: 'direct', host: 'lightweaver.local',
+      card: { id: freshStatus.cardId, firmwareVersion: freshStatus.firmwareVersion, buildId: freshStatus.buildId },
+      expectedCard: { id: freshStatus.cardId, firmwareVersion: freshStatus.firmwareVersion, buildId: freshStatus.buildId },
+      readiness: freshStatus,
+    };
+    getSharedCardLink().dispatch(event);
+    getSharedCardLink().dispatch(event);
+  }, status);
+
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('lw_firmware_update_session_v1'))).toBeNull();
+  await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
+});
+
 test('preserving update: older card offers one USB bootstrap and separates factory reset', async ({ page }) => {
   await openPreservingFixture(page, 'usb');
   const panel = page.getByTestId('preserving-update-panel');
