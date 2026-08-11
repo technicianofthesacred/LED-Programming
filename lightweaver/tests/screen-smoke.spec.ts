@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { createDefaultProject } from '../src/lib/projectModel.js';
+import { cardProjectFingerprint } from '../src/lib/cardProjectResolver.js';
 
 // Every primary Studio destination must retain the shared shell controls.
 // 'Setup' is the single card destination — the old 'Setup' and 'Hardware' rail
@@ -651,6 +653,11 @@ test('status control announces state and dialog expansion', async ({ page }) => 
 
 for (const width of [641, 768, 900]) {
   test(`connected footer remains usable without overflow at ${width}px`, async ({ page }) => {
+    const project = createDefaultProject();
+    const projectFingerprint = cardProjectFingerprint(project);
+    await page.addInitScript(savedProject => {
+      localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
+    }, project);
     await page.setViewportSize({ width, height: 844 });
     await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
     await page.evaluate(() => localStorage.clear());
@@ -668,7 +675,14 @@ for (const width of [641, 768, 900]) {
         firmwareVersion: '1.4.0',
         buildId: 'responsive-build',
       },
-      readiness: readyStatus('lw-responsive-card', { buildId: 'responsive-build' }),
+      readiness: readyStatus('lw-responsive-card', {
+        buildId: 'responsive-build',
+        playbackReady: true,
+        projectId: project.id,
+        projectRevision: 0,
+        projectFingerprint,
+        piece: { id: project.id },
+      }),
     }]);
     await expect(page.getByTestId('card-link-status')).toHaveAccessibleName(/Connected/);
     await expect(page.locator('.card-status-summary')).toHaveCount(0);
