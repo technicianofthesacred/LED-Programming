@@ -213,6 +213,50 @@ test('reload recovery distinguishes probation, valid, and rollback without weake
   }).reason, 'update-capability-missing');
 });
 
+test('reload recovery accepts idle or missing update status only with complete runtime-known-good evidence', () => {
+  const session = {
+    version: 1, cardId: CARD_ID, previousBootId: OLD_BOOT,
+    expectedProjectHead: OLD_HEAD, expectedProjectFingerprint: OLD_FINGERPRINT,
+    targetFirmwareVersion: '1.2.0', targetBuildId: TARGET_BUILD, targetBuildNumber: 1300,
+    ticketSha256: TICKET_DIGEST, phase: 'restarting', acknowledgedBytes: 8,
+  };
+  const runtimeKnownGood = {
+    cardId: CARD_ID, bootId: 'boot-new', firmwareVersion: '1.2.0', buildId: TARGET_BUILD,
+    projectHead: OLD_HEAD, projectFingerprint: OLD_FINGERPRINT,
+    runtimePhase: 'ready', knownGoodProject: true, commandReady: true,
+    outputReady: true, playbackReady: true, provisionalSetup: false,
+  };
+  const accepted = {
+    ok: true, terminal: true, phase: 'valid', reason: '', evidence: 'runtime-known-good',
+  };
+
+  assert.deepEqual(correlateFirmwareUpdateRecovery(session, { phase: 'idle' }, runtimeKnownGood), accepted);
+  assert.deepEqual(correlateFirmwareUpdateRecovery(session, {}, {
+    ...runtimeKnownGood, provisionalSetup: undefined,
+  }), accepted);
+
+  for (const [field, value] of [
+    ['runtimePhase', 'recovering'],
+    ['knownGoodProject', false],
+    ['commandReady', false],
+    ['outputReady', false],
+    ['playbackReady', false],
+    ['provisionalSetup', true],
+  ]) {
+    assert.equal(
+      correlateFirmwareUpdateRecovery(session, { phase: 'idle' }, {
+        ...runtimeKnownGood, [field]: value,
+      }).reason,
+      'runtime-not-known-good',
+      `${field} must remain part of the runtime-known-good gate`,
+    );
+  }
+  assert.equal(
+    correlateFirmwareUpdateRecovery(session, {}, { ...runtimeKnownGood, playbackReady: undefined }).reason,
+    'runtime-not-known-good',
+  );
+});
+
 test('blank-card Wi-Fi update binds an exact empty project head without treating it as a wildcard', async () => {
   const storage = new Map();
   const storageAdapter = {

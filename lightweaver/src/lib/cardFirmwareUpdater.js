@@ -195,7 +195,21 @@ export function correlateFirmwareUpdateRecovery(rawSession, updateStatus = {}, r
     return { ok: false, terminal: false, phase, reason: 'target-mismatch' };
   }
   if (phase === 'probation') return { ok: false, terminal: false, phase, reason: '' };
-  if (phase !== 'valid') return { ok: false, terminal: false, phase, reason: phase ? 'update-not-valid' : 'status-missing' };
+  if (!phase || phase === 'idle') {
+    const runtimeKnownGood = readiness.runtimePhase === 'ready'
+      && readiness.knownGoodProject === true
+      && readiness.commandReady === true
+      && readiness.outputReady === true
+      && readiness.playbackReady === true
+      && readiness.provisionalSetup !== true;
+    if (!runtimeKnownGood) {
+      return { ok: false, terminal: false, phase, reason: 'runtime-not-known-good' };
+    }
+    return {
+      ok: true, terminal: true, phase: 'valid', reason: '', evidence: 'runtime-known-good',
+    };
+  }
+  if (phase !== 'valid') return { ok: false, terminal: false, phase, reason: 'update-not-valid' };
   const capability = readiness?.capabilities?.firmwareUpdate;
   if (capability?.version !== 1 || capability.network !== true) {
     return { ok: false, terminal: false, phase, reason: 'update-capability-missing' };
