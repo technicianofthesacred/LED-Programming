@@ -41,7 +41,10 @@ function validRelease(release) {
   return { manifest, ticketSha256, imageBytes, ticketBytes, ticketSignature };
 }
 
-function binding(authority, release, physicalConfirmation) {
+function binding(authority, release, physicalConfirmation, softwareGrant) {
+  const grantPayload = typeof softwareGrant?.grantPayload === 'string' ? softwareGrant.grantPayload : '';
+  const grantSignature = text(softwareGrant?.grantSignature, 128);
+  const softwareAuthorized = Boolean(grantPayload && grantSignature);
   const result = {
     cardId: text(authority?.cardId, 64),
     bootId: text(authority?.bootId, 96),
@@ -50,6 +53,8 @@ function binding(authority, release, physicalConfirmation) {
     expectedProjectHead: exactProjectHead(authority?.projectHead),
     capability: text(authority?.ownerCapability, 512),
     physicalConfirmationNonce: text(physicalConfirmation, 160),
+    grantPayload,
+    grantSignature,
     releaseBuildId: text(release.manifest.buildId, 40).toLowerCase(),
     ticketSha256: release.ticketSha256,
   };
@@ -57,13 +62,14 @@ function binding(authority, release, physicalConfirmation) {
     || !result.bootId || !result.ownerSessionId
     || !Number.isSafeInteger(result.operationGeneration) || result.operationGeneration <= 0
     || result.expectedProjectHead === null
-    || !result.capability || !result.physicalConfirmationNonce) {
-    throw new Error('A current exact-card owner authority and physical confirmation are required.');
+    || (!softwareAuthorized && (!result.capability || !result.physicalConfirmationNonce))) {
+    throw new Error('A current exact-card update authorization is required.');
   }
-  if (text(authority.ownerCapabilityExpectedHead, 64).toLowerCase() !== result.expectedProjectHead) {
+  if (!softwareAuthorized
+    && text(authority.ownerCapabilityExpectedHead, 64).toLowerCase() !== result.expectedProjectHead) {
     throw new Error('Owner authority is bound to a different project head.');
   }
-  return Object.freeze(result);
+  return Object.freeze({ ...result, authorization: softwareAuthorized ? 'software-grant' : 'physical-owner' });
 }
 
 function mutationHeaders(value, additions = {}) {
@@ -208,16 +214,18 @@ export function createCardFirmwareUpdater({
   authority,
   release: rawRelease,
   physicalConfirmation,
+  softwareGrant,
   projectFingerprint = authority?.readiness?.projectFingerprint || '',
   storage = browserSessionStorage(),
   onProgress,
 } = {}) {
   const release = validRelease(rawRelease);
-  const exactBinding = binding(authority, release, physicalConfirmation);
+  const exactBinding = binding(authority, release, physicalConfirmation, softwareGrant);
   let phase = 'idle';
   let leaseId = '';
   let acknowledgedBytes = 0;
   let revoked = false;
+  let updateCapability = '';
   const stopWatching = authority.watch?.(() => { revoked = true; }) || (() => {});
   const assertCurrent = () => {
     if (revoked || authority.revoked
@@ -251,7 +259,10 @@ export function createCardFirmwareUpdater({
     }
     return result || {};
   };
-  const body = additions => ({ ...exactBinding, ...additions });
+  const body = additions => {
+    const { authorization: _authorization, grantPayload: _grantPayload, grantSignature: _grantSignature, ...common } = exactBinding;
+    return { ...common, ...additions };
+  };
 
   return Object.freeze({
     get phase() { return phase; },
@@ -264,13 +275,21 @@ export function createCardFirmwareUpdater({
           targetFirmwareVersion: release.manifest.firmwareVersion,
           ticket: base64(release.ticketBytes),
           signature: base64url(release.ticketSignature),
+          ...(exactBinding.authorization === 'software-grant' ? {
+            grantPayload: exactBinding.grantPayload,
+            grantSignature: exactBinding.grantSignature,
+          } : {}),
         }),
       });
+      if (exactBinding.authorization === 'software-grant') {
+        updateCapability = text(result.updateCapability, 160);
+        if (!updateCapability) throw new Error('The card did not issue an update-only capability.');
+      }
       phase = 'preflight'; session(phase); return result;
     },
     async begin() {
       const result = await request('/api/update/begin', {
-        method: 'POST', headers: mutationHeaders(exactBinding), body: body({ imageSize: release.imageBytes.byteLength }),
+        method: 'POST', headers: mutationHeaders(exactBinding), body: body({ imageSize: release.imageBytes.byteLength, updateCapability }),
       });
       leaseId = text(result.leaseId, 128);
       acknowledgedBytes = Number(result.receivedBytes || 0);
@@ -285,7 +304,7 @@ export function createCardFirmwareUpdater({
         const result = await request('/api/update/chunk', {
           method: 'POST',
           headers: mutationHeaders(exactBinding),
-          body: body({ leaseId, sequence, offset, data: base64(chunk) }),
+          body: body({ leaseId, sequence, offset, data: base64(chunk), updateCapability }),
         });
         const next = Number(result.receivedBytes);
         if (next !== offset + chunk.byteLength) throw new Error('Card update acknowledgement did not match the sent bytes.');
@@ -299,7 +318,7 @@ export function createCardFirmwareUpdater({
     async commit() {
       if (!leaseId || acknowledgedBytes !== release.imageBytes.byteLength) throw new Error('Firmware update is not fully acknowledged.');
       const result = await request('/api/update/commit', {
-        method: 'POST', headers: mutationHeaders(exactBinding), body: body({ leaseId }),
+        method: 'POST', headers: mutationHeaders(exactBinding), body: body({ leaseId, updateCapability }),
       });
       phase = 'restarting'; session(phase); return result;
     },
@@ -316,7 +335,7 @@ export function createCardFirmwareUpdater({
     async cancel() {
       try {
         const result = await request('/api/update/cancel', {
-          method: 'POST', headers: mutationHeaders(exactBinding), body: body({ leaseId }),
+          method: 'POST', headers: mutationHeaders(exactBinding), body: body({ leaseId, updateCapability }),
         });
         phase = 'cancelled'; session(phase); return result;
       } finally { stopWatching(); }

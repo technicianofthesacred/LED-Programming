@@ -15,6 +15,7 @@
 
 #include "LightweaverCardStudio.h"
 #include "LightweaverFirmwareBootHealth.h"
+#include "LightweaverFirmwareUpdateGrant.h"
 #include "LightweaverHttpFrameStream.h"
 #include "LightweaverOwnerCapability.h"
 #include "LightweaverProjectRepository.h"
@@ -435,8 +436,31 @@ FirmwareUpdateBinding updateBinding(JsonVariantConst source) {
   return binding;
 }
 
-bool authorizeUpdate(JsonVariantConst source, const FirmwareUpdateBinding& update,
-                     bool requirePhysical, String& error) {
+FirmwareUpdateGrantBinding updateGrantBinding(
+    const FirmwareUpdateBinding& update) {
+  FirmwareUpdateGrantBinding binding;
+  binding.cardId = update.cardId;
+  binding.bootId = update.bootId;
+  binding.expectedProjectHead = update.expectedProjectHead;
+  binding.allowedOrigin = g_updateServer->header("Origin");
+  binding.host = g_updateServer->hostHeader();
+  binding.networkIdentity = runtimeNetworkIdentity();
+  binding.ownerSessionId = update.ownerSessionId;
+  binding.operationGeneration = update.operationGeneration;
+  binding.releaseBuildId = update.releaseBuildId;
+  binding.ticketSha256 = update.ticketSha256;
+  return binding;
+}
+
+bool exactLiveUpdateBinding(const FirmwareUpdateBinding& update) {
+  return update.cardId == runtimeCardId() &&
+      update.bootId == runtimeBootId() &&
+      update.expectedProjectHead == lightweaverProjectRepository().currentHead();
+}
+
+bool authorizePhysicalUpdate(JsonVariantConst source,
+                             const FirmwareUpdateBinding& update,
+                             bool requirePhysical, String& error) {
   LightweaverOwnerBinding owner;
   owner.cardId = update.cardId;
   owner.bootId = update.bootId;
@@ -449,8 +473,7 @@ bool authorizeUpdate(JsonVariantConst source, const FirmwareUpdateBinding& updat
   const String capability = source["capability"] | "";
   if (lightweaverOwnerCapability().validate(capability, owner, millis()) !=
           LightweaverOwnerValidation::Accepted ||
-      update.cardId != runtimeCardId() || update.bootId != runtimeBootId() ||
-      update.expectedProjectHead != lightweaverProjectRepository().currentHead()) {
+      !exactLiveUpdateBinding(update)) {
     error = "owner capability or exact-card binding rejected";
     return false;
   }
@@ -458,6 +481,62 @@ bool authorizeUpdate(JsonVariantConst source, const FirmwareUpdateBinding& updat
       !String(source["physicalConfirmationNonce"] | "").length())) {
     error = "fresh physical confirmation required";
     return false;
+  }
+  return true;
+}
+
+bool authorizeActiveUpdateCapability(JsonVariantConst source,
+                                     const FirmwareUpdateBinding& update,
+                                     String& error) {
+  const String capability = source["updateCapability"] | "";
+  if (!capability.length() || !exactLiveUpdateBinding(update) ||
+      lightweaverFirmwareUpdateGrant().validateCapability(
+          capability, updateGrantBinding(update), millis()) !=
+              FirmwareUpdateGrantResult::Accepted) {
+    error = "update-only capability or exact-card binding rejected";
+    return false;
+  }
+  return true;
+}
+
+bool authorizeUpdate(JsonVariantConst source, const FirmwareUpdateBinding& update,
+                     bool requirePhysical, String& error) {
+  if (String(source["updateCapability"] | "").length())
+    return authorizeActiveUpdateCapability(source, update, error);
+  return authorizePhysicalUpdate(source, update, requirePhysical, error);
+}
+
+String makeUpdateCapabilityToken() {
+  uint8_t random[LW_UPDATE_GRANT_NONCE_BYTES] = {};
+  lightweaverUpdateGrantRandom(random, sizeof(random));
+  static const char digits[] = "0123456789abcdef";
+  char encoded[LW_UPDATE_GRANT_NONCE_BYTES * 2 + 1] = {};
+  for (size_t index = 0; index < sizeof(random); index++) {
+    encoded[index * 2] = digits[random[index] >> 4];
+    encoded[index * 2 + 1] = digits[random[index] & 0x0f];
+  }
+  return String(encoded);
+}
+
+bool consumeSoftwareUpdateGrant(JsonVariantConst source,
+                                const FirmwareUpdateBinding& update,
+                                String& capability, String& error) {
+  const String payload = source["grantPayload"] | "";
+  const String encodedSignature = source["grantSignature"] | "";
+  uint8_t signature[LW_UPDATE_GRANT_SIGNATURE_BYTES] = {};
+  if (!payload.length() || payload.length() > LW_UPDATE_GRANT_MAX_PAYLOAD_BYTES ||
+      !decodeBase64UrlSignature(encodedSignature, signature)) {
+    error = "software update grant encoding rejected"; return false;
+  }
+  capability = makeUpdateCapabilityToken();
+  const FirmwareUpdateGrantResult result =
+      lightweaverFirmwareUpdateGrant().consumeSignedGrant(
+          reinterpret_cast<const uint8_t*>(payload.c_str()), payload.length(),
+          signature, sizeof(signature), verifyLightweaverUpdateGrantSignature,
+          updateGrantBinding(update), capability, millis());
+  if (result != FirmwareUpdateGrantResult::Accepted) {
+    capability = String();
+    error = "software update grant rejected"; return false;
   }
   return true;
 }
@@ -507,6 +586,7 @@ void abortInactiveWrite(const String& reason, bool failed) {
   if (g_imageShaActive) { mbedtls_sha256_free(&g_imageSha); g_imageShaActive = false; }
   g_transfer.reset();
   g_leaseId = String();
+  lightweaverFirmwareUpdateGrant().revokeCapability();
   if (!g_restoreBlackout) runtimeSetBlackout(false);
   g_restoreBlackout = false;
   g_status.phase = failed ? FirmwareUpdatePhase::Failed : FirmwareUpdatePhase::Idle;
@@ -515,7 +595,8 @@ void abortInactiveWrite(const String& reason, bool failed) {
   g_status.pendingSlot = String();
 }
 
-void sendStatusBody(int status = 200) {
+void sendStatusBody(int status = 200,
+                    const String& updateCapability = String()) {
   JsonDocument doc;
   doc["ok"] = status < 400;
   doc["phase"] = phaseLabel(g_status.phase);
@@ -530,9 +611,85 @@ void sendStatusBody(int status = 200) {
   doc["restoredFirmwareVersion"] = g_status.restoredFirmwareVersion;
   doc["restoredBuildId"] = g_status.restoredBuildId;
   doc["restoredBuildNumber"] = g_status.restoredBuildNumber;
+  if (updateCapability.length()) {
+    doc["updateCapability"] = updateCapability;
+    doc["updateCapabilityExpiresInMs"] = LW_UPDATE_GRANT_TTL_MS;
+  }
   String body;
   serializeJson(doc, body);
   g_updateServer->send(status, "application/json", body);
+}
+
+void sendChallengeError(int status, const char* detail) {
+  JsonDocument doc;
+  doc["ok"] = false;
+  doc["error"] = "update-challenge-rejected";
+  doc["detail"] = detail;
+  String body; serializeJson(doc, body);
+  g_updateServer->send(status, "application/json", body);
+}
+
+void handleChallenge() {
+  sendUpdateCors();
+  if (!allowUpdateMutation()) return;
+  JsonDocument request;
+  if (!parseUpdateBody(request)) return;
+  const String origin = g_updateServer->header("Origin");
+  const String studioOrigin = request["studioOrigin"] | "";
+  const String cardId = request["cardId"] | "";
+  const String bootId = request["bootId"] | "";
+  const String expectedProjectHead = request["expectedProjectHead"] | "";
+  const String ownerSessionId = request["ownerSessionId"] | "";
+  const uint32_t operationGeneration = request["operationGeneration"] | 0U;
+  const String releaseBuildId = request["releaseBuildId"] | "";
+  const String ticketSha256 = request["ticketSha256"] | "";
+  if (!corsOriginAllowed(origin)) {
+    sendChallengeError(403, "origin is not allowed"); return;
+  }
+  if (studioOrigin != origin || cardId != runtimeCardId() ||
+      bootId != runtimeBootId() ||
+      expectedProjectHead != lightweaverProjectRepository().currentHead()) {
+    sendChallengeError(409, "card, boot, origin, or project head changed"); return;
+  }
+  if (!ownerSessionId.length() || operationGeneration == 0 ||
+      !strictHex(releaseBuildId, 40) || !strictHex(ticketSha256, 64)) {
+    sendChallengeError(400, "challenge binding is incomplete"); return;
+  }
+  if (!runtimeCommandReady() || lightweaverFirmwareUpdateActive()) {
+    sendChallengeError(409, "card is not ready for an update challenge"); return;
+  }
+  FirmwareUpdateGrantBinding binding;
+  binding.cardId = cardId;
+  binding.bootId = bootId;
+  binding.expectedProjectHead = expectedProjectHead;
+  binding.allowedOrigin = studioOrigin;
+  binding.host = g_updateServer->hostHeader();
+  binding.networkIdentity = runtimeNetworkIdentity();
+  binding.ownerSessionId = ownerSessionId;
+  binding.operationGeneration = operationGeneration;
+  binding.releaseBuildId = releaseBuildId;
+  binding.ticketSha256 = ticketSha256;
+  uint8_t nonce[LW_UPDATE_GRANT_NONCE_BYTES] = {};
+  uint8_t payload[LW_UPDATE_GRANT_MAX_PAYLOAD_BYTES + 1] = {};
+  size_t payloadLength = 0;
+  lightweaverUpdateGrantRandom(nonce, sizeof(nonce));
+  if (!lightweaverFirmwareUpdateGrant().issueChallenge(
+          binding, nonce, millis(), payload,
+          LW_UPDATE_GRANT_MAX_PAYLOAD_BYTES, payloadLength)) {
+    sendChallengeError(400, "challenge payload could not be created"); return;
+  }
+  payload[payloadLength] = 0;
+  JsonDocument response;
+  response["ok"] = true;
+  response["schemaVersion"] = LW_UPDATE_GRANT_SCHEMA_VERSION;
+  response["scope"] = "firmware-update";
+  response["cardId"] = binding.cardId;
+  response["bootId"] = binding.bootId;
+  response["projectHead"] = binding.expectedProjectHead;
+  response["expiresInMs"] = LW_UPDATE_GRANT_TTL_MS;
+  response["grantPayload"] = reinterpret_cast<const char*>(payload);
+  String body; serializeJson(response, body);
+  g_updateServer->send(200, "application/json", body);
 }
 
 void handlePreflight() {
@@ -549,8 +706,12 @@ void handlePreflight() {
     sendUpdateError(409, FirmwareUpdateResult::ConcurrentMutation); return;
   }
   FirmwareUpdateBinding binding = updateBinding(doc.as<JsonVariantConst>());
+  const bool softwareGrantRequested =
+      String(doc["grantPayload"] | "").length() ||
+      String(doc["grantSignature"] | "").length();
   String authError;
-  if (!authorizeUpdate(doc.as<JsonVariantConst>(), binding, true, authError)) {
+  if (!softwareGrantRequested &&
+      !authorizePhysicalUpdate(doc.as<JsonVariantConst>(), binding, true, authError)) {
     sendUpdateError(403, authError.indexOf("physical") >= 0
         ? FirmwareUpdateResult::PhysicalConfirmationRequired
         : FirmwareUpdateResult::AuthorityRejected, authError); return;
@@ -578,16 +739,25 @@ void handlePreflight() {
         verifyError.length() ? verifyError : "ticket or signature encoding rejected");
     return;
   }
+  String updateCapability;
+  if (softwareGrantRequested && !consumeSoftwareUpdateGrant(
+          doc.as<JsonVariantConst>(), binding, updateCapability, authError)) {
+    sendUpdateError(403, FirmwareUpdateResult::AuthorityRejected, authError);
+    return;
+  }
   g_transfer.reset();
   FirmwareUpdateResult result = g_transfer.preflight(binding, ticket.imageSize, millis());
-  if (result != FirmwareUpdateResult::Accepted) { sendUpdateError(409, result); return; }
+  if (result != FirmwareUpdateResult::Accepted) {
+    lightweaverFirmwareUpdateGrant().revokeCapability();
+    sendUpdateError(409, result); return;
+  }
   g_ticket = ticket;
   g_status = FirmwareUpdateStatus{};
   syncTransferStatus();
   g_status.expectedBuildId = ticket.buildId;
   g_status.activeSlot = partitionLabel(esp_ota_get_running_partition());
   g_status.pendingSlot = partitionLabel(esp_ota_get_next_update_partition(nullptr));
-  sendStatusBody();
+  sendStatusBody(200, updateCapability);
 }
 
 void handleBegin() {
@@ -778,6 +948,7 @@ void handleCommit() {
   g_transfer.markPendingReboot();
   syncTransferStatus();
   g_rebootAtMs = millis() + LW_FIRMWARE_UPDATE_REBOOT_DELAY_MS;
+  lightweaverFirmwareUpdateGrant().revokeCapability();
   sendStatusBody();
 }
 
@@ -796,7 +967,8 @@ void handleCancel() {
 void handleStatus() { sendUpdateCors(); sendStatusBody(); }
 
 void handleUpdateMutation(const String& uri) {
-  if (uri == "/api/update/preflight") handlePreflight();
+  if (uri == "/api/update/challenge") handleChallenge();
+  else if (uri == "/api/update/preflight") handlePreflight();
   else if (uri == "/api/update/begin") handleBegin();
   else if (uri == "/api/update/chunk") handleChunk();
   else if (uri == "/api/update/commit") handleCommit();
@@ -851,7 +1023,8 @@ void handleUpdateRaw(HTTPRaw& raw) {
 class BoundedFirmwareUpdateHandler final : public RequestHandler {
  public:
   bool canHandle(HTTPMethod method, String uri) override {
-    return method == HTTP_POST && (uri == "/api/update/preflight" ||
+    return method == HTTP_POST && (uri == "/api/update/challenge" ||
+        uri == "/api/update/preflight" ||
         uri == "/api/update/begin" || uri == "/api/update/chunk" ||
         uri == "/api/update/commit" || uri == "/api/update/cancel");
   }
@@ -876,7 +1049,7 @@ void registerLightweaverFirmwareUpdate(WebServer& server) {
   server.on("/api/update/status", HTTP_GET, handleStatus);
   for (const char* route : {"/api/update/preflight", "/api/update/begin",
       "/api/update/chunk", "/api/update/commit", "/api/update/cancel",
-      "/api/update/status"}) {
+      "/api/update/status", "/api/update/challenge"}) {
     server.on(route, HTTP_OPTIONS, handleUpdateOptions);
   }
   server.addHandler(new BoundedFirmwareUpdateHandler());
@@ -885,6 +1058,7 @@ void registerLightweaverFirmwareUpdate(WebServer& server) {
 }
 
 void handleLightweaverFirmwareUpdate() {
+  lightweaverFirmwareUpdateGrant().expire(millis());
   if (g_transfer.expire(millis())) {
     abortInactiveWrite("update lease expired", true);
   }

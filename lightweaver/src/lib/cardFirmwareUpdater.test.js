@@ -103,6 +103,41 @@ test('Wi-Fi updater binds preflight and monotonic 32 KiB chunks to exact authori
   assert.equal(progress.at(-1).acknowledgedBytes, FIRMWARE_UPDATE_CHUNK_BYTES + 7);
 });
 
+test('software grant is consumed once and only its update capability authorizes later mutations', async () => {
+  const calls = [];
+  const softwareAuthority = {
+    ...authority(calls, {
+      '/api/update/preflight': { ok: true, updateCapability: 'update-only-secret' },
+      '/api/update/begin': { ok: true, leaseId: 'update-1', receivedBytes: 0 },
+      '/api/update/chunk': { ok: true, receivedBytes: 8 },
+      '/api/update/commit': { ok: true },
+    }),
+    ownerCapability: '',
+    ownerCapabilityExpectedHead: null,
+  };
+  const updater = createCardFirmwareUpdater({
+    authority: softwareAuthority,
+    release: release(8),
+    softwareGrant: { grantPayload: '{"exact":"card-challenge"}', grantSignature: 'A'.repeat(86) },
+  });
+
+  await updater.preflight();
+  await updater.begin();
+  await updater.send();
+  await updater.commit();
+
+  assert.equal(calls[0].init.body.grantPayload, '{"exact":"card-challenge"}');
+  assert.equal(calls[0].init.body.grantSignature, 'A'.repeat(86));
+  assert.equal(calls[0].init.body.updateCapability, undefined);
+  for (const call of calls.slice(1)) {
+    assert.equal(call.init.body.updateCapability, 'update-only-secret');
+    assert.equal(call.init.body.grantPayload, undefined);
+    assert.equal(call.init.body.grantSignature, undefined);
+    assert.equal(call.init.body.capability, '');
+    assert.equal(call.init.body.physicalConfirmationNonce, '');
+  }
+});
+
 test('reload state is redacted and reconnect succeeds only for same card, new boot, target build, and unchanged project', async () => {
   const storage = new Map();
   const storageAdapter = {
@@ -217,7 +252,7 @@ test('blank-card Wi-Fi update binds an exact empty project head without treating
     authority: { ...blankAuthority, projectHead: 'not-a-project-head', ownerCapabilityExpectedHead: 'not-a-project-head' },
     release: release(8),
     physicalConfirmation: 'owner-confirmed-physical-control',
-  }), /exact-card owner authority/i);
+  }), /exact-card update authorization/i);
 });
 
 test('Wi-Fi updater rejects a zero operation generation before any card mutation', () => {
@@ -226,7 +261,7 @@ test('Wi-Fi updater rejects a zero operation generation before any card mutation
     authority: { ...authority(calls), operationGeneration: 0 },
     release: release(8),
     physicalConfirmation: 'owner-confirmed-physical-control',
-  }), /exact-card owner authority/i);
+  }), /exact-card update authorization/i);
   assert.deepEqual(calls, []);
 });
 
