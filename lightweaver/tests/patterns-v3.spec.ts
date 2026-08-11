@@ -178,7 +178,12 @@ async function gotoPairedReadinessPatterns(page, {
     cardId, firmwareVersion: '1.0.0', buildId, bootId: `${cardId}-boot`,
     runtimePhase, knownGoodProject, commandReady, outputReady,
     ...(playbackReady === undefined ? {} : { playbackReady }),
-    ...(fixture ? { piece: { id: project.id }, projectFingerprint: fixture.projectFingerprint } : {}),
+    ...(fixture ? {
+      projectId: project.id,
+      projectRevision: 0,
+      piece: { id: project.id },
+      projectFingerprint: fixture.projectFingerprint,
+    } : {}),
     ...(runtimePhase === 'factory' ? { mode: 'factory-flash', source: 'defaults' } : {}),
   } }));
   await page.route('**/api/control', async route => {
@@ -946,6 +951,7 @@ test('clicking a card updates the preview', async ({ page }) => {
     runtimePhase: 'ready',
     knownGoodProject: true,
     commandReady: true,
+    playbackReady: true,
   });
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
@@ -987,6 +993,7 @@ test('an exact paired ready card still applies Ocean immediately', async ({ page
     runtimePhase: 'ready',
     knownGoodProject: true,
     commandReady: true,
+    playbackReady: true,
   });
   await expect(page.getByTestId('card-link-status')).toContainText('Connected');
 
