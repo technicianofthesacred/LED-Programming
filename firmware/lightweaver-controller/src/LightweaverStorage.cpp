@@ -2469,6 +2469,7 @@ String runtimeStatusJson(const RuntimeConfig& config, ErrorCode errorCode, uint1
       LW_KALEIDOSCOPE_REFLECTION_POINTS_VERSION;
   doc["capabilities"]["firmwareUpdate"]["version"] = LW_FIRMWARE_UPDATE_VERSION;
   doc["capabilities"]["firmwareUpdate"]["network"] = true;
+  doc["capabilities"]["firmwareUpdate"]["softwareGrant"] = true;
   JsonDocument updateStatus;
   if (!deserializeJson(updateStatus, runtimeFirmwareUpdateStatusJson())) {
     doc["firmwareUpdate"] = updateStatus.as<JsonObject>();

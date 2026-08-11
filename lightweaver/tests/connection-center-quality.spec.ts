@@ -837,6 +837,11 @@ test('card update and safe recovery use install only when browser USB is usable'
   await expect(page).toHaveURL(/#screen=flash&mode=install$/);
 
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  // The first scenario deliberately leaves the shared card link in an
+  // attention state. Reload before exercising the independent recovery case;
+  // otherwise the fused footer correctly routes straight to Setup instead of
+  // opening the connection dialog this assertion is about.
+  await page.reload({ waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await dispatchCardLinkEvent(page, { type: 'bridge-lost', reason: 'recovery-unconfirmed' });
   await expect(actionRegion(page)).toHaveAttribute('data-action-id', 'needs-safe-recovery');
