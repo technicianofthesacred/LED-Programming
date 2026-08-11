@@ -132,6 +132,24 @@ export function clearFirmwareUpdateSession({ storage = browserSessionStorage() }
   catch { return false; }
 }
 
+const RECOVERY_IDENTITY_FIELDS = Object.freeze([
+  'cardId',
+  'previousBootId',
+  'targetFirmwareVersion',
+  'targetBuildId',
+  'targetBuildNumber',
+  'expectedProjectHead',
+  'expectedProjectFingerprint',
+]);
+
+export function clearFirmwareUpdateSessionIfMatches(expected, { storage = browserSessionStorage() } = {}) {
+  const safeExpected = safeSession(expected);
+  const current = readFirmwareUpdateSession({ storage });
+  if (!safeExpected || !current
+    || RECOVERY_IDENTITY_FIELDS.some(field => current[field] !== safeExpected[field])) return false;
+  return clearFirmwareUpdateSession({ storage });
+}
+
 function persistSession(session, storage) {
   const safe = safeSession(session);
   if (!safe) throw new Error('Firmware update recovery state is incomplete.');

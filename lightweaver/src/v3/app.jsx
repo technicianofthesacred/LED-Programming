@@ -78,7 +78,11 @@ import { bootstrapStudioCardConnection } from '../lib/studioCardBootstrap.js';
 import { deriveSetupJourney } from '../lib/setupJourney.js';
 import { deriveCardLifecycle } from '../lib/cardLifecycle.js';
 import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
-import { readFirmwareUpdateSession } from '../lib/cardFirmwareUpdater.js';
+import {
+  clearFirmwareUpdateSessionIfMatches,
+  correlateFirmwareUpdateRecovery,
+  readFirmwareUpdateSession,
+} from '../lib/cardFirmwareUpdater.js';
 
 const PatternScreen = lazy(() => import('./lw-pattern.jsx').then(module => ({ default: module.PatternScreen })));
 const PatternLabScreen = lazy(() => import('../pattern-lab/PatternLabScreen.jsx'));
@@ -834,6 +838,29 @@ function Shell({ offlineUpdateController = null }) {
       return next;
     });
   }, []);
+  useEffect(() => {
+    const session = readFirmwareUpdateSession();
+    const readiness = cardLink.readiness;
+    if (!session || !readiness?.cardId) return;
+    const correlation = correlateFirmwareUpdateRecovery(
+      session,
+      readiness.firmwareUpdate || {},
+      readiness,
+    );
+    if (correlation.ok && correlation.terminal) {
+      if (clearFirmwareUpdateSessionIfMatches(session)) setFirmwareRecoveryState(null);
+      return;
+    }
+    if (correlation.terminal && correlation.phase === 'rolled-back') {
+      setFirmwareRecoveryState({ phase: 'rolled-back', reason: correlation.reason });
+      return;
+    }
+    if (['wrong-card', 'target-mismatch', 'project-changed'].includes(correlation.reason)) {
+      setFirmwareRecoveryState(current => current?.phase === 'blocked' && current.reason === correlation.reason
+        ? current
+        : { phase: 'blocked', reason: correlation.reason });
+    }
+  }, [cardLink.readiness]);
   const lifecycleProject = useMemo(() => {
     const project = serializeProject();
     const currentInstallation = projectLifecycle.installedRevision === projectLifecycle.editedRevision

@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   FIRMWARE_UPDATE_CHUNK_BYTES,
+  clearFirmwareUpdateSessionIfMatches,
   correlateFirmwareUpdateRecovery,
   correlateFirmwareUpdateReconnect,
   createCardFirmwareUpdater,
@@ -324,6 +325,34 @@ test('USB bootstrap can save the same redacted correlation envelope without upda
   assert.equal(saved.cardId, CARD_ID);
   assert.deepEqual(readFirmwareUpdateSession({ storage: storageAdapter }), saved);
   assert.doesNotMatch(storage.get('lw_firmware_update_session_v1'), /capability|ownerSession/i);
+});
+
+test('correlated recovery cannot clear a newer firmware session', () => {
+  const values = new Map();
+  const storage = {
+    getItem: key => values.get(key) || null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: key => values.delete(key),
+  };
+  const first = saveFirmwareUpdateSession({
+    cardId: CARD_ID, previousBootId: OLD_BOOT, expectedProjectHead: OLD_HEAD,
+    expectedProjectFingerprint: OLD_FINGERPRINT, targetFirmwareVersion: '1.2.0',
+    targetBuildId: TARGET_BUILD, targetBuildNumber: 1300, ticketSha256: TICKET_DIGEST,
+    phase: 'pending-reboot', acknowledgedBytes: 8,
+  }, { storage });
+  const newer = saveFirmwareUpdateSession({
+    ...first,
+    previousBootId: 'boot-newer-session',
+    targetFirmwareVersion: '1.3.0',
+    targetBuildId: 'f'.repeat(40),
+    targetBuildNumber: 1301,
+    phase: 'preflight',
+  }, { storage });
+
+  assert.equal(clearFirmwareUpdateSessionIfMatches(first, { storage }), false);
+  assert.deepEqual(readFirmwareUpdateSession({ storage }), newer);
+  assert.equal(clearFirmwareUpdateSessionIfMatches(newer, { storage }), true);
+  assert.equal(readFirmwareUpdateSession({ storage }), null);
 });
 
 test('a no-LAN old card can resume USB correlation without inventing prior boot or project evidence', () => {
