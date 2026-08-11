@@ -562,6 +562,12 @@ import {
       } else if (result.phase === 'probation') {
         setPhase('probation');
       } else if (result.ok && result.phase === 'valid') {
+        // A card that came back after the recovery deadline already painted the
+        // timeout alert, which renders unconditionally. Clear it here or the
+        // owner is shown a success and a failure for the same update at once.
+        setError('');
+        setConfirming(false);
+        setPhysicalConfirmed(false);
         setPhase('reconnected');
         clearFirmwareUpdateSession();
       } else if (['restarting', 'pending-reboot', 'probation', 'valid', 'rolled-back'].includes(session.phase)) {

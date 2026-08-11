@@ -258,6 +258,52 @@ test('reload recovery accepts idle or missing update status only with complete r
   );
 });
 
+test('a session that preserved no project accepts the exact target readback the card can actually report', () => {
+  // A USB bootstrap writes the image with esptool and resets the chip, so no OTA
+  // handoff record is ever armed and /api/update/status reads back `idle` on the
+  // first boot. That is the ONLY status such a card can report, so the strict
+  // runtime health proof — which exists to show a PRESERVED project survived —
+  // has nothing to prove and must not be what decides the update failed.
+  const bootstrapped = {
+    version: 1, mode: 'usb', cardId: CARD_ID, previousBootId: '',
+    expectedProjectHead: '', expectedProjectFingerprint: '',
+    targetFirmwareVersion: '1.2.0', targetBuildId: TARGET_BUILD, targetBuildNumber: 1300,
+    ticketSha256: TICKET_DIGEST, phase: 'restarting', acknowledgedBytes: 8,
+  };
+  // Exactly the envelope a freshly bootstrapped, not-yet-commissioned card sends:
+  // no wiring, so no commandReady/outputReady/playbackReady claim at all.
+  const bareReadback = {
+    cardId: CARD_ID, bootId: 'boot-after-usb', firmwareVersion: '1.2.0', buildId: TARGET_BUILD,
+    capabilities: { firmwareUpdate: { version: 1, network: true } },
+  };
+
+  assert.deepEqual(correlateFirmwareUpdateRecovery(bootstrapped, { phase: 'idle' }, bareReadback), {
+    ok: true, terminal: true, phase: 'valid', reason: '', evidence: 'exact-target-readback',
+  });
+  assert.deepEqual(correlateFirmwareUpdateRecovery(bootstrapped, {}, bareReadback), {
+    ok: true, terminal: true, phase: 'valid', reason: '', evidence: 'exact-target-readback',
+  });
+
+  // The identity and target proofs are untouched by the relaxation.
+  assert.equal(
+    correlateFirmwareUpdateRecovery(bootstrapped, { phase: 'idle' }, {
+      ...bareReadback, buildId: 'e'.repeat(40),
+    }).reason,
+    'target-mismatch',
+  );
+
+  // A session that DID promise to preserve a project keeps the strict gate.
+  const preserving = {
+    ...bootstrapped, mode: 'network', previousBootId: OLD_BOOT, expectedProjectHead: OLD_HEAD,
+  };
+  assert.equal(
+    correlateFirmwareUpdateRecovery(preserving, { phase: 'idle' }, {
+      ...bareReadback, projectHead: OLD_HEAD,
+    }).reason,
+    'runtime-not-known-good',
+  );
+});
+
 test('blank-card Wi-Fi update binds an exact empty project head without treating it as a wildcard', async () => {
   const storage = new Map();
   const storageAdapter = {
