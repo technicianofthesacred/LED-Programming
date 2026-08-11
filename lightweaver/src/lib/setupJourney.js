@@ -63,7 +63,7 @@ function commissioningStage(commissioningFlow) {
   return commissioningFlow?.stage ?? commissioningFlow?.flow?.stage ?? '';
 }
 
-function connectBlockers({ cardLink, commissioningFlow }) {
+function connectBlockers({ cardLink, cardLifecycle, commissioningFlow, resolution }) {
   const stage = commissioningStage(commissioningFlow);
   if (cardLink?.activity === 'failed' || cardLink?.reason === 'operation-uncertain') {
     return [{ id: 'recover-operation', phaseId: 'connect' }];
@@ -75,12 +75,36 @@ function connectBlockers({ cardLink, commissioningFlow }) {
     && ['setup-required', 'setup-joined'].includes(commissioningFlow?.networkState)) {
     return [{ id: 'wifi', phaseId: 'connect' }];
   }
+  if (stage === 'set-up-card') return [{ id: 'install-project', phaseId: 'connect' }];
+  // Once the exact card has reached the factory/discovery portion of the
+  // commissioning flow, its blank or temporary bench runtime is positive
+  // setup evidence—not a generic project/recovery failure. Keep firmware,
+  // Wi-Fi, and explicit commissioning stages above this branch, then allow
+  // the established light-discovery journey to resume.
+  const discoveryRuntime = connectedExactCard(cardLink) && (
+    cardLink?.cardBlank === true
+    || cardLink?.readiness?.runtimePhase === 'factory'
+    || resolution?.provisionalSetup === true
+  );
+  const lifecycleTaskId = cardLifecycle?.setupTaskId;
+  if (!discoveryRuntime) {
+    if (lifecycleTaskId === 'update-firmware') return [{ id: 'firmware', phaseId: 'connect' }];
+    if (lifecycleTaskId === 'pair-card') return [{ id: 'pair-card', phaseId: 'connect' }];
+    if (['connect-card', 'reconnect-card'].includes(lifecycleTaskId)) {
+      return [{ id: lifecycleTaskId, phaseId: 'connect' }];
+    }
+    if (lifecycleTaskId === 'install-project') return [{ id: 'install-project', phaseId: 'connect' }];
+    if (lifecycleTaskId === 'load-matching-project') return [{ id: 'load-matching-project', phaseId: 'connect' }];
+    if (lifecycleTaskId === 'recover-operation'
+      && (cardLifecycle?.state === 'update-rolled-back' || !stage)) {
+      return [{ id: 'recover-operation', phaseId: 'connect' }];
+    }
+  }
   if (cardLink?.reason === 'found-unpaired') return [{ id: 'pair-card', phaseId: 'connect' }];
   if (cardLink?.state === 'reconnecting' || cardLink?.state === 'reconnecting-bridge') {
     return [{ id: 'reconnect-card', phaseId: 'connect' }];
   }
   if (!connectedExactCard(cardLink)) return [{ id: 'connect-card', phaseId: 'connect' }];
-  if (stage === 'set-up-card') return [{ id: 'install-project', phaseId: 'connect' }];
   if (normalizeHost(cardLink?.host) === SETUP_MODE_HOST) return [{ id: 'wifi', phaseId: 'connect' }];
   return [];
 }
@@ -186,12 +210,13 @@ function phasesFor(currentPhaseId, lightsProgress, currentLayoutProgress, comple
 
 export function deriveSetupJourney({
   cardLink,
+  cardLifecycle,
   commissioningFlow,
   project,
   resolution,
   verification,
 } = {}) {
-  const blockers = connectBlockers({ cardLink, commissioningFlow });
+  const blockers = connectBlockers({ cardLink, cardLifecycle, commissioningFlow, resolution });
   const progress = lightProgress(project);
   const currentLayoutProgress = layoutProgress(project);
 
@@ -208,9 +233,10 @@ export function deriveSetupJourney({
   }
 
   const installedMatch = blockers.length === 0
-    && resolution?.matchesCurrentProject === true
-    && resolution?.playbackAccess === 'ready'
-    && resolution?.provisionalSetup !== true;
+    && ((resolution?.matchesCurrentProject === true
+      && resolution?.playbackAccess === 'ready'
+      && resolution?.provisionalSetup !== true)
+      || cardLifecycle?.state === 'ready');
   if (installedMatch) {
     return withTask({
       diagnosis: { state: 'installed-match' },

@@ -94,6 +94,7 @@ function CardOverview({
   connected,
   cardHost,
   cardLink,
+  cardLifecycle,
   onConnectCard,
   onOpenConnectionCenter,
   onOpenSection,
@@ -110,6 +111,7 @@ function CardOverview({
   saveBeforeCardProjectSwitch,
   isProjectSwitchSnapshotCurrent,
   onMatchedProjectLoaded,
+  onMatchedProjectVerified,
   onStartNewProject,
 }) {
   const [commissioningFlow, setCommissioningFlow] = useState(() => inspectCardCommissioning().flow);
@@ -167,7 +169,13 @@ function CardOverview({
   } catch {
     currentProjectInstallable = false;
   }
-  const setupJourney = deriveSetupJourney({ cardLink, commissioningFlow, project: currentProject });
+  const setupJourney = deriveSetupJourney({
+    cardLink,
+    cardLifecycle,
+    commissioningFlow,
+    project: currentProject,
+    resolution: benchProject ? { provisionalSetup: true } : null,
+  });
   const setupTaskCopy = {
     'connect-card': 'Connect the exact Lightweaver card.',
     'pair-card': 'Pair the card Studio found.',
@@ -615,7 +623,11 @@ function CardOverview({
           associationHandoffFailed = true;
           throw new Error(projectSwitchSaveFailureMessage('association-handoff-failed'));
         }
-        await readExactCardSnapshot(evidence, { workspace: false });
+        const verifiedEvidence = await readExactCardSnapshot(evidence, { workspace: false });
+        const installed = onMatchedProjectVerified?.({ evidence: verifiedEvidence, expectedMarker: result.marker });
+        if (installed?.ok !== true) {
+          throw new Error('The matching project loaded, but Studio could not bind its exact installed revision. Controls remain paused.');
+        }
         authorizeResolvedProject(resolved.project, projectGeneration + 1);
         window.location.hash = '#screen=pattern';
         return;
@@ -679,7 +691,11 @@ function CardOverview({
         associationHandoffFailed = true;
         throw new Error(projectSwitchSaveFailureMessage('association-handoff-failed'));
       }
-      await readExactCardSnapshot(evidence, { workspace: false });
+      const verifiedEvidence = await readExactCardSnapshot(evidence, { workspace: false });
+      const installed = onMatchedProjectVerified?.({ evidence: verifiedEvidence, expectedMarker: result.marker });
+      if (installed?.ok !== true) {
+        throw new Error('The matching project loaded, but Studio could not bind its exact installed revision. Controls remain paused.');
+      }
       authorizeResolvedProject(studioProject, projectGeneration + 1, resolved.source === 'production' ? {
         jobId: resolved.candidate.jobId,
         jobDigest: resolved.candidate.digest,
@@ -714,6 +730,7 @@ function CardOverview({
     currentProject,
     matchingProjectState.status,
     onMatchedProjectLoaded,
+    onMatchedProjectVerified,
     openMatchingCardProject,
     readCloudProject,
     readBrowserProjects,
@@ -903,7 +920,7 @@ function CardSupport({ initialTool, cardProps, onOpenConnectionCenter, onOpenSec
   );
 }
 
-export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpenConnectionCenter, onOpenSection, onOpenSetupTask, go, replaceProject, currentProject, projectGeneration, activeCloudProjects, browserProjects, readBrowserProjects, readCloudProject, openMatchingCardProject, confirmProjectReplacement, saveBeforeCardProjectSwitch, saveProjectToBrowserGuarded, isProjectSwitchSnapshotCurrent, onMatchedProjectLoaded, onStartNewProject, onSaveProject, route = { section: DEFAULT_CARD_SECTION, supportTool: '' } }) {
+export function CardScreen({ connected, cardHost, cardLink, cardLifecycle, onConnectCard, onOpenConnectionCenter, onOpenSection, onOpenSetupTask, onFirmwareRecoveryState, go, replaceProject, currentProject, projectGeneration, activeCloudProjects, browserProjects, readBrowserProjects, readCloudProject, openMatchingCardProject, confirmProjectReplacement, saveBeforeCardProjectSwitch, saveProjectToBrowserGuarded, isProjectSwitchSnapshotCurrent, onMatchedProjectLoaded, onMatchedProjectVerified, onStartNewProject, onSaveProject, route = { section: DEFAULT_CARD_SECTION, supportTool: '' } }) {
   const headingRef = useRef(null);
   const mountedRef = useRef(false);
 
@@ -920,7 +937,7 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
     return () => cancelAnimationFrame(frame);
   }, [route.section]);
 
-  const cardProps = { connected, cardHost, cardLink, onConnectCard };
+  const cardProps = { connected, cardHost, cardLink, cardLifecycle, onConnectCard };
   let content;
   if (route.section === 'setup') content = (
     <SetupScreen
@@ -937,6 +954,8 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
     <AutomaticInstallScreen
       embedded
       cardLink={cardLink}
+      cardLifecycle={cardLifecycle}
+      onFirmwareRecoveryState={onFirmwareRecoveryState}
       onConnectCard={onConnectCard}
       persistCurrentProjectToBrowser={saveProjectToBrowserGuarded}
       onCommissioningComplete={() => onOpenSection('overview')}
@@ -946,7 +965,7 @@ export function CardScreen({ connected, cardHost, cardLink, onConnectCard, onOpe
   else if (route.section === 'workshop') content = <ProductionScreen embedded cardHost={cardHost} cardLink={cardLink} onConnectCard={onConnectCard} />;
   else if (route.section === 'preferences') content = <SettingsScreen embedded mode="preferences" {...cardProps} />;
   else if (route.section === 'support') content = <CardSupport initialTool={route.supportTool} cardProps={cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} />;
-  else content = <CardOverview {...cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} onOpenSetupTask={onOpenSetupTask} go={go} replaceProject={replaceProject} currentProject={currentProject} projectGeneration={projectGeneration} activeCloudProjects={activeCloudProjects} browserProjects={browserProjects} readBrowserProjects={readBrowserProjects} readCloudProject={readCloudProject} openMatchingCardProject={openMatchingCardProject} confirmProjectReplacement={confirmProjectReplacement} saveBeforeCardProjectSwitch={saveBeforeCardProjectSwitch} isProjectSwitchSnapshotCurrent={isProjectSwitchSnapshotCurrent} onMatchedProjectLoaded={onMatchedProjectLoaded} onStartNewProject={onStartNewProject} />;
+  else content = <CardOverview {...cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} onOpenSetupTask={onOpenSetupTask} go={go} replaceProject={replaceProject} currentProject={currentProject} projectGeneration={projectGeneration} activeCloudProjects={activeCloudProjects} browserProjects={browserProjects} readBrowserProjects={readBrowserProjects} readCloudProject={readCloudProject} openMatchingCardProject={openMatchingCardProject} confirmProjectReplacement={confirmProjectReplacement} saveBeforeCardProjectSwitch={saveBeforeCardProjectSwitch} isProjectSwitchSnapshotCurrent={isProjectSwitchSnapshotCurrent} onMatchedProjectLoaded={onMatchedProjectLoaded} onMatchedProjectVerified={onMatchedProjectVerified} onStartNewProject={onStartNewProject} />;
 
   // Batch production (route.section === 'workshop') renders outside the tab
   // set: its own heading and kicker, no section tab highlighted.

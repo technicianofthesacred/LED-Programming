@@ -51,8 +51,10 @@ import {
   readFirmwareUpdateStatus,
   saveFirmwareUpdateSession,
 } from '../lib/cardFirmwareUpdater.js';
+import { recoverFirmwareUpdate } from '../lib/firmwareUpdateRecovery.js';
 import { runPreservingUsbBootstrap } from '../lib/preservingUsbBootstrap.js';
-import { getActiveCardTransportAuthority } from '../lib/cardTransport.js';
+import { connectCardTransport, getActiveCardTransportAuthority } from '../lib/cardTransport.js';
+import { readStoredCardHost, readStoredCardHostHistory } from '../lib/cardConnection.js';
 import { requestSoftwareFirmwareUpdateGrant } from '../lib/ownerFirmwareUpdateGrant.js';
 import {
   clearActiveUsbInspection,
@@ -473,6 +475,7 @@ import {
   function PreservingUpdatePanel({
     mode,
     card,
+    cardLifecycle,
     readiness,
     release,
     loaderRef,
@@ -480,6 +483,8 @@ import {
     onUsbReleased,
     onReconnectCard,
     reconnectHost = '',
+    onFirmwareRecoveryState,
+    onFirmwareSession,
   }) {
     const [confirming, setConfirming] = useState(false);
     const [physicalConfirmed, setPhysicalConfirmed] = useState(false);
@@ -487,6 +492,7 @@ import {
     const [phase, setPhase] = useState('idle');
     const [acknowledgedBytes, setAcknowledgedBytes] = useState(0);
     const [error, setError] = useState('');
+    const [recoveryBlocker, setRecoveryBlocker] = useState('');
     const [rollback, setRollback] = useState(null);
     const [observedUpdateStatus, setObservedUpdateStatus] = useState(null);
     const rolledBackRef = useRef(false);
@@ -519,6 +525,24 @@ import {
         setPhase('rolled-back');
       }
     };
+
+    useEffect(() => {
+      if (!onFirmwareRecoveryState) return undefined;
+      if (phase === 'rolled-back') {
+        onFirmwareRecoveryState({ phase: 'rolled-back', reason: rollback?.reason || 'health-check-failed' });
+      } else if (['preflight', 'sending', 'verifying'].includes(phase)) {
+        onFirmwareRecoveryState({ phase });
+      } else if (['restarting', 'probation'].includes(phase)) {
+        onFirmwareRecoveryState({ phase });
+      } else if (phase === 'reconnected') {
+        onFirmwareRecoveryState({ phase: 'reconnected' });
+      } else if (error) {
+        onFirmwareRecoveryState({ phase: 'blocked', reason: recoveryBlocker || error });
+      } else {
+        onFirmwareRecoveryState(null);
+      }
+      return undefined;
+    }, [error, onFirmwareRecoveryState, phase, recoveryBlocker, rollback?.reason]);
 
     useEffect(() => {
       if (!target) return;
@@ -559,21 +583,82 @@ import {
     }, [card.id, readiness?.host, target]);
 
     useEffect(() => {
-      if (phase !== 'restarting') return undefined;
+      if (phase !== 'restarting' || !target) return undefined;
+      const session = readFirmwareUpdateSession();
+      if (!session || session.cardId !== card.id || session.targetBuildId !== target.buildId) return undefined;
       const configured = import.meta.env.DEV ? Number(window.__LW_PRESERVING_RECONNECT_TIMEOUT_MS__) : 0;
       const timeoutMs = Number.isFinite(configured) && configured > 0 ? configured : 45_000;
-      const timer = window.setTimeout(() => {
-        setError('Studio could not verify the restarted card in time. Keep the card powered, reconnect this exact card, and resume the preserving update check. Your saved card data was not erased.');
+      const authorities = new Map();
+      const hosts = [
+        reconnectHost,
+        readiness?.host,
+        readStoredCardHost(),
+        ...readStoredCardHostHistory(),
+        'lightweaver.local',
+      ];
+      let active = true;
+      recoverFirmwareUpdate({
+        session,
+        hosts,
+        timeoutMs,
+        connect: async (host, { expectedCardId }) => {
+          await onReconnectCard?.(host);
+          const authority = await connectCardTransport({ host, expectedCardId });
+          if (!authority?.connected) throw new Error(authority?.reason || 'card-unreachable');
+          authorities.set(host, authority);
+          return authority;
+        },
+        readSnapshot: async host => {
+          const authority = authorities.get(host) || getActiveCardTransportAuthority(host);
+          if (!authority) throw new Error('card-unreachable');
+          const freshReadiness = await authority.revalidate();
+          let updateStatus = {};
+          try { updateStatus = await readFirmwareUpdateStatus(authority); } catch { /* runtime-known-good fallback remains valid */ }
+          return { readiness: freshReadiness, updateStatus };
+        },
+        onState: state => {
+          if (active && state.state === 'reconnecting') setPhase('restarting');
+        },
+      }).then(result => {
+        if (!active) return;
+        if (result.state === 'reconnected') {
+          clearFirmwareUpdateSession();
+          setObservedUpdateStatus(result.snapshot?.updateStatus || null);
+          setPhase('reconnected');
+          setError('');
+          setRecoveryBlocker('');
+          return;
+        }
+        if (result.state === 'rolled-back') {
+          rolledBackRef.current = true;
+          setRollback({
+            restoredBuildNumber: result.correlation?.restoredBuildNumber || null,
+            reason: result.correlation?.reason || 'health-check-failed',
+          });
+          setPhase('rolled-back');
+          return;
+        }
+        const detail = result.state === 'blocked'
+          ? `Studio blocked recovery because ${result.reason}. Reconnect the exact card and review the saved project before retrying.`
+          : 'Studio could not verify the restarted card in time. Keep the card powered, reconnect this exact card, and resume the preserving update check. Your saved card data was not erased.';
+        setError(detail);
+        setRecoveryBlocker(result.state === 'blocked' ? result.reason : '');
         setConfirming(false);
         setPhysicalConfirmed(false);
         setPhase('idle');
-      }, timeoutMs);
-      return () => window.clearTimeout(timer);
-    }, [phase]);
+      }).catch(cause => {
+        if (!active) return;
+        setError(cause?.message || 'Studio could not resume the saved firmware update safely.');
+        setRecoveryBlocker('');
+        setPhase('idle');
+      });
+      return () => { active = false; };
+    }, [card.id, phase, readiness?.host, reconnectHost, target]);
 
     const start = async () => {
       if ((!useSoftwareAuthorization && !physicalConfirmed) || !release) return;
       setError('');
+      setRecoveryBlocker('');
       setPhase('preflight');
       try {
         if (mode === 'wifi') {
@@ -609,10 +694,14 @@ import {
             onProgress,
           });
           await updater.preflight();
+          onFirmwareSession?.(readFirmwareUpdateSession());
           await updater.begin();
+          onFirmwareSession?.(readFirmwareUpdateSession());
           await updater.send();
+          onFirmwareSession?.(readFirmwareUpdateSession());
           setPhase('verifying');
           await updater.commit();
+          onFirmwareSession?.(readFirmwareUpdateSession());
           if (!rolledBackRef.current) {
             setPhase('restarting');
             try { await updater.readStatus(); } catch { /* reboot can close the committed request path */ }
@@ -631,7 +720,7 @@ import {
             phase: 'sending',
             acknowledgedBytes: 0,
           };
-          saveFirmwareUpdateSession(usbSession);
+          onFirmwareSession?.(saveFirmwareUpdateSession(usbSession));
           const testBootstrap = import.meta.env.DEV && window.__LW_RUN_PRESERVING_USB_BOOTSTRAP_FOR_TEST__;
           const runBootstrap = testBootstrap || runPreservingUsbBootstrap;
           await runBootstrap({
@@ -653,11 +742,11 @@ import {
               setAcknowledgedBytes(Math.round((event.progress || 0) * release.imageBytes.byteLength));
             },
           });
-          saveFirmwareUpdateSession({
+          onFirmwareSession?.(saveFirmwareUpdateSession({
             ...usbSession,
             phase: 'restarting',
             acknowledgedBytes: release.imageBytes.byteLength,
-          });
+          }));
           loaderRef.current = null;
           transportRef.current = null;
           onUsbReleased?.();
@@ -671,7 +760,7 @@ import {
     };
 
     return (
-      <section className="card install-action-card preserving-update-panel" data-testid="preserving-update-panel" aria-live="polite">
+      <section className="card install-action-card preserving-update-panel" data-testid="preserving-update-panel" data-card-lifecycle={cardLifecycle?.state || 'unknown'} aria-live="polite">
         <div className="install-action-copy">
           <div className="eyebrow">Preserving firmware update</div>
           <h2>{mode === 'wifi' ? 'Update this card over Wi-Fi' : 'One-time USB update for this card'}</h2>
@@ -734,7 +823,7 @@ import {
     );
   }
 
-  function AutomaticInstallScreen({ cardLink = {}, onConnectCard, onCommissioningComplete, persistCurrentProjectToBrowser, embedded = false }) {
+  function AutomaticInstallScreen({ cardLink = {}, cardLifecycle = null, onFirmwareRecoveryState, onConnectCard, onCommissioningComplete, persistCurrentProjectToBrowser, embedded = false }) {
     const { serializeProject, flushProjectAutosave, markProjectPersisted, projectLifecycle } = useProject();
     const capabilities = detectInstallerCapabilities();
     const preservingFixture = import.meta.env.DEV ? window.__LW_PRESERVING_UPDATE_FIXTURE__ || null : null;
@@ -773,7 +862,11 @@ import {
       && cardState.hardware?.source === 'usb-flash'
       ? normalizeFirmwareUpdateCard({ ...cardState.hardware, ...installedFirmware })
       : null;
-    const recoverySession = readFirmwareUpdateSession();
+    // Keep the exact recovery identity for this screen mount. A successful
+    // reconnect clears the redacted browser session immediately, but the
+    // completed panel must stay mounted long enough to report the correlated
+    // card and firmware instead of falling back to the destructive installer.
+    const [recoverySession, setRecoverySession] = useState(readFirmwareUpdateSession);
     const recoveryTarget = updateReleaseState.state === 'ready' ? updateReleaseState.release.manifest : null;
     const recoveryCard = recoverySession && recoveryTarget
       && recoverySession.targetBuildId === recoveryTarget.buildId
@@ -1074,6 +1167,7 @@ import {
             <PreservingUpdatePanel
               mode={preservingMode}
               card={preservingCard}
+              cardLifecycle={cardLifecycle}
               readiness={updateReadiness}
               release={updateReleaseState.state === 'ready' ? updateReleaseState.release : null}
               loaderRef={loaderRef}
@@ -1083,6 +1177,8 @@ import {
               }))}
               onReconnectCard={onConnectCard}
               reconnectHost={cardLink?.host || updateReadiness?.host || ''}
+              onFirmwareRecoveryState={onFirmwareRecoveryState}
+              onFirmwareSession={session => { if (session) setRecoverySession(session); }}
             />
           )}
           {preservingMode && updateReleaseState.state === 'error' && (

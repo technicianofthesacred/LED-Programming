@@ -16,6 +16,7 @@ const READY_LINK = Object.freeze({
     playbackReady: true,
     knownGoodProject: true,
     projectId: 'piece-a',
+    projectRevision: 7,
     projectFingerprint: 'a'.repeat(64),
   },
 });
@@ -23,12 +24,23 @@ const READY_LINK = Object.freeze({
 test('one lifecycle orders exact failures ahead of generic connection copy', () => {
   const cases = [
     [{ link: { state: 'disconnected' } }, 'disconnected', 'Not connected', 'connect-card'],
+    [{ link: { state: 'connecting' } }, 'connecting', 'Connecting', 'connect-card'],
+    [{ link: { state: 'disconnected', reason: 'found-unpaired' } }, 'found-unpaired', 'Found — pair', 'pair-card'],
+    [{ link: { state: 'connecting', activity: 'recovering' } }, 'recovering', 'Recovering', 'recover-operation'],
     [{ link: { state: 'reconnecting' } }, 'reconnecting', 'Card stopped responding', 'reconnect-card'],
     [{ link: { state: 'revalidating', reason: 'card-restarted' } }, 'verifying', 'Card restarted — verifying', 'reconnect-card'],
     [{ link: { reason: 'wrong-card' } }, 'wrong-card', 'Wrong card', 'connect-card'],
     [{ update: { phase: 'rolled-back', reason: 'boot-health-failed' } }, 'update-rolled-back', 'Update rolled back', 'recover-operation'],
+    [{ update: { phase: 'sending' } }, 'updating', 'Updating card', 'recover-operation'],
+    [{ update: { phase: 'restarting' } }, 'update-recovering', 'Restarting card', 'recover-operation'],
+    [{ update: { phase: 'blocked', reason: 'wrong-card' } }, 'wrong-card', 'Wrong card', 'connect-card'],
+    [{ update: { phase: 'blocked', reason: 'target-mismatch' } }, 'target-mismatch', 'Needs attention', 'update-firmware'],
+    [{ update: { phase: 'blocked', reason: 'project-changed' } }, 'project-changed', 'Needs attention', 'load-matching-project'],
     [{ link: { reason: 'firmware-too-old' } }, 'update-required', 'Needs attention', 'update-firmware'],
     [{ link: { ...READY_LINK, cardBlank: true } }, 'setup-required', 'Needs project', 'install-project'],
+    [{ link: READY_LINK, project: { id: 'piece-b', revision: 7, fingerprint: 'b'.repeat(64) } }, 'project-mismatch', 'Needs attention', 'load-matching-project'],
+    [{ link: READY_LINK, project: { id: 'piece-a', revision: 7, fingerprint: 'a'.repeat(64) } }, 'ready', 'Connected', 'open-patterns'],
+    [{ link: { ...READY_LINK, readiness: { ...READY_LINK.readiness, firmwareUpdate: { phase: 'rolled-back', rollbackReason: 'health-check-failed' } } } }, 'update-rolled-back', 'Update rolled back', 'recover-operation'],
   ];
 
   for (const [input, state, label, setupTaskId] of cases) {
@@ -42,7 +54,7 @@ test('one lifecycle orders exact failures ahead of generic connection copy', () 
 test('safe commands require the exact ready installed project', () => {
   const input = {
     link: READY_LINK,
-    project: { id: 'piece-a', fingerprint: 'a'.repeat(64) },
+    project: { id: 'piece-a', revision: 7, fingerprint: 'a'.repeat(64) },
   };
   const ready = deriveCardLifecycle(input);
   assert.equal(ready.state, 'ready');
@@ -52,7 +64,7 @@ test('safe commands require the exact ready installed project', () => {
 
   const wrongProject = deriveCardLifecycle({
     ...input,
-    project: { id: 'piece-b', fingerprint: 'b'.repeat(64) },
+    project: { id: 'piece-b', revision: 7, fingerprint: 'b'.repeat(64) },
   });
   assert.equal(wrongProject.state, 'project-mismatch');
   assert.equal(wrongProject.safeControlAccess, 'project-mismatch');
@@ -60,13 +72,20 @@ test('safe commands require the exact ready installed project', () => {
 
   const wrongFingerprint = deriveCardLifecycle({
     ...input,
-    project: { id: 'piece-a', fingerprint: 'b'.repeat(64) },
+    project: { id: 'piece-a', revision: 7, fingerprint: 'b'.repeat(64) },
   });
   assert.equal(wrongFingerprint.state, 'project-mismatch');
+
+  const wrongRevision = deriveCardLifecycle({
+    ...input,
+    project: { id: 'piece-a', revision: 8, fingerprint: 'a'.repeat(64) },
+  });
+  assert.equal(wrongRevision.state, 'project-mismatch');
+  assert.equal(wrongRevision.exactRevision, false);
 });
 
 test('transport identity and all runtime readiness fields stay fail-closed', () => {
-  const project = { id: 'piece-a', fingerprint: 'a'.repeat(64) };
+  const project = { id: 'piece-a', revision: 7, fingerprint: 'a'.repeat(64) };
   assert.equal(deriveCardLifecycle({
     link: { ...READY_LINK, expectedCard: { id: 'lw-card-b' } },
     project,

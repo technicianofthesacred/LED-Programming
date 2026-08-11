@@ -10,7 +10,8 @@ const ATTENTION_REASONS = new Set([
   'wrong-firmware-build',
 ]);
 
-export function cardConnectionStatus(link = {}) {
+export function cardConnectionStatus(link = {}, lifecycle = null) {
+  if (lifecycle?.label) return lifecycle.label;
   if (link.state === 'revalidating' && link.reason === 'card-restarted') return 'Card restarted — verifying';
   if (link.state === 'reconnecting' || link.state === 'reconnecting-bridge') return 'Card stopped responding';
   if (link.reason === 'wrong-card') return 'Wrong card';
@@ -32,8 +33,8 @@ export function cardConnectionStatus(link = {}) {
   return 'Not connected';
 }
 
-export function CardStatusControl({ link, onOpen, open = false, dialogId = 'card-connection-center' }) {
-  const status = cardConnectionStatus(link);
+export function CardStatusControl({ link, lifecycle = null, onOpen, open = false, dialogId = 'card-connection-center' }) {
+  const status = cardConnectionStatus(link, lifecycle);
   const connected = status === 'Connected';
   const accessibleName = connected
     ? `${link.card?.name || 'Lightweaver'} · Connected`

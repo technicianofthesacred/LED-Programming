@@ -31,9 +31,18 @@ function readyStatus(cardId: string, overrides = {}) {
     app: 'Lightweaver', provisioningContractVersion: 1,
     cardId, firmwareVersion: '1.4.0', buildId: 'a'.repeat(40),
     bootId: 'boot-quality-1', runtimePhase: 'ready', knownGoodProject: true,
-    commandReady: true, outputReady: true,
+    commandReady: true, outputReady: true, playbackReady: true,
     ...overrides,
   };
+}
+
+async function currentProjectEvidence(page) {
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_autosave_v3'))).not.toBeNull();
+  return page.evaluate(async () => {
+    const { cardProjectFingerprint } = await import('/src/lib/cardProjectResolver.js');
+    const project = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    return { projectId: project.id, projectRevision: 0, projectFingerprint: cardProjectFingerprint(project) };
+  });
 }
 
 function finalStationStatus(cardId: string, overrides = {}) {
@@ -139,13 +148,16 @@ test('announces asynchronous connection states without repeating card metadata',
   await dispatchCardLinkEvent(page, { type: 'operation-failed' });
   await expect(announcement).toHaveText('Needs attention');
 
+  const installedProject = await currentProjectEvidence(page);
   await dispatchCardLinkEvent(page, { type: 'operation-confirmed' });
   await dispatchCardLinkEvent(page, {
     type: 'card-verified',
     via: 'bridge',
     host: 'lightweaver.local',
     card: { id: 'lw-quality', name: 'Gallery card', pixelCount: 440, firmwareVersion: '1.4.0', buildId: 'a'.repeat(40) },
-    readiness: readyStatus('lw-quality'),
+    readiness: readyStatus('lw-quality', {
+      ...installedProject,
+    }),
   });
   await expect(announcement).toHaveText('Connected');
   await expect(announcement).not.toContainText(/Gallery card|440 pixels|firmware/i);
@@ -170,13 +182,14 @@ test('normalizes a bare local card name before validation and storage', async ({
 });
 
 test('renders verified card behavior through the new orchestrator state', async ({ page }) => {
+  const installedProject = await currentProjectEvidence(page);
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await dispatchCardLinkEvent(page, {
     type: 'card-verified',
     via: 'bridge',
     host: 'lightweaver.local',
     card: { id: 'lw-quality', name: 'Gallery card', pixelCount: 440, firmwareVersion: '1.4.0', buildId: 'a'.repeat(40) },
-    readiness: readyStatus('lw-quality'),
+    readiness: readyStatus('lw-quality', installedProject),
   });
 
   const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
@@ -190,6 +203,7 @@ test('connected outdated firmware offers the safe installer without starting har
     (window as any).__hardwareOperations = 0;
     window.addEventListener('lw-hardware-operation-active', () => { (window as any).__hardwareOperations += 1; });
   });
+  const installedProject = await currentProjectEvidence(page);
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await dispatchCardLinkEvent(page, {
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
@@ -197,7 +211,7 @@ test('connected outdated firmware offers the safe installer without starting har
       id: 'lw-quality', name: 'Gallery card', pixelCount: 440,
       firmwareVersion: '1.4.0', buildNumber: signedRelease.buildNumber - 1, buildId: 'a'.repeat(40),
     },
-    readiness: readyStatus('lw-quality'),
+    readiness: readyStatus('lw-quality', installedProject),
   });
 
   const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
@@ -209,6 +223,7 @@ test('connected outdated firmware offers the safe installer without starting har
 });
 
 test('connected outdated firmware can be deferred without losing the verified card', async ({ page }) => {
+  const installedProject = await currentProjectEvidence(page);
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await dispatchCardLinkEvent(page, {
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
@@ -216,7 +231,7 @@ test('connected outdated firmware can be deferred without losing the verified ca
       id: 'lw-quality', name: 'Gallery card', pixelCount: 440,
       firmwareVersion: '1.4.0', buildNumber: signedRelease.buildNumber - 1, buildId: 'a'.repeat(40),
     },
-    readiness: readyStatus('lw-quality'),
+    readiness: readyStatus('lw-quality', installedProject),
   });
 
   const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
@@ -226,6 +241,7 @@ test('connected outdated firmware can be deferred without losing the verified ca
 });
 
 test('connected current firmware does not show an update prompt', async ({ page }) => {
+  const installedProject = await currentProjectEvidence(page);
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await dispatchCardLinkEvent(page, {
     type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
@@ -236,6 +252,7 @@ test('connected current firmware does not show an update prompt', async ({ page 
       buildId: signedRelease.buildId,
     },
     readiness: readyStatus('lw-quality', {
+      ...installedProject,
       firmwareVersion: signedRelease.firmwareVersion,
       buildId: signedRelease.buildId,
     }),

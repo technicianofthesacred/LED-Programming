@@ -231,9 +231,10 @@ test('owner capability issuance is explicit, bounded, and bound to the probed pr
   assert.equal(JSON.parse(calls[1].init.body).expectedProjectHead, status.projectHead);
 });
 
-test('Connection Center exposes deliberate physical confirmation for live control', async () => {
+test('Connection Center does not require physical confirmation for ordinary safe controls', async () => {
   const source = await readFile(new URL('../components/card/CardConnectionCenter.jsx', import.meta.url), 'utf8');
-  assert.match(source, /Enable live control/);
-  assert.match(source, /Touch a physical card control/);
-  assert.match(source, /issueOwnerCapability/);
+  assert.doesNotMatch(source, /Enable live control/);
+  assert.doesNotMatch(source, /Touch a physical card control/);
+  assert.doesNotMatch(source, /issueOwnerCapability/);
+  assert.match(source, /Card verified/);
 });

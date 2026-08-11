@@ -12,7 +12,7 @@ function percent(value) {
   return Math.round(Number(value || 0) * 100);
 }
 
-export function CardControlDrawer({ open, link, host, onClose, onAdvanced, onReconnect }) {
+export function CardControlDrawer({ open, link, lifecycle = null, host, onClose, onAdvanced, onReconnect }) {
   const panelRef = useRef(null);
   const restoreFocusRef = useRef(null);
   const [controls, setControls] = useState(null);
@@ -67,9 +67,10 @@ export function CardControlDrawer({ open, link, host, onClose, onAdvanced, onRec
 
   if (!open) return null;
   const view = controls?.view;
-  const connectionStatus = cardConnectionStatus(link);
+  const connectionStatus = cardConnectionStatus(link, lifecycle);
   const connected = connectionStatus === 'Connected';
-  const mutationDisabled = !connected || Boolean(controls?.pending);
+  const safeControlsReady = lifecycle?.safeControlAccess === 'ready';
+  const mutationDisabled = !safeControlsReady || Boolean(controls?.pending);
   const activePattern = view?.patterns.find(pattern => pattern.id === view.activePatternId);
   const customControls = activePattern?.controls && Object.values(activePattern.controls).some(Boolean)
     ? activePattern.controls
@@ -125,7 +126,7 @@ export function CardControlDrawer({ open, link, host, onClose, onAdvanced, onRec
           <button type="button" className="card-connection-close" onClick={onClose} aria-label="Close card controls">×</button>
         </header>
 
-        {!connected ? <div className="card-control-error" role="status"><p>Card controls are paused until the connection is restored.</p><button type="button" className="btn" onClick={onReconnect}>Reconnect</button></div> : null}
+        {!safeControlsReady ? <div className="card-control-error" role="status"><p>Card controls are paused until this exact card and installed project are verified.</p><button type="button" className="btn" onClick={onReconnect}>Reconnect</button></div> : null}
 
         {loadError ? <div className="card-control-error" role="alert"><p>{loadError}</p><button type="button" className="btn" onClick={() => setReloadKey(key => key + 1)}>Try again</button></div> : null}
         {!controls && !loadError ? <p className="card-control-loading" role="status">Reading the card controls…</p> : null}

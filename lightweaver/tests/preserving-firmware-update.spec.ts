@@ -7,6 +7,18 @@ const HEAD = 'a'.repeat(64);
 const FINGERPRINT = 'b'.repeat(64);
 
 async function openPreservingFixture(page: any, mode: 'wifi' | 'usb', outcome = 'progress', capabilityShape = 'current') {
+  if (outcome === 'reload-disconnected' || outcome === 'in-place-disconnect') {
+    const exactRestartedStatus = {
+      app: 'Lightweaver', provisioningContractVersion: 1,
+      cardId: CARD_ID, bootId: 'boot-new', projectHead: HEAD, projectFingerprint: FINGERPRINT,
+      projectId: 'recovered-project', projectRevision: 7,
+      firmwareVersion: '1.2.0', buildId: TARGET_BUILD, buildNumber: 1300,
+      runtimePhase: 'ready', knownGoodProject: true, commandReady: true,
+      outputReady: true, playbackReady: true,
+    };
+    await page.route('http://lightweaver.local/api/status', route => route.fulfill({ json: exactRestartedStatus }));
+    await page.route('http://lightweaver.local/api/update/status', route => route.fulfill({ json: { phase: 'idle' } }));
+  }
   await page.addInitScript(({ mode, outcome, capabilityShape, cardId, oldBuild, targetBuild, head, fingerprint }) => {
     localStorage.clear();
     sessionStorage.clear();
@@ -53,16 +65,32 @@ async function openPreservingFixture(page: any, mode: 'wifi' | 'usb', outcome = 
       if (outcome === 'usb-verifying') await new Promise(() => {});
       return { ok: true };
     };
-    (window as any).__LW_CREATE_FIRMWARE_UPDATER_FOR_TEST__ = ({ onProgress }: any) => ({
+    (window as any).__LW_CREATE_FIRMWARE_UPDATER_FOR_TEST__ = ({ onProgress }: any) => {
+      const saveExactSession = (phase: string) => sessionStorage.setItem('lw_firmware_update_session_v1', JSON.stringify({
+        version: 1, cardId, previousBootId: 'boot-old', expectedProjectHead: head,
+        expectedProjectFingerprint: fingerprint, targetFirmwareVersion: '1.2.0',
+        targetBuildId: targetBuild, targetBuildNumber: 1300, ticketSha256: '4'.repeat(64),
+        phase, acknowledgedBytes: phase === 'preflight' ? 0 : 3,
+      }));
+      return ({
       preflight: async () => {
         if (outcome === 'http-400') throw Object.assign(new Error('owner binding is incomplete'), {
           status: 400, code: 'owner binding is incomplete',
         });
+        saveExactSession('preflight');
         onProgress({ phase: 'preflight', acknowledgedBytes: 0, totalBytes: 3 });
       },
-      begin: async () => { onProgress({ phase: 'sending', acknowledgedBytes: 0, totalBytes: 3 }); },
+      begin: async () => {
+        saveExactSession('sending');
+        onProgress({ phase: 'sending', acknowledgedBytes: 0, totalBytes: 3 });
+        if (outcome === 'pause-sending') await new Promise(() => {});
+      },
       send: async () => { onProgress({ phase: 'sending', acknowledgedBytes: 3, totalBytes: 3 }); },
-      commit: async () => { onProgress({ phase: 'restarting', acknowledgedBytes: 3, totalBytes: 3 }); },
+      commit: async () => {
+        saveExactSession('restarting');
+        if (outcome === 'in-place-disconnect') (window as any).__LW_PRESERVING_UPDATE_FIXTURE__ = null;
+        onProgress({ phase: 'restarting', acknowledgedBytes: 3, totalBytes: 3 });
+      },
       readStatus: async () => {
         (window as any).__LW_UPDATE_READ_STATUS_CALLS__ += 1;
         const status = outcome === 'rollback'
@@ -71,7 +99,8 @@ async function openPreservingFixture(page: any, mode: 'wifi' | 'usb', outcome = 
         onProgress(status);
         return status;
       },
-    });
+      });
+    };
   }, { mode, outcome, capabilityShape, cardId: CARD_ID, oldBuild: OLD_BUILD, targetBuild: TARGET_BUILD, head: HEAD, fingerprint: FINGERPRINT });
   await page.goto('/#screen=card&section=install', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', {
@@ -162,12 +191,58 @@ test('preserving update: reload resumes redacted state and shows valid only afte
   await expect(panel).toContainText(`Reconnected to Card ${CARD_ID} on firmware 1.2.0 · Build 1300`);
 });
 
-test('preserving update: a Wi-Fi reboot keeps recovery visible while the card link is disconnected', async ({ page }) => {
+test('preserving update: a Wi-Fi reboot self-heals from exact runtime-known-good evidence', async ({ page }) => {
   await openPreservingFixture(page, 'wifi', 'reload-disconnected');
   const panel = page.getByTestId('preserving-update-panel');
-  await expect(panel).toContainText('InstalledChecking restarted card…');
-  await expect(panel).toContainText('Restarting card');
-  await expect(panel.getByRole('alert')).toContainText(/could not verify the restarted card/i);
+  await expect(panel).toContainText(`Reconnected to Card ${CARD_ID} on firmware 1.2.0 · Build 1300`);
+  await expect(panel.getByRole('alert')).toHaveCount(0);
+  expect(await page.evaluate(() => sessionStorage.getItem('lw_firmware_update_session_v1'))).toBeNull();
+  const recoveredLink = await page.evaluate(async () => {
+    const { getSharedCardLink } = await import('/src/lib/cardLink.js');
+    const state = getSharedCardLink().getState();
+    return {
+      cardId: state.readiness?.cardId,
+      bootId: state.validatedBootId || state.readiness?.bootId,
+      projectHead: state.readiness?.projectHead,
+      projectFingerprint: state.readiness?.projectFingerprint,
+      firmwareVersion: state.readiness?.firmwareVersion,
+      buildId: state.readiness?.buildId,
+    };
+  });
+  expect(recoveredLink).toEqual({
+    cardId: CARD_ID,
+    bootId: 'boot-new',
+    projectHead: HEAD,
+    projectFingerprint: FINGERPRINT,
+    firmwareVersion: '1.2.0',
+    buildId: TARGET_BUILD,
+  });
+});
+
+test('preserving update: navigation cannot discard an active update lifecycle or reopen controls', async ({ page }) => {
+  await openPreservingFixture(page, 'wifi', 'pause-sending');
+  const panel = page.getByTestId('preserving-update-panel');
+  await panel.getByRole('button', { name: 'Update over Wi-Fi' }).click();
+  await panel.getByRole('button', { name: 'Start secure Wi-Fi update' }).click();
+  await expect(panel).toContainText('Sending signed update');
+
+  await page.getByRole('button', { name: 'Layout' }).click();
+  await expect(page).toHaveURL(/screen=layout/);
+  const footer = page.getByTestId('card-link-status');
+  await expect(footer).toHaveAccessibleName(/Updating card/);
+  await footer.click();
+  await expect(page.getByRole('dialog', { name: /connect lightweaver/i })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: /controls/i })).toHaveCount(0);
+});
+
+test('preserving update: an in-place disconnect retains the new session and self-heals through the real coordinator', async ({ page }) => {
+  await openPreservingFixture(page, 'wifi', 'in-place-disconnect');
+  const panel = page.getByTestId('preserving-update-panel');
+  await panel.getByRole('button', { name: 'Update over Wi-Fi' }).click();
+  await panel.getByRole('button', { name: 'Start secure Wi-Fi update' }).click();
+  await expect(panel).toContainText(`Reconnected to Card ${CARD_ID} on firmware 1.2.0 · Build 1300`);
+  await expect(panel.getByRole('alert')).toHaveCount(0);
+  expect(await page.evaluate(() => sessionStorage.getItem('lw_firmware_update_session_v1'))).toBeNull();
 });
 
 test('preserving update: older card offers one USB bootstrap and separates factory reset', async ({ page }) => {
