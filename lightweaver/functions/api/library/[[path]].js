@@ -1,6 +1,7 @@
 import { authenticateAccessRequest } from './_shared/auth.js';
 import { readSessionCookie } from './_shared/accountAuth.js';
 import { createD1AccountStore } from './_shared/accountStore.js';
+import { createFirmwareUpdateGrantIssuer } from './_shared/firmwareUpdateGrant.js';
 import { handleLibraryRequest } from './_shared/router.js';
 import { createD1R2LibraryStore } from './_shared/store.js';
 
@@ -48,6 +49,7 @@ export async function handleLibraryPagesRequest(context, options = {}) {
     }
   }
   const maxBytes = configuredMaxBytes(context.env);
+  const firmwareUpdateGrantIssuer = createFirmwareUpdateGrantIssuer(context.env);
   const store = createD1R2LibraryStore(context.env, {
     maxBytes,
     maxBackupBytes: configuredPositiveInteger(context.env, 'MAX_LIBRARY_BACKUP_BYTES'),
@@ -58,6 +60,7 @@ export async function handleLibraryPagesRequest(context, options = {}) {
     request: context.request,
     identity,
     accountStore,
+    firmwareUpdateGrantIssuer,
     maxBytes,
     store,
   });

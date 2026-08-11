@@ -9,6 +9,10 @@ import {
   validateWorkspaceAsset,
 } from './validation.js';
 import { AccountStoreError } from './accountStore.js';
+import {
+  FirmwareUpdateGrantUnavailableError,
+  FirmwareUpdateGrantValidationError,
+} from './firmwareUpdateGrant.js';
 
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 const SAFE_STORE_ERRORS = {
@@ -161,6 +165,7 @@ export async function handleLibraryRequest({
   identity,
   store,
   accountStore,
+  firmwareUpdateGrantIssuer,
   maxBytes = DEFAULT_MAX_BYTES,
   maxBackupBytes = DEFAULT_MAX_BACKUP_BYTES,
 }) {
@@ -198,6 +203,25 @@ export async function handleLibraryRequest({
 
     if (method !== 'GET' && method !== 'HEAD' && !requireSameOrigin(request)) {
       return errorResponse(403, 'invalid_origin', 'The request origin is not allowed.', requestId);
+    }
+
+    if (segments.length === 1 && segments[0] === 'firmware-update-grant') {
+      if (method !== 'POST') {
+        return errorResponse(405, 'method_not_allowed', 'The method is not allowed for this route.', requestId);
+      }
+      if (identity.role !== 'owner') {
+        return errorResponse(403, 'forbidden', 'Only an authenticated owner may authorize firmware updates.', requestId);
+      }
+      if (typeof firmwareUpdateGrantIssuer !== 'function') {
+        return errorResponse(503, 'update_grant_unavailable', 'Firmware update authorization is unavailable.', requestId);
+      }
+      const body = await readJson(request, 4096);
+      if (typeof body.grantPayload !== 'string' || Object.keys(body).length !== 1) {
+        throw new LibraryValidationError('invalid_request', 'An exact firmware update grant payload is required.');
+      }
+      return jsonResponse(await firmwareUpdateGrantIssuer(body.grantPayload, {
+        studioOrigin: new URL(request.url).origin,
+      }));
     }
 
     if (segments.length >= 1 && segments[0] === 'accounts') {
@@ -516,6 +540,12 @@ export async function handleLibraryRequest({
     }
     if (error instanceof AccountStoreError) {
       return errorResponse(error.status || 400, error.code || 'invalid_request', error.message, requestId);
+    }
+    if (error instanceof FirmwareUpdateGrantValidationError) {
+      return errorResponse(400, 'invalid_request', error.message, requestId);
+    }
+    if (error instanceof FirmwareUpdateGrantUnavailableError) {
+      return errorResponse(503, 'update_grant_unavailable', 'Firmware update authorization is unavailable.', requestId);
     }
     return errorResponse(500, 'internal_error', 'The project library request could not be completed.', requestId);
   }

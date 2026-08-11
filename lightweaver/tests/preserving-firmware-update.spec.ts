@@ -100,9 +100,9 @@ test('preserving update: capable card uses Wi-Fi with exact preservation facts a
   expect(actionBox!.y).toBeGreaterThan(targetBox!.y + targetBox!.height);
   expect(Math.abs((actionBox!.x + actionBox!.width) - (targetBox!.x + targetBox!.width))).toBeLessThanOrEqual(1);
   await updateAction.click();
-  await expect(panel).toContainText('Press the card control once');
-  await panel.getByRole('checkbox', { name: /physically confirmed/i }).check();
-  await panel.getByRole('button', { name: 'Start preserving update' }).click();
+  await expect(panel).toContainText('securely binds this signed update to this exact card');
+  await expect(panel.getByRole('checkbox', { name: /physically confirmed/i })).toHaveCount(0);
+  await panel.getByRole('button', { name: 'Start secure Wi-Fi update' }).click();
   await expect(panel).toContainText('Restarting card');
 });
 
@@ -115,8 +115,7 @@ test('preserving update: Wi-Fi panel surfaces the card response detail for a rej
   await openPreservingFixture(page, 'wifi', 'http-400');
   const panel = page.getByTestId('preserving-update-panel');
   await panel.getByRole('button', { name: 'Update over Wi-Fi' }).click();
-  await panel.getByRole('checkbox', { name: /physically confirmed/i }).check();
-  await panel.getByRole('button', { name: 'Start preserving update' }).click();
+  await panel.getByRole('button', { name: 'Start secure Wi-Fi update' }).click();
   await expect(panel.getByRole('alert')).toHaveText('owner binding is incomplete');
   await expect(panel.getByRole('alert')).not.toContainText('Card returned HTTP 400');
 });
@@ -125,8 +124,7 @@ test('preserving update: rollback names the restored build and a redacted reason
   await openPreservingFixture(page, 'wifi', 'rollback');
   const panel = page.getByTestId('preserving-update-panel');
   await panel.getByRole('button', { name: 'Update over Wi-Fi' }).click();
-  await panel.getByRole('checkbox', { name: /physically confirmed/i }).check();
-  await panel.getByRole('button', { name: 'Start preserving update' }).click();
+  await panel.getByRole('button', { name: 'Start secure Wi-Fi update' }).click();
   await expect(panel).toContainText('Update rolled back');
   await expect(panel).toContainText('restored Build 1198');
   await expect(panel).toContainText('boot-health-failed');

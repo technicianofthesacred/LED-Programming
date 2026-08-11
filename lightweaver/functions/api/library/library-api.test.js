@@ -13,6 +13,11 @@ import {
 import { createMemoryLibraryStore } from './_shared/memoryStore.js';
 import { handleLibraryRequest } from './_shared/router.js';
 import {
+  FIRMWARE_UPDATE_GRANT_ALGORITHM,
+  createFirmwareUpdateGrantIssuer,
+  validateFirmwareUpdateGrantPayload,
+} from './_shared/firmwareUpdateGrant.js';
+import {
   validateMasterBackup,
   validatePortableProject,
 } from './_shared/validation.js';
@@ -359,6 +364,7 @@ async function call(store, {
   maxBytes = MAX_BYTES,
   maxBackupBytes,
   accountStore,
+  firmwareUpdateGrantIssuer,
 } = {}) {
   const hasBody = body !== undefined;
   const headers = new Headers({ 'x-lightweaver-request': requestId });
@@ -375,6 +381,7 @@ async function call(store, {
       : identity,
     store,
     accountStore,
+    firmwareUpdateGrantIssuer,
     maxBytes,
     maxBackupBytes,
   });
@@ -383,6 +390,42 @@ async function call(store, {
     : null;
   assert.equal(response.headers.get('cache-control'), 'no-store');
   return { response, payload };
+}
+
+const firmwareUpdateGrantPayload = JSON.stringify({
+  schemaVersion: 1,
+  scope: 'firmware-update',
+  cardId: 'lw-b0fe81f61b44',
+  bootId: 'boot-12345678-b0fe81f61b44',
+  challenge: 'A'.repeat(43),
+  studioOrigin: 'https://led.mandalacodes.com',
+  cardHost: '192.168.18.70',
+  networkIdentity: 'station:192.168.18.70:lightweaver:7',
+  ownerSessionId: 'owner-session-1',
+  operationGeneration: 8,
+  expectedProjectHead: 'a'.repeat(64),
+  releaseBuildId: 'b'.repeat(40),
+  ticketSha256: 'c'.repeat(64),
+});
+
+async function updateGrantKeyFixture() {
+  const keys = await crypto.subtle.generateKey(
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    true,
+    ['sign', 'verify'],
+  );
+  const privateBytes = new Uint8Array(await crypto.subtle.exportKey('pkcs8', keys.privateKey));
+  const publicKeySpki = new Uint8Array(await crypto.subtle.exportKey('spki', keys.publicKey));
+  const base64 = Buffer.from(privateBytes).toString('base64').match(/.{1,64}/g).join('\n');
+  return {
+    privateKeyPem: `-----BEGIN PRIVATE KEY-----\n${base64}\n-----END PRIVATE KEY-----`,
+    publicKey: keys.publicKey,
+    publicKeySpki,
+  };
+}
+
+function decodeBase64Url(value) {
+  return new Uint8Array(Buffer.from(value, 'base64url'));
 }
 
 async function activeNativeIdentity(accountStore, account, password) {
@@ -765,6 +808,200 @@ test('returns the authenticated owner or worker session', async () => {
     email: 'owner@example.test',
     role: 'owner',
   });
+});
+
+test('authenticated owner can request an exact firmware update grant without a library store', async () => {
+  const calls = [];
+  const firmwareUpdateGrantIssuer = async value => {
+    calls.push(value);
+    return {
+      grantPayload: value,
+      signature: 'signed-payload',
+      algorithm: 'ECDSA_P256_SHA256_P1363',
+    };
+  };
+  const result = await call(null, {
+    role: 'owner',
+    method: 'POST',
+    path: '/firmware-update-grant',
+    body: { grantPayload: firmwareUpdateGrantPayload },
+    firmwareUpdateGrantIssuer,
+  });
+
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(calls, [firmwareUpdateGrantPayload]);
+  assert.deepEqual(result.payload, {
+    grantPayload: firmwareUpdateGrantPayload,
+    signature: 'signed-payload',
+    algorithm: 'ECDSA_P256_SHA256_P1363',
+  });
+});
+
+test('firmware update grant route requires owner, POST, and exact same origin', async () => {
+  let calls = 0;
+  const firmwareUpdateGrantIssuer = async () => {
+    calls += 1;
+    throw new Error('must not sign');
+  };
+  const cases = [
+    { role: 'worker', method: 'POST', origin: 'https://led.mandalacodes.com', status: 403, code: 'forbidden' },
+    { role: 'owner', method: 'GET', origin: 'https://led.mandalacodes.com', status: 405, code: 'method_not_allowed' },
+    { role: 'owner', method: 'POST', origin: null, status: 403, code: 'invalid_origin' },
+    { role: 'owner', method: 'POST', origin: 'https://evil.example', status: 403, code: 'invalid_origin' },
+  ];
+
+  for (const entry of cases) {
+    const result = await call(null, {
+      ...entry,
+      path: '/firmware-update-grant',
+      body: entry.method === 'POST' ? { grantPayload: firmwareUpdateGrantPayload } : undefined,
+      firmwareUpdateGrantIssuer,
+    });
+    assert.equal(result.response.status, entry.status);
+    assert.equal(result.payload.error.code, entry.code);
+  }
+  assert.equal(calls, 0);
+});
+
+test('firmware update grant issuer signs the exact validated payload with a dedicated matching P-256 key', async () => {
+  const { privateKeyPem, publicKey, publicKeySpki } = await updateGrantKeyFixture();
+  const issuer = createFirmwareUpdateGrantIssuer({
+    LIGHTWEAVER_UPDATE_GRANT_PRIVATE_KEY: privateKeyPem,
+  }, { verificationPublicKeySpki: publicKeySpki });
+
+  const result = await issuer(firmwareUpdateGrantPayload, {
+    studioOrigin: 'https://led.mandalacodes.com',
+  });
+
+  assert.equal(result.grantPayload, firmwareUpdateGrantPayload);
+  assert.equal(result.algorithm, FIRMWARE_UPDATE_GRANT_ALGORITHM);
+  const signature = decodeBase64Url(result.signature);
+  assert.equal(signature.byteLength, 64);
+  assert.equal(await crypto.subtle.verify(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    publicKey,
+    signature,
+    new TextEncoder().encode(firmwareUpdateGrantPayload),
+  ), true);
+  assert.equal(await crypto.subtle.verify(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    publicKey,
+    signature,
+    new TextEncoder().encode(`${firmwareUpdateGrantPayload} `),
+  ), false);
+});
+
+test('firmware update grant validation rejects ambiguous JSON and every unsupported binding', () => {
+  assert.equal(validateFirmwareUpdateGrantPayload(firmwareUpdateGrantPayload).cardId, 'lw-b0fe81f61b44');
+  const parsed = JSON.parse(firmwareUpdateGrantPayload);
+  const invalidPayloads = [
+    ` ${firmwareUpdateGrantPayload}`,
+    firmwareUpdateGrantPayload.replace('"schemaVersion":1', '"schemaVersion":1,"schemaVersion":1'),
+    JSON.stringify({ ...parsed, unexpected: true }),
+    JSON.stringify({ ...parsed, schemaVersion: 2 }),
+    JSON.stringify({ ...parsed, scope: 'project-write' }),
+    JSON.stringify({ ...parsed, cardId: 'lw-not-a-card' }),
+    JSON.stringify({ ...parsed, bootId: '' }),
+    JSON.stringify({ ...parsed, challenge: 'short' }),
+    JSON.stringify({ ...parsed, studioOrigin: 'https://evil.example' }),
+    JSON.stringify({ ...parsed, cardHost: 'https://192.168.18.70/path' }),
+    JSON.stringify({ ...parsed, networkIdentity: '' }),
+    JSON.stringify({ ...parsed, ownerSessionId: '' }),
+    JSON.stringify({ ...parsed, operationGeneration: 0 }),
+    JSON.stringify({ ...parsed, expectedProjectHead: 'not-a-head' }),
+    JSON.stringify({ ...parsed, releaseBuildId: 'b'.repeat(39) }),
+    JSON.stringify({ ...parsed, ticketSha256: 'c'.repeat(63) }),
+  ];
+  for (const payload of invalidPayloads) {
+    assert.throws(
+      () => validateFirmwareUpdateGrantPayload(payload, {
+        studioOrigin: 'https://led.mandalacodes.com',
+      }),
+      /firmware update grant/i,
+      payload,
+    );
+  }
+});
+
+test('missing or malformed update-grant key fails only the grant route', async () => {
+  for (const value of [undefined, 'not a PKCS8 key']) {
+    const firmwareUpdateGrantIssuer = createFirmwareUpdateGrantIssuer({
+      LIGHTWEAVER_UPDATE_GRANT_PRIVATE_KEY: value,
+    });
+    const denied = await call(null, {
+      role: 'owner',
+      method: 'POST',
+      path: '/firmware-update-grant',
+      body: { grantPayload: firmwareUpdateGrantPayload },
+      firmwareUpdateGrantIssuer,
+    });
+    assert.equal(denied.response.status, 503);
+    assert.equal(denied.payload.error.code, 'update_grant_unavailable');
+    assert.doesNotMatch(JSON.stringify(denied.payload), /PKCS8|private|key/i);
+  }
+
+  const normal = await call(createMemoryLibraryStore(), { path: '/projects' });
+  assert.equal(normal.response.status, 200);
+});
+
+test('a valid private key that does not match the firmware-pinned public key fails closed', async () => {
+  const signing = await updateGrantKeyFixture();
+  const firmware = await updateGrantKeyFixture();
+  const issuer = createFirmwareUpdateGrantIssuer({
+    LIGHTWEAVER_UPDATE_GRANT_PRIVATE_KEY: signing.privateKeyPem,
+  }, { verificationPublicKeySpki: firmware.publicKeySpki });
+  await assert.rejects(
+    issuer(firmwareUpdateGrantPayload, { studioOrigin: 'https://led.mandalacodes.com' }),
+    error => error?.code === 'update_grant_unavailable' && error?.status === 503,
+  );
+});
+
+test('firmware update grant route binds the signed payload to its exact request origin', async () => {
+  const { privateKeyPem, publicKeySpki } = await updateGrantKeyFixture();
+  const firmwareUpdateGrantIssuer = createFirmwareUpdateGrantIssuer({
+    LIGHTWEAVER_UPDATE_GRANT_PRIVATE_KEY: privateKeyPem,
+  }, { verificationPublicKeySpki: publicKeySpki });
+  const mismatchedPayload = JSON.stringify({
+    ...JSON.parse(firmwareUpdateGrantPayload),
+    studioOrigin: 'https://studio.example',
+  });
+
+  const denied = await call(null, {
+    role: 'owner',
+    method: 'POST',
+    path: '/firmware-update-grant',
+    body: { grantPayload: mismatchedPayload },
+    firmwareUpdateGrantIssuer,
+  });
+
+  assert.equal(denied.response.status, 400);
+  assert.equal(denied.payload.error.code, 'invalid_request');
+  assert.doesNotMatch(JSON.stringify(denied.payload), /studio\.example/);
+});
+
+test('firmware update grant route rejects unauthenticated callers and wrapper ambiguity', async () => {
+  const issuer = async () => {
+    throw new Error('must not sign');
+  };
+  const unauthenticated = await call(null, {
+    role: null,
+    method: 'POST',
+    path: '/firmware-update-grant',
+    body: { grantPayload: firmwareUpdateGrantPayload },
+    firmwareUpdateGrantIssuer: issuer,
+  });
+  assert.equal(unauthenticated.response.status, 401);
+  assert.equal(unauthenticated.payload.error.code, 'unauthenticated');
+
+  const ambiguous = await call(null, {
+    role: 'owner',
+    method: 'POST',
+    path: '/firmware-update-grant',
+    body: { grantPayload: firmwareUpdateGrantPayload, extra: true },
+    firmwareUpdateGrantIssuer: issuer,
+  });
+  assert.equal(ambiguous.response.status, 400);
+  assert.equal(ambiguous.payload.error.code, 'invalid_request');
 });
 
 test('protected login returns a no-store same-origin redirect to a sanitized Studio path', async () => {

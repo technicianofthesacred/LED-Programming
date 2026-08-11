@@ -52,6 +52,7 @@ import {
 } from '../lib/cardFirmwareUpdater.js';
 import { runPreservingUsbBootstrap } from '../lib/preservingUsbBootstrap.js';
 import { getActiveCardTransportAuthority } from '../lib/cardTransport.js';
+import { requestSoftwareFirmwareUpdateGrant } from '../lib/ownerFirmwareUpdateGrant.js';
 import {
   clearActiveUsbInspection,
   registerActiveUsbInspection,
@@ -566,7 +567,7 @@ import {
     }, [phase]);
 
     const start = async () => {
-      if (!physicalConfirmed || !release) return;
+      if ((mode !== 'wifi' && !physicalConfirmed) || !release) return;
       setError('');
       setPhase('preflight');
       try {
@@ -575,19 +576,16 @@ import {
           const authority = getActiveCardTransportAuthority(readiness?.host || '')
             || getActiveCardTransportAuthority();
           if (!testFactory && !authority) throw new Error('Reconnect this exact card before updating over Wi-Fi.');
-          if (!testFactory && !authority.ownerCapability) {
-            await authority.issueOwnerCapability({
-              commissioningProof: 'owner-confirmed-physical-control',
-              expectedProjectHead: readiness?.projectHead || authority.projectHead,
-            });
-          }
+          const softwareGrant = testFactory
+            ? window.__LW_SOFTWARE_UPDATE_GRANT_FOR_TEST__ || {
+              grantPayload: '{"test":"software-update-grant"}', grantSignature: 'A'.repeat(86),
+            }
+            : await requestSoftwareFirmwareUpdateGrant({ authority, release });
           const makeUpdater = testFactory || createCardFirmwareUpdater;
-          const physicalConfirmationNonce = globalThis.crypto?.randomUUID?.()
-            || `physical-${Date.now()}-${Math.random()}`;
           const updater = makeUpdater({
             authority,
             release,
-            physicalConfirmation: physicalConfirmationNonce,
+            softwareGrant,
             projectFingerprint: readiness?.projectFingerprint || '',
             onProgress,
           });
@@ -674,12 +672,21 @@ import {
         </div>
         {confirming && phase === 'idle' && (
           <div className="install-confirm-action">
-            <p>Press the card control once, then confirm below. Studio binds this update to this exact card and project.</p>
-            <label>
-              <input type="checkbox" checked={physicalConfirmed} onChange={event => setPhysicalConfirmed(event.target.checked)} />
-              <span>I physically confirmed this exact Lightweaver card.</span>
-            </label>
-            <button className="btn-lg" type="button" disabled={!physicalConfirmed} onClick={start}>Start preserving update</button>
+            {mode === 'wifi' ? (
+              <>
+                <p>Studio securely binds this signed update to this exact card, project, and browser session.</p>
+                <button className="btn-lg" type="button" onClick={start}>Start secure Wi-Fi update</button>
+              </>
+            ) : (
+              <>
+                <p>Confirm the exact connected card before the one-time USB update.</p>
+                <label>
+                  <input type="checkbox" checked={physicalConfirmed} onChange={event => setPhysicalConfirmed(event.target.checked)} />
+                  <span>I physically confirmed this exact Lightweaver card.</span>
+                </label>
+                <button className="btn-lg" type="button" disabled={!physicalConfirmed} onClick={start}>Start preserving update</button>
+              </>
+            )}
           </div>
         )}
         {phaseLabel && (
