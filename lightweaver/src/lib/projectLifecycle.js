@@ -50,6 +50,13 @@ export function markInstalled(state, revision = state.editedRevision) {
   const cardId = String(source.cardId || '').trim();
   const projectRevision = Number(source.projectRevision);
   const projectFingerprint = String(source.projectFingerprint || '').trim().toLowerCase();
+  // What `cardProjectFingerprint` computed for the Studio project at the moment
+  // it was bound to this card. Installs performed FROM Studio need it for
+  // nothing — the two fingerprints are the same hash. It exists for the project
+  // adopted back OFF a card, whose reconstruction can never recompute the bytes
+  // the card hashed: it is the only way to later tell "this is still the
+  // structure that was installed" from "this has been rewired since".
+  const studioFingerprint = String(source.studioFingerprint || '').trim().toLowerCase();
   const exactIdentity = Boolean(
     cardId
     && Number.isSafeInteger(projectRevision)
@@ -63,6 +70,7 @@ export function markInstalled(state, revision = state.editedRevision) {
       cardId,
       projectRevision: Number.isSafeInteger(projectRevision) ? projectRevision : null,
       projectFingerprint,
+      studioFingerprint: /^[a-f0-9]{16,64}$/.test(studioFingerprint) ? studioFingerprint : '',
       verified: source.verified === false ? false : exactIdentity,
     },
   };
@@ -108,7 +116,48 @@ export function reverifyInstallation(state, evidence = {}) {
   const studioProjectId = sanitizeProjectId(evidence.studioProjectId);
   if (!cardProjectId || !studioProjectId || cardProjectId !== studioProjectId) return state;
 
+  // A record that names the Studio structure it was bound to must still match
+  // it. Re-verification is about proving the open project is the installed one,
+  // and a project rewired since the install is not.
+  const recordedStudioFingerprint = String(installation.studioFingerprint || '');
+  if (recordedStudioFingerprint
+    && recordedStudioFingerprint !== String(evidence.studioProjectFingerprint || '').trim().toLowerCase()) return state;
+
   return { ...state, installation: { ...installation, verified: true } };
+}
+
+// The installation record ONLY while it still describes the project as it
+// stands. One edit since the install and the card holds something else, so the
+// record stops speaking for the open project.
+export function currentInstallation(state) {
+  return state?.installedRevision === state?.editedRevision && state?.installation
+    ? state.installation
+    : null;
+}
+
+// The verified installation record for a project whose STRUCTURE is still the
+// one that was installed — the record's `studioFingerprint` against the
+// project's `cardProjectFingerprint` as it stands right now.
+//
+// Why structure rather than the edited revision: a project adopted back off a
+// card can never recompute the fingerprint the card holds, so identity checks
+// that compare the two refuse a correctly installed card forever. The record
+// carries the card's own value and is the binding the contract intends. But it
+// may only stand in while the thing both fingerprints describe — project id,
+// name, strips, patch board, wiring, controller — is unchanged. Choosing a
+// look or a colour is not that, and it is exactly what the Patterns screen
+// does before every send; gating on the revision instead would revoke a card's
+// own project the moment the owner tapped a pattern on it.
+//
+// Records written by a Studio install carry no `studioFingerprint` (the two
+// hashes are the same value there, so nothing needs standing in) and are
+// deliberately not eligible.
+export function structurallyInstalledRecord(state, studioFingerprint) {
+  const installation = state?.installation;
+  if (installation?.verified !== true) return null;
+  const recorded = String(installation.studioFingerprint || '');
+  const current = String(studioFingerprint || '').trim().toLowerCase();
+  return recorded && recorded === current ? installation : null;
 }
 
 export function replaceProjectLifecycle(state) {
@@ -163,6 +212,12 @@ export function lifecycleRecordFromState(state) {
           ? state.installation.projectRevision
           : null,
         projectFingerprint: String(state.installation.projectFingerprint || ''),
+        // Only records that actually carry one write it, so an install made
+        // from Studio (where the two fingerprints are the same hash) keeps the
+        // record shape it has always had.
+        ...(state.installation.studioFingerprint
+          ? { studioFingerprint: String(state.installation.studioFingerprint) }
+          : {}),
       }
     : null;
   return {

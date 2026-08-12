@@ -78,6 +78,7 @@ import { bootstrapStudioCardConnection } from '../lib/studioCardBootstrap.js';
 import { CONNECTED_CARD_LINK_STATES, deriveSetupJourney } from '../lib/setupJourney.js';
 import { deriveCardLifecycle } from '../lib/cardLifecycle.js';
 import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
+import { currentInstallation, structurallyInstalledRecord } from '../lib/projectLifecycle.js';
 import {
   clearFirmwareUpdateSessionIfMatches,
   correlateFirmwareUpdateRecovery,
@@ -877,6 +878,7 @@ function Shell({ offlineUpdateController = null }) {
       projectRevision: readiness.projectRevision,
       projectFingerprint: readiness.projectFingerprint,
       studioProjectId: serializeProject().id,
+      studioProjectFingerprint: cardProjectFingerprint(serializeProject()),
     });
   }, [
     cardLink.state,
@@ -888,16 +890,19 @@ function Shell({ offlineUpdateController = null }) {
   ]);
   const lifecycleProject = useMemo(() => {
     const project = serializeProject();
-    const currentInstallation = projectLifecycle.installedRevision === projectLifecycle.editedRevision
-      && projectLifecycle.installation?.verified === true
-      ? projectLifecycle.installation
-      : null;
+    const structureFingerprint = cardProjectFingerprint(project);
+    const installation = currentInstallation(projectLifecycle);
+    // A card-adopted project is bound by its installation record, not by a
+    // fingerprint it cannot recompute — so the record stands in for as long as
+    // the structure it named is unchanged, not only until the first look edit.
+    const verified = structurallyInstalledRecord(projectLifecycle, structureFingerprint)
+      || (installation?.verified === true ? installation : null);
     return {
       ...project,
-      revision: Number.isSafeInteger(currentInstallation?.projectRevision)
-        ? currentInstallation.projectRevision
+      revision: Number.isSafeInteger(verified?.projectRevision)
+        ? verified.projectRevision
         : projectLifecycle.editedRevision,
-      fingerprint: currentInstallation?.projectFingerprint || cardProjectFingerprint(project),
+      fingerprint: verified?.projectFingerprint || structureFingerprint,
     };
   }, [
     projectLifecycle.editedRevision,

@@ -14,6 +14,7 @@ import {
   replaceProjectSafely,
   repositoryPersistenceMarker,
   reverifyInstallation,
+  structurallyInstalledRecord,
 } from './projectLifecycle.js';
 
 test('card repository saves preserve the exact lifecycle revision without treating recovery writes as explicit saves', () => {
@@ -174,6 +175,55 @@ test('boot lifecycle from a record: saved states survive reload, dirty ones rest
   assert.equal(hasUnsavedChanges(untouched), false);
 });
 
+test('a card-adopted installation binds by the structure it was recorded against, not by the edit revision', () => {
+  const studioFingerprint = 'b1b2c3d4e5f60708';
+  const adopted = markInstalled(createProjectLifecycle(), {
+    ...exactInstallation(0),
+    studioFingerprint,
+  });
+  assert.equal(adopted.installation.verified, true);
+
+  // The card's own fingerprint stands in for the open project…
+  assert.equal(
+    structurallyInstalledRecord(adopted, studioFingerprint)?.projectFingerprint,
+    'a1b2c3d4e5f60708',
+  );
+  // …and keeps standing in after a look edit, which changes no structure.
+  assert.equal(
+    structurallyInstalledRecord(markEdited(adopted), studioFingerprint)?.projectFingerprint,
+    'a1b2c3d4e5f60708',
+  );
+  // …but not after a rewire, which changes the structural fingerprint.
+  assert.equal(structurallyInstalledRecord(adopted, 'c1b2c3d4e5f60708'), null);
+  // A Studio install records no structural fingerprint and never stands in.
+  assert.equal(
+    structurallyInstalledRecord(markInstalled(createProjectLifecycle(), exactInstallation(0)), ''),
+    null,
+  );
+
+  const record = lifecycleRecordFromState(adopted);
+  assert.equal(record.installation.studioFingerprint, studioFingerprint);
+  const restored = lifecycleForRestoredProject(record);
+  assert.equal(restored.installation.verified, false);
+
+  // Re-verification must still see the same structure it was bound to.
+  const evidence = {
+    cardId: 'lw-aabbccddeeff',
+    projectId: 'installed-piece-01',
+    studioProjectId: 'installed-piece-01',
+    projectRevision: 7,
+    projectFingerprint: 'a1b2c3d4e5f60708',
+  };
+  assert.equal(
+    reverifyInstallation(restored, { ...evidence, studioProjectFingerprint: 'c1b2c3d4e5f60708' }).installation.verified,
+    false,
+  );
+  assert.equal(
+    reverifyInstallation(restored, { ...evidence, studioProjectFingerprint: studioFingerprint }).installation.verified,
+    true,
+  );
+});
+
 test('installed lifecycle records bind exact card and project identity but reload as unverified', () => {
   const installation = {
     revision: 0,
@@ -201,6 +251,7 @@ test('installed lifecycle records bind exact card and project identity but reloa
     cardId: installation.cardId,
     projectRevision: installation.projectRevision,
     projectFingerprint: installation.projectFingerprint,
+    studioFingerprint: '',
     verified: false,
   });
 

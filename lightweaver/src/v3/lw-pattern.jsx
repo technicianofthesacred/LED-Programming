@@ -56,6 +56,7 @@ import { markCardEditIntentAbandoned } from '../lib/cardEditIntent.js';
 import { isCardLinkPlaybackReady } from '../lib/cardConnectionFlow.js';
 import { evaluateCardInstallGate, readCardAccessLevel } from '../lib/cardInstallGate.js';
 import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
+import { currentInstallation, structurallyInstalledRecord } from '../lib/projectLifecycle.js';
 import {
   consumeCardEditAuthorization,
   currentCardProjectAuthorizationExpiresAt,
@@ -435,7 +436,7 @@ import { PatternPreview } from './PatternPreview.jsx';
     const patternAuthorizationBinding = useMemo(() => {
       const readiness = cardLink?.readiness || {};
       const card = cardLink?.card || {};
-      const currentProject = serializeProject();
+      const studioStructureFingerprint = cardProjectFingerprint(serializeProject());
       return {
         cardId: readiness.cardId || card.id || card.cardId || '',
         firmwareVersion: readiness.firmwareVersion || card.firmwareVersion || '',
@@ -444,10 +445,19 @@ import { PatternPreview } from './PatternPreview.jsx';
         installedProjectId: installedProjectIdFromCardStatus(readiness),
         installedProjectFingerprint: readiness.projectFingerprint || '',
         studioProjectId: projectId,
-        studioProjectFingerprint: cardProjectFingerprint(currentProject),
+        // A verified installation record binds THIS project to the card and
+        // carries the fingerprint the card itself reported when the binding was
+        // made. Recomputing one from a project adopted back off a card produces
+        // a different hash than the card holds, which made
+        // `issueCardEditAuthorization` refuse a correctly installed card
+        // permanently. The record only stands in while the project structure it
+        // named is unchanged (see `structurallyInstalledRecord`), so a rewire
+        // falls straight back to the computed fingerprint and the grant lapses.
+        studioProjectFingerprint: structurallyInstalledRecord(projectLifecycle, studioStructureFingerprint)
+          ?.projectFingerprint || studioStructureFingerprint,
         projectGeneration: projectLifecycle.generation,
       };
-    }, [cardLink?.card, cardLink?.readiness, cardLink?.validatedBootId, projectId, projectLifecycle.generation, serializeProject]);
+    }, [cardLink?.card, cardLink?.readiness, cardLink?.validatedBootId, projectId, projectLifecycle, serializeProject]);
     const lastExactPatternAuthorizationBindingRef = useRef(null);
     const exactAuthorizationExpiresAt = currentCardProjectAuthorizationExpiresAt(patternAuthorizationBinding);
     if (exactAuthorizationExpiresAt > 0) {
@@ -523,12 +533,15 @@ import { PatternPreview } from './PatternPreview.jsx';
       };
     }, [cardLink?.card, cardLink?.readiness, cardLink?.validatedBootId]);
     // Only an installation record that still describes the project as it stands
-    // (nothing edited since the install) can support a derived authorization.
-    const currentInstallation = projectLifecycle.installedRevision === projectLifecycle.editedRevision
-      ? projectLifecycle.installation
-      : null;
+    // can support a derived authorization: either the structure it named is
+    // unchanged (a card-adopted project, whose fingerprints legitimately
+    // differ), or nothing at all has been edited since the install.
+    const installationRecord = structurallyInstalledRecord(
+      projectLifecycle,
+      cardProjectFingerprint(serializeProject()),
+    ) || currentInstallation(projectLifecycle);
     const authorizationEvidenceRef = useRef(null);
-    authorizationEvidenceRef.current = { cardEvidence: liveCardEvidence, installation: currentInstallation };
+    authorizationEvidenceRef.current = { cardEvidence: liveCardEvidence, installation: installationRecord };
 
     // Was: a bare `hasCurrentCardProjectAuthorization` read, which meant the
     // ONLY way to authorize pattern commands was the Setup-screen "load the

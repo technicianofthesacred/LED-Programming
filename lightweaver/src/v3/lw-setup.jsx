@@ -3,12 +3,13 @@ import './lw-setup.css';
 import { CONNECTED_CARD_LINK_STATES, deriveSetupJourney } from '../lib/setupJourney.js';
 import { CARD_COMMISSIONING_CHANGED_EVENT, inspectCardCommissioning } from '../lib/cardCommissioningFlow.js';
 import { readCardProjectEvidence, readCardStatusEnvelope } from '../lib/cardPushClient.js';
-import { resolveCardProject, describeResolvedCardProject } from '../lib/cardProjectResolver.js';
+import { cardProjectFingerprint, resolveCardProject, describeResolvedCardProject } from '../lib/cardProjectResolver.js';
 import { isBenchProjectEvidence } from '../lib/benchConfig.js';
 import { projectSkeletonFromCardStatus } from '../lib/discoveryCommit.js';
 import { readCardPatternsFromCard, readCardZonesFromCard } from '../lib/cardLiveControl.js';
 import { cardConnectionStatus } from '../components/card/CardStatusControl.jsx';
 import { useProject } from '../state/ProjectContext.jsx';
+import { currentInstallation, structurallyInstalledRecord } from '../lib/projectLifecycle.js';
 
 function visualLookFromZone(zone = {}, fallbackPatternId = 'aurora') {
   return {
@@ -72,8 +73,8 @@ function exactCardName(cardLink, cardHost) {
     || 'No exact card yet';
 }
 
-function installRelationship(resolution, installedProjectId = '') {
-  if (resolution.kind === 'matches-current') return 'Installed project matches';
+function installRelationship(resolution, installedProjectId = '', installationMatch = false) {
+  if (resolution.kind === 'matches-current' || installationMatch) return 'Installed project matches';
   if (resolution.kind === 'saved-match') return 'Matching saved project found';
   if (resolution.kind === 'bench') return 'Temporary setup — not installed';
   // The card told us what it holds. Reporting "Project not installed" over the
@@ -128,12 +129,13 @@ export function SetupScreen({
 }) {
   const {
     setProjectId, setPortRoles, setStandaloneController, replaceLayoutGeometry,
-    markProjectInstalled, readProjectLifecycle,
+    markProjectInstalled, readProjectLifecycle, projectLifecycle,
   } = useProject();
   const [commissioningFlow, setCommissioningFlow] = useState(() => inspectCardCommissioning().flow);
   const [cardState, setCardState] = useState({ evidence: null, status: null, read: false });
   const [resolution, setResolution] = useState({ kind: 'unknown' });
   const [recheckTick, setRecheckTick] = useState(0);
+  const [adoptionError, setAdoptionError] = useState('');
   const importRef = useRef(null);
   const resolveInputsRef = useRef({ currentProject, activeCloudProjects, browserProjects });
   const previousPhaseRef = useRef('');
@@ -160,7 +162,7 @@ export function SetupScreen({
   // evidence-based — `markInstalled` only marks it verified when the card
   // supplied a real card id, a non-negative project revision, and a well-formed
   // fingerprint, so a card that reports nothing binds nothing.
-  const recordCardInstallation = (status = null, marker = null) => {
+  const recordCardInstallation = (status = null, marker = null, adopted = null) => {
     const readiness = cardLink?.readiness || {};
     const lifecycle = marker || readProjectLifecycle?.();
     if (!lifecycle || !markProjectInstalled) return;
@@ -172,6 +174,10 @@ export function SetupScreen({
       cardId: status?.cardId || cardLink?.card?.id || readiness.cardId || '',
       projectRevision: Number(status?.projectRevision ?? readiness.projectRevision),
       projectFingerprint: status?.projectFingerprint || readiness.projectFingerprint || '',
+      // The structure this binding was made against. A project reconstructed
+      // from a card hashes to something the card never held, so this is what
+      // later distinguishes "still the adopted structure" from "rewired since".
+      studioFingerprint: adopted ? cardProjectFingerprint(adopted) : '',
       verified: true,
     });
   };
@@ -221,8 +227,13 @@ export function SetupScreen({
           standaloneController: nextController,
         },
       }, { confirmDiscard: () => true });
-      recordCardInstallation(status, replacement?.marker);
-      return;
+      // An installation record must never outlive the replacement that earned
+      // it. Recording unconditionally marked the card's project as installed
+      // against a project that was never adopted — a lie that then failed
+      // every downstream identity check for reasons the owner could not see.
+      if (!replacement?.ok) return { ok: false, reason: replacement?.reason || 'replace-failed' };
+      recordCardInstallation(status, replacement.marker, replacement.project);
+      return { ok: true };
     }
     if (status?.projectId) setProjectId(status.projectId);
     if (Array.isArray(parts?.portRoles)) setPortRoles(parts.portRoles);
@@ -243,6 +254,7 @@ export function SetupScreen({
         },
       }));
     }
+    return { ok: true };
   };
 
   const adoptedCardRef = useRef('');
@@ -254,7 +266,11 @@ export function SetupScreen({
     const alreadyDescribed = (currentProject?.portRoles || [])
       .some(output => output?.role === 'strip' && Number(output.pixelCount) > 0);
     adoptedCardRef.current = signature;
-    if (!alreadyDescribed) void applyCardParts(skeleton, status);
+    if (!alreadyDescribed) {
+      void applyCardParts(skeleton, status)
+        .then(applied => { if (!applied?.ok) reportAdoptionFailure(applied?.reason); })
+        .catch(error => reportAdoptionFailure('', error));
+    }
   };
 
   useEffect(() => {
@@ -303,7 +319,33 @@ export function SetupScreen({
     return () => { cancelled = true; };
   }, [cardReachable, cardLink?.host, cardLink?.transport, cardHost, currentProject?.id, currentProject?.projectRevision, recheckTick]);
 
-  const journeyResolution = resolution.kind === 'matches-current'
+  // A project adopted from a card can never match it by fingerprint: the card
+  // hashed the bytes it was installed with, and a reconstruction from
+  // `/api/status` cannot reproduce them. So the resolver alone reported a
+  // freshly adopted card as "differs from open project" forever, which is what
+  // kept Setup nagging about a card it had just adopted. The installation
+  // record settles it instead — and only on an exact agreement with what this
+  // card reports right now: same card, same installed project id as the open
+  // project, same project revision, same fingerprint it was recorded with.
+  const installationMatch = useMemo(() => {
+    const installation = structurallyInstalledRecord(projectLifecycle, cardProjectFingerprint(currentProject))
+      || currentInstallation(projectLifecycle);
+    if (installation?.verified !== true) return false;
+    const readiness = cardLink?.readiness || {};
+    const status = cardState.status || {};
+    const identity = value => String(value || '').trim().toLowerCase();
+    const cardId = identity(status.cardId || cardLink?.card?.id || readiness.cardId);
+    if (!cardId || cardId !== identity(installation.cardId)) return false;
+    const fingerprint = identity(status.projectFingerprint || readiness.projectFingerprint);
+    if (!/^[a-f0-9]{16,64}$/.test(fingerprint) || fingerprint !== identity(installation.projectFingerprint)) return false;
+    const projectRevision = Number(status.projectRevision ?? readiness.projectRevision);
+    if (!Number.isSafeInteger(projectRevision) || projectRevision !== Number(installation.projectRevision)) return false;
+    const installedProjectId = String(status.projectId || readiness.projectId || '').trim();
+    return Boolean(installedProjectId) && installedProjectId === String(currentProject?.id || '').trim();
+  }, [cardLink?.card, cardLink?.readiness, cardState.status, currentProject, projectLifecycle]);
+  const matchesOpenProject = resolution.kind === 'matches-current' || installationMatch;
+
+  const journeyResolution = matchesOpenProject
     ? { matchesCurrentProject: true, playbackAccess: 'ready', provisionalSetup: false }
     : resolution.kind === 'saved-match'
       ? { savedProjectMatch: true, playbackAccess: 'ready', provisionalSetup: false }
@@ -316,7 +358,7 @@ export function SetupScreen({
     commissioningFlow,
     project: currentProject,
     resolution: journeyResolution,
-  }), [cardLifecycle, cardLink, commissioningFlow, currentProject, resolution.kind]);
+  }), [cardLifecycle, cardLink, commissioningFlow, currentProject, installationMatch, resolution.kind]);
 
   useEffect(() => {
     const previous = previousPhaseRef.current;
@@ -330,7 +372,19 @@ export function SetupScreen({
 
   const go = hash => { window.location.hash = hash; };
 
+  const ADOPTION_FAILURES = Object.freeze({
+    cancelled: 'Studio kept the open project, so nothing was adopted from the card.',
+    invalid: 'The card described a project Studio could not read. Read this card again.',
+    'no-geometry': 'This card did not report any light outputs, so there is no wiring to start from. Read this card again.',
+  });
+  const reportAdoptionFailure = (reason, error = null) => {
+    if (error) console.warn('Lightweaver card project adoption failed', error);
+    setAdoptionError(ADOPTION_FAILURES[String(reason || '')]
+      || 'Studio could not adopt this card’s project. Read this card again, then try once more.');
+  };
+
   const startFromCard = async () => {
+    setAdoptionError('');
     const readHost = cardLink?.host || cardHost || '';
     let status = cardState.status;
     let patterns = null;
@@ -355,18 +409,34 @@ export function SetupScreen({
     patterns = installedState[0].status === 'fulfilled' ? installedState[0].value : null;
     zones = installedState[1].status === 'fulfilled' ? installedState[1].value : null;
     const skeleton = projectSkeletonFromCardStatus(status || {});
-    if (!skeleton.strips.length) return;
-    await applyCardParts(reconstructInstalledCardState({ skeleton, patterns, zones }), status);
+    if (!skeleton.strips.length) {
+      reportAdoptionFailure('no-geometry');
+      return;
+    }
+    // Adoption used to fail in silence: a rejected replacement and a thrown one
+    // looked exactly like a successful one from this screen, so the owner
+    // pressed the button, watched nothing change, and had nothing to act on.
+    try {
+      const applied = await applyCardParts(reconstructInstalledCardState({ skeleton, patterns, zones }), status);
+      if (!applied?.ok) reportAdoptionFailure(applied?.reason);
+    } catch (error) {
+      reportAdoptionFailure('', error);
+    }
   };
 
   const loadResolvedProject = async () => {
     if (!resolution?.resolved?.project) return;
+    setAdoptionError('');
     try {
       const replacement = await replaceProject?.(resolution.resolved.project, { confirmDiscard: () => true });
       // The resolver matched this project against the card's own evidence, so
-      // the adopted copy is installed on that card by definition. Record it.
-      if (replacement?.ok) recordCardInstallation(cardState.status, replacement.marker);
-    } catch { /* keep current */ }
+      // the adopted copy is installed on that card by definition. Record it —
+      // but only once the replacement itself reported success.
+      if (replacement?.ok) recordCardInstallation(cardState.status, replacement.marker, replacement.project);
+      else reportAdoptionFailure(replacement?.reason);
+    } catch (error) {
+      reportAdoptionFailure('', error);
+    }
   };
 
   // A real "try again" for a blocked or uncertain card operation: re-read the
@@ -378,8 +448,14 @@ export function SetupScreen({
     const file = event.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
+    setAdoptionError('');
     reader.onload = async loadEvent => {
-      try { await replaceProject?.(JSON.parse(String(loadEvent.target.result))); } catch { /* keep current */ }
+      try {
+        const replacement = await replaceProject?.(JSON.parse(String(loadEvent.target.result)));
+        if (!replacement?.ok) reportAdoptionFailure(replacement?.reason);
+      } catch (error) {
+        reportAdoptionFailure('invalid', error);
+      }
     };
     reader.readAsText(file);
     event.target.value = '';
@@ -515,24 +591,27 @@ export function SetupScreen({
         <div><span>Card</span><strong>{exactCardName(cardLink, cardHost)}</strong></div>
         <div><span>Connection</span><strong>{identityStatus}</strong></div>
         <div><span>Project</span><strong>{currentProject?.name || currentProject?.id || 'Untitled project'}</strong></div>
-        <div><span>Installed</span><strong>{installRelationship(resolution, cardState.status?.projectId || cardLink?.readiness?.projectId || '')}</strong></div>
+        <div><span>Installed</span><strong>{installRelationship(resolution, cardState.status?.projectId || cardLink?.readiness?.projectId || '', installationMatch)}</strong></div>
       </section>
 
       <div className="card-status-area" data-testid="setup-card-status" aria-live="polite">
+        {adoptionError && (
+          <p className="lw-setup-error" role="alert" data-testid="setup-adoption-error">{adoptionError}</p>
+        )}
         {resolution.kind === 'bench' && (
           <section className="card-support-panel lw-setup-banner">
             <h2>Temporary light setup detected</h2>
             <p>This is discovery evidence, not a finished installation. Continue through artwork placement and the visible final test.</p>
           </section>
         )}
-        {resolution.kind === 'matches-current' && (
+        {matchesOpenProject && (
           <section className="card-support-panel lw-setup-banner">
             <h2>This exact card is already set up</h2>
             <p>Its installed project matches the project open in Studio. The verified card bridge remains available for controls.</p>
             <button type="button" className="btn primary" data-testid="setup-open-patterns" onClick={() => go('#screen=pattern')}>Open Patterns</button>
           </section>
         )}
-        {resolution.kind === 'saved-match' && (
+        {resolution.kind === 'saved-match' && !installationMatch && (
           <section className="card-support-panel lw-setup-banner">
             <h2>A saved project matches this exact card</h2>
             <p>Load the matching project instead of replaying blank-card setup.</p>
@@ -544,7 +623,7 @@ export function SetupScreen({
         {/* The connect phase renders these same two actions when its active
             task IS the unresolved card project, so the banner stands down
             rather than showing a second copy of them. */}
-        {resolution.kind === 'none' && cardState.read && cardState.status?.projectId && journey.taskId !== 'load-matching-project' && (
+        {resolution.kind === 'none' && !installationMatch && cardState.read && cardState.status?.projectId && journey.taskId !== 'load-matching-project' && (
           <section className="card-support-panel lw-setup-banner">
             <h2>Resolve this card&rsquo;s project</h2>
             <div className="lw-setup-banner-actions">
