@@ -13,6 +13,7 @@ import {
   replaceProjectLifecycle,
   replaceProjectSafely,
   repositoryPersistenceMarker,
+  reverifyInstallation,
 } from './projectLifecycle.js';
 
 test('card repository saves preserve the exact lifecycle revision without treating recovery writes as explicit saves', () => {
@@ -324,4 +325,53 @@ test('unsaved cancel preserves state and successful replace applies only after v
   });
   assert.equal(replaced.ok, true);
   assert.deepEqual(calls, ['validate', 'confirm', 'apply:Next']);
+});
+
+test('a restored installation re-verifies only on an exact three-way match with fresh card evidence', () => {
+  const installation = {
+    revision: 0,
+    generation: 0,
+    cardId: 'lw-aabbccddeeff',
+    projectRevision: 7,
+    projectFingerprint: 'a1b2c3d4e5f60708',
+  };
+  const restored = lifecycleForRestoredProject(
+    lifecycleRecordFromState(markInstalled(createProjectLifecycle(), installation)),
+  );
+  assert.equal(restored.installation.verified, false);
+
+  const evidence = {
+    cardId: 'lw-aabbccddeeff',
+    projectId: 'lotus-gate',
+    projectRevision: 7,
+    projectFingerprint: 'A1B2C3D4E5F60708',
+    studioProjectId: 'Lotus Gate',
+  };
+
+  // The card sanitizes ids, so the Studio id has to cross the same boundary.
+  const verified = reverifyInstallation(restored, evidence);
+  assert.equal(verified.installation.verified, true);
+  assert.equal(lifecycleLabel(verified), 'Installed on card');
+
+  // Every single disagreement leaves the record untouched.
+  for (const override of [
+    { cardId: 'lw-000000000000' },
+    { projectRevision: 8 },
+    { projectRevision: undefined },
+    { projectFingerprint: 'ffffffffffffffff' },
+    { projectFingerprint: 'not-hex' },
+    { projectId: 'other-piece' },
+    { studioProjectId: '' },
+  ]) {
+    assert.equal(
+      reverifyInstallation(restored, { ...evidence, ...override }).installation.verified,
+      false,
+      JSON.stringify(override),
+    );
+  }
+
+  // An edit since the restore means the card no longer holds this project.
+  assert.equal(reverifyInstallation(markEdited(restored), evidence).installation.verified, false);
+  // Nothing installed ⇒ nothing to re-verify.
+  assert.equal(reverifyInstallation(createProjectLifecycle(), evidence).installation, null);
 });

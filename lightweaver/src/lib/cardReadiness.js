@@ -48,6 +48,13 @@ export function normalizeCardReadiness(raw = {}) {
   const runtimeSource = cleanText(source.source ?? source.runtimeSource, 32).toLowerCase();
   const projectId = installedProjectIdFromCardStatus(source);
   const projectFingerprint = cleanText(source.projectFingerprint, 64).toLowerCase();
+  // The third leg of the installed-project identity the firmware publishes
+  // alongside projectId/projectFingerprint. It was omitted here while the other
+  // two were normalized, so every consumer reading identity off the normalized
+  // envelope silently lost `exactRevision` and could never conclude the card
+  // holds the open project. Null when the card did not say — never 0, which is
+  // a real revision a card can legitimately report.
+  const projectRevision = nonNegativeInteger(source.projectRevision);
   const contractVersion = Number.isSafeInteger(source.provisioningContractVersion)
     ? source.provisioningContractVersion
     : null;
@@ -87,6 +94,7 @@ export function normalizeCardReadiness(raw = {}) {
     source: runtimeSource,
     projectId,
     projectFingerprint,
+    projectRevision,
     knownGoodProject: explicitBoolean(source.knownGoodProject),
     commandReady: explicitBoolean(source.commandReady),
     // Reported separately from `commandReady` by the firmware. Playback is

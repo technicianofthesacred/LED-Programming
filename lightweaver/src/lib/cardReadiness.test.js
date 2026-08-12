@@ -521,3 +521,28 @@ test('a blank factory card is refused for playback as well as for commands', () 
   assert.equal(result.patternAccess, 'blank');
   assert.equal(result.playbackAccess, 'blank');
 });
+
+test('normalizes the installed project revision alongside the rest of the project identity', () => {
+  const normalized = normalizeCardReadiness(readyEnvelope({
+    projectId: 'lotus-gate',
+    projectFingerprint: 'A'.repeat(32),
+    projectRevision: 7,
+  }));
+  assert.equal(normalized.projectId, 'lotus-gate');
+  assert.equal(normalized.projectFingerprint, 'a'.repeat(32));
+  assert.equal(normalized.projectRevision, 7);
+
+  // Zero is a real revision a card can report and must survive normalization.
+  assert.equal(normalizeCardReadiness(readyEnvelope({ projectRevision: 0 })).projectRevision, 0);
+  // Silence, negatives, and non-integers stay null rather than becoming 0.
+  assert.equal(normalizeCardReadiness(readyEnvelope()).projectRevision, null);
+  assert.equal(normalizeCardReadiness(readyEnvelope({ projectRevision: -1 })).projectRevision, null);
+  assert.equal(normalizeCardReadiness(readyEnvelope({ projectRevision: '7' })).projectRevision, null);
+  assert.equal(normalizeCardReadiness(readyEnvelope({ projectRevision: 1.5 })).projectRevision, null);
+
+  // Classification carries it through untouched.
+  assert.equal(
+    classifyCardReadiness(readyEnvelope({ projectRevision: 4 }), { expectedCardId: CARD_ID }).projectRevision,
+    4,
+  );
+});

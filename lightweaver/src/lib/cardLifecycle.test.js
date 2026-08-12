@@ -100,3 +100,24 @@ test('transport identity and all runtime readiness fields stay fail-closed', () 
     assert.equal(lifecycle.safeControlAccess, 'attention-required');
   }
 });
+
+test('project ids match across the card sanitizing boundary instead of stranding a correct card', () => {
+  // The card lowercases and slugifies whatever id it was given before storing
+  // it, so a raw string comparison reported a permanent project-mismatch for a
+  // card that is in fact holding exactly this project.
+  const ready = deriveCardLifecycle({
+    link: READY_LINK,
+    project: { id: 'Piece A', revision: 7, fingerprint: 'A'.repeat(64) },
+  });
+  assert.equal(ready.exactProject, true);
+  assert.equal(ready.state, 'ready');
+  assert.equal(ready.setupTaskId, 'open-patterns');
+
+  // Genuinely different ids still refuse.
+  const mismatch = deriveCardLifecycle({
+    link: READY_LINK,
+    project: { id: 'piece-b', revision: 7, fingerprint: 'a'.repeat(64) },
+  });
+  assert.equal(mismatch.exactProject, false);
+  assert.equal(mismatch.state, 'project-mismatch');
+});

@@ -8,6 +8,7 @@ import {
   CARD_KALEIDOSCOPE_MAX_SPANS_PER_MAPPING,
 } from './cardKaleidoscope.js';
 import { validateKaleidoscope } from './kaleidoscope.js';
+import { sanitizeProjectId } from './projectIdentity.js';
 
 export const CARD_RUNTIME_MODES = ['factory-flash', 'website-flash', 'sd-sequence', 'live-host'];
 export const CARD_RUNTIME_MAX_ZONES = CARD_HARDWARE_CONTRACT.maxZones;
@@ -644,12 +645,10 @@ function clampInt(value, fallback, min, max) {
   return Math.max(min, Math.min(max, number));
 }
 
+// Single definition, shared with every Studio-side comparison that has to cross
+// this same sanitizing boundary (see projectIdentity.js).
 function sanitizeId(value = '') {
-  return String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+  return sanitizeProjectId(value);
 }
 
 function titleFromId(id = '') {

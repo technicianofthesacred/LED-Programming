@@ -1,3 +1,5 @@
+import { sanitizeProjectId } from './projectIdentity.js';
+
 export function createProjectLifecycle(initial = {}) {
   return {
     generation: Number.isSafeInteger(initial.generation) && initial.generation >= 0
@@ -64,6 +66,49 @@ export function markInstalled(state, revision = state.editedRevision) {
       verified: source.verified === false ? false : exactIdentity,
     },
   };
+}
+
+// Re-verify a restored installation record against fresh evidence from the
+// card that is actually connected right now.
+//
+// `lifecycleForRestoredProject` deliberately restores the installation with
+// `verified: false` — the persisted record on its own is a memory, not proof
+// that the card still holds that project. But nothing ever cleared that
+// doubt again, so a reload permanently demoted a correctly installed card to
+// `project-mismatch` and stranded the owner in Setup with no way out except a
+// re-install.
+//
+// This is the missing evidence path, and it stays evidence-based: the record is
+// promoted back to verified ONLY on an exact three-way match — same card id,
+// same project revision, same project fingerprint as the record names, plus the
+// open Studio project being the same project the card names. Any single
+// disagreement (or any missing field) leaves the state untouched, so a
+// different card, a re-installed card, or an edited project still has to earn
+// verification through a real install.
+export function reverifyInstallation(state, evidence = {}) {
+  const installation = state.installation;
+  if (!installation || installation.verified === true) return state;
+  // A record that no longer describes the project as it stands is not a
+  // candidate — an edit since the restore means the card holds something else.
+  if (state.installedRevision !== state.editedRevision) return state;
+
+  const cardId = String(evidence.cardId || '').trim();
+  if (!cardId || cardId !== String(installation.cardId || '').trim()) return state;
+
+  const projectRevision = Number(evidence.projectRevision);
+  if (!Number.isSafeInteger(projectRevision)
+    || projectRevision < 0
+    || projectRevision !== installation.projectRevision) return state;
+
+  const projectFingerprint = String(evidence.projectFingerprint || '').trim().toLowerCase();
+  if (!/^[a-f0-9]{16,64}$/.test(projectFingerprint)
+    || projectFingerprint !== String(installation.projectFingerprint || '')) return state;
+
+  const cardProjectId = sanitizeProjectId(evidence.projectId);
+  const studioProjectId = sanitizeProjectId(evidence.studioProjectId);
+  if (!cardProjectId || !studioProjectId || cardProjectId !== studioProjectId) return state;
+
+  return { ...state, installation: { ...installation, verified: true } };
 }
 
 export function replaceProjectLifecycle(state) {

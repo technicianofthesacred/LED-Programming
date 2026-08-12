@@ -1,3 +1,5 @@
+import { sanitizeProjectId } from './projectIdentity.js';
+
 const CONNECTED_STATES = new Set(['connected-direct', 'connected-bridge']);
 
 const LABELS = Object.freeze({
@@ -62,8 +64,13 @@ export function deriveCardLifecycle({ link = {}, update = null, project = null }
   const observedId = normalized(link.card?.id || readiness.cardId);
   const expectedId = normalized(link.expectedCard?.id);
   const exactCard = Boolean(observedId) && (!expectedId || observedId === expectedId);
-  const studioProjectId = normalized(project?.id || project?.projectId);
-  const cardProjectId = normalized(readiness.projectId || readiness.piece?.id);
+  // Project ids cross a sanitizing boundary: the card lowercases and slugifies
+  // whatever id it was given before storing it, so an exact-match comparison of
+  // the raw strings reports a permanent mismatch for a correctly installed
+  // card. Both sides go through the card's own sanitizer here, the same way
+  // fingerprints are already case-folded below.
+  const studioProjectId = sanitizeProjectId(project?.id || project?.projectId);
+  const cardProjectId = sanitizeProjectId(readiness.projectId || readiness.piece?.id);
   const studioFingerprint = normalizedFingerprint(project?.fingerprint || project?.projectFingerprint);
   const cardFingerprint = normalizedFingerprint(readiness.projectFingerprint);
   const studioRevision = Number(project?.revision ?? project?.projectRevision);
