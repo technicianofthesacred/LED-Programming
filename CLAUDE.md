@@ -57,6 +57,13 @@ As of 2026-06 the runtime is **ESP32-S3 only**. The card runs the Lightweaver fi
 - [ ] _(deferred)_ Configure WLED/Madrix and Art-Net only when that future lane is explicitly resumed
 - [ ] _(deferred — future Pi integration, not current plan)_ Build out `visitor-ui/` against the WLED JSON API and deploy to the Pi
 
+## Branch landing rules (standing policy — read before pushing or merging)
+Full policy: `docs/branch-maintenance.md`. The short version every session must follow:
+- Every branch is either **PR'd**, **`archive/`-prefixed with a TODO.md entry**, or **deletable**. Never end a session with only "pushed to branch X".
+- Before opening a PR for a branch you don't own, check the account's session list and ask the owning session whether the build is done. If unsure, open it as a **draft**.
+- Once the owning session confirms done and CI is green, **merge without asking** and delete the branch. Land one stream at a time.
+- "**Wrap it up**" from Adrian means: finish the increment, then merge / PR-and-watch / archive-and-log — pick one, do it, report which.
+
 ## Where to look for…
 - **Launch checklist / deployment source of truth** → `docs/deployment-checklist.md`
 - **Project roadmap (living source of truth)** → `docs/roadmap.md`
