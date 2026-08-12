@@ -220,11 +220,22 @@ export function correlateFirmwareUpdateRecovery(rawSession, updateStatus = {}, r
       && readiness.outputReady === true
       && readiness.playbackReady === true
       && readiness.provisionalSetup !== true;
-    if (!runtimeKnownGood) {
+    // The health proof answers one question: did the project this update promised
+    // to PRESERVE survive the write? A session that recorded no project head made
+    // no such promise — a blank card, or the USB bootstrap, which resets the chip
+    // without arming an OTA handoff and so can only ever read back `idle`. Demanding
+    // wiring-dependent evidence from a card that was never wired rejects a perfectly
+    // good update forever, and `runtime-not-known-good` is non-terminal, so the
+    // owner gets the 45-second retry cycle with no way out.
+    if (session.expectedProjectHead && !runtimeKnownGood) {
       return { ok: false, terminal: false, phase, reason: 'runtime-not-known-good' };
     }
     return {
-      ok: true, terminal: true, phase: 'valid', reason: '', evidence: 'runtime-known-good',
+      ok: true,
+      terminal: true,
+      phase: 'valid',
+      reason: '',
+      evidence: runtimeKnownGood ? 'runtime-known-good' : 'exact-target-readback',
     };
   }
   if (phase !== 'valid') return { ok: false, terminal: false, phase, reason: 'update-not-valid' };
