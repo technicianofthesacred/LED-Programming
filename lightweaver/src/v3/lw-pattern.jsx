@@ -59,7 +59,7 @@ import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
 import {
   consumeCardEditAuthorization,
   currentCardProjectAuthorizationExpiresAt,
-  hasCurrentCardProjectAuthorization,
+  ensureCardEditAuthorization,
   renewCardEditAuthorization,
 } from '../lib/cardEditAuthorization.js';
 import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard, readCardProjectEvidence } from '../lib/cardPushClient.js';
@@ -318,6 +318,14 @@ import { PatternPreview } from './PatternPreview.jsx';
       </div>);
   }
 
+  // One wording for a refused tap, shared by the hero status line and the
+  // notice rendered next to the pattern grid.
+  function patternGateMessage(gate) {
+    if (gate === 'blank') return 'This card has no project yet. Set up its LED strips, then install this Studio project.';
+    if (gate === 'project') return 'Open Hardware and verify that this exact Studio project is still installed on this card before sending lights.';
+    return 'This card is not ready for pattern commands. Recover and verify it before sending lights.';
+  }
+
   function PatternScreen({ connected, cardLink, go }) {
     const { workspaceAssets } = useCloudLibrary();
     const {
@@ -410,6 +418,8 @@ import { PatternPreview } from './PatternPreview.jsx';
     const [previewAction, dispatchPreviewAction] = useReducer(cardActionReducer, undefined, createCardActionState);
     const [previewFailure, setPreviewFailure] = useState(null);
     const [patternCardGate, setPatternCardGate] = useState('');
+    const [patternCardGateSeq, setPatternCardGateSeq] = useState(0);
+    const patternGateNoticeRef = useRef(null);
     const [handoffUrl, setHandoffUrl] = useState("");
     const [selectedTargetId, setSelectedTargetId] = useState(ALL_SECTIONS_TARGET_ID);
     const [draftLooks, setDraftLooks] = useState({});
@@ -493,8 +503,47 @@ import { PatternPreview } from './PatternPreview.jsx';
     patternAccessRef.current = patternCardAccess;
     const previousPatternAccessRef = useRef(patternCardAccess);
 
+    // Live, un-retained card evidence for `ensureCardEditAuthorization`. This
+    // deliberately reads `cardLink.readiness` directly rather than the
+    // effective binding: during a bridge re-check the binding may be the
+    // retained last-exact one, and a retained binding must never be able to
+    // mint a new grant off itself.
+    const liveCardEvidence = useMemo(() => {
+      const readiness = cardLink?.readiness;
+      if (!readiness) return null;
+      const card = cardLink?.card || {};
+      return {
+        cardId: readiness.cardId || card.id || card.cardId || '',
+        firmwareVersion: readiness.firmwareVersion || card.firmwareVersion || '',
+        buildId: readiness.buildId || card.buildId || '',
+        bootId: readiness.bootId || cardLink?.validatedBootId || '',
+        projectId: installedProjectIdFromCardStatus(readiness),
+        projectFingerprint: readiness.projectFingerprint || '',
+        projectRevision: readiness.projectRevision,
+      };
+    }, [cardLink?.card, cardLink?.readiness, cardLink?.validatedBootId]);
+    // Only an installation record that still describes the project as it stands
+    // (nothing edited since the install) can support a derived authorization.
+    const currentInstallation = projectLifecycle.installedRevision === projectLifecycle.editedRevision
+      ? projectLifecycle.installation
+      : null;
+    const authorizationEvidenceRef = useRef(null);
+    authorizationEvidenceRef.current = { cardEvidence: liveCardEvidence, installation: currentInstallation };
+
+    // Was: a bare `hasCurrentCardProjectAuthorization` read, which meant the
+    // ONLY way to authorize pattern commands was the Setup-screen "load the
+    // card's project" button — an in-memory grant that a reload erased. An
+    // owner with a connected, verified card whose installed project matches the
+    // open one clicked a pattern and nothing at all was sent. Deriving the
+    // grant from that same evidence (see `ensureCardEditAuthorization`) removes
+    // the button press without removing a single check.
     const hasCurrentProjectAuthorization = useCallback(() => (
-      hasCurrentCardProjectAuthorization(patternAuthorizationRef.current)
+      ensureCardEditAuthorization({
+        binding: patternAuthorizationRef.current,
+        cardEvidence: authorizationEvidenceRef.current?.cardEvidence || null,
+        installation: authorizationEvidenceRef.current?.installation || null,
+        linkReady: patternAccessRef.current === 'ready',
+      })
     ), []);
     const currentPatternCardAccess = useCallback(() => {
       const access = patternAccessRef.current;
@@ -549,16 +598,22 @@ import { PatternPreview } from './PatternPreview.jsx';
     const blockPatternCardEffect = useCallback((access = patternAccessRef.current) => {
       invalidatePendingPreview();
       setPatternCardGate(access === 'blank' ? 'blank' : access === 'project' ? 'project' : 'recovery');
+      // The hero status sits far above the pattern grid, so on a scrolled page
+      // a refused tap looked like nothing happened at all. Bump this on every
+      // refusal (not just when the reason changes) so the same repeated block
+      // still brings its explanation back into view.
+      setPatternCardGateSeq(seq => seq + 1);
       setHandoffUrl('');
       setStatusKind('err');
-      setStatus(
-        access === 'blank'
-          ? 'This card has no project yet. Set up its LED strips, then install this Studio project.'
-          : access === 'project'
-            ? 'Open Hardware and verify that this exact Studio project is still installed on this card before sending lights.'
-            : 'This card is not ready for pattern commands. Recover and verify it before sending lights.',
-      );
+      setStatus(patternGateMessage(access === 'blank' ? 'blank' : access === 'project' ? 'project' : 'recovery'));
     }, [invalidatePendingPreview]);
+
+    useEffect(() => {
+      if (!patternCardGateSeq || !patternCardGate) return;
+      const notice = patternGateNoticeRef.current;
+      if (typeof notice?.scrollIntoView !== 'function') return;
+      notice.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, [patternCardGate, patternCardGateSeq]);
 
     useEffect(() => {
       // Every readiness poll that still reports the exact bound card, boot,
@@ -571,15 +626,32 @@ import { PatternPreview } from './PatternPreview.jsx';
       renewCardEditAuthorization(effectivePatternAuthorizationBinding);
     }, [patternCardAccess, effectivePatternAuthorizationBinding]);
 
+    // Derive the grant as soon as the evidence supports it, not only at the
+    // moment of a click, so the screen renders as authorized (no "verify this
+    // project" banner over a card that is demonstrably holding it) and the
+    // first pattern tap of a session goes straight out.
+    useEffect(() => {
+      if (patternCardAccess !== 'ready' || projectAuthorizationCurrent) return;
+      if (hasCurrentProjectAuthorization()) refreshPatternAuthorization();
+    }, [currentInstallation, hasCurrentProjectAuthorization, liveCardEvidence, patternCardAccess, projectAuthorizationCurrent]);
+
     const previousProjectAuthorizationRef = useRef(projectAuthorizationCurrent);
     useEffect(() => {
       const previous = previousProjectAuthorizationRef.current;
       previousProjectAuthorizationRef.current = projectAuthorizationCurrent;
       if (previous && !projectAuthorizationCurrent && patternAccessRef.current === 'ready') {
+        // A grant that merely aged out while the card kept proving the same
+        // facts is not a loss of authority — re-derive it before telling the
+        // owner to go verify something that never stopped being true.
+        if (hasCurrentProjectAuthorization()) {
+          previousProjectAuthorizationRef.current = true;
+          refreshPatternAuthorization();
+          return;
+        }
         setColorOrderOpen(false);
         blockPatternCardEffect('project');
       }
-    }, [blockPatternCardEffect, projectAuthorizationCurrent]);
+    }, [blockPatternCardEffect, hasCurrentProjectAuthorization, projectAuthorizationCurrent]);
 
     useEffect(() => {
       // Card authority is tied to the exact readiness envelope that existed
@@ -869,8 +941,16 @@ import { PatternPreview } from './PatternPreview.jsx';
         );
       };
       if (!livePreview) {
+        // Was: clear the status and return. With the checkbox off, a tap on a
+        // pattern changed the Studio preview and sent nothing to the card,
+        // with no message anywhere — indistinguishable from the app being
+        // broken. Say which of the two happened.
+        setPatternCardGate('');
+        setHandoffUrl('');
         setStatusKind('');
-        setStatus('');
+        setStatus(patternAccessRef.current === 'ready'
+          ? 'Live preview is off — this pattern is previewing in Studio only. Turn on “Preview taps on the LED card” above the pattern list to send it to the card.'
+          : '');
         return;
       }
       if (!hasCurrentAuthority()) {
@@ -1764,6 +1844,18 @@ import { PatternPreview } from './PatternPreview.jsx';
     const targetTotal = previewTargetIds.length || 1;
     const selectedTargetName = selectedTarget ? targetLabel(selectedTarget) : 'All sections';
     const showFlashAction = statusKind === 'err' && status === cardBridgeFeatureGap('frame')?.message;
+    // The gate's escape hatch, rendered in the notice beside the pattern grid.
+    const patternGateActionLabel = patternCardGate === 'blank'
+      ? 'Set up LED strips and install on card'
+      : patternCardGate === 'project'
+        // Verifying and recovering a card is the Card status board's job, not
+        // the guided ladder's — so it names that section rather than riding the
+        // card default, which now lands on Setup.
+        ? 'Verify project in Card status'
+        : 'Recover and verify card';
+    const runPatternGateAction = () => (patternCardGate === 'blank'
+      ? go?.('layout')
+      : (window.location.hash = '#screen=card&section=overview'));
     const hasPreviewFailureAction = previewAction.status === 'failed' && Boolean(previewFailure?.actionId);
     // A card fresh out of strip discovery is holding Studio's own bench config,
     // so its project fingerprint cannot match the open project and the check
@@ -1907,27 +1999,10 @@ import { PatternPreview } from './PatternPreview.jsx';
                     <button type="button" className="btn primary" onClick={() => { window.location.hash = '#screen=flash'; }}>Open Flash</button>
                   </div>
                 }
-                {patternCardGate &&
-                  <div className="pmx-status-actions">
-                    <button
-                      type="button"
-                      className="btn primary"
-                      onClick={() => (patternCardGate === 'blank'
-                        ? go?.('layout')
-                        // Verifying and recovering a card is the Card status
-                        // board's job, not the guided ladder's — so it names
-                        // that section rather than riding the card default,
-                        // which now lands on Setup.
-                        : (window.location.hash = '#screen=card&section=overview'))}
-                    >
-                      {patternCardGate === 'blank'
-                        ? 'Set up LED strips and install on card'
-                        : patternCardGate === 'project'
-                          ? 'Verify project in Card status'
-                          : 'Recover and verify card'}
-                    </button>
-                  </div>
-                }
+                {/* The gate's action button is NOT here: it lives in the
+                    notice beside the pattern grid, which is where the owner is
+                    looking when a tap is refused. Two copies of the same button
+                    would also make "the" button ambiguous to click. */}
                 {hasPreviewFailureAction &&
                   <div className="pmx-status-actions">
                     <button type="button" className="btn primary" onClick={runPreviewFailureAction}>{previewFailure.actionLabel}</button>
@@ -2030,6 +2105,25 @@ import { PatternPreview } from './PatternPreview.jsx';
                     </div>
                     <span className="pt-count">{Math.min(visibleCount, filtered.length)} of {filtered.length} shown</span>
                   </div>
+                  {/* The hero status is often scrolled off by the time anyone
+                      is tapping patterns, so a refused tap repeats its reason
+                      and its one-click fix right here, next to the grid. */}
+                  {patternCardGate &&
+                    <div
+                      ref={patternGateNoticeRef}
+                      className="pmx-status is-err"
+                      role="alert"
+                      data-testid="pattern-gate-notice"
+                      style={{ margin: "0 0 10px" }}
+                    >
+                      <strong>That tap was not sent to the card.</strong> {status || patternGateMessage(patternCardGate)}
+                      <div className="pmx-status-actions">
+                        <button type="button" className="btn primary" onClick={runPatternGateAction}>
+                          {patternGateActionLabel}
+                        </button>
+                      </div>
+                    </div>
+                  }
                   <div className="pm-cards">
                     {filtered.slice(0, visibleCount).map((p) => {
                       const cardInPlaylist = inPlaylist(p.id);

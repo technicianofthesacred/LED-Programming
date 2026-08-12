@@ -1955,3 +1955,102 @@ test('firmware without playbackReady still blocks patterns while recovering', as
   expect(controlRequests).toHaveLength(0);
   await expect(page.getByRole('button', { name: 'Recover and verify card' })).toBeVisible();
 });
+
+// ── Authorization survives a reload ───────────────────────────────────────
+// The card-edit authorization used to be mintable only by the Setup screen's
+// "load the card's project" button, in module memory. So an owner who
+// reloaded Studio (or simply opened Patterns in a new session) tapped a
+// pattern and NOTHING was sent to the card — no request, no message. This
+// asserts the derived path: ready exact card + restored installation record
+// that the live card still matches ⇒ the tap goes out.
+async function pairRestoredInstalledCard(page, {
+  cardId = 'lw-restored-install',
+  installation = null,
+} = {}) {
+  const project = createDefaultProject();
+  project.id = 'restored-installed-project';
+  project.name = 'Restored installed project';
+  const buildId = `${cardId}-build`;
+  const projectFingerprint = cardProjectFingerprint(project);
+  const controlRequests: Record<string, unknown>[] = [];
+
+  await mockDefaultCardZones(page);
+  await page.addInitScript(({ id, build, savedProject, fingerprint, record }) => {
+    localStorage.clear();
+    localStorage.setItem('lw_chip_card_host', 'lightweaver.local');
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(savedProject));
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1, id, firmwareVersion: '1.0.0', buildId: build,
+    }));
+    // What a previous session's install left on disk. It restores UNVERIFIED
+    // by design; only live card evidence can promote it.
+    localStorage.setItem('lw_project_lifecycle_v1', JSON.stringify({
+      version: 2,
+      dirty: false,
+      persistedDestination: 'browser',
+      installation: record || { cardId: id, projectRevision: 0, projectFingerprint: fingerprint },
+    }));
+  }, { id: cardId, build: buildId, savedProject: project, fingerprint: projectFingerprint, record: installation });
+
+  await page.route('**/api/status', route => route.fulfill({ json: {
+    app: 'Lightweaver', provisioningContractVersion: 1,
+    cardId, firmwareVersion: '1.0.0', buildId, bootId: `${cardId}-boot`,
+    runtimePhase: 'ready', knownGoodProject: true,
+    commandReady: true, outputReady: true, playbackReady: true,
+    projectId: project.id, piece: { id: project.id },
+    projectRevision: 0, projectFingerprint,
+  } }));
+  await page.route('**/api/firmware-info', route => route.fulfill({ json: {
+    app: 'Lightweaver', cardId, firmwareVersion: '1.0.0', buildId, bootId: `${cardId}-boot`,
+    projectId: project.id, projectRevision: 0, projectFingerprint,
+  } }));
+  await page.route('**/api/control', async route => {
+    const request = JSON.parse(route.request().postData() || '{}');
+    controlRequests.push(request);
+    await route.fulfill({ json: {
+      ok: true, cardId, patternId: request.patternId, revision: request.revision,
+    } });
+  });
+
+  await page.goto('/#screen=patterns', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.pm')).toBeVisible();
+  return { controlRequests, project, projectFingerprint };
+}
+
+test('a restored install that the live card still matches sends patterns without any Setup button press', async ({ page }) => {
+  const { controlRequests } = await pairRestoredInstalledCard(page);
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+
+  await expect(page.getByTestId('pattern-preview-meta')).toContainText('Ocean');
+  await expect.poll(() => controlRequests.some(request => request.patternId === 'ocean')).toBe(true);
+  await expect(page.getByTestId('pattern-gate-notice')).toHaveCount(0);
+});
+
+test('a restored install naming a different card still refuses, next to the pattern grid', async ({ page }) => {
+  const { controlRequests } = await pairRestoredInstalledCard(page, {
+    installation: { cardId: 'lw-some-other-card', projectRevision: 0, projectFingerprint: 'a'.repeat(64) },
+  });
+
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+
+  await expect(page.getByTestId('pattern-preview-meta')).toContainText('Ocean');
+  await page.waitForTimeout(400);
+  expect(controlRequests).toHaveLength(0);
+  const notice = page.getByTestId('pattern-gate-notice');
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText('That tap was not sent to the card.');
+  await expect(notice.getByRole('button', { name: 'Verify project in Card status' })).toBeVisible();
+});
+
+test('with live preview off a pattern tap says so instead of silently doing nothing', async ({ page }) => {
+  const { controlRequests } = await pairRestoredInstalledCard(page, { cardId: 'lw-live-off' });
+
+  await page.getByText('Preview taps on the LED card').click();
+  await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
+
+  await expect(page.getByTestId('pattern-preview-meta')).toContainText('Ocean');
+  await expect(page.locator('.pmx-status')).toContainText('Live preview is off');
+  await page.waitForTimeout(300);
+  expect(controlRequests).toHaveLength(0);
+});

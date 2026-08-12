@@ -149,6 +149,61 @@ export function renewCardEditAuthorization(binding, options) {
   return true;
 }
 
+// ── Deriving a grant from evidence already in hand ────────────────────────
+//
+// Until now the ONLY issuers were the Setup-screen "load the card's project"
+// button and the signed-production path, and the grant lived in this module's
+// memory. So a reload — or simply opening Patterns without pressing that
+// button again — left a connected, verified, exactly-matching card unable to
+// receive a single pattern command, silently: Patterns bailed with 'project'
+// before any request was made.
+//
+// The fix is NOT to weaken the binding. It is to notice that a state which
+// already satisfies every fact the binding asserts should not additionally
+// require a button press that was performed in a previous session. This
+// re-derives the grant from live evidence and issues it through the ordinary
+// `issueCardEditAuthorization`, so every check that path enforces still runs.
+//
+// It refuses unless ALL of the following hold:
+//   - the card link is ready for playback against the exact expected card
+//   - the binding matches FRESH card evidence field for field (card, firmware,
+//     build, boot, installed project id + fingerprint) — a stale or retained
+//     binding cannot mint, only a live one can
+//   - the open project carries a VERIFIED installation record naming the same
+//     card, the same project fingerprint, and the same project revision the
+//     card reports right now
+//
+// The derived grant deliberately carries NO intent. An intent is a card-issued
+// handoff request ("open pattern:ocean"); deriving one here would let Studio
+// answer a question the card never asked.
+export function ensureCardEditAuthorization(request = {}, options) {
+  const binding = request.binding || {};
+  if (hasCurrentCardProjectAuthorization(binding, options)) return true;
+  if (request.linkReady !== true) return false;
+
+  const evidence = request.cardEvidence || null;
+  if (!evidence) return false;
+  const sameText = (a, b) => text(a) !== '' && text(a) === text(b);
+  const sameId = (a, b) => text(a) !== '' && text(a).toLowerCase() === text(b).toLowerCase();
+  if (!sameId(binding.cardId, evidence.cardId)
+    || !sameText(binding.firmwareVersion, evidence.firmwareVersion)
+    || !sameText(binding.buildId, evidence.buildId)
+    || !sameText(binding.bootId, evidence.bootId)
+    || !sameText(binding.installedProjectId, evidence.projectId)
+    || !sameId(binding.installedProjectFingerprint, evidence.projectFingerprint)) return false;
+
+  const installation = request.installation || null;
+  if (!installation || installation.verified !== true) return false;
+  if (!sameId(binding.cardId, installation.cardId)) return false;
+  if (!sameId(binding.installedProjectFingerprint, installation.projectFingerprint)) return false;
+  const cardRevision = Number(evidence.projectRevision);
+  if (!Number.isSafeInteger(cardRevision)
+    || cardRevision < 0
+    || cardRevision !== Number(installation.projectRevision)) return false;
+
+  return issueCardEditAuthorization({ ...binding, intent: '' }, options);
+}
+
 export function hasCurrentCardProjectAuthorization(binding, options) {
   return Boolean(readCurrent(binding, options));
 }

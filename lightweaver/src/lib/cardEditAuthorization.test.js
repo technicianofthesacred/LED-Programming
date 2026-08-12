@@ -4,6 +4,7 @@ import {
   CARD_EDIT_AUTHORIZATION_TTL_MS,
   clearCardEditAuthorization,
   consumeCardEditAuthorization,
+  ensureCardEditAuthorization,
   hasCurrentCardProjectAuthorization,
   issueCardEditAuthorization,
   issueSignedProductionCardEditAuthorization,
@@ -230,4 +231,117 @@ test('a card that stops confirming still lapses on the staleness window', () => 
   assert.equal(hasCurrentCardProjectAuthorization(binding, {
     now: NOW + CARD_EDIT_AUTHORIZATION_TTL_MS,
   }), false);
+});
+
+// ── ensureCardEditAuthorization ───────────────────────────────────────────
+// A connected, verified, exactly-matching card must be able to receive pattern
+// commands after a reload, without a second press of the Setup button — but
+// only when every fact the binding asserts is independently evidenced.
+
+const autoBinding = Object.freeze({ ...binding, intent: '' });
+const autoEvidence = Object.freeze({
+  cardId: 'LW-AABBCCDDEEFF',
+  firmwareVersion: '1.2.3',
+  buildId: 'build-42',
+  bootId: 'boot-7',
+  projectId: 'project-1',
+  projectFingerprint: 'A'.repeat(64),
+  projectRevision: 9,
+});
+const autoInstallation = Object.freeze({
+  cardId: 'lw-aabbccddeeff',
+  projectRevision: 9,
+  projectFingerprint: 'a'.repeat(64),
+  verified: true,
+});
+const autoRequest = (patch = {}) => ({
+  binding: autoBinding,
+  cardEvidence: autoEvidence,
+  installation: autoInstallation,
+  linkReady: true,
+  ...patch,
+});
+
+test('derives an authorization from a ready link, fresh card evidence, and a verified installation', () => {
+  assert.equal(hasCurrentCardProjectAuthorization(autoBinding, { now: NOW }), false);
+  assert.equal(ensureCardEditAuthorization(autoRequest(), { now: NOW }), true);
+  assert.equal(hasCurrentCardProjectAuthorization(autoBinding, { now: NOW + 1 }), true);
+});
+
+test('a derived authorization carries no intent, so it never answers a card handoff claim', () => {
+  ensureCardEditAuthorization(autoRequest(), { now: NOW });
+  assert.equal(consumeCardEditAuthorization({ ...autoBinding, intent: 'pattern:ocean' }, { now: NOW + 1 }), false);
+  // …and the command authorization itself is untouched by the refused claim.
+  assert.equal(hasCurrentCardProjectAuthorization(autoBinding, { now: NOW + 2 }), true);
+});
+
+test('an existing exact authorization is kept rather than re-issued', () => {
+  issueCardEditAuthorization(binding, { now: NOW });
+  assert.equal(ensureCardEditAuthorization({ binding, linkReady: false }, { now: NOW + 1 }), true);
+  // The intent-bearing grant survived, so the card handoff can still claim it.
+  assert.equal(consumeCardEditAuthorization(binding, { now: NOW + 2 }), true);
+});
+
+test('refuses to derive an authorization on any break in the evidence chain', () => {
+  const refusals = [
+    ['link not ready', { linkReady: false }],
+    ['link readiness unknown', { linkReady: undefined }],
+    ['no card evidence at all', { cardEvidence: null }],
+    ['different card', { cardEvidence: { ...autoEvidence, cardId: 'lw-112233445566' } }],
+    ['card reports no id', { cardEvidence: { ...autoEvidence, cardId: '' } }],
+    ['firmware changed', { cardEvidence: { ...autoEvidence, firmwareVersion: '1.2.4' } }],
+    ['build changed', { cardEvidence: { ...autoEvidence, buildId: 'build-43' } }],
+    ['stale boot id', { cardEvidence: { ...autoEvidence, bootId: 'boot-8' } }],
+    ['card holds another project', { cardEvidence: { ...autoEvidence, projectId: 'project-2' } }],
+    ['card fingerprint diverged', { cardEvidence: { ...autoEvidence, projectFingerprint: 'b'.repeat(64) } }],
+    ['card reports no revision', { cardEvidence: { ...autoEvidence, projectRevision: null } }],
+    ['card revision moved on', { cardEvidence: { ...autoEvidence, projectRevision: 10 } }],
+    ['no installation record', { installation: null }],
+    ['installation not verified', { installation: { ...autoInstallation, verified: false } }],
+    ['installation names another card', { installation: { ...autoInstallation, cardId: 'lw-112233445566' } }],
+    ['installation fingerprint diverged', { installation: { ...autoInstallation, projectFingerprint: 'b'.repeat(64) } }],
+    ['installation revision diverged', { installation: { ...autoInstallation, projectRevision: 8 } }],
+    ['studio project is not the installed one', {
+      binding: { ...autoBinding, studioProjectId: 'project-2' },
+    }],
+    ['studio fingerprint diverged from the card', {
+      binding: { ...autoBinding, studioProjectFingerprint: 'b'.repeat(64) },
+    }],
+    ['binding is incomplete', { binding: { ...autoBinding, bootId: '' } }],
+  ];
+
+  for (const [label, patch] of refusals) {
+    clearCardEditAuthorization();
+    assert.equal(ensureCardEditAuthorization(autoRequest(patch), { now: NOW }), false, label);
+    assert.equal(hasCurrentCardProjectAuthorization(autoBinding, { now: NOW + 1 }), false, label);
+  }
+});
+
+test('a derived authorization lapses and renews exactly like an issued one', () => {
+  ensureCardEditAuthorization(autoRequest(), { now: NOW });
+  assert.equal(renewCardEditAuthorization(autoBinding, { now: NOW + 1_000 }), true);
+  assert.equal(hasCurrentCardProjectAuthorization(autoBinding, {
+    now: NOW + 1_000 + CARD_EDIT_AUTHORIZATION_TTL_MS - 1,
+  }), true);
+  assert.equal(hasCurrentCardProjectAuthorization(autoBinding, {
+    now: NOW + 1_000 + CARD_EDIT_AUTHORIZATION_TTL_MS,
+  }), false);
+});
+
+test('a lapsed derived authorization is re-derived from evidence that still holds', () => {
+  ensureCardEditAuthorization(autoRequest(), { now: NOW });
+  const lapsed = NOW + CARD_EDIT_AUTHORIZATION_TTL_MS;
+  assert.equal(hasCurrentCardProjectAuthorization(autoBinding, { now: lapsed }), false);
+  assert.equal(ensureCardEditAuthorization(autoRequest(), { now: lapsed }), true);
+  assert.equal(hasCurrentCardProjectAuthorization(autoBinding, { now: lapsed + 1 }), true);
+});
+
+test('a refused derivation leaves an unrelated live authorization alone', () => {
+  issueCardEditAuthorization(binding, { now: NOW });
+  const otherCard = { ...autoBinding, cardId: 'lw-112233445566' };
+  assert.equal(ensureCardEditAuthorization(autoRequest({
+    binding: otherCard,
+    installation: { ...autoInstallation, cardId: 'lw-112233445566' },
+  }), { now: NOW + 1 }), false);
+  assert.equal(hasCurrentCardProjectAuthorization(binding, { now: NOW + 2 }), true);
 });
