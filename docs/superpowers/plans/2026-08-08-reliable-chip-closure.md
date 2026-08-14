@@ -36,6 +36,34 @@ behind the baseline used here, and overlaps later firmware and guided-setup
 work. Selectively reimplement its still-relevant behavior through current tests.
 Never cherry-pick or merge it wholesale.
 
+### Status re-checked against `main` on 2026-08-11 (revision `b5ab670c`)
+
+The checkboxes below this section were never ticked, but main has advanced ~200
+commits past this plan's `177e9de` baseline and has since closed part of it. Verified
+in source:
+
+- **Task 1 (proven network, late router) — COMPLETE.** `CredentialsResumed`
+  (`LightweaverConnectivityPolicy.h:33`) shares the `CredentialsAccepted` arm and sets
+  `generation = 0` with `handoffRequired = false`; the `SetupAp` re-arm condition
+  `(generation != 0 || !handoffRequired)` (`:211`) is what keeps a resumed
+  generation-zero join retrying every 10 s. Landed as `75079a6a`.
+- **Task 2 (config save self-reboot) — COMPLETE.** `runtimeArmConfigRestartFallback` /
+  `armConfigRestartFallback` (`main.cpp:2578`).
+- **Task 3 (Art-Net playback admission) — COMPLETE.** `LightweaverArtnet.cpp:106`.
+- **Task 5 (two fresh envelopes for ordinary bridge authority) — NOT STARTED.**
+  `cardBridge.js:692-695` still grants authority from one envelope, and
+  `cardLink.js:74` still has `requiresStableRevalidation: false` (untouched since this
+  plan's merge base).
+- **Task 6 (truthful LAN recovery action) — NOT STARTED.** `CardConnectionCenter.jsx`
+  still offers only the `192.168.4.1` setup-AP route. When building it, do **not** take
+  `2462ca4`'s version: main has since built `findCardAcrossKnownSubnets` mDNS-first
+  rediscovery that the branch predates, and the branch's patch deletes the "Try local
+  network again" affordance. Reuse only its microcopy.
+
+Confirmed-remaining-failure #1 in the list below is therefore fixed; #2 and #3 are
+fixed; #4, #5 and #6 stand. A fuller audit of what `2462ca4` still has to offer — and
+what it would regress — is recorded in the branch-consolidation block of `TODO.md`.
+
 ### Already complete on current `main`
 
 - Proven Wi-Fi credentials persist and a successful resumed association skips
