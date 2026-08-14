@@ -312,3 +312,54 @@ test('shared lifecycle maps every cross-surface state to the same Setup destinat
     assert.equal(journey.taskId, expectedTask, state);
   }
 });
+
+test('a connected exact card holding an unmatched project gets a load action, not another connection prompt', () => {
+  const journey = deriveSetupJourney({
+    cardLink: connectedCard(READY_STATUS),
+    cardLifecycle: { state: 'project-mismatch', setupTaskId: 'load-matching-project' },
+    project: { id: 'lotus-gate', name: 'Lotus Gate' },
+  });
+
+  // The connect phase stays ACTIVE so Setup renders a real task for it. Held as
+  // a blocker it produced a "Find my card" button that reopened the connection
+  // center, whose only exit routed back to this same step.
+  assert.equal(journey.currentPhaseId, 'connect');
+  assert.equal(journey.taskId, 'load-matching-project');
+  assert.deepEqual(journey.blockers, []);
+  assert.notEqual(journey.taskId, 'connect-card');
+});
+
+test('a saved match reaches its adoption branch once the exact card is connected', () => {
+  const journey = deriveSetupJourney({
+    cardLink: connectedCard(READY_STATUS),
+    cardLifecycle: { state: 'project-mismatch', setupTaskId: 'load-matching-project' },
+    project: { id: 'lotus-gate', name: 'Lotus Gate' },
+    resolution: { savedProjectMatch: true, playbackAccess: 'ready', provisionalSetup: false },
+  });
+
+  assert.equal(journey.diagnosis.state, 'saved-match');
+  assert.equal(journey.taskId, 'load-matching-project');
+});
+
+test('an installed exact match still resolves ahead of the unmatched-project branch', () => {
+  const journey = deriveSetupJourney({
+    cardLink: connectedCard(READY_STATUS),
+    cardLifecycle: { state: 'project-mismatch', setupTaskId: 'load-matching-project' },
+    project: { id: 'lotus-gate', name: 'Lotus Gate' },
+    resolution: { matchesCurrentProject: true, playbackAccess: 'ready', provisionalSetup: false },
+  });
+
+  assert.equal(journey.diagnosis.state, 'installed-match');
+  assert.equal(journey.setupComplete, true);
+});
+
+test('a disconnected card with a project-mismatch lifecycle still blocks on connection', () => {
+  const journey = deriveSetupJourney({
+    cardLink: { state: 'disconnected' },
+    cardLifecycle: { state: 'project-mismatch', setupTaskId: 'load-matching-project' },
+    project: { id: 'lotus-gate', name: 'Lotus Gate' },
+  });
+
+  assert.equal(journey.currentPhaseId, 'connect');
+  assert.equal(journey.blockers[0].id, 'load-matching-project');
+});

@@ -31,6 +31,9 @@ plan is a reference library, not one large job to execute.
 
 ## Soon
 
+- [ ] **Unify the zone-id vocabulary between section targets and runtime zones.** _(band: agent-runnable)_ `deriveSectionTargets` in `lw-pattern.jsx` is called without `wiring`, so section targets carry patch-board ids (`patch-strip-1`) while `cardRuntimeProject.js` builds runtime zones from compiled wiring (`strip-1`); any project with compiled wiring makes a section-scoped live preview ask for a zone the card cannot have, forcing `ensureCardSectionsForPreview` to push a full `/api/config` on every section-targeted pattern tap. Whole-piece taps (the default) are unaffected. Found during the 2026-08-12 setup-loop/pattern-click fix; aligning the vocabularies is a runtime-contract change that needs deliberate design, not a drive-by.
+- [ ] **Persist the installation record across edits the way the structural fingerprint already reasons.** _(band: agent-runnable)_ `lifecycleRecordFromState` drops the installation once `editedRevision` moves, so a pattern tap followed by a reload loses the record and the owner must re-adopt. In-session the 2026-08-12 fix keeps the grant alive across look edits via the structural fingerprint; making the persisted record structural too is the consistent follow-up.
+
 ### Branch consolidation audit — 2026-08-11
 
 All 25 `codex/*` branches were audited commit-by-commit against `main`. **Twenty-two

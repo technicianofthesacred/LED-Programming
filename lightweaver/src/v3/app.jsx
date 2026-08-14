@@ -75,9 +75,10 @@ import { createStudioFreshnessMonitor } from '../lib/studioFreshness.js';
 import { STUDIO_HARDWARE_OPERATION_EVENT } from '../lib/studioHardwareOperation.js';
 import { getRunningStudioRelease } from '../lib/studioRelease.js';
 import { bootstrapStudioCardConnection } from '../lib/studioCardBootstrap.js';
-import { deriveSetupJourney } from '../lib/setupJourney.js';
+import { CONNECTED_CARD_LINK_STATES, deriveSetupJourney } from '../lib/setupJourney.js';
 import { deriveCardLifecycle } from '../lib/cardLifecycle.js';
 import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
+import { currentInstallation, structurallyInstalledRecord } from '../lib/projectLifecycle.js';
 import {
   clearFirmwareUpdateSessionIfMatches,
   correlateFirmwareUpdateRecovery,
@@ -548,7 +549,7 @@ function Shell({ offlineUpdateController = null }) {
   const {
     projectName, serializeProject, flushProjectAutosave, replaceProject, replaceWithNewProject, requestReplacementConfirmation,
     projectLifecycle, projectLifecycleLabel, markProjectPersisted, markProjectEdited, markProjectInstalled, isProjectLifecycleMarkerCurrent,
-    projectHasUnsavedChanges,
+    projectHasUnsavedChanges, reverifyProjectInstallation,
   } = useProject();
   const offlineUpdateState = useSyncExternalStore(
     offlineUpdateController?.subscribe || subscribeDisabledOfflineUpdate,
@@ -861,18 +862,47 @@ function Shell({ offlineUpdateController = null }) {
         : { phase: 'blocked', reason: correlation.reason });
     }
   }, [cardLink.readiness]);
+  // A reload restores the installation record unverified (it is a memory, not
+  // proof). When the exact card that is connected right now still reports the
+  // same project id, revision, and fingerprint the record names, that IS the
+  // proof, so the record is promoted back to verified and the card lifecycle can
+  // reach `ready` again without a pointless re-install. The match is checked in
+  // `reverifyInstallation`, which refuses anything short of an exact three-way
+  // agreement — this effect only supplies the live evidence.
+  useEffect(() => {
+    const readiness = cardLink.readiness;
+    if (!CONNECTED_CARD_LINK_STATES.includes(cardLink.state) || !readiness) return;
+    reverifyProjectInstallation({
+      cardId: cardLink.card?.id || readiness.cardId,
+      projectId: readiness.projectId,
+      projectRevision: readiness.projectRevision,
+      projectFingerprint: readiness.projectFingerprint,
+      studioProjectId: serializeProject().id,
+      studioProjectFingerprint: cardProjectFingerprint(serializeProject()),
+    });
+  }, [
+    cardLink.state,
+    cardLink.card?.id,
+    cardLink.readiness,
+    projectLifecycle.installation,
+    reverifyProjectInstallation,
+    serializeProject,
+  ]);
   const lifecycleProject = useMemo(() => {
     const project = serializeProject();
-    const currentInstallation = projectLifecycle.installedRevision === projectLifecycle.editedRevision
-      && projectLifecycle.installation?.verified === true
-      ? projectLifecycle.installation
-      : null;
+    const structureFingerprint = cardProjectFingerprint(project);
+    const installation = currentInstallation(projectLifecycle);
+    // A card-adopted project is bound by its installation record, not by a
+    // fingerprint it cannot recompute — so the record stands in for as long as
+    // the structure it named is unchanged, not only until the first look edit.
+    const verified = structurallyInstalledRecord(projectLifecycle, structureFingerprint)
+      || (installation?.verified === true ? installation : null);
     return {
       ...project,
-      revision: Number.isSafeInteger(currentInstallation?.projectRevision)
-        ? currentInstallation.projectRevision
+      revision: Number.isSafeInteger(verified?.projectRevision)
+        ? verified.projectRevision
         : projectLifecycle.editedRevision,
-      fingerprint: currentInstallation?.projectFingerprint || cardProjectFingerprint(project),
+      fingerprint: verified?.projectFingerprint || structureFingerprint,
     };
   }, [
     projectLifecycle.editedRevision,

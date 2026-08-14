@@ -94,7 +94,17 @@ function connectBlockers({ cardLink, cardLifecycle, commissioningFlow, resolutio
       return [{ id: lifecycleTaskId, phaseId: 'connect' }];
     }
     if (lifecycleTaskId === 'install-project') return [{ id: 'install-project', phaseId: 'connect' }];
-    if (lifecycleTaskId === 'load-matching-project') return [{ id: 'load-matching-project', phaseId: 'connect' }];
+    // `load-matching-project` is a project question, not a connection one. Held
+    // here as a connect blocker it made its own escape hatch unreachable: the
+    // saved-match branch below (the only place that surfaces a real "load this
+    // card's project" action) requires an empty blocker list, so the exact state
+    // that needs the action could never reach it — Setup fell through to a
+    // generic "Find my card" button that reopened the connection center, which
+    // sent the owner straight back to Setup. Once the exact card is connected
+    // and verified, let it flow to the resolution branches instead.
+    if (lifecycleTaskId === 'load-matching-project' && !connectedExactCard(cardLink)) {
+      return [{ id: 'load-matching-project', phaseId: 'connect' }];
+    }
     if (lifecycleTaskId === 'recover-operation'
       && (cardLifecycle?.state === 'update-rolled-back' || !stage)) {
       return [{ id: 'recover-operation', phaseId: 'connect' }];
@@ -259,6 +269,28 @@ export function deriveSetupJourney({
       blockers: [],
       currentPhaseId: null,
       nextAction: { id: 'load-matching-project' },
+      resumeDestination: null,
+      setupComplete: false,
+    });
+  }
+
+  // The exact card is connected and healthy, but the project it holds is not
+  // the one open in Studio and no saved copy resolved it. That is an actionable
+  // project question — adopt what the card holds, or keep setting up the open
+  // project — not a connection failure, so it keeps the connect phase ACTIVE
+  // with a real load action instead of being folded into the blocker list,
+  // where it only ever produced another "Find my card".
+  const cardProjectUnresolved = blockers.length === 0
+    && connectedExactCard(cardLink)
+    && cardLifecycle?.setupTaskId === 'load-matching-project'
+    && resolution?.provisionalSetup !== true;
+  if (cardProjectUnresolved) {
+    return withTask({
+      diagnosis: { state: 'card-project-unresolved' },
+      phases: phasesFor('connect', progress, currentLayoutProgress),
+      blockers: [],
+      currentPhaseId: 'connect',
+      nextAction: { id: 'load-matching-project', phaseId: 'connect' },
       resumeDestination: null,
       setupComplete: false,
     });

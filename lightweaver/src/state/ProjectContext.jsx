@@ -54,6 +54,7 @@ import {
   markInstalled,
   markPersisted,
   repositoryPersistenceMarker,
+  reverifyInstallation,
   replaceProjectLifecycle,
   replaceProjectSafely,
 } from '../lib/projectLifecycle.js';
@@ -230,6 +231,7 @@ function projectLifecycleReducer(state, action) {
     return markPersisted(state, action.destination, action.revision);
   }
   if (action.type === 'installed') return markInstalled(state, action.installation);
+  if (action.type === 'reverified') return reverifyInstallation(state, action.evidence);
   if (action.type === 'replaced') return replaceProjectLifecycle(state);
   if (action.type === 'boot') return action.lifecycle;
   return state;
@@ -1078,6 +1080,14 @@ export function ProjectProvider({ children, repository = null, initialProjectEnv
       && marker.revision === projectLifecycleRef.current.editedRevision
   ), []);
   const markProjectInstalled = useCallback(installation => dispatchProjectLifecycle({ type: 'installed', installation }), []);
+  // Reads the live lifecycle (not the render snapshot), so a caller that has
+  // just replaced the project can record the installation against the
+  // generation/revision that replacement actually produced.
+  const readProjectLifecycle = useCallback(() => projectLifecycleRef.current, []);
+  const reverifyProjectInstallation = useCallback(
+    evidence => dispatchProjectLifecycle({ type: 'reverified', evidence }),
+    [],
+  );
   const commitProjectStateWithoutEdit = useCallback(commit => {
     suppressNextLifecycleEditRef.current = true;
     commit();
@@ -1190,6 +1200,8 @@ export function ProjectProvider({ children, repository = null, initialProjectEnv
       markProjectEdited,
       isProjectLifecycleMarkerCurrent,
       markProjectInstalled,
+      readProjectLifecycle,
+      reverifyProjectInstallation,
       commitProjectStateWithoutEdit,
       markCardLookConfirmed,
       registerProjectSnapshotContributor,
