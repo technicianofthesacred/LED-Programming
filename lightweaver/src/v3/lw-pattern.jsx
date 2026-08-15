@@ -66,9 +66,8 @@ import {
 import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard, readCardProjectEvidence } from '../lib/cardPushClient.js';
 import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
 import { prepareCardDeployment, waitForCardDeploymentVerification } from '../lib/cardDeployment.js';
-import { ensureCardSectionsForPreview } from '../lib/cardSectionSync.js';
 import { runtimePackageForCardOperation } from '../lib/testStrip.js';
-import { decideLiveControlProjectAuthority, pushLivePreviewToCard, recoverCardLights } from '../lib/cardLiveControl.js';
+import { decideLiveControlProjectAuthority, previewResponseUsedZoneFallback, pushLivePreviewToCard, recoverCardLights } from '../lib/cardLiveControl.js';
 import {
   cardActionReducer,
   cardActionStatusLabel,
@@ -366,7 +365,6 @@ import { PatternPreview } from './PatternPreview.jsx';
     // ── browse / ui state ───────────────────────────────────────────────
     const [q, setQ] = useState("");
     const [cat, setCat] = useState("all");
-    const [livePreview, setLivePreview] = useState(true);
     const [localCard, setLocalCard] = useState(readLocalChipDefault);
     const [menuOpen, setMenuOpen] = useState(false);
     const menuButtonRef = useRef(null);
@@ -581,6 +579,19 @@ import { PatternPreview } from './PatternPreview.jsx';
       if (authority.ok) return 'ready';
       return authority.state === 'project-mismatch' ? 'project' : 'recovery';
     }, [cardLink?.readiness, hasCurrentProjectAuthorization]);
+    // Preview authority, deliberately weaker than install authority.
+    //
+    // A live preview writes nothing: the card holds it in RAM, a reboot
+    // restores the installed startup look, and the firmware accepts any of its
+    // compiled-in patterns whatever project is stored (`isSupportedCompiledPattern`,
+    // main.cpp). So a preview needs only the right card, ready to play. It does
+    // NOT need proof that this Studio project is the one installed — requiring
+    // that turned the pattern grid, which exists to try patterns, into a
+    // surface that refused every tap until the owner installed first.
+    //
+    // `currentPatternCardAccess` above keeps the full project gate and stays
+    // the gate for installs, which do persist.
+    const currentPatternPreviewAccess = useCallback(() => patternAccessRef.current, []);
     const matchesCurrentCardProjectEvidence = useCallback((evidence = {}) => {
       const binding = patternAuthorizationRef.current;
       const matches = hasCurrentProjectAuthorization()
@@ -661,10 +672,17 @@ import { PatternPreview } from './PatternPreview.jsx';
           refreshPatternAuthorization();
           return;
         }
+        // Losing the grant closes the install-shaped controls and says so.
+        // It is NOT a refused tap: previews no longer ride on this
+        // authorization, so raising the grid's "that tap was not sent to the
+        // card" notice here would be a false alarm over a grid whose taps
+        // still reach the strip. Say the true thing — installs need
+        // revalidating — and leave the pattern grid alone.
         setColorOrderOpen(false);
-        blockPatternCardEffect('project');
+        setStatusKind('err');
+        setStatus(patternGateMessage('project'));
       }
-    }, [blockPatternCardEffect, hasCurrentProjectAuthorization, projectAuthorizationCurrent]);
+    }, [hasCurrentProjectAuthorization, projectAuthorizationCurrent]);
 
     useEffect(() => {
       // Card authority is tied to the exact readiness envelope that existed
@@ -938,7 +956,7 @@ import { PatternPreview } from './PatternPreview.jsx';
 
     const scheduleLivePreview = useCallback((nextLook, target = selectedTarget, delayMs = 80, { bridgeAuthority = null, expectedControlPatch = null } = {}) => {
       const hasCurrentAuthority = () => {
-        if (currentPatternCardAccess() !== 'ready') return false;
+        if (currentPatternPreviewAccess() !== 'ready') return false;
         if (patternAccessRef.current === 'ready') return true;
         if (!bridgeAuthority) return false;
         const state = getCardBridgeState();
@@ -953,21 +971,8 @@ import { PatternPreview } from './PatternPreview.jsx';
           && state.card?.buildId === bridgeAuthority.buildId
         );
       };
-      if (!livePreview) {
-        // Was: clear the status and return. With the checkbox off, a tap on a
-        // pattern changed the Studio preview and sent nothing to the card,
-        // with no message anywhere — indistinguishable from the app being
-        // broken. Say which of the two happened.
-        setPatternCardGate('');
-        setHandoffUrl('');
-        setStatusKind('');
-        setStatus(patternAccessRef.current === 'ready'
-          ? 'Live preview is off — this pattern is previewing in Studio only. Turn on “Preview taps on the LED card” above the pattern list to send it to the card.'
-          : '');
-        return;
-      }
       if (!hasCurrentAuthority()) {
-        blockPatternCardEffect(currentPatternCardAccess());
+        blockPatternCardEffect(currentPatternPreviewAccess());
         return;
       }
       setPatternCardGate('');
@@ -981,35 +986,29 @@ import { PatternPreview } from './PatternPreview.jsx';
       livePreviewTimer.current = setTimeout(async () => {
         setHandoffUrl('');
         if (!hasCurrentAuthority()) {
-          blockPatternCardEffect(currentPatternCardAccess());
+          blockPatternCardEffect(currentPatternPreviewAccess());
           return;
         }
         try {
-          const evidence = await readCardProjectEvidence({ host: cardHost, transport: cardLink?.transport });
-          if (sequence !== livePreviewSeq.current) return;
-          if (!matchesCurrentCardProjectEvidence(evidence)) {
-            blockPatternCardEffect('project');
-            return;
-          }
-          if (zone) {
-            if (!runtimePackage) throw runtimeBuild.error;
-            await ensureCardSectionsForPreview({
-              host: cardHost,
-              requiredZoneIds: [zone],
-              runtimePackage,
-            });
-            if (sequence !== livePreviewSeq.current) return;
-            if (!hasCurrentAuthority()) {
-              blockPatternCardEffect(currentPatternCardAccess());
-              return;
-            }
-          }
-          await pushLivePreviewToCard(
+          // Was: a fresh `/api/firmware-info` read on every tap, whose result
+          // had to prove this Studio project was the installed one before a
+          // single light command went out. That is install authority, and it
+          // cost a full round-trip of latency ahead of every preview. A
+          // preview persists nothing, so it is gated on the card being the
+          // right card and ready — checked above — and sends immediately.
+          //
+          // Was also: `ensureCardSectionsForPreview`, which pushed a whole
+          // `/api/config` when the target zone was missing from the card.
+          // Writing the card's storage to preview a pattern is an install
+          // wearing a preview's name; ask the card to fall back to the whole
+          // strip instead, which `pushLivePreviewToCard` reports back through
+          // `previewZoneFallback` rather than doing silently.
+          const response = await pushLivePreviewToCard(
             { ...nextLook, zone, syncZones: target?.kind === 'section' ? false : true },
             {
               host: cardHost,
               timeoutMs: 2200,
-              fallbackMissingZoneToAll: false,
+              fallbackMissingZoneToAll: true,
               preferBridge: localCard || (typeof window !== 'undefined' && window.location?.protocol === 'https:'),
               revision: sequence,
               ...(expectedControlPatch ? { expectedControlPatch } : {}),
@@ -1019,8 +1018,14 @@ import { PatternPreview } from './PatternPreview.jsx';
             dispatchPreviewAction({ type: 'confirm', revision: sequence });
             setPreviewFailure(null);
             markCardLookConfirmed({ ...nextLook, zone, syncZones: target?.kind === 'section' ? false : true });
-            setStatusKind('');
-            setStatus('');
+            // The pattern is on the strip either way, so this is a note, not a
+            // failure — but the owner is looking at a section tab and the whole
+            // piece just changed, so say which one actually happened.
+            const usedFallback = previewResponseUsedZoneFallback(response);
+            setStatusKind(usedFallback ? 'ok' : '');
+            setStatus(usedFallback
+              ? `The card has no “${targetLabel(target)}” section yet, so this played on the whole piece. Install to give the card your sections.`
+              : '');
           }
         } catch (error) {
           if (error?.reason === 'superseded') {
@@ -1038,7 +1043,7 @@ import { PatternPreview } from './PatternPreview.jsx';
           }
         }
       }, delayMs);
-    }, [blockPatternCardEffect, cardHost, cardLink?.transport, currentPatternCardAccess, livePreview, localCard, markCardLookConfirmed, matchesCurrentCardProjectEvidence, runtimeBuild.error, runtimePackage, selectedTarget]);
+    }, [blockPatternCardEffect, cardHost, currentPatternPreviewAccess, localCard, markCardLookConfirmed, selectedTarget]);
 
     const retryLatestPreview = useCallback(() => {
       const latest = latestPreviewIntent.current;
@@ -1168,12 +1173,12 @@ import { PatternPreview } from './PatternPreview.jsx';
 
     const scheduleBrowseLivePreview = useCallback((nextLook, target) => {
       if (!nextLook) return;
-      if (livePreview && currentPatternCardAccess() !== 'ready') {
-        blockPatternCardEffect(currentPatternCardAccess());
+      if (currentPatternPreviewAccess() !== 'ready') {
+        blockPatternCardEffect(currentPatternPreviewAccess());
         return;
       }
       setPatternCardGate('');
-      const needsBridge = livePreview && (
+      const needsBridge = Boolean(
         localCard || (typeof window !== 'undefined' && window.location?.protocol === 'https:')
       );
       if (!needsBridge) {
@@ -1209,7 +1214,7 @@ import { PatternPreview } from './PatternPreview.jsx';
           && bridgeState.runtimePlaybackReady
           && normalizeCardHost(bridgeState.host) === normalizeCardHost(cardHost);
         if (!exactFreshAuthority || sequence !== browsePreviewSeq.current) {
-          blockPatternCardEffect(currentPatternCardAccess());
+          blockPatternCardEffect(currentPatternPreviewAccess());
           return;
         }
         setStatusKind('');
@@ -1278,7 +1283,7 @@ import { PatternPreview } from './PatternPreview.jsx';
           setStatus(error?.message || 'The local card did not connect. Open Flash to update the card, then try again.');
         }
       });
-    }, [blockPatternCardEffect, cardHost, currentPatternCardAccess, livePreview, localCard, scheduleLivePreview]);
+    }, [blockPatternCardEffect, cardHost, currentPatternPreviewAccess, localCard, scheduleLivePreview]);
 
     // Clicking a target tab pushes that target's current look to its zone
     // (debounced) so the physical strip follows the selection.
@@ -1294,10 +1299,6 @@ import { PatternPreview } from './PatternPreview.jsx';
           ? target.id
           : (previewTargetIds.includes(previous.lastTargetId) ? previous.lastTargetId : previewTargetIds[0] || ''),
       }));
-      // Picking a target only changes what the controls edit — with live
-      // preview off nothing is sent, so there is nothing to report. The
-      // "Live preview is off…" note belongs to actual look changes only.
-      if (!livePreview) return;
       if (!connected) {
         setStatusKind('err');
         setStatus(`Not connected to the card, so the lights can't follow this selection. Use Connect to card in the bottom bar.`);
@@ -1999,8 +2000,13 @@ import { PatternPreview } from './PatternPreview.jsx';
               </div>
             </header>
 
+            {/* When the grid's refusal notice is up it carries this exact
+                sentence plus the action, so keeping this an `alert` too made a
+                screen reader announce the same refusal twice and gave the page
+                two matching alert roles. The notice owns the announcement
+                while it is showing; this stays visible, quietly. */}
             {status &&
-              <div className={"pmx-status" + (statusKind === 'ok' ? ' is-ok' : statusKind === 'err' ? ' is-err' : '')} role={statusKind === 'err' ? 'alert' : 'status'} aria-live="polite">
+              <div className={"pmx-status" + (statusKind === 'ok' ? ' is-ok' : statusKind === 'err' ? ' is-err' : '')} role={statusKind === 'err' && !patternCardGate ? 'alert' : 'status'} aria-live="polite">
                 {status}
                 {handoffUrl &&
                   <div className="pmx-status-actions">
@@ -2060,20 +2066,12 @@ import { PatternPreview } from './PatternPreview.jsx';
               <section className="pm-main">
                 <div className="sec-h"><span className="t">Tap a pattern to preview</span><span className="m">{filtered.length} shown of {REAL_PATTERNS.length} chip-ready + {realMixes.length} mixes / {playlistSize} in playlist</span><span className="line" /></div>
 
+                {/* Was: a "Preview taps on the LED card" checkbox. There is no
+                    moment in this screen's job where a tap should not reach the
+                    card — it is the scratchpad for trying patterns on the real
+                    strip — and an off checkbox only produced taps that looked
+                    broken. Every tap sends. */}
                 <div className="pm-livebar">
-                  <label className="pm-check">
-                    <input type="checkbox" checked={livePreview} onChange={(event) => {
-                      if (!event.target.checked) {
-                        invalidatePendingPreview();
-                        setHandoffUrl('');
-                        setStatusKind('');
-                        setStatus('');
-                      }
-                      setLivePreview(event.target.checked);
-                    }} />
-                    <span aria-hidden="true" className={"pm-box" + (livePreview ? " on" : "")}>{livePreview && I.check}</span>
-                    Preview taps on the LED card
-                  </label>
                   <span className="pm-saved" data-testid="physical-preview-status">{cardActionStatusLabel(previewAction)}</span>
                 </div>
 

@@ -396,7 +396,6 @@ test('fresh strip preview and design target stay synchronized without committing
   await expect(previewHeading).toContainText('Lava Lamp');
   await expect(stage).toHaveAttribute('data-preview-patterns', 'lava');
 
-  await page.getByLabel('Preview taps on the LED card').uncheck();
   await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
   await expect(previewHeading).toContainText('Plasma');
   await expect(stage).toHaveAttribute('data-preview-patterns', 'plasma');
@@ -564,7 +563,6 @@ test('whole-piece preview composites saved assignments plus the unsaved selected
   await gotoSavedProjectPatterns(page, project);
 
   await page.getByTestId('section-target-patch-default-inner-circle').click();
-  await page.getByLabel('Preview taps on the LED card').uncheck();
   await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
   await page.getByRole('button', { name: 'On my piece' }).click();
 
@@ -583,7 +581,6 @@ test('leaving whole-piece preview restores the remembered strip as the edit targ
   const allTarget = page.getByTestId('section-target-all');
   const toggle = page.getByRole('button', { name: 'On my piece' });
   const stage = page.getByTestId('pattern-piece-preview');
-  await page.getByLabel('Preview taps on the LED card').uncheck();
   await innerTarget.click();
   await allTarget.click();
   await expect(stage).toHaveAttribute('data-preview-mode', 'piece');
@@ -605,7 +602,6 @@ test('verified Install persists the auditioned section assignment in Studio', as
   await gotoSavedProjectPatterns(page, project);
 
   await page.getByTestId('section-target-patch-default-inner-circle').click();
-  await page.getByLabel('Preview taps on the LED card').uncheck();
   await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
   await setRangeValue(page.getByTestId('look-brightness-slider'), '0.42');
   await page.getByTitle('Install the current look on the card').click();
@@ -660,7 +656,6 @@ test('an edit made during verification remains a draft above the installed snaps
   const innerTarget = page.getByTestId('section-target-patch-default-inner-circle');
   const install = page.getByTitle('Install the current look on the card');
   await innerTarget.click();
-  await page.getByLabel('Preview taps on the LED card').uncheck();
   await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
   await install.click();
   await expect.poll(() => posted).toBe(true);
@@ -692,7 +687,6 @@ test('a rejected Install preserves canonical Studio state and the current draft'
   await gotoSavedProjectPatterns(page, project);
 
   await page.getByTestId('section-target-patch-default-inner-circle').click();
-  await page.getByLabel('Preview taps on the LED card').uncheck();
   await page.locator('.pm-cards .pmcard[data-pattern-id="plasma"]').click();
   await page.getByTitle('Install the current look on the card').click();
 
@@ -1415,7 +1409,6 @@ test('disabling live preview invalidates a pending bridge selection', async ({ p
   await expect(page.getByRole('button', { name: 'Install on card' })).toBeEnabled();
 
   await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
-  await page.getByLabel('Preview taps on the LED card').uncheck();
   await page.evaluate(() => {
     window.dispatchEvent(new MessageEvent('message', {
       origin: 'http://lightweaver.local',
@@ -2027,7 +2020,11 @@ test('a restored install that the live card still matches sends patterns without
   await expect(page.getByTestId('pattern-gate-notice')).toHaveCount(0);
 });
 
-test('a restored install naming a different card still refuses, next to the pattern grid', async ({ page }) => {
+// Was: this asserted a refusal. A stored installation record naming another
+// card is a fact about a past install, not about the card answering right now
+// — and a preview writes nothing, so it has no business consulting it. The
+// grid exists to try patterns on the strip in front of you.
+test('a stale install record naming a different card does not stop a preview to the card that is actually connected', async ({ page }) => {
   const { controlRequests } = await pairRestoredInstalledCard(page, {
     installation: { cardId: 'lw-some-other-card', projectRevision: 0, projectFingerprint: 'a'.repeat(64) },
   });
@@ -2035,22 +2032,47 @@ test('a restored install naming a different card still refuses, next to the patt
   await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
 
   await expect(page.getByTestId('pattern-preview-meta')).toContainText('Ocean');
-  await page.waitForTimeout(400);
-  expect(controlRequests).toHaveLength(0);
-  const notice = page.getByTestId('pattern-gate-notice');
-  await expect(notice).toBeVisible();
-  await expect(notice).toContainText('That tap was not sent to the card.');
-  await expect(notice.getByRole('button', { name: 'Verify project in Card status' })).toBeVisible();
+  await expect.poll(() => controlRequests.some(request => request.patternId === 'ocean')).toBe(true);
+  await expect(page.getByTestId('pattern-gate-notice')).toHaveCount(0);
 });
 
-test('with live preview off a pattern tap says so instead of silently doing nothing', async ({ page }) => {
-  const { controlRequests } = await pairRestoredInstalledCard(page, { cardId: 'lw-live-off' });
+// The refusal that still stands, and the only one that should: a card whose
+// identity is not the one Studio paired with must never receive a command.
+test('a card answering with the wrong identity is still refused, next to the pattern grid', async ({ page }) => {
+  const { controlRequests } = await pairRestoredInstalledCard(page, { cardId: 'lw-restored-install' });
+  await page.route('**/api/status', route => route.fulfill({ json: {
+    app: 'Lightweaver', provisioningContractVersion: 1,
+    cardId: 'lw-an-impostor-card', firmwareVersion: '1.0.0', buildId: 'lw-restored-install-build',
+    bootId: 'lw-an-impostor-card-boot',
+    runtimePhase: 'ready', knownGoodProject: true,
+    commandReady: true, outputReady: true, playbackReady: true,
+  } }));
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.pm')).toBeVisible();
 
-  await page.getByText('Preview taps on the LED card').click();
   await page.locator('.pm-cards .pmcard[data-pattern-id="ocean"]').click();
 
   await expect(page.getByTestId('pattern-preview-meta')).toContainText('Ocean');
-  await expect(page.locator('.pmx-status')).toContainText('Live preview is off');
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(400);
   expect(controlRequests).toHaveLength(0);
+  await expect(page.getByTestId('pattern-gate-notice')).toContainText('That tap was not sent to the card.');
+});
+
+// The behaviour Adrian asked for in as many words: an unedited tap on any
+// pattern overrides whatever the card is currently playing, with no install.
+test('a pattern tap overrides what the card is already playing without installing anything', async ({ page }) => {
+  const { controlRequests } = await pairRestoredInstalledCard(page, { cardId: 'lw-override' });
+  const configPosts: unknown[] = [];
+  await page.route('**/api/config', async route => {
+    configPosts.push(route.request().postData());
+    await route.fulfill({ json: { ok: true } });
+  });
+
+  for (const patternId of ['ocean', 'fire', 'sparkle']) {
+    await page.locator(`.pm-cards .pmcard[data-pattern-id="${patternId}"]`).click();
+    await expect.poll(() => controlRequests.some(request => request.patternId === patternId)).toBe(true);
+  }
+
+  expect(configPosts).toHaveLength(0);
+  await expect(page.getByTestId('pattern-gate-notice')).toHaveCount(0);
 });
