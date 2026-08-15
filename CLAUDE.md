@@ -4,7 +4,7 @@ status: active
 stack: [ESP32-S3, Lightweaver firmware, React, Vite]
 deploy: public Studio at led.mandalacodes.com; local Lightweaver card command path
 family: installation
-last_reviewed: 2026-07-31
+last_reviewed: 2026-08-15
 ---
 
 # Lightweaver — branded LED installation controller
@@ -44,6 +44,32 @@ As of 2026-06 the runtime is **ESP32-S3 only**. The card runs the Lightweaver fi
 - `lightweaver/` (React) is the public Studio, installer, design, commissioning, and control surface.
 - `visitor-ui/` is a **future Pi-hosted** branded React UI (captive-portal scene selector per `branded-installation-ui.md`). **Not in the current ESP-only plan** — the firmware card page is today's visitor UI. Retained for a future Pi integration; visitor-facing polish goes into the firmware page for now.
 - **Tests** live under `/e2e/` using `@playwright/test`. **Diagnostic scripts** are archived in `/scripts/debug/`.
+
+## Shipment vocabulary and standing authorization
+
+Use these words precisely in every Lightweaver handoff:
+
+- **Committed**: the change exists in a local Git commit. Not necessarily on GitHub.
+- **Pushed**: a remote branch contains the commit. Not necessarily reviewed or on `origin/main`.
+- **PR-ready**: the pushed branch has its required tests and a truthful ready-for-review pull request. Not merged.
+- **Merged**: the integrated change is contained in `origin/main`. Not necessarily deployed.
+- **Deployed**: the production workflow used real production credentials, published the exact integrated revision, and succeeded. A credential-skipped green workflow is not deployed.
+- **Shipped**: tested, merged into `origin/main`, deployed successfully, and then independently proven live at `https://led.mandalacodes.com` by its strict no-store `/studio-release.json` revision and the exact deployed files in the staged build graph.
+
+Every **Deployed** and **Shipped** report must name the **build numbers** — the repository's first-parent commit count, which is exactly the number GitHub prints as "N Commits" at the top of the file list. Adrian checks GitHub, checks the screen, and knows whether he is running the newest code. Never switch this to a prettier counter that steps by one per change — neat increments are worthless if they match nothing he can see. The same number is used for both surfaces:
+
+- **Studio build** — `buildNumber` in `/studio-release.json`, shown in the Studio footer beacon.
+- **Firmware build** — `buildNumber` in the signed `/firmware/release-manifest.json`, compiled into the binary as `LW_BUILD_NUMBER` and reported by the card on `/api/firmware-info` and `/api/status`. A card and the release it was flashed from always report the same number.
+
+Say "Shipped — Studio build 412, firmware build 411", not just a commit SHA. Those numbers are how Adrian confirms a browser and a card are current without decoding a hash. The two can differ by one on a firmware release, because the signer commits the signed artifacts on top of the revision the binary was compiled from; that is expected, not drift.
+
+"Ship it to main" is standing authorization to complete that entire sequence, including the integration PR, merge, production workflow, and final live proof. A commit, push, PR, merge, or green CI result alone never satisfies it. If any boundary cannot be crossed, report **not shipped** and name the exact last verified state and blocker. Do not claim completion before the final live proof against the terminal `origin/main` revision, including any protected firmware signer commit triggered by the merge.
+
+## Agent ownership boundaries
+- `led-art-mapper/app/src/` — owned by led-art-mapper agent; do not edit
+- `lightweaver/src/` — owned by lightweaver-app agent; do not edit
+- `firmware/lightweaver-controller/src/` — owned by firmware agent; do not edit
+- `scripts/`, `.github/`, `docs/`, root markdown files, `lightweaver/scripts/`, `lightweaver/vite.config.js`, `lightweaver/package.json` (scripts section only), `.gitignore` — owned by CI/docs agent
 
 ## Tools already built
 - `led-art-mapper/` — design tool: draw LED strip paths over artwork, set pixel counts, write live patterns (JS), and export WLED/FastLED/CSV geometry for external consumers
