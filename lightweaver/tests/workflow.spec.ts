@@ -378,7 +378,14 @@ test('complete playlist sync writes and verifies all card sections', async ({ pa
   await expect(page.getByTestId('workspace-notice')).toHaveCount(0);
 });
 
-test('latest section preview installs dependencies once and wins rapid taps', async ({ page }) => {
+// Was: 'latest section preview installs dependencies once and wins rapid taps',
+// which asserted that selecting a section pushed one /api/config to give the
+// card the zone it was missing. Writing the card's storage to preview a
+// pattern is an install wearing a preview's name, and it put a ~1s config
+// write in front of a tap that is supposed to be instant. A preview now falls
+// back to the whole strip and says so. The rapid-tap half of this test is the
+// part worth keeping: the last tap still wins.
+test('the latest section preview wins rapid taps and never writes the card config', async ({ page }) => {
   const card = await mockLocalCard(page, {
     zones: [{ id: 'full-piece', label: 'Full piece', ranges: [{ start: 0, count: 44 }] }],
     configDelayMs: 1000,
@@ -387,12 +394,21 @@ test('latest section preview installs dependencies once and wins rapid taps', as
 
   card.operations.length = 0;
   await page.getByRole('button', { name: 'Outer circle', exact: true }).click();
-  await expect.poll(() => card.operations.filter(item => item === 'config').length).toBe(1);
+  await expect.poll(() => card.controls.length).toBeGreaterThan(0);
   await page.getByRole('button', { name: 'Inner circle', exact: true }).click();
 
   await page.waitForTimeout(1500);
-  expect(card.operations.filter(item => item === 'config')).toHaveLength(1);
-  expect(card.controls).toHaveLength(1);
-  expect(card.controls[0].zone).toBe('patch-default-inner-circle');
-  await expect(page.locator('.pmx-status')).toHaveCount(0);
+  expect(card.operations.filter(item => item === 'config')).toHaveLength(0);
+  // Both taps reach the card now, and that is the point: each one is a single
+  // fast control POST, so neither has to be thrown away. Superseding only ever
+  // mattered while a ~1s config write sat in front of the send. What must still
+  // hold is that the card ends on the LAST tap.
+  expect(card.controls.length).toBeGreaterThanOrEqual(1);
+  const revisions = card.controls.map(control => control.revision);
+  expect(revisions.at(-1)).toBe(Math.max(...revisions));
+  // The card has only `full-piece`, so the targeted zone cannot be honoured.
+  // The pattern still reaches the strip, whole-piece, and the screen says which
+  // of the two happened rather than letting a section tab imply otherwise.
+  expect(card.controls.every(control => control.zone === undefined)).toBe(true);
+  await expect(page.locator('.pmx-status')).toContainText('played on the whole piece');
 });

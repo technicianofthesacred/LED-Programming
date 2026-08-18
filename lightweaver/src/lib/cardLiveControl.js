@@ -917,11 +917,48 @@ function liveTargetsFromZones(zonesPayload = {}, fallbackLook = {}) {
     : [];
 }
 
+// Resolve a zone-targeted look against the zones the card actually has.
+// Returns the look to send plus the fallback record, or null when nothing had
+// to change. Every transport shares this: an authority-backed send that
+// skipped the check would post a zone the card cannot know, and the firmware
+// answers `unknown zone` (422) rather than lighting anything.
+// Callers guard with this rather than letting the async resolver short-circuit
+// internally: awaiting it unconditionally costs a microtask hop even when there
+// is nothing to resolve, which is enough to let a superseding preview POST
+// first and reorder the latest-only queue.
+function needsZoneResolution(look, options = {}) {
+  return Boolean(options.fallbackMissingZoneToAll && look?.zone);
+}
+
+async function resolveZoneForPreview(host, look, options = {}) {
+  try {
+    const zonesPayload = await readCardZones(host, Math.min(options.timeoutMs || 2500, 1200));
+    if (!hasCardZones(zonesPayload) || zoneExists(zonesPayload, String(look.zone))) return null;
+    const { zone: requestedZone, ...fallbackLook } = look;
+    return {
+      previewLook: fallbackLook,
+      previewZoneFallback: {
+        requestedZone: String(requestedZone),
+        availableZones: zonesPayload.zones.map(zone => String(zone?.id || '')).filter(Boolean),
+      },
+    };
+  } catch {
+    // If the zone probe fails, keep the original targeted request so the normal
+    // connection error path can report the real card reachability issue.
+    return null;
+  } finally {
+    requireCurrentPreviewIntent(options);
+  }
+}
+
 async function pushLivePreviewToHost(host, look, options = {}) {
   const authority = options.authority || getActiveCardTransportAuthority(host);
   if (authority) {
     requireCurrentPreviewIntent(options);
-    const previewLook = look;
+    const resolved = needsZoneResolution(look, options)
+      ? await resolveZoneForPreview(host, look, { ...options, authority })
+      : null;
+    const previewLook = resolved?.previewLook || look;
     const response = requireBoundedControlObject(await authority.request('/api/control', {
       method: 'POST',
       body: {
@@ -929,7 +966,10 @@ async function pushLivePreviewToHost(host, look, options = {}) {
         ...(options.revision !== undefined ? { revision: options.revision } : {}),
       },
     }));
-    return requireLivePreviewAcknowledgement(response, previewLook, options, { id: authority.cardId });
+    const acknowledged = requireLivePreviewAcknowledgement(response, previewLook, options, { id: authority.cardId });
+    return resolved
+      ? { ...acknowledged, previewZoneFallback: true, ...resolved.previewZoneFallback }
+      : acknowledged;
   }
   // Local-card mode deliberately exercises the same verified postMessage path
   // as public HTTPS, even when Studio itself is running from an HTTP dev host.
@@ -942,25 +982,9 @@ async function pushLivePreviewToHost(host, look, options = {}) {
     expected: options.expectedCardId ? { id: options.expectedCardId } : null,
   });
   requireCurrentPreviewIntent(options);
-  let previewLook = look;
-  let previewZoneFallback = null;
-  if (options.fallbackMissingZoneToAll && look?.zone) {
-    try {
-      const zonesPayload = await readCardZones(host, Math.min(options.timeoutMs || 2500, 1200));
-      if (hasCardZones(zonesPayload) && !zoneExists(zonesPayload, String(look.zone))) {
-        const { zone: requestedZone, ...fallbackLook } = look;
-        previewLook = fallbackLook;
-        previewZoneFallback = {
-          requestedZone: String(requestedZone),
-          availableZones: zonesPayload.zones.map(zone => String(zone?.id || '')).filter(Boolean),
-        };
-      }
-    } catch {
-      // If the zone probe fails, keep the original targeted request so the
-      // normal connection error path can report the real card reachability issue.
-    }
-    requireCurrentPreviewIntent(options);
-  }
+  const resolved = needsZoneResolution(look, options) ? await resolveZoneForPreview(host, look, options) : null;
+  const previewLook = resolved?.previewLook || look;
+  const previewZoneFallback = resolved?.previewZoneFallback || null;
   const url = `${cardHostToUrl(host)}/api/control`;
   const body = JSON.stringify({
     ...buildLivePreviewControlPayload(previewLook, options),
@@ -996,25 +1020,9 @@ async function pushLivePreviewToHost(host, look, options = {}) {
 }
 
 async function pushLivePreviewToBridge(host, look, options = {}) {
-  let previewLook = look;
-  let previewZoneFallback = null;
-  if (options.fallbackMissingZoneToAll && look?.zone) {
-    try {
-      const zonesPayload = await readCardZones(host, Math.min(options.timeoutMs || 2500, 1200));
-      if (hasCardZones(zonesPayload) && !zoneExists(zonesPayload, String(look.zone))) {
-        const { zone: requestedZone, ...fallbackLook } = look;
-        previewLook = fallbackLook;
-        previewZoneFallback = {
-          requestedZone: String(requestedZone),
-          availableZones: zonesPayload.zones.map(zone => String(zone?.id || '')).filter(Boolean),
-        };
-      }
-    } catch {
-      // Keep the original request so the bridge error path can report the
-      // actual handoff problem if the card page is not open or not updated.
-    }
-    requireCurrentPreviewIntent(options);
-  }
+  const resolved = needsZoneResolution(look, options) ? await resolveZoneForPreview(host, look, options) : null;
+  const previewLook = resolved?.previewLook || look;
+  const previewZoneFallback = resolved?.previewZoneFallback || null;
   requireCurrentPreviewIntent(options);
   const json = requireBoundedControlObject(await sendCardBridgeRequest(
     'control',
