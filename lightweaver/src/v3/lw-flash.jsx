@@ -55,7 +55,7 @@ import { recoverFirmwareUpdate } from '../lib/firmwareUpdateRecovery.js';
 import { runPreservingUsbBootstrap } from '../lib/preservingUsbBootstrap.js';
 import { connectCardTransport, getActiveCardTransportAuthority } from '../lib/cardTransport.js';
 import { readStoredCardHost, readStoredCardHostHistory } from '../lib/cardConnection.js';
-import { requestSoftwareFirmwareUpdateGrant } from '../lib/ownerFirmwareUpdateGrant.js';
+import { openOwnerLibrarySignIn, probeFirmwareUpdateGrantService, requestSoftwareFirmwareUpdateGrant } from '../lib/ownerFirmwareUpdateGrant.js';
 import {
   clearActiveUsbInspection,
   registerActiveUsbInspection,
@@ -499,7 +499,26 @@ import {
     const target = release?.manifest;
     const softwareGrantAvailable = mode === 'wifi'
       && cardSupportsSoftwareFirmwareUpdateGrant(readiness);
-    const useSoftwareAuthorization = softwareGrantAvailable && !forcePhysicalAuthorization;
+    // Whether this browser could actually obtain the software grant. The card
+    // capability alone is not enough: the grant is signed by the Studio site's
+    // owner-protected service, and a browser that is not signed in gets an
+    // opaque login redirect there — which used to surface as a bare
+    // "Failed to fetch" after the Start button.
+    const [grantService, setGrantService] = useState({ state: 'unknown', reason: '' });
+    useEffect(() => {
+      if (!softwareGrantAvailable) return undefined;
+      if (import.meta.env.DEV) {
+        // The dev server has no owner-protected library; probing it would
+        // misreport. Fixtures opt into a specific probe answer.
+        setGrantService(window.__LW_GRANT_PROBE_RESULT_FOR_TEST__ || { state: 'ready', reason: '' });
+        return undefined;
+      }
+      let active = true;
+      probeFirmwareUpdateGrantService().then(result => { if (active) setGrantService(result); });
+      return () => { active = false; };
+    }, [softwareGrantAvailable]);
+    const softwareGrantBlocked = grantService.state === 'sign-in-required' || grantService.state === 'unavailable';
+    const useSoftwareAuthorization = softwareGrantAvailable && !forcePhysicalAuthorization && !softwareGrantBlocked;
     const actionLabel = mode === 'wifi' ? 'Update over Wi-Fi' : 'Update once over USB';
     const phaseLabel = mode === 'usb' && phase === 'verifying'
       ? 'Upload complete · checking the saved update'
@@ -802,12 +821,27 @@ import {
                   <span>I physically confirmed this exact Lightweaver card.</span>
                 </label>
                 <button className="btn-lg" type="button" disabled={!physicalConfirmed} onClick={start}>Start preserving update</button>
-                {softwareGrantAvailable && mode === 'wifi' && (
+                {softwareGrantAvailable && mode === 'wifi' && (softwareGrantBlocked ? (
+                  <div className="install-release" role="status" data-testid="software-grant-blocked">
+                    <span>
+                      {grantService.state === 'sign-in-required'
+                        ? 'Software authorization needs the owner sign-in for this Studio site. The card-button update above works without it.'
+                        : 'Studio cannot reach its software authorization service right now. The card-button update above works without it.'}
+                    </span>
+                    {grantService.reason === 'owner-access' && (
+                      <button className="btn" type="button" onClick={() => openOwnerLibrarySignIn()}>Open owner sign-in</button>
+                    )}
+                    <button className="btn" type="button" onClick={() => {
+                      setGrantService({ state: 'unknown', reason: '' });
+                      void probeFirmwareUpdateGrantService().then(setGrantService);
+                    }}>Check again</button>
+                  </div>
+                ) : (
                   <button className="btn" type="button" onClick={() => {
                     setPhysicalConfirmed(false);
                     setForcePhysicalAuthorization(false);
                   }}>Use secure software authorization</button>
-                )}
+                ))}
               </>
             )}
           </div>

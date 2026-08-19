@@ -78,8 +78,16 @@ export function deriveCardLifecycle({ link = {}, update = null, project = null }
   const exactRevision = Number.isSafeInteger(studioRevision) && studioRevision >= 0
     && Number.isSafeInteger(cardRevision) && cardRevision >= 0
     && studioRevision === cardRevision;
+  // A card flashed before fingerprint reporting answers with an empty
+  // fingerprint for a project it genuinely holds. When the Studio side's
+  // binding is a verified installation record made against that empty value
+  // (`legacyFingerprintBinding`), the empty answer confirms the record instead
+  // of contradicting it. A card that reports a real fingerprint must match it.
+  const exactFingerprint = cardFingerprint
+    ? Boolean(studioFingerprint && studioFingerprint === cardFingerprint)
+    : project?.legacyFingerprintBinding === true;
   const exactProject = Boolean(studioProjectId && cardProjectId && studioProjectId === cardProjectId)
-    && Boolean(studioFingerprint && studioFingerprint === cardFingerprint)
+    && exactFingerprint
     && exactRevision;
   const verifiedTransport = exactCard && CONNECTED_STATES.has(link.state);
   const commandReady = verifiedTransport

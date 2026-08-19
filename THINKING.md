@@ -331,3 +331,65 @@ suite — `card-link-state.mjs` (~39 sites), `cardReadiness.test.js` (~31),
 `playlist-storage`, `connection-center-quality`, `screen-smoke`. They model a
 ready card that reports no installed project, which no real card does. Harmless
 until someone writes an authorization test against one. Logged in `TODO.md`.
+
+---
+
+## 2026-08-19 — The card that could never match: legacy fingerprints, and the Access wall around the update grant
+
+**Topic:** Adrian's real gallery card (lw-b0fe81f61b44, firmware build 1306)
+was "inaccessible": Setup phase 1 offered "Use this card's project" which
+appeared to do nothing however many times it was pressed, and "Start secure
+Wi-Fi update" died at a bare "Failed to fetch". Both were reproduced against
+the physical card on the LAN and root-caused. Two different defects, one
+session.
+
+**Bug 1 — adoption worked, recognition was impossible.** The card reports
+`projectRevision: 0` and an EMPTY `projectFingerprint` for the project it
+genuinely holds — it was installed before fingerprint reporting existed.
+Clicking "Use this card's project" adopted the project correctly (verified in
+localStorage: same id, same 41-pixel strip on pin 18), but every recognition
+path — `resolveCardProject` (regex-rejects empty fp as 'invalid'),
+`markInstalled` (`exactIdentity` required a well-formed fp, so `verified:
+false`), `installationMatch`, `deriveCardLifecycle.exactProject` — demanded a
+well-formed fingerprint equality. So Setup stayed on phase 1 with the same
+buttons and the identity row said "differs from open project" about a project
+with an identical id. The button looked dead because success was invisible.
+
+**The fix is a structural stand-in, not a relaxation.** An empty card
+fingerprint verifies ONLY through the `studioFingerprint` the adoption
+recorded — the structural hash of the project rebuilt from the card's own
+readback — plus exact card id, revision, and project id agreement
+(`markInstalled`, `reverifyInstallation`, `installationMatch`,
+`legacyFingerprintBinding` in `deriveCardLifecycle`). A card that reports a
+real fingerprint must still match it exactly; an empty fingerprint with no
+recorded stand-in still binds nothing. Future Claude: do not "simplify" this
+into accepting id-equality alone, and do not require fingerprints universally
+again — either direction re-strands one class of card. The legacy state heals
+permanently the first time a project is saved to the card (the new install
+writes a real fingerprint).
+
+**Bug 2 — the update grant lives behind Cloudflare Access, and the error was
+a lie.** `/api/library/*` on led.mandalacodes.com is deliberately behind
+Cloudflare Access until the native-account cutover
+(docs/deployment-checklist.md runbook; LIGHTWEAVER_NATIVE_AUTH_READY is still
+unset — verified live: /api/library/session 302s to
+soft-band-fe5b.cloudflareaccess.com). PR #122 later put
+`/api/library/firmware-update-grant` INSIDE that wall. A browser without an
+Access session gets a cross-origin login redirect on the grant POST, which
+fetch reports as bare "Failed to fetch" — a dead end. The card side was
+healthy the whole time (challenge endpoint + CORS + private-network preflight
+all verified against the real card).
+
+**What shipped:** the grant client detects the redirect (`redirect: 'manual'`)
+and names the owner sign-in; the update panel probes `/api/library/session`
+before offering software authorization and defaults to the physical
+card-button path (which needs no server at all — firmware requires a recent
+physical BOOT press via `runtimeOwnerPairingAuthorized`) with "Open owner
+sign-in" and "Check again" affordances.
+
+**Not done, deliberately:** the native-auth cutover itself (owner bootstrap,
+password ceremony, removing the Access rule) is Adrian's runbook, not a code
+fix — and until it runs, ALL /api/library features (cloud project library,
+accounts) still require an Access session in the browser. The grant was NOT
+moved outside the wall: it must stay owner-authenticated, and pre-cutover the
+Access wall IS the owner authentication.

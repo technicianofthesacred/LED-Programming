@@ -903,6 +903,11 @@ function Shell({ offlineUpdateController = null }) {
         ? verified.projectRevision
         : projectLifecycle.editedRevision,
       fingerprint: verified?.projectFingerprint || structureFingerprint,
+      // A verified record whose card-side fingerprint is empty was bound to a
+      // card flashed before fingerprint reporting. The lifecycle needs to know
+      // that, or it reports a permanent mismatch against the card's own
+      // honest empty answer.
+      legacyFingerprintBinding: Boolean(verified) && verified.projectFingerprint === '',
     };
   }, [
     projectLifecycle.editedRevision,

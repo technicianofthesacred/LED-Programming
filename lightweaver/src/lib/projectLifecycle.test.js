@@ -224,6 +224,62 @@ test('a card-adopted installation binds by the structure it was recorded against
   );
 });
 
+test('a legacy card that reports no fingerprint binds through the structural stand-in alone', () => {
+  const studioFingerprint = 'b1b2c3d4e5f60708';
+  const legacy = {
+    revision: 0,
+    generation: 0,
+    cardId: 'lw-b0fe81f61b44',
+    projectRevision: 0,
+    projectFingerprint: '',
+    studioFingerprint,
+  };
+
+  // Adoption off a pre-fingerprint card verifies on the structural stand-in…
+  const adopted = markInstalled(createProjectLifecycle(), legacy);
+  assert.equal(adopted.installation.verified, true);
+  assert.equal(adopted.installation.projectFingerprint, '');
+  assert.equal(structurallyInstalledRecord(adopted, studioFingerprint)?.cardId, 'lw-b0fe81f61b44');
+
+  // …but an empty fingerprint with no stand-in still binds nothing.
+  assert.equal(
+    markInstalled(createProjectLifecycle(), { ...legacy, studioFingerprint: '' }).installation.verified,
+    false,
+  );
+
+  // A reload restores the record unverified, and the legacy evidence path
+  // re-promotes it only on the full agreement: same card, same revision, the
+  // card still reporting no fingerprint, same ids, same structure.
+  const restored = lifecycleForRestoredProject(lifecycleRecordFromState(adopted));
+  assert.equal(restored.installation.verified, false);
+  const evidence = {
+    cardId: 'lw-b0fe81f61b44',
+    projectId: 'installed-piece-01',
+    studioProjectId: 'installed-piece-01',
+    projectRevision: 0,
+    projectFingerprint: '',
+    studioProjectFingerprint: studioFingerprint,
+  };
+  assert.equal(reverifyInstallation(restored, evidence).installation.verified, true);
+  assert.equal(
+    reverifyInstallation(restored, { ...evidence, studioProjectFingerprint: 'c1b2c3d4e5f60708' }).installation.verified,
+    false,
+  );
+  // A card that now reports a real fingerprint no longer matches the empty record.
+  assert.equal(
+    reverifyInstallation(restored, { ...evidence, projectFingerprint: 'a1b2c3d4e5f60708' }).installation.verified,
+    false,
+  );
+  // And a fingerprint-bearing record never accepts empty card evidence.
+  const exactRestored = lifecycleForRestoredProject(lifecycleRecordFromState(
+    markInstalled(createProjectLifecycle(), { ...exactInstallation(0), studioFingerprint }),
+  ));
+  assert.equal(
+    reverifyInstallation(exactRestored, { ...evidence, projectRevision: 7 }).installation.verified,
+    false,
+  );
+});
+
 test('installed lifecycle records bind exact card and project identity but reload as unverified', () => {
   const installation = {
     revision: 0,

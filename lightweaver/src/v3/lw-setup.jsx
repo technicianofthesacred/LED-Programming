@@ -73,7 +73,7 @@ function exactCardName(cardLink, cardHost) {
     || 'No exact card yet';
 }
 
-function installRelationship(resolution, installedProjectId = '', installationMatch = false) {
+function installRelationship(resolution, installedProjectId = '', installationMatch = false, openProjectId = '') {
   if (resolution.kind === 'matches-current' || installationMatch) return 'Installed project matches';
   if (resolution.kind === 'saved-match') return 'Matching saved project found';
   if (resolution.kind === 'bench') return 'Temporary setup — not installed';
@@ -81,6 +81,11 @@ function installRelationship(resolution, installedProjectId = '', installationMa
   // top of that is simply false, and it was the line that made a healthy,
   // correctly installed card look broken.
   const installed = String(installedProjectId || '').trim();
+  // Same id but no verified binding: calling that "differs from open project"
+  // is false and reads as a failure. Name what is actually missing.
+  if (installed && installed === String(openProjectId || '').trim()) {
+    return 'Same project — save to card to verify';
+  }
   if (installed) return `${installed} — differs from open project`;
   return 'Project not installed';
 }
@@ -328,7 +333,8 @@ export function SetupScreen({
   // card reports right now: same card, same installed project id as the open
   // project, same project revision, same fingerprint it was recorded with.
   const installationMatch = useMemo(() => {
-    const installation = structurallyInstalledRecord(projectLifecycle, cardProjectFingerprint(currentProject))
+    const studioStructureFingerprint = cardProjectFingerprint(currentProject);
+    const installation = structurallyInstalledRecord(projectLifecycle, studioStructureFingerprint)
       || currentInstallation(projectLifecycle);
     if (installation?.verified !== true) return false;
     const readiness = cardLink?.readiness || {};
@@ -337,7 +343,18 @@ export function SetupScreen({
     const cardId = identity(status.cardId || cardLink?.card?.id || readiness.cardId);
     if (!cardId || cardId !== identity(installation.cardId)) return false;
     const fingerprint = identity(status.projectFingerprint || readiness.projectFingerprint);
-    if (!/^[a-f0-9]{16,64}$/.test(fingerprint) || fingerprint !== identity(installation.projectFingerprint)) return false;
+    if (/^[a-f0-9]{16,64}$/.test(fingerprint)) {
+      if (fingerprint !== identity(installation.projectFingerprint)) return false;
+    } else if (fingerprint
+      || identity(installation.projectFingerprint)
+      || !identity(installation.studioFingerprint)
+      || identity(installation.studioFingerprint) !== identity(studioStructureFingerprint)) {
+      // A card flashed before fingerprint reporting answers with an empty
+      // fingerprint for a project it genuinely holds. The record adopted off
+      // that exact card carries the structural stand-in instead, and only an
+      // exact structural agreement lets it speak for the empty value.
+      return false;
+    }
     const projectRevision = Number(status.projectRevision ?? readiness.projectRevision);
     if (!Number.isSafeInteger(projectRevision) || projectRevision !== Number(installation.projectRevision)) return false;
     const installedProjectId = String(status.projectId || readiness.projectId || '').trim();
@@ -480,9 +497,11 @@ export function SetupScreen({
         return (
           <div className="lw-setup-task" data-testid="setup-active-task">
             <p role="status" data-testid="setup-card-project-note">
-              {installedId
-                ? `This exact card is connected and holds “${installedId}”, which is not the project open in Studio.`
-                : 'This exact card is connected, but Studio has not matched the project it holds to the project open here.'}
+              {installedId && installedId === String(currentProject?.id || '').trim()
+                ? `This exact card holds “${installedId}” — the same project open in Studio — but its wiring has changed here since it was installed. Adopt the card’s copy, or save this project to the card.`
+                : installedId
+                  ? `This exact card is connected and holds “${installedId}”, which is not the project open in Studio.`
+                  : 'This exact card is connected, but Studio has not matched the project it holds to the project open here.'}
             </p>
             <div className="lw-setup-banner-actions">
               {resolution.resolved ? (
@@ -591,7 +610,7 @@ export function SetupScreen({
         <div><span>Card</span><strong>{exactCardName(cardLink, cardHost)}</strong></div>
         <div><span>Connection</span><strong>{identityStatus}</strong></div>
         <div><span>Project</span><strong>{currentProject?.name || currentProject?.id || 'Untitled project'}</strong></div>
-        <div><span>Installed</span><strong>{installRelationship(resolution, cardState.status?.projectId || cardLink?.readiness?.projectId || '', installationMatch)}</strong></div>
+        <div><span>Installed</span><strong>{installRelationship(resolution, cardState.status?.projectId || cardLink?.readiness?.projectId || '', installationMatch, currentProject?.id)}</strong></div>
       </section>
 
       <div className="card-status-area" data-testid="setup-card-status" aria-live="polite">
