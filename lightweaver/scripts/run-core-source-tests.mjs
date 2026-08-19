@@ -20,6 +20,9 @@ const REQUIRED_CORE_TESTS = Object.freeze([
   'node ../firmware/lightweaver-controller/tests/runtime-output-allocation-clamp.mjs',
   // The pin menu and -DLW_MAX_PIXELS still match the hardware contract.
   'node tests/hardware-capability-contract.mjs',
+  // The runtime still reports whether its LED output is actually ready, which
+  // is what lets Studio tell "the card answered" apart from "the strip is lit".
+  'node ../firmware/lightweaver-controller/tests/output-readiness-diagnostics.mjs',
 ]);
 
 // Browser-lane counterpart: the end-to-end walk from a blank card to a lit
