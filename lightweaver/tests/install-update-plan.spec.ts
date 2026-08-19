@@ -112,6 +112,11 @@ test('USB discovery names the exact card and separates last-verified installed f
   await expect(identity).toContainText(`v${manifest.firmwareVersion} · Build ${manifest.buildNumber}`);
 });
 
+// Once a signed preserving update ticket is published for the current release,
+// a USB-identified card is offered that update instead of the destructive
+// install plan — so the proven-semver recommendation is read off the preserving
+// panel here. `describeFirmwareUpdate`'s usb-flash semver branch keeps its own
+// coverage in src/lib/firmwareUpdatePlan.test.js.
 test('USB flash identity outranks remembered firmware and clearly recommends a proven semver update', async ({ page, request }) => {
   const manifest = await (await request.get('/firmware/release-manifest.json')).json();
   await page.addInitScript(({ card }) => {
@@ -134,9 +139,14 @@ test('USB flash identity outranks remembered firmware and clearly recommends a p
   const identity = page.getByTestId('install-card-identity');
   await expect(identity).toContainText('v1.1.1 · Build 1366faf23a29 (read directly from this card over USB)');
   await expect(identity).not.toContainText('v1.0.0');
-  const plan = page.getByTestId('install-update-plan');
-  await expect(plan).toContainText(`This updates it to ${manifest.firmwareVersion} · Build ${manifest.buildNumber}.`);
-  await expect(plan).not.toContainText('replaces it with');
+
+  const panel = page.getByTestId('preserving-update-panel');
+  await expect(panel.getByRole('heading', { name: 'One-time USB update for this card' })).toBeVisible();
+  await expect(panel).toContainText('1.1.1 · Build 1366faf23a29');
+  await expect(panel).toContainText(`${manifest.firmwareVersion} · Build ${manifest.buildNumber}`);
+  await expect(panel).not.toContainText('replaces it with');
+  // The destructive plan must not also be on screen offering the erasing path.
+  await expect(page.getByTestId('install-update-plan')).toHaveCount(0);
 });
 
 test('LAN connection explains and releases an active USB inspection before any status probe', async ({ page }) => {
