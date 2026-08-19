@@ -252,6 +252,16 @@ jobs:
         working-directory: lightweaver
       - run: npm run ci:artifact
         working-directory: lightweaver
+      # A signed release changes only the served manifest, so this lane is the
+      # only gate a manifest-shaped break reaches. Kept as a separate step
+      # rather than folded into ci:artifact: the signer runs that script
+      # immediately before pushing to main, and it must stay browser-free.
+      - run: node scripts/ensure-rollup-native.mjs
+        working-directory: lightweaver
+      - run: npx playwright install --with-deps chromium
+        working-directory: lightweaver
+      - run: npm run ci:artifact:release-ui
+        working-directory: lightweaver
 
   gate:
     name: gate
