@@ -53,6 +53,7 @@ jobs:
       enabled: ${{ steps.resolve.outputs.enabled }}
       revision: ${{ steps.resolve.outputs.revision }}
       reason: ${{ steps.resolve.outputs.reason }}
+      awaiting_signer: ${{ steps.resolve.outputs.awaiting_signer }}
     steps:
       - name: Resolve the authorized revision
         id: revision
@@ -127,22 +128,66 @@ jobs:
               exit 1
             fi
             echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "awaiting_signer=true" >> "$GITHUB_OUTPUT"
             echo "reason=Firmware-sensitive source is waiting for the protected signer." >> "$GITHUB_OUTPUT"
           else
             echo "enabled=true" >> "$GITHUB_OUTPUT"
             echo "reason=Exact tested revision authorized." >> "$GITHUB_OUTPUT"
           fi
 
+  # A green "Deploy site" must mean the site was published. This job used to
+  # print the deferral reason and exit 0, so a revision that deferred to a
+  # signer which then FAILED left every visible signal green while
+  # led.mandalacodes.com kept serving the previous build. That is how build
+  # 1316 stayed live for days after its replacement merged: the only red run
+  # was on a different workflow that nobody was watching.
+  #
+  # Deferring to the signer is only legitimate if the signer actually
+  # publishes. So wait for it and adopt its outcome. The other deferral reasons
+  # (a newer revision owns the deploy; a signer artifact commit that deploys
+  # through its own dispatch) are genuine no-ops and stay green.
   deferred:
     needs: preflight
     if: needs.preflight.outputs.enabled != 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     steps:
       - env:
           REASON: ${{ needs.preflight.outputs.reason }}
         run: |
           echo "## Production publish: DEFERRED" >> "$GITHUB_STEP_SUMMARY"
           echo "$REASON" >> "$GITHUB_STEP_SUMMARY"
+      - name: A deferral to the signer is only green once the signer publishes
+        if: needs.preflight.outputs.awaiting_signer == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ needs.preflight.outputs.revision }}
+          REPO: ${{ github.repository }}
+        run: |
+          deadline=$(( $(date +%s) + 1500 ))
+          conclusion=""
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            conclusion="$(gh api "repos/$REPO/actions/workflows/build-firmware.yml/runs?head_sha=$HEAD_SHA&per_page=1" \
+              --jq '.workflow_runs[0].conclusion // ""' 2>/dev/null || echo "")"
+            [ -n "$conclusion" ] && break
+            sleep 20
+          done
+          {
+            echo ""
+            echo "Signer conclusion for \`$HEAD_SHA\`: **${conclusion:-none}**"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$conclusion" = "success" ]; then
+            echo "Signer published; it dispatches the deploy for its own signed revision."
+            exit 0
+          fi
+          if [ -z "$conclusion" ]; then
+            echo "::error::NOT DEPLOYED. Deferred to the protected signer, but no signer run for $HEAD_SHA concluded within 25 minutes. led.mandalacodes.com is still serving the previous build."
+          else
+            echo "::error::NOT DEPLOYED. Deferred to the protected signer and the signer finished '$conclusion', so nothing was published and led.mandalacodes.com is still serving the previous build. Check 'Build firmware binary' for $HEAD_SHA — the usual cause is a firmware VERSION that is not greater than the one already signed."
+          fi
+          exit 1
 
   deploy:
     if: needs.preflight.outputs.enabled == 'true'
