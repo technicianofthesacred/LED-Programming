@@ -19,11 +19,15 @@ import { readFileSync } from 'node:fs';
 import { classifyChangedPaths, LANE_NAMES } from './ci-changed-lanes.mjs';
 
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+// NOT trimmed: an unstaged porcelain line begins with a space (" M path"), and
+// trimming the whole block eats that space on the FIRST line only — which then
+// cost that path its first character and silently misclassified its CI lanes.
+const gitRaw = (...args) => execFileSync('git', args, { encoding: 'utf8' });
 
 const base = process.argv[2] || 'origin/main';
 const mergeBase = git('merge-base', base, 'HEAD');
 const committed = git('diff', '--name-only', `${mergeBase}..HEAD`).split('\n').filter(Boolean);
-const uncommitted = git('status', '--porcelain')
+const uncommitted = gitRaw('status', '--porcelain')
   .split('\n')
   .filter(Boolean)
   .map(line => line.slice(3).replace(/^"|"$/g, ''));

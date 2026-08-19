@@ -147,6 +147,7 @@ jobs:
         run: |
           pip install platformio==6.1.19
           npm ci --prefix lightweaver
+          npx --prefix lightweaver playwright install --with-deps chromium
       - name: Recheck firmware version before protected signing
         run: |
           test "$(tr -d '\r\n' < firmware/lightweaver-controller/VERSION)" = "$FW_VERSION"
@@ -252,6 +253,7 @@ jobs:
           if git diff --quiet -- "${RELEASE_PATHS[@]}" && \
              test -z "$(git ls-files --others --exclude-standard -- "${RELEASE_PATHS[@]}")"; then
             npm run ci:artifact --prefix lightweaver
+            npm run ci:artifact:release-ui --prefix lightweaver
             echo "Signed firmware release already matches tested source."
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "signed_sha=$SOURCE_REVISION" >> "$GITHUB_OUTPUT"
@@ -268,6 +270,7 @@ jobs:
           fi
           git rebase origin/main
           npm run ci:artifact --prefix lightweaver
+          npm run ci:artifact:release-ui --prefix lightweaver
           git push origin HEAD:main
           signed_sha="$(git rev-parse HEAD)"
           echo "changed=true" >> "$GITHUB_OUTPUT"
