@@ -55,7 +55,7 @@ import { recoverFirmwareUpdate } from '../lib/firmwareUpdateRecovery.js';
 import { runPreservingUsbBootstrap } from '../lib/preservingUsbBootstrap.js';
 import { connectCardTransport, getActiveCardTransportAuthority } from '../lib/cardTransport.js';
 import { readStoredCardHost, readStoredCardHostHistory } from '../lib/cardConnection.js';
-import { probeFirmwareUpdateGrantService, requestSoftwareFirmwareUpdateGrant } from '../lib/ownerFirmwareUpdateGrant.js';
+import { openOwnerLibrarySignIn, probeFirmwareUpdateGrantService, requestSoftwareFirmwareUpdateGrant } from '../lib/ownerFirmwareUpdateGrant.js';
 import {
   clearActiveUsbInspection,
   registerActiveUsbInspection,
@@ -829,7 +829,7 @@ import {
                         : 'Studio cannot reach its software authorization service right now. The card-button update above works without it.'}
                     </span>
                     {grantService.reason === 'owner-access' && (
-                      <button className="btn" type="button" onClick={() => window.open('/api/library/session', '_blank', 'noopener')}>Open owner sign-in</button>
+                      <button className="btn" type="button" onClick={() => openOwnerLibrarySignIn()}>Open owner sign-in</button>
                     )}
                     <button className="btn" type="button" onClick={() => {
                       setGrantService({ state: 'unknown', reason: '' });

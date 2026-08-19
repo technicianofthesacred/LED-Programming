@@ -112,6 +112,14 @@ function requestChallenge(authority, { origin, releaseBuildId, ticketSha256 }) {
   });
 }
 
+// Where the owner signs in to the Studio site's protected library: a
+// top-level navigation, so the Access login can complete and set its cookie.
+// Lives here (not in the flash screen) because card command and flashing
+// paths must never reference the cloud library API themselves.
+export function openOwnerLibrarySignIn(openImpl = globalThis.open) {
+  return openImpl?.('/api/library/session', '_blank', 'noopener');
+}
+
 // Answers whether this browser could obtain a software update grant right
 // now, without spending the card's challenge. `/api/library/session` sits
 // behind the same owner protection as the grant route, so its answer is the
