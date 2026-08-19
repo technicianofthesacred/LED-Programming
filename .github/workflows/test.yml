@@ -201,6 +201,27 @@ jobs:
       - run: npm run ci:firmware-sensitive
         working-directory: lightweaver
       - run: node --test scripts/firmware-update-release.test.mjs
+      # The signer refuses a release whose VERSION is not greater than the one
+      # already signed, and a firmware-sensitive revision cannot reach the live
+      # site by any other route. Until this check existed the refusal happened
+      # AFTER merge: the PR went green, main landed, the signer went red on its
+      # own workflow, Deploy site deferred to a signer that would never publish,
+      # and the site kept serving the previous build. Three changes shipped days
+      # late that way. Ask for the bump here, where it is one line and the
+      # change has not merged yet.
+      #
+      # The predecessor is read from the committed manifest, not the live site:
+      # the signer commits it in the same job that publishes, so the two always
+      # agree, and a PR gate must not depend on the network being up.
+      - name: Require a firmware version the signer will be able to publish
+        run: |
+          previous="$(node -p 'require("./lightweaver/public/firmware/release-manifest.json").firmwareVersion')"
+          current="$(tr -d '\r\n' < firmware/lightweaver-controller/VERSION)"
+          if ! npm run --silent firmware:version:check --prefix lightweaver -- --previous "$previous" >/dev/null; then
+            echo "::error file=firmware/lightweaver-controller/VERSION::This change is firmware-sensitive, so it can only reach led.mandalacodes.com through the protected signer — and the signer will refuse version $current because $previous is already signed. Bump firmware/lightweaver-controller/VERSION (and the literal in firmware/lightweaver-controller/tests/firmware-version-policy.mjs, which pins it) before merging."
+            exit 1
+          fi
+          echo "Firmware version $current is publishable over signed $previous."
       - name: Resolve the release build number
         id: buildnumber
         run: echo "value=$(git rev-list --count "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"

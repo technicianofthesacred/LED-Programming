@@ -18,7 +18,7 @@ const {
   parseVersion,
 } = await import(helperPath);
 
-assert.equal(readFileSync(versionPath, 'utf8').trim(), '1.1.18');
+assert.equal(readFileSync(versionPath, 'utf8').trim(), '1.1.19');
 
 assert.deepEqual(parseVersion('1.2.3'), [1, 2, 3]);
 for (const malformed of ['', '1', '1.2', 'v1.2.3', '1.2.3-beta', '01.2.3', '1.02.3', '1.2.03']) {
@@ -184,6 +184,44 @@ assert.doesNotMatch(
   workflow,
   /require\('\.\/lightweaver\/public\/firmware\/release-manifest\.json'\)/,
   'a candidate must not lower its comparison baseline by replaying an old manifest',
+);
+
+// The signer is the only thing that can publish a firmware-sensitive revision,
+// and it refuses a VERSION that is not greater than the one already signed.
+// Discovering that after merge left main stuck with the live site on the old
+// build three times, so Tests asks for the bump while the change is still a PR.
+//
+// This gate reads the COMMITTED manifest, which the assertion above forbids the
+// signer itself from trusting — deliberately. It is an early warning, not the
+// authority: a lowered manifest makes this gate permissive, and the signer's
+// authenticated `--previous-production` check still refuses. It can only ever
+// catch the honest mistake earlier; it cannot let a bad version through.
+const testsWorkflow = readFileSync(resolve(repoRoot, '.github/workflows/test.yml'), 'utf8');
+assert.match(
+  testsWorkflow,
+  /firmware:version:check[\s\S]{0,120}--previous "\$previous"/,
+  'Tests must refuse a firmware-sensitive revision the signer could never publish',
+);
+
+// A green "Deploy site" has to mean the site was published. Deferring to the
+// signer is legitimate only if the signer then publishes, so the deferral
+// adopts the signer's outcome instead of exiting 0 regardless.
+const deployWorkflow = readFileSync(resolve(repoRoot, '.github/workflows/deploy-site.yml'), 'utf8');
+assert.match(deployWorkflow, /awaiting_signer: \$\{\{ steps\.resolve\.outputs\.awaiting_signer \}\}/);
+assert.match(
+  deployWorkflow,
+  /needs\.preflight\.outputs\.awaiting_signer == 'true'/,
+  'the deferred job must verify the signer it deferred to',
+);
+assert.match(
+  deployWorkflow,
+  /build-firmware\.yml\/runs\?head_sha=/,
+  'the deferral must resolve the signer run for its own revision',
+);
+assert.match(
+  deployWorkflow,
+  /::error::NOT DEPLOYED\./,
+  'a deferral that never published must fail loudly, not report success',
 );
 
 for (const source of [mainSource, storageSource]) {
