@@ -51,6 +51,32 @@ test('one lifecycle orders exact failures ahead of generic connection copy', () 
   }
 });
 
+test('a legacy card reporting no fingerprint is ready only through a verified legacy binding', () => {
+  const legacyLink = {
+    ...READY_LINK,
+    readiness: { ...READY_LINK.readiness, projectRevision: 0, projectFingerprint: '' },
+  };
+  // The verified installation record made against the empty value stands in…
+  const bound = deriveCardLifecycle({
+    link: legacyLink,
+    project: { id: 'piece-a', revision: 0, fingerprint: 'f'.repeat(64), legacyFingerprintBinding: true },
+  });
+  assert.equal(bound.state, 'ready');
+  assert.equal(bound.exactProject, true);
+  // …but without that record the empty answer proves nothing.
+  const unbound = deriveCardLifecycle({
+    link: legacyLink,
+    project: { id: 'piece-a', revision: 0, fingerprint: 'f'.repeat(64) },
+  });
+  assert.equal(unbound.state, 'project-mismatch');
+  // A card that reports a real fingerprint must still match it exactly.
+  const conflicting = deriveCardLifecycle({
+    link: READY_LINK,
+    project: { id: 'piece-a', revision: 7, fingerprint: 'b'.repeat(64), legacyFingerprintBinding: true },
+  });
+  assert.equal(conflicting.state, 'project-mismatch');
+});
+
 test('safe commands require the exact ready installed project', () => {
   const input = {
     link: READY_LINK,

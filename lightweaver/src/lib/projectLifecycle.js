@@ -57,11 +57,18 @@ export function markInstalled(state, revision = state.editedRevision) {
   // the card hashed: it is the only way to later tell "this is still the
   // structure that was installed" from "this has been rewired since".
   const studioFingerprint = String(source.studioFingerprint || '').trim().toLowerCase();
+  // A card flashed before fingerprint reporting answers with an empty
+  // `projectFingerprint` for a project it genuinely holds. Adoption from such
+  // a card still carries real evidence — the structural fingerprint of the
+  // project that was just rebuilt from the card's own readback — so that
+  // stand-in verifies the record. An empty fingerprint with no structural
+  // stand-in still binds nothing.
   const exactIdentity = Boolean(
     cardId
     && Number.isSafeInteger(projectRevision)
     && projectRevision >= 0
-    && /^[a-f0-9]{16,64}$/.test(projectFingerprint),
+    && (/^[a-f0-9]{16,64}$/.test(projectFingerprint)
+      || (!projectFingerprint && /^[a-f0-9]{16,64}$/.test(studioFingerprint))),
   );
   return {
     ...state,
@@ -109,8 +116,17 @@ export function reverifyInstallation(state, evidence = {}) {
     || projectRevision !== installation.projectRevision) return state;
 
   const projectFingerprint = String(evidence.projectFingerprint || '').trim().toLowerCase();
-  if (!/^[a-f0-9]{16,64}$/.test(projectFingerprint)
-    || projectFingerprint !== String(installation.projectFingerprint || '')) return state;
+  const recordedStudioFingerprint = String(installation.studioFingerprint || '');
+  if (/^[a-f0-9]{16,64}$/.test(projectFingerprint)) {
+    if (projectFingerprint !== String(installation.projectFingerprint || '')) return state;
+  } else if (projectFingerprint
+    || String(installation.projectFingerprint || '')
+    || !recordedStudioFingerprint) {
+    // A legacy card that reports no fingerprint can still re-verify a record
+    // that was bound to it with no fingerprint — but only through the
+    // structural stand-in check below, which such a record must carry.
+    return state;
+  }
 
   const cardProjectId = sanitizeProjectId(evidence.projectId);
   const studioProjectId = sanitizeProjectId(evidence.studioProjectId);
@@ -119,7 +135,6 @@ export function reverifyInstallation(state, evidence = {}) {
   // A record that names the Studio structure it was bound to must still match
   // it. Re-verification is about proving the open project is the installed one,
   // and a project rewired since the install is not.
-  const recordedStudioFingerprint = String(installation.studioFingerprint || '');
   if (recordedStudioFingerprint
     && recordedStudioFingerprint !== String(evidence.studioProjectFingerprint || '').trim().toLowerCase()) return state;
 
