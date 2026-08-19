@@ -89,6 +89,7 @@ Full policy: `docs/branch-maintenance.md`. The short version every session must 
 - Before opening a PR for a branch you don't own, check the account's session list and ask the owning session whether the build is done. If unsure, open it as a **draft**.
 - Once the owning session confirms done and CI is green, **merge without asking** and delete the branch. Land one stream at a time.
 - "**Wrap it up**" from Adrian means: finish the increment, then merge / PR-and-watch / archive-and-log — pick one, do it, report which.
+- **Half-built work never merges.** Wrapping an unfinished stream = push the branch + a TODO.md resume entry (branch name, done, remaining, resume point). No resume entry, no wrap.
 
 ## Where to look for…
 - **Launch checklist / deployment source of truth** → `docs/deployment-checklist.md`

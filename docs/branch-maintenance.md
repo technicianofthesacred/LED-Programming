@@ -53,6 +53,14 @@ TODO.md**. Never end a working session with only "pushed to branch X."
 Sessions should apply this standard even unprompted when their work-stream
 is complete.
 
+**Half-built work never merges.** "Wrap it up" on an unfinished stream means
+park it visibly, not land it: push the branch as-is, then leave a resume
+note — a TODO.md entry (repo format) naming the branch, what is finished,
+what remains, and where to resume (a draft PR description or a
+`docs/handoff-YYYY-MM-DD.md` for anything longer than a sentence). **No
+resume entry, no wrap** — a parked branch without one is indistinguishable
+from an abandoned branch, and the sweep will treat it as such.
+
 ## One tool per stream
 
 Parallel streams are fine; two tools on one stream is how duplicate commits
