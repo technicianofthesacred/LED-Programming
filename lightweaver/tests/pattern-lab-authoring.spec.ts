@@ -2,6 +2,7 @@ import { type Route } from '@playwright/test';
 import { test, expect } from './studioTest';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { choosePattern, patternSearchInput } from './helpers/pattern-lab.ts';
 
 const AUTOSAVE_KEY = 'lw_autosave_v3';
 const PREVIEW_SOURCE = await readFile(fileURLToPath(new URL('../src/v3/PatternPreview.jsx', import.meta.url)), 'utf8');
@@ -53,7 +54,7 @@ test('Pattern Inspector presents Choose, Sculpt, and Evolve as compact attached 
   const evolve = page.getByTestId('pattern-lab-step-evolve');
 
   await expect(choose.getByRole('heading', { name: 'Choose', exact: true })).toHaveAttribute('id', 'plab-source-heading');
-  await expect(choose.getByLabel('Base pattern')).toBeVisible();
+  await expect(choose.getByLabel('Search patterns')).toBeVisible();
   await expect(choose.getByText('Base pattern', { exact: true })).toHaveCount(0);
   await expect(choose.getByText(/Start with a built-in Lightweaver look/i)).toHaveCount(0);
 
@@ -96,19 +97,35 @@ test('Pattern Inspector presents Choose, Sculpt, and Evolve as compact attached 
   expect(surfaceDistance(sectionSurfaces[1], sectionSurfaces[2])).toBeGreaterThanOrEqual(8);
 });
 
-test('shows six direct controls in exact order with no Energy', async ({ page }) => {
-  await page.getByLabel('Base pattern').selectOption('aurora');
+test('shows Color, Movement, Brightness, and Speed for a built-in pattern, with no Energy, Shape, or Texture', async ({ page }) => {
+  await choosePattern(page, 'aurora');
+
+  // Movement, Shape, and Texture are context-dependent (see
+  // controlsForContext in PatternLabControls.jsx): Movement drives
+  // applyPatternLabMotionToStrips, which only the built-in library patterns
+  // render through, while Shape/Texture drive artistic.scale/density, which
+  // only the five procedural generators consume. A built-in pattern like
+  // Aurora shows Movement but not Shape/Texture.
+  const labels = await page.locator('.plab-macros input[type="range"]')
+    .evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label')));
+  expect(labels).toEqual(['Color', 'Movement', 'Brightness', 'Speed']);
+  await expect(page.getByLabel('Energy', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Energy', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('slider', { name: 'Shape', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('slider', { name: 'Texture', exact: true })).toHaveCount(0);
+});
+
+test('shows Color, Shape, Texture, Brightness, and Speed for a procedural generator, with no Movement', async ({ page }) => {
+  await choosePattern(page, 'generator:particles');
 
   const labels = await page.locator('.plab-macros input[type="range"]')
     .evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label')));
-  expect(labels).toEqual(['Color', 'Brightness', 'Movement', 'Speed', 'Shape', 'Texture']);
-  await expect(page.getByLabel('Energy', { exact: true })).toHaveCount(0);
-  await expect(page.getByText('Energy', { exact: true })).toHaveCount(0);
+  expect(labels).toEqual(['Color', 'Shape', 'Texture', 'Brightness', 'Speed']);
+  await expect(page.getByRole('slider', { name: 'Movement', exact: true })).toHaveCount(0);
 });
 
 test('exports Brightness and Speed as independent playback controls', async ({ page }) => {
-  await page.getByLabel('Base pattern').selectOption('aurora');
-  await page.getByRole('slider', { name: 'Movement', exact: true }).fill('88');
+  await choosePattern(page, 'aurora');
   await page.getByRole('slider', { name: 'Brightness', exact: true }).fill('25');
   await page.getByRole('slider', { name: 'Speed', exact: true }).fill('175');
 
@@ -121,13 +138,12 @@ test('exports Brightness and Speed as independent playback controls', async ({ p
   expect(downloadedPath).not.toBeNull();
   const exported = JSON.parse(await readFile(downloadedPath!, 'utf8'));
 
-  expect(exported.macros.movement).toBe(0.88);
   expect(exported.macros.energy).toBeUndefined();
   expect(exported.playback).toEqual({ brightness: 0.25, speed: 1.75 });
 });
 
 test('offers one accessible Import recipe control and imports through its file chooser', async ({ page }) => {
-  await page.getByLabel('Base pattern').selectOption('aurora');
+  await choosePattern(page, 'aurora');
   const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Export recipe' }).click();
   const downloadedPath = await (await downloadPromise).path();
@@ -153,23 +169,19 @@ test('offers one accessible Import recipe control and imports through its file c
   await expect(page.getByTestId('pattern-lab-save-status')).toContainText('Imported Accessible import.');
 });
 
-test('announces continuous Movement through its nearest semantic anchor', async ({ page }) => {
-  await page.getByLabel('Base pattern').selectOption('aurora');
-  const movement = page.getByRole('slider', { name: 'Movement', exact: true });
-
-  await movement.fill('0');
-  await expect(movement).toHaveAttribute('aria-valuetext', 'Drift, 0%');
-  await movement.fill('33');
-  await expect(movement).toHaveAttribute('aria-valuetext', 'Flow, 33%');
-  await movement.fill('67');
-  await expect(movement).toHaveAttribute('aria-valuetext', 'Pulse, 67%');
-  await movement.fill('100');
-  await expect(movement).toHaveAttribute('aria-valuetext', 'Surge, 100%');
-  await movement.fill('42');
-  await expect(movement).toHaveAttribute('aria-valuetext', 'Flow, 42%');
-  await expect(page.getByText('Drift 0% · Flow 33% · Pulse 67% · Surge 100%')).toBeVisible();
-});
-
+// The Movement slider itself is back (PatternLabControls.jsx now shows it
+// for built-in patterns via controlsForContext — Movement genuinely drives
+// renderOptions.motionWeights through patternLabMotion.js, unlike Shape and
+// Texture which were confirmed preview-only placebos for built-in patterns;
+// see PatternLabPreview.jsx). What did NOT come back is the semantic-anchor
+// aria-valuetext this test checked ("Drift, 0%" / "Flow, 33%" / …) and the
+// "Drift 0% · Flow 33% · Pulse 67% · Surge 100%" legend — the slider now
+// renders through the same generic aria-valuetext={`${value}%`} path as
+// every other macro, with no anchor naming. The underlying anchor math is
+// still covered at the unit level in src/lib/patternLabControls.test.js
+// ('movement resolves exact Drift, Flow, Pulse, and Surge anchors'); only
+// its UI-level exposure is gone, and there is no dead-slider UI left here to
+// test against.
 test('keeps the active Inspector band synchronized with direct focus and workflow actions', async ({ page }) => {
   const workflow = page.getByRole('navigation', { name: 'Pattern Lab workflow' });
   const choose = page.getByTestId('pattern-lab-step-choose');
@@ -179,7 +191,7 @@ test('keeps the active Inspector band synchronized with direct focus and workflo
   await expect(choose).toHaveAttribute('data-active', 'true');
   await expect(workflow.getByRole('button', { name: 'Choose' })).toHaveAttribute('aria-current', 'step');
 
-  await page.getByLabel('Base pattern').selectOption('aurora');
+  await choosePattern(page, 'aurora');
   await expect(choose).toHaveAttribute('data-active', 'true');
   await expect(workflow.getByRole('button', { name: 'Choose' })).toHaveAttribute('aria-current', 'step');
 
@@ -191,13 +203,13 @@ test('keeps the active Inspector band synchronized with direct focus and workflo
   await expect(evolve).toHaveAttribute('data-active', 'true');
   await expect(workflow.getByRole('button', { name: 'Evolve' })).toHaveAttribute('aria-current', 'step');
 
-  await page.getByLabel('Base pattern').focus();
+  await patternSearchInput(page).focus();
   await expect(choose).toHaveAttribute('data-active', 'true');
   await expect(workflow.getByRole('button', { name: 'Choose' })).toHaveAttribute('aria-current', 'step');
 });
 
 test('gives pattern and control changes one bounded preview response with local acknowledgment', async ({ page }) => {
-  await page.getByLabel('Base pattern').selectOption('aurora');
+  await choosePattern(page, 'aurora');
 
   const previewResponse = page.getByTestId('pattern-lab-preview-response');
   const previewContent = page.getByTestId('pattern-lab-preview-content');
@@ -230,7 +242,7 @@ test('gives pattern and control changes one bounded preview response with local 
 });
 
 test('reveals Long Evolution controls with transform and opacity, then removes motion when requested', async ({ page }) => {
-  await page.getByLabel('Base pattern').selectOption('aurora');
+  await choosePattern(page, 'aurora');
   const evolutionFields = page.getByTestId('pattern-lab-evolution-fields');
   const evolutionToggle = page.getByRole('checkbox', { name: /Long Evolution/ });
 
@@ -254,7 +266,7 @@ test('reveals Long Evolution controls with transform and opacity, then removes m
 
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.getByLabel('Base pattern').selectOption('aurora');
+  await choosePattern(page, 'aurora');
   const reducedFields = page.getByTestId('pattern-lab-evolution-fields');
   const reducedResponse = page.getByTestId('pattern-lab-preview-response');
   const reducedStyles = await reducedFields.evaluate(element => {
@@ -276,35 +288,31 @@ test('creates, compares, and reopens a long private pattern without changing the
   const projectBefore = await projectBytes(page);
 
   await expect(page.getByText('No source selected')).toBeVisible();
-  await page.getByLabel('Base pattern').selectOption('aurora');
+  await choosePattern(page, 'aurora');
   await expect(page.getByTestId('pattern-lab-mapped-preview').locator('canvas')).toBeVisible();
   await expect(page.getByText('Mapped to current artwork')).toBeVisible();
 
+  // Pattern Lab opens already playing (patternlab-rebuild.md Phase 1), and
+  // Beginning/Middle/End only set the preview clock -- they don't touch
+  // playback. Pause first so the exact-value reads below aren't racing a
+  // clock that's still ticking.
+  await page.getByRole('button', { name: 'Pause', exact: true }).click();
+
   await page.getByRole('slider', { name: 'Color', exact: true }).fill('72');
-  await expect(page.getByLabel('Color value')).toHaveText('72%');
-  await expect(page.getByText('Advanced controls')).not.toHaveAttribute('open', '');
+  await expect(page.getByLabel('Color value', { exact: true })).toHaveText('72%');
 
   await page.getByRole('checkbox', { name: /Long Evolution/ }).check();
   await page.getByLabel('Evolution character').selectOption('tidal');
   await page.getByLabel('Duration (minutes)').fill('10');
   await page.getByLabel('Change amount').fill('48');
 
-  await page.getByRole('button', { name: 'Beginning' }).click();
+  await page.getByRole('button', { name: 'Beginning', exact: true }).click();
   await expect(page.getByLabel('Preview time')).toHaveValue('0');
-  await page.getByRole('button', { name: 'Middle' }).click();
+  await page.getByRole('button', { name: 'Middle', exact: true }).click();
   await expect(page.getByLabel('Preview time')).toHaveValue('300');
   await expect(page.getByTestId('pattern-lab-time')).toHaveText('5:00 / 10:00');
-  await page.getByRole('button', { name: 'End' }).click();
+  await page.getByRole('button', { name: 'End', exact: true }).click();
   await expect(page.getByLabel('Preview time')).toHaveValue('600');
-
-  const seedBefore = await page.getByTestId('pattern-lab-seed').textContent();
-  await page.getByRole('button', { name: 'Variation 3' }).click();
-  await expect(page.getByTestId('pattern-lab-seed')).not.toHaveText(seedBefore || '');
-
-  await page.getByRole('button', { name: 'Source', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Source', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await page.getByRole('button', { name: 'Draft', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Draft', exact: true })).toHaveAttribute('aria-pressed', 'true');
 
   await page.getByRole('button', { name: 'Save private draft' }).click();
   await expect(page.getByTestId('pattern-lab-save-status')).toContainText('Saved privately');
@@ -319,7 +327,7 @@ test('creates, compares, and reopens a long private pattern without changing the
 });
 
 test('derives offline audio lanes locally and marks the recipe as bake-only', async ({ page }) => {
-  await page.getByLabel('Base pattern').selectOption('aurora');
+  await choosePattern(page, 'aurora');
   await page.getByText('Offline audio lanes').click();
   await page.getByLabel('WAV audio file').setInputFiles({
     name: 'private-song.wav',
@@ -355,41 +363,23 @@ test('derives offline audio lanes locally and marks the recipe as bake-only', as
   expect(cleaned.requirements).not.toContainEqual(expect.objectContaining({ capability: 'offline-analysis' }));
 });
 
-test('edits and rotates the palette with simple color controls', async ({ page }) => {
-  await page.getByLabel('Base pattern').selectOption('gradient');
-  const tools = page.getByTestId('pattern-lab-runtime-tools');
-  const originalSource = JSON.parse(await tools.getAttribute('data-source-recipe-snapshot') || 'null');
-  const first = page.getByLabel('Palette color 1');
-  await first.fill('#ff0000');
-  await expect(first).toHaveValue('#ff0000');
-  const secondBefore = await page.getByLabel('Palette color 2').inputValue();
-  await page.getByRole('button', { name: 'Rotate palette' }).click();
-  await expect(page.getByLabel('Palette color 1')).not.toHaveValue('#ff0000');
-  await expect(page.getByLabel('Palette color 1')).toHaveValue(secondBefore);
-
-  const pending = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Export recipe' }).click();
-  const exportedPath = await (await pending).path();
-  const exported = JSON.parse(await readFile(exportedPath!, 'utf8'));
-  expect(exported.palette.at(-1)).toBe('#ff0000');
-
-  await page.getByRole('button', { name: 'Save private draft' }).click();
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: /Open Gradient/ }).click();
-  const reopenedSource = JSON.parse(await tools.getAttribute('data-source-recipe-snapshot') || 'null');
-  expect(reopenedSource.palette).toEqual(originalSource.palette);
-  expect(reopenedSource.palette).not.toEqual(exported.palette);
-});
+// The 6-swatch palette editor and "Rotate palette" button were deleted in
+// this rebuild — they only reached 2 of 130 patterns (see
+// todo/plans/patternlab-rebuild.md §4). The surviving Color slider covers
+// palette warmth/travel for every pattern; there is no remaining per-swatch
+// UI to test.
 
 test('Play advances one bounded journey clock and Pause preserves it', async ({ page }) => {
-  await page.getByLabel('Base pattern').selectOption('aurora');
+  await choosePattern(page, 'aurora');
   await page.getByRole('checkbox', { name: /Long Evolution/ }).check();
   await page.getByLabel('Duration (minutes)').fill('5');
-  await page.getByRole('button', { name: 'Middle' }).click();
+  await page.getByRole('button', { name: 'Middle', exact: true }).click();
   const before = Number(await page.getByLabel('Preview time').inputValue());
   const canvasBefore = await page.getByTestId('pattern-lab-mapped-preview').locator('canvas').evaluate(canvas => canvas.toDataURL());
 
-  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  // Pattern Lab opens already playing (patternlab-rebuild.md Phase 1) and
+  // nothing above paused it, so the clock is already advancing -- no Play
+  // click needed to prove it.
   await expect.poll(async () => Number(await page.getByLabel('Preview time').inputValue())).toBeGreaterThan(before + 0.2);
   await expect(page.getByTestId('pattern-lab-time')).not.toHaveText('2:30 / 5:00');
   const canvasAfter = await page.getByTestId('pattern-lab-mapped-preview').locator('canvas').evaluate(canvas => canvas.toDataURL());
@@ -400,10 +390,33 @@ test('Play advances one bounded journey clock and Pause preserves it', async ({ 
   await page.waitForTimeout(350);
   expect(Number(await page.getByLabel('Preview time').inputValue())).toBeCloseTo(paused, 3);
 
-  await page.getByRole('button', { name: 'End' }).click();
+  await page.getByRole('button', { name: 'End', exact: true }).click();
   await page.getByRole('button', { name: 'Play', exact: true }).click();
   await expect.poll(async () => Number(await page.getByLabel('Preview time').inputValue())).toBeLessThan(5);
   await page.getByRole('button', { name: 'Pause', exact: true }).click();
+});
+
+// Regression guard for patternlab-rebuild.md Phase 1's headline requirement:
+// "The screen opens already playing... The preview never pauses itself."
+// Picking a pattern must never leave the owner staring at a still image --
+// it has to be moving the instant there is something to show, with zero
+// clicks. This asserts on the playing STATE (button label + aria-pressed)
+// and on the preview clock advancing on its own, not on canvas pixels,
+// because requestAnimationFrame does not tick in a backgrounded harness tab
+// (see tests/pattern-lab-authoring.spec.ts canvas assertions above for the
+// pixel-level check, which runs in a foregrounded/focused test page).
+test('choosing a pattern starts the preview playing with no user interaction', async ({ page }) => {
+  const playButton = page.getByRole('button', { name: 'Pause', exact: true });
+  await choosePattern(page, 'aurora');
+
+  // No click of any kind happened between choosePattern and this assertion.
+  await expect(playButton).toBeVisible();
+  await expect(playButton).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Play', exact: true })).toHaveCount(0);
+
+  const time = page.getByLabel('Preview time');
+  const before = Number(await time.inputValue());
+  await expect.poll(async () => Number(await time.inputValue())).toBeGreaterThan(before);
 });
 
 test('selected recipe owns strips that entered the Lab with inherited pattern overrides', async ({ page }) => {
@@ -425,16 +438,16 @@ test('selected recipe owns strips that entered the Lab with inherited pattern ov
     });
   };
 
-  await page.getByLabel('Base pattern').selectOption('fire');
+  await choosePattern(page, 'fire');
   const fireSignature = await signature();
-  await page.getByLabel('Base pattern').selectOption('gradient');
+  await choosePattern(page, 'gradient');
   const gradientSignature = await signature();
   expect(gradientSignature).not.toBe(fireSignature);
 });
 
 test('exports canonical recipes and rejects invalid imports without mutating the draft', async ({ page }) => {
-  await page.getByLabel('Base pattern').selectOption('aurora');
-  await page.getByRole('slider', { name: 'Movement', exact: true }).fill('64');
+  await choosePattern(page, 'aurora');
+  await page.getByRole('slider', { name: 'Color', exact: true }).fill('64');
   const nameBefore = await page.getByTestId('pattern-lab-draft-name').textContent();
 
   const downloadPromise = page.waitForEvent('download');
@@ -446,7 +459,7 @@ test('exports canonical recipes and rejects invalid imports without mutating the
   const exported = JSON.parse(await readFile(downloadedPath!, 'utf8'));
   expect(exported.version).toBe(2);
   expect(exported.base.patternId).toBe('aurora');
-  expect(exported.macros.movement).toBe(0.64);
+  expect(exported.macros.color).toBe(0.64);
 
   await page.getByLabel('Import recipe').setInputFiles({
     name: 'broken.lwrecipe.json',
@@ -458,7 +471,7 @@ test('exports canonical recipes and rejects invalid imports without mutating the
   expect(await alert.locator('li').count()).toBeLessThanOrEqual(4);
   await expect(alert).toContainText('$.version');
   await expect(page.getByTestId('pattern-lab-draft-name')).toHaveText(nameBefore || 'Aurora');
-  await expect(page.getByRole('slider', { name: 'Movement', exact: true })).toHaveValue('64');
+  await expect(page.getByRole('slider', { name: 'Color', exact: true })).toHaveValue('64');
 
   await page.getByLabel('Import recipe').setInputFiles({
     name: 'invalid-fields.lwrecipe.json',
@@ -476,7 +489,7 @@ test('exports canonical recipes and rejects invalid imports without mutating the
   await expect(alert).toContainText('$.evolution.character');
   await expect(alert).toContainText('$.layers');
   await expect(alert).toContainText('$.targets');
-  await expect(page.getByRole('slider', { name: 'Movement', exact: true })).toHaveValue('64');
+  await expect(page.getByRole('slider', { name: 'Color', exact: true })).toHaveValue('64');
 
   await page.getByLabel('Import recipe').setInputFiles({
     name: 'null-layer.lwrecipe.json',
@@ -486,7 +499,7 @@ test('exports canonical recipes and rejects invalid imports without mutating the
   await expect(alert.locator('li')).toHaveCount(1);
   await expect(alert).toContainText('$.layers[0]');
   await expect(page.getByTestId('pattern-lab-draft-name')).toHaveText(nameBefore || 'Aurora');
-  await expect(page.getByRole('slider', { name: 'Movement', exact: true })).toHaveValue('64');
+  await expect(page.getByRole('slider', { name: 'Color', exact: true })).toHaveValue('64');
 
   await page.getByLabel('Import recipe').setInputFiles({
     name: 'malformed-layer.lwrecipe.json',
@@ -502,7 +515,7 @@ test('exports canonical recipes and rejects invalid imports without mutating the
   await expect(alert).toContainText('$.layers[0].blendMode');
   await expect(alert).toContainText('$.layers[0].opacity');
   await expect(page.getByTestId('pattern-lab-draft-name')).toHaveText(nameBefore || 'Aurora');
-  await expect(page.getByRole('slider', { name: 'Movement', exact: true })).toHaveValue('64');
+  await expect(page.getByRole('slider', { name: 'Color', exact: true })).toHaveValue('64');
 
   await page.getByLabel('Import recipe').setInputFiles({
     name: 'too-large.lwrecipe.json',
@@ -511,7 +524,7 @@ test('exports canonical recipes and rejects invalid imports without mutating the
   });
   await expect(alert).toContainText('file: must be smaller');
   await expect(alert.locator('li')).toHaveCount(1);
-  await expect(page.getByRole('slider', { name: 'Movement', exact: true })).toHaveValue('64');
+  await expect(page.getByRole('slider', { name: 'Color', exact: true })).toHaveValue('64');
 });
 
 test('uses an accessible lower controls drawer on a phone while keeping preview first', async ({ page }) => {
@@ -522,8 +535,7 @@ test('uses an accessible lower controls drawer on a phone while keeping preview 
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
   await trigger.click();
   await expect(preview).toHaveAttribute('inert', '');
-  await page.getByLabel('Base pattern').selectOption('aurora');
-  await expect(page.getByTestId('pattern-lab-variation-preview')).toHaveCount(4);
+  await choosePattern(page, 'aurora');
   await page.getByRole('button', { name: 'Close pattern controls' }).click();
 
   const previewBox = await page.getByTestId('pattern-lab-mapped-preview').boundingBox();
@@ -531,7 +543,6 @@ test('uses an accessible lower controls drawer on a phone while keeping preview 
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
   await expect(page.getByLabel('Pattern Lab controls')).toHaveAttribute('aria-hidden', 'true');
   await expect(preview).not.toHaveAttribute('inert', '');
-  await expect(page.getByTestId('pattern-lab-variation-preview')).toHaveCount(0);
   await trigger.click();
   await expect(trigger).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByLabel('Pattern Lab controls')).not.toHaveAttribute('aria-hidden', 'true');
@@ -550,96 +561,40 @@ test('uses an accessible lower controls drawer on a phone while keeping preview 
   });
   expect(saveHeight).toBeGreaterThanOrEqual(44);
   await page.getByRole('button', { name: 'Close pattern controls' }).click();
-  const playHeight = await page.getByRole('button', { name: 'Play', exact: true }).evaluate(element => {
+  // Pattern Lab opens already playing (patternlab-rebuild.md Phase 1) and
+  // choosePattern above never paused it, so the button reads "Pause" here --
+  // this assertion is about the touch-target height, not playback state.
+  const playHeight = await page.getByRole('button', { name: 'Pause', exact: true }).evaluate(element => {
     return Number.parseFloat(getComputedStyle(element).height);
   });
   expect(playHeight).toBeGreaterThanOrEqual(44);
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.getByText('Advanced controls')).not.toHaveAttribute('open', '');
 });
 
-test('keeps all six controls reachable with 44px slider hit areas in the phone drawer', async ({ page }) => {
+test('keeps all four controls reachable with 44px slider hit areas in the phone drawer', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Pattern controls', exact: true }).click();
-  await page.getByLabel('Base pattern').selectOption('aurora');
+  await choosePattern(page, 'aurora');
 
   const controls = page.locator('.plab-macros input[type="range"]');
-  await expect(controls).toHaveCount(6);
-  for (const label of ['Color', 'Brightness', 'Movement', 'Speed', 'Shape', 'Texture']) {
+  await expect(controls).toHaveCount(4);
+  for (const label of ['Color', 'Movement', 'Brightness', 'Speed']) {
     const control = page.getByRole('slider', { name: label, exact: true });
     await control.scrollIntoViewIfNeeded();
     await expect(control).toBeVisible();
     expect((await control.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   }
-
-  const movement = page.getByRole('slider', { name: 'Movement', exact: true });
-  await movement.focus();
-  await page.keyboard.press('Home');
-  await expect(movement).toHaveAttribute('aria-valuetext', 'Drift, 0%');
-  await page.keyboard.press('End');
-  await expect(movement).toHaveAttribute('aria-valuetext', 'Surge, 100%');
 });
 
-test('seed selection explicitly enables and persists the real Long Evolution workflow', async ({ page }) => {
-  await page.getByLabel('Base pattern').selectOption('aurora');
-  const variants = page.getByTestId('pattern-lab-variants');
-  const evolutionToggle = page.getByRole('checkbox', { name: /Long Evolution/ });
-  await expect(variants.getByTestId('pattern-lab-variation-preview')).toHaveCount(4);
-  await expect(variants.locator('canvas')).toHaveCount(4);
-  await expect(variants).toContainText('journey midpoint');
-  await expect(evolutionToggle).not.toBeChecked();
-  const mainCanvas = page.getByTestId('pattern-lab-mapped-preview').locator('canvas');
-  await page.waitForTimeout(350);
-  await expect.poll(async () => {
-    const signatures = await variants.locator('canvas').evaluateAll(canvases => canvases.map(canvas => canvas.toDataURL()));
-    return new Set(signatures).size;
-  }).toBe(4);
-  const seedBefore = await page.getByTestId('pattern-lab-seed').textContent();
-  const optionsBefore = await variants.locator('[data-seed]').evaluateAll(elements => elements.map(element => element.getAttribute('data-seed')));
-
-  await page.getByRole('button', { name: 'New variation' }).click();
-  const optionsAfter = await variants.locator('[data-seed]').evaluateAll(elements => elements.map(element => element.getAttribute('data-seed')));
-  expect(optionsAfter).not.toEqual(optionsBefore);
-  await expect(page.getByTestId('pattern-lab-seed')).toHaveText(seedBefore || '1');
-
-  await page.getByRole('button', { name: 'Select variation 2' }).click();
-  await expect(page.getByTestId('pattern-lab-seed')).not.toHaveText(seedBefore || '1');
-  const selectedSeed = await page.getByTestId('pattern-lab-seed').textContent();
-  await expect(evolutionToggle).toBeChecked();
-  await expect(page.getByRole('button', { name: 'Export recipe' })).toBeEnabled();
-
-  await page.getByRole('button', { name: 'Beginning' }).click();
-  await page.waitForTimeout(350);
-  const beginningFrame = await mainCanvas.evaluate(canvas => canvas.toDataURL());
-  await page.getByRole('button', { name: 'End' }).click();
-  await expect.poll(() => mainCanvas.evaluate(canvas => canvas.toDataURL())).not.toBe(beginningFrame);
-
-  await page.getByRole('button', { name: 'Beginning' }).click();
-  await page.waitForTimeout(350);
-  const beforePlay = await mainCanvas.evaluate(canvas => canvas.toDataURL());
-  await page.getByRole('button', { name: 'Play', exact: true }).click();
-  await expect.poll(async () => Number(await page.getByLabel('Preview time').inputValue())).toBeGreaterThan(0.2);
-  await expect.poll(() => mainCanvas.evaluate(canvas => canvas.toDataURL())).not.toBe(beforePlay);
-  await page.getByRole('button', { name: 'Pause', exact: true }).click();
-
-  const downloadPromise = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Export recipe' }).click();
-  const download = await downloadPromise;
-  const exportedPath = await download.path();
-  expect(exportedPath).not.toBeNull();
-  const exported = JSON.parse(await readFile(exportedPath!, 'utf8'));
-  expect(exported.evolution.enabled).toBe(true);
-  expect(exported.seed).toBe(Number(selectedSeed));
-
-  await page.getByRole('button', { name: 'Save private draft' }).click();
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: /Open Aurora/ }).click();
-  await expect(page.getByRole('checkbox', { name: /Long Evolution/ })).toBeChecked();
-  await expect(page.getByTestId('pattern-lab-seed')).toHaveText(selectedSeed || '');
-  await page.getByRole('checkbox', { name: 'Lock seed choices' }).check();
-  await expect(page.getByRole('button', { name: 'New variation' })).toBeDisabled();
-});
+// PatternLabVariants.jsx (the seed/variations panel this test drove — the
+// four variation thumbnails, "New variation", "Select variation N", the
+// pattern-lab-seed readout, and "Lock seed choices") was deleted wholesale
+// in this rebuild (see todo/plans/patternlab-rebuild.md §7 Phase 1). There
+// is no replacement seed-picking UI; a recipe's seed is now fixed at
+// creation. The Play/Pause/Beginning/End journey-clock coverage this test
+// also carried is preserved by 'Play advances one bounded journey clock and
+// Pause preserves it' above.
 
 test('shows storage read and write failures without claiming a private save', async ({ page }) => {
   await page.addInitScript(() => {
@@ -662,25 +617,17 @@ test('does not announce success when a private draft write fails', async ({ page
     };
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.getByLabel('Base pattern').selectOption('aurora');
+  await choosePattern(page, 'aurora');
   await page.getByRole('button', { name: 'Save private draft' }).click();
   await expect(page.getByTestId('pattern-lab-save-status')).toContainText('Private write blocked');
   await expect(page.getByTestId('pattern-lab-save-status')).not.toContainText('Saved privately');
 });
 
-test('Advanced and optional Layers are collapsed safely', async ({ page }) => {
-  await expect(page.locator('details.plab-advanced')).toHaveCount(0);
-  const inertAdvanced = page.getByText('Advanced controls');
-  await expect(inertAdvanced).toHaveAttribute('aria-disabled', 'true');
-
-  await page.getByLabel('Base pattern').selectOption('aurora');
-  const advanced = page.locator('details.plab-advanced').filter({ hasText: 'Advanced controls' });
-  await expect(advanced).not.toHaveAttribute('open', '');
-  expect(await advanced.locator('summary').evaluate(element => Number.parseFloat(getComputedStyle(element).height))).toBeGreaterThanOrEqual(44);
-  const layers = page.getByTestId('pattern-lab-layers');
-  await expect(layers).toBeVisible();
-  await expect(layers).not.toHaveAttribute('open', '');
-});
+// This test covered two things this rebuild deleted outright: the
+// "Advanced controls" macro readout (a disabled placeholder shown before a
+// pattern was chosen) and PatternLabLayers.jsx (the optional-layers panel,
+// pattern-lab-layers testid). Neither exists any more — there is no
+// replacement disabled-state or layers affordance to assert on.
 
 test('PatternPreview exposes a controlled renderer clock without a per-pixel wrapper', () => {
   expect(PREVIEW_SOURCE).toContain('controlledTime = null');

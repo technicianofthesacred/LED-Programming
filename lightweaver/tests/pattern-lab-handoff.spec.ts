@@ -1,4 +1,5 @@
 import { test, expect, type Route } from '@playwright/test';
+import { choosePattern } from './helpers/pattern-lab.ts';
 
 const AUTOSAVE_KEY = 'lw_autosave_v3';
 let cardMutationRequests: string[];
@@ -20,7 +21,7 @@ test('reviews, cancels, and confirms a native look without touching the Pattern 
   const projectBefore = await page.evaluate(key => localStorage.getItem(key), AUTOSAVE_KEY);
   const parsedBefore = JSON.parse(projectBefore!);
 
-  await page.getByLabel('Base pattern').selectOption('aurora');
+  await choosePattern(page, 'aurora');
   const tools = page.getByTestId('pattern-lab-runtime-tools');
   const draftId = await tools.getAttribute('data-draft-recipe-id');
   const sourceId = await tools.getAttribute('data-source-recipe-id');
@@ -55,7 +56,7 @@ test('reviews, cancels, and confirms a native look without touching the Pattern 
 });
 
 test('explains that an evolving recipe must be baked before project handoff', async ({ page }) => {
-  await page.getByLabel('Base pattern').selectOption('aurora');
+  await choosePattern(page, 'aurora');
   await page.getByRole('checkbox', { name: /Long Evolution/ }).check();
   const tools = page.getByTestId('pattern-lab-runtime-tools');
   await tools.locator(':scope > summary').click();

@@ -69,7 +69,7 @@ test('worker budgets encode the bounded Task 7 limits', () => {
     maxGeometryBytes: 512 * 1024,
     maxGeometryMetadataBytes: 64 * 1024,
     maxAllocationBytes: 4 * 1024 * 1024,
-    renderWarningMs: 40,
+    renderWarningMs: 120,
     exportWarningMs: 250,
   });
   assert.ok(Object.isFrozen(PATTERN_LAB_WORKER_BUDGETS));

@@ -478,7 +478,7 @@ function OfflineStatusControl({ state, onActivate }) {
     return (
       <button
         type="button"
-        className="sb-firmware is-update-available"
+        className="sb-firmware sb-offline is-update-available"
         data-testid="offline-update-status"
         title={state.reason ? `Update waits for safety: ${state.reason}.` : 'A verified Studio update is ready.'}
         onClick={onActivate}
@@ -492,7 +492,7 @@ function OfflineStatusControl({ state, onActivate }) {
       : state.status === 'reloading' ? 'Reopening Studio…'
         : state.status === 'activating' ? 'Applying update…'
           : 'Preparing offline…';
-  return <span className={`sb-firmware is-${state.status}`} data-testid="offline-update-status" role="status">{label}</span>;
+  return <span className={`sb-firmware sb-offline is-${state.status}`} data-testid="offline-update-status" role="status">{label}</span>;
 }
 
 function StatusBar({ link, lifecycle, connectionCenterOpen, cardControlOpen, onOpenCardControl, firmwareStatus, firmwareRelease, firmwareReleaseError, onOpenFirmwareUpdate, offlineUpdateState, onActivateOfflineUpdate, testStrip, onToggleTestStrip, onTestStripLengthChange, runningStudioRelease, freshness }) {

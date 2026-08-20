@@ -990,7 +990,7 @@ button.sb-firmware:hover { background: var(--bg-elev-2); color: var(--text-hi); 
   .status-bar {
     display: grid; height: auto; min-height: 32px;
     grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "card studio" "firmware test";
+    grid-template-areas: "card studio" "firmware test" "offline offline";
     gap: 6px 8px; padding: 6px 12px;
   }
   .sb-card { grid-area: card; min-width: 0; }
@@ -999,6 +999,7 @@ button.sb-firmware:hover { background: var(--bg-elev-2); color: var(--text-hi); 
   .sb-teststrip.is-active { grid-column: 1 / -1; justify-self: stretch; flex-wrap: wrap; }
   .sb-teststrip.is-active .sb-ts-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .sb-freshness { grid-area: studio; justify-self: end; }
+  .sb-firmware.sb-offline { grid-area: offline; justify-self: start; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sb-spring { display: none; }
 
   .card-status-control { min-height: 44px; max-width: min(100%, 300px); }

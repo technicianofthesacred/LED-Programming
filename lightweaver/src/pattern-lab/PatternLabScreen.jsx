@@ -26,14 +26,12 @@ import PatternLabControls from './PatternLabControls.jsx';
 import PatternLabDiagnostics from './PatternLabDiagnostics.jsx';
 import PatternLabEvolution from './PatternLabEvolution.jsx';
 import PatternLabExport from './PatternLabExport.jsx';
-import PatternLabLayers from './PatternLabLayers.jsx';
 import PatternLabPreview from './PatternLabPreview.jsx';
-import PatternLabVariants from './PatternLabVariants.jsx';
 import './pattern-lab.css';
 
 const WORKFLOW = [
   ['Choose', 'Begin with a built-in pattern.', 'Choose a base pattern', <svg viewBox="0 0 24 24"><path d="M4 7h6l2 2h8v10H4z"/><path d="M12 12v4M10 14h4"/></svg>],
-  ['Sculpt', 'Shape it with six direct controls.', 'Shape color, brightness, movement, speed, form, and texture', <svg viewBox="0 0 24 24"><path d="M4 7h7M15 7h5M4 12h3M11 12h9M4 17h10M18 17h2"/><circle cx="13" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="16" cy="17" r="2"/></svg>],
+  ['Sculpt', 'Shape it with the controls that actually apply to this pattern.', 'Color, brightness, and speed always apply; movement or shape and texture depend on what you picked', <svg viewBox="0 0 24 24"><path d="M4 7h7M15 7h5M4 12h3M11 12h9M4 17h10M18 17h2"/><circle cx="13" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="16" cy="17" r="2"/></svg>],
   ['Evolve', 'Build a five-to-fifteen-minute journey.', 'Build a long-changing journey', <svg viewBox="0 0 24 24"><path d="M4 14c2-5 4-5 6 0s4 5 6 0 3-4 4-2"/><path d="M4 8h16"/></svg>],
   ['Save', 'Keep a private, repeatable variation.', 'Save this variation privately', <svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v6h7V3M8 15h8v6H8z"/></svg>],
 ];
@@ -43,6 +41,119 @@ const COMPATIBILITY_OUTCOMES = [
   ['simplify-for-card', 'Simplify for card'],
   ['studio-only', 'Studio only'],
 ];
+// Plain-language badge shown next to the promoted project-handoff button.
+// Every string here is checked against what createPatternLabHandoff
+// (patternLabHandoff.js) actually does for that classification — it must
+// never claim a route that createPatternLabHandoff cannot complete today.
+//   - live-on-card: handoff succeeds immediately as a saved look.
+//   - bake-to-card: handoff succeeds only after a completed bake; there is
+//     no live streaming from Studio to fall back on, so the badge points at
+//     the recording step instead of inventing one.
+//   - simplify-for-card: the recipe itself is not eligible for anything;
+//     only a simplified variant (created below) can become native or baked.
+//   - studio-only: neither native nor bake-eligible even after
+//     simplification. No route exists yet — say so, don't imply recording
+//     or streaming will save it.
+const COMPATIBILITY_BADGES = {
+  'live-on-card': 'Plays on the piece as-is',
+  'bake-to-card': 'Can be recorded to the piece',
+  'simplify-for-card': 'Too complex for the piece as designed — simplify it to continue',
+  'studio-only': "Can't reach the piece yet — plays only in Studio",
+};
+// What tapping the promoted button actually does per classification. Kept
+// next to the badge copy so the two can never drift out of sync with each
+// other or with createPatternLabHandoff's real behavior.
+const PROMOTED_ACTION_LABELS = {
+  'live-on-card': 'Use in Project',
+  'bake-to-card': 'Record to piece',
+  'simplify-for-card': 'Simplify to continue',
+  'studio-only': 'Not ready for the piece',
+};
+const PROMOTED_ACTION_HINTS = {
+  'live-on-card': 'Adds a new saved look to your project right now.',
+  'bake-to-card': 'Opens the recording step below — it renders a video of light the card can replay.',
+  'simplify-for-card': 'Opens a simplified copy you can create below. Your current design stays unchanged.',
+  'studio-only': 'This design can’t reach the piece yet. See Card compatibility & diagnostics below for why.',
+};
+
+function compatibilityBadge(compatibility) {
+  if (!compatibility) return null;
+  return COMPATIBILITY_BADGES[compatibility.classification] || null;
+}
+
+function promotedActionLabel(compatibility) {
+  if (!compatibility) return 'Use in Project';
+  return PROMOTED_ACTION_LABELS[compatibility.classification] || 'Use in Project';
+}
+
+function promotedActionHint(compatibility) {
+  if (!compatibility) return '';
+  return PROMOTED_ACTION_HINTS[compatibility.classification] || '';
+}
+
+// -- Piece color -------------------------------------------------------
+// The card derives its actual on-wall hue from the middle swatch of
+// recipe.palette (lookFromRecipe in patternLabHandoff.js), unconditionally,
+// for every pattern. That is the one honest color control: a single hue
+// that is always what the piece plays, instead of a 6-swatch editor that
+// only 2 of 130 library patterns ever read for their own preview pixels.
+// Shifting every swatch by the same hue delta keeps a pattern's original
+// relative palette shape (useful for gradient/blocks, which draw every
+// swatch) while making the middle swatch land exactly on the picked hue.
+function hexToHsl(hex) {
+  const clean = String(hex || '').replace('#', '');
+  const full = clean.length === 3 ? clean.split('').map(c => c + c).join('') : clean;
+  const value = Number.parseInt(full, 16);
+  if (full.length !== 6 || !Number.isFinite(value)) return [30, 0.6, 0.5];
+  const r = ((value >> 16) & 255) / 255;
+  const g = ((value >> 8) & 255) / 255;
+  const b = (value & 255) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const delta = max - min;
+  if (delta === 0) return [0, 0, l];
+  const s = l > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+  let h;
+  if (max === r) h = ((g - b) / delta) % 6;
+  else if (max === g) h = (b - r) / delta + 2;
+  else h = (r - g) / delta + 4;
+  h *= 60;
+  if (h < 0) h += 360;
+  return [h, s, l];
+}
+
+function hslToHex(hue, saturation, lightness) {
+  const h = ((hue % 360) + 360) % 360;
+  const s = Math.min(1, Math.max(0, saturation));
+  const l = Math.min(1, Math.max(0, lightness));
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  const [r0, g0, b0] = h < 60 ? [c, x, 0]
+    : h < 120 ? [x, c, 0]
+      : h < 180 ? [0, c, x]
+        : h < 240 ? [0, x, c]
+          : h < 300 ? [x, 0, c]
+            : [c, 0, x];
+  const toByte = channel => Math.round((channel + m) * 255).toString(16).padStart(2, '0');
+  return `#${toByte(r0)}${toByte(g0)}${toByte(b0)}`;
+}
+
+function paletteBaseHue(palette) {
+  const swatches = Array.isArray(palette) && palette.length ? palette : ['#f0a04a'];
+  const [hue] = hexToHsl(swatches[Math.floor(swatches.length / 2)]);
+  return hue;
+}
+
+function shiftPaletteHue(palette, targetHueDegrees) {
+  const swatches = Array.isArray(palette) && palette.length ? palette : ['#f0a04a'];
+  const delta = targetHueDegrees - paletteBaseHue(swatches);
+  return swatches.map(hex => {
+    const [h, s, l] = hexToHsl(hex);
+    return hslToHex(h + delta, s, l);
+  });
+}
 const MAX_IMPORT_BYTES = 256 * 1024;
 const MAX_IMPORT_NODES = 2000;
 const MAX_IMPORT_DEPTH = 12;
@@ -186,16 +297,6 @@ function sourceFromRecipe(recipe) {
   });
 }
 
-function deriveSeed(seed, index) {
-  let value = ((Number(seed) >>> 0) + Math.imul(index + 1, 0x9e3779b1)) >>> 0;
-  value ^= value >>> 16;
-  value = Math.imul(value, 0x7feb352d);
-  value ^= value >>> 15;
-  value = Math.imul(value, 0x846ca68b);
-  value ^= value >>> 16;
-  return value >>> 0;
-}
-
 function validateImportDocument(value) {
   const errors = [];
   const add = (path, message) => {
@@ -314,16 +415,43 @@ export default function PatternLabScreen() {
   const previewStageRef = useRef(null);
   const drawerTriggerRef = useRef(null);
   const drawerCloseRef = useRef(null);
+  const sheetScrollRef = useRef(null);
+  const screenRef = useRef(null);
+  const workspaceRef = useRef(null);
+  const sheetDragMovedRef = useRef(false);
+  const runtimeToolsRef = useRef(null);
   const [sourceRecipe, setSourceRecipe] = useState(null);
   const [draft, setDraft] = useState(null);
-  const [comparison, setComparison] = useState('draft');
   const [previewTime, setPreviewTime] = useState(0);
-  const [playing, setPlaying] = useState(false);
+  // Open already playing (patternlab-rebuild.md Phase 1: "the preview never
+  // pauses itself"). Default true unconditionally, not conditionally on
+  // previewRecipe existing yet: the animation effect below already gates on
+  // `!playing || !previewRecipe`, so `playing: true` with no recipe is inert
+  // (nothing to animate, Play button stays disabled). The moment a recipe
+  // appears — choosePattern, openDraft, importRecipe, useDraftVariant — this
+  // flag is already true, so the preview starts moving with no extra
+  // setPlaying(true) call and no chance of a race between "recipe arrived"
+  // and "start playing" firing in the wrong order.
+  const [playing, setPlaying] = useState(true);
   const [drafts, setDrafts] = useState([]);
   const [draftState, setDraftState] = useState('loading');
   const [message, setMessage] = useState('');
   const [importErrors, setImportErrors] = useState([]);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  // The phone control sheet is a three-detent sheet, not a fixed 82%-tall
+  // modal drawer (todo/plans/patternlab-rebuild.md §5, §7 Phase 2). The owner
+  // could not "get real tangible designs or play" because reaching any slider
+  // meant opening a sheet that covered the artwork AND marked the preview
+  // `inert` — you could move a control or watch the art, never both.
+  //
+  //   closed — off screen, aria-hidden + inert (unchanged; this is what
+  //            `openControls()` in tests/helpers/pattern-lab.ts opens).
+  //   peek   — the play strip: the sliders sit under a live, fully visible,
+  //            NON-inert preview. This is where a pattern choice lands you.
+  //   half   — same non-modal contract, taller, for the depth controls.
+  //   full   — the browser/library/save view. The only detent allowed to be
+  //            modal, because at that height the artwork is behind the sheet
+  //            anyway and a focus trap is then the honest behaviour.
+  const [sheetDetent, setSheetDetent] = useState('closed');
   const [activeWorkflowStep, setActiveWorkflowStep] = useState(0);
   const [instrumentResponse, setInstrumentResponse] = useState({
     sequence: 0,
@@ -331,8 +459,6 @@ export default function PatternLabScreen() {
     step: 0,
     patternSequence: 0,
   });
-  const [variationRound, setVariationRound] = useState(0);
-  const [seedLocked, setSeedLocked] = useState(false);
   const [previewFrameSignals, setPreviewFrameSignals] = useState({
     recipeId: null,
     frameObserved: false,
@@ -340,7 +466,14 @@ export default function PatternLabScreen() {
     blackPixelCount: null,
   });
   const mobileDrawer = useMobileDrawer();
-  const previewRecipe = comparison === 'source' ? sourceRecipe : draft;
+  const drawerOpen = sheetDetent !== 'closed';
+  // Modal-ness is a property of ONE detent, not of "the drawer is open".
+  // Everything downstream — the preview's `inert`, the dismiss backdrop, the
+  // focus trap, aria-modal — keys off this single flag so they cannot drift
+  // apart into a sheet that traps focus without a backdrop, or dims the
+  // screen without disabling it.
+  const sheetModal = mobileDrawer && sheetDetent === 'full';
+  const previewRecipe = draft;
   const previewDuration = draft?.evolution?.durationSeconds ?? 600;
 
   useEffect(() => {
@@ -369,6 +502,13 @@ export default function PatternLabScreen() {
 
   useEffect(() => {
     if (!mobileDrawer || !drawerOpen) return undefined;
+    // Reopening starts at the top of the control column. Before this, the
+    // sheet reappeared wherever it was last scrolled to — usually deep in the
+    // diagnostics accordion — so "open controls" showed a random slice of the
+    // screen instead of the pattern browser. Deliberately keyed on
+    // closed -> open only (`drawerOpen`), so moving between detents keeps the
+    // owner's scroll position.
+    if (sheetScrollRef.current) sheetScrollRef.current.scrollTop = 0;
     drawerCloseRef.current?.focus();
     const closeOnEscape = event => {
       if (event.key === 'Escape') closeDrawer();
@@ -376,6 +516,32 @@ export default function PatternLabScreen() {
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [drawerOpen, mobileDrawer]);
+
+  // The control sheet is anchored to the viewport, but the artwork it must
+  // not cover ends at the workspace's bottom edge — the Studio status bar
+  // sits between the two. Publish that measured strip so the CSS can shrink
+  // the preview by the OVERLAP rather than by the sheet's whole height; the
+  // naive version leaves a phone with a 0px-tall stage.
+  useEffect(() => {
+    if (!mobileDrawer) {
+      screenRef.current?.style.removeProperty('--plab-sheet-gap');
+      return undefined;
+    }
+    const measure = () => {
+      const workspace = workspaceRef.current;
+      const screen = screenRef.current;
+      if (!workspace || !screen) return;
+      const gap = Math.max(0, Math.round(window.innerHeight - workspace.getBoundingClientRect().bottom));
+      screen.style.setProperty('--plab-sheet-gap', `${gap}px`);
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    window.addEventListener('orientationchange', measure);
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('orientationchange', measure);
+    };
+  }, [mobileDrawer, sheetDetent, draftState]);
 
   const geometry = useMemo(() => ({
     strips: project.strips.map(strip => {
@@ -485,10 +651,6 @@ export default function PatternLabScreen() {
     };
   }, [geometry, previewRecipe]);
 
-  const variantSeeds = useMemo(
-    () => Array.from({ length: 4 }, (_, index) => deriveSeed(sourceRecipe?.seed ?? 1, index + variationRound * 4)),
-    [sourceRecipe?.seed, variationRound],
-  );
   const runtimeMetrics = useMemo(
     () => draft ? runtimeMetricsFor(draft, geometry) : null,
     [draft, geometry],
@@ -581,26 +743,21 @@ export default function PatternLabScreen() {
     const source = { ...selected, sourcePalette: cloneRecipe(selected.palette) };
     setSourceRecipe(source);
     setDraft(cloneRecipe(source));
-    setComparison('draft');
     setPreviewTime(0);
-    setPlaying(false);
     setMessage('');
     setImportErrors([]);
-    setVariationRound(0);
-    setSeedLocked(false);
     signalInstrumentResponse(0, 'pattern');
+    settleSheetOnSculpt();
   }
 
   function changeMacro(name, value) {
     setDraft(current => current ? { ...current, macros: { ...current.macros, [name]: value } } : current);
-    setComparison('draft');
     setMessage('');
     signalInstrumentResponse(1);
   }
 
   function changePlayback(name, value) {
     setDraft(current => current ? { ...current, playback: { ...current.playback, [name]: value } } : current);
-    setComparison('draft');
     setMessage('');
     signalInstrumentResponse(1);
   }
@@ -616,14 +773,24 @@ export default function PatternLabScreen() {
         },
       },
     } : current);
-    setComparison('draft');
     setMessage('');
     signalInstrumentResponse(1);
   }
 
-  function changePalette(palette) {
-    setDraft(current => current ? { ...current, palette: [...palette] } : current);
-    setComparison('draft');
+  function changeParam(name, value) {
+    setDraft(current => current ? {
+      ...current,
+      base: {
+        ...current.base,
+        params: { ...current.base.params, [name]: value },
+      },
+    } : current);
+    setMessage('');
+    signalInstrumentResponse(1);
+  }
+
+  function changePieceColor(hueDegrees) {
+    setDraft(current => current ? { ...current, palette: shiftPaletteHue(current.palette, hueDegrees) } : current);
     setMessage('');
     signalInstrumentResponse(1);
   }
@@ -631,7 +798,6 @@ export default function PatternLabScreen() {
   function changeEvolution(name, value) {
     setDraft(current => current ? { ...current, evolution: { ...current.evolution, [name]: value } } : current);
     if (name === 'durationSeconds') setPreviewTime(current => Math.min(current, value));
-    setComparison('draft');
     setMessage('');
     signalInstrumentResponse(2);
   }
@@ -652,7 +818,6 @@ export default function PatternLabScreen() {
         requirements: [...requirements, cloneRecipe(requirement)],
       };
     });
-    setComparison('draft');
     setMessage('');
     signalInstrumentResponse(2);
   }
@@ -662,28 +827,115 @@ export default function PatternLabScreen() {
     signalInstrumentResponse(2);
   }
 
-  function chooseSeed(seed) {
-    setDraft(current => current ? {
-      ...cloneRecipe(current),
-      seed,
-      evolution: { ...current.evolution, enabled: true },
-    } : current);
-    setComparison('draft');
-    setMessage('');
-  }
-
-  function createNewVariations() {
-    if (!seedLocked) setVariationRound(round => round + 1);
-  }
-
   function closeDrawer() {
-    setDrawerOpen(false);
+    setSheetDetent('closed');
     requestAnimationFrame(() => drawerTriggerRef.current?.focus());
+  }
+
+  function toggleDrawer() {
+    if (drawerOpen) closeDrawer();
+    // "Controls" is the open-everything affordance: it lands on the browser,
+    // the drafts and the save actions, which only exist at full height.
+    else setSheetDetent('full');
+  }
+
+  // Choosing a pattern drops the sheet to the play strip: the artwork is back
+  // in full view, still running, with Brightness / Speed / Color under it. No
+  // gesture is needed to get from "I picked this" to "I can play with it".
+  function settleSheetOnSculpt() {
+    if (!mobileDrawer) return;
+    setSheetDetent('peek');
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const heading = document.getElementById('plab-sculpt-heading');
+      const section = heading?.closest('.plab-control-section') || heading;
+      section?.scrollIntoView({ block: 'start' });
+      // Focus follows the sheet rather than staying on a tile that the peek
+      // detent has just scrolled out of view — the non-modal replacement for
+      // the focus trap, which only ran because the sheet used to be modal.
+      heading?.focus({ preventScroll: true });
+    }));
+  }
+
+  function detentForHeight(height) {
+    const viewport = typeof window === 'undefined' ? 1 : (window.innerHeight || 1);
+    const ratio = height / viewport;
+    if (ratio < 0.58) return 'peek';
+    if (ratio < 0.79) return 'half';
+    return 'full';
+  }
+
+  // Changing detent must not throw away what the owner was looking at. The
+  // sheet's content is one tall scroller, so a taller sheet reveals sections
+  // ABOVE the current scroll position and pushes the sliders off the bottom
+  // unless the top-most visible section is re-pinned to the top afterwards.
+  function withSheetAnchor(mutate) {
+    const scroller = sheetScrollRef.current;
+    let anchor = null;
+    if (scroller) {
+      const top = scroller.getBoundingClientRect().top + 4;
+      anchor = [...scroller.querySelectorAll('.plab-control-section, .plab-private-library')]
+        .find(node => node.getBoundingClientRect().bottom > top) || null;
+    }
+    mutate();
+    if (!anchor) return;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      anchor.scrollIntoView({ block: 'start' });
+    }));
+  }
+
+  function cycleSheetDetent() {
+    // A drag that actually moved already chose a detent; the trailing click
+    // must not advance it again.
+    if (sheetDragMovedRef.current) {
+      sheetDragMovedRef.current = false;
+      return;
+    }
+    withSheetAnchor(() => setSheetDetent(current => {
+      if (current === 'closed') return current;
+      if (current === 'peek') return 'half';
+      return current === 'half' ? 'full' : 'peek';
+    }));
+  }
+
+  function beginSheetDrag(event) {
+    if (!mobileDrawer || !drawerRef.current || event.button > 0) return;
+    const startY = event.clientY;
+    const startHeight = drawerRef.current.getBoundingClientRect().height;
+    sheetDragMovedRef.current = false;
+    const move = moveEvent => {
+      const delta = startY - moveEvent.clientY;
+      if (!sheetDragMovedRef.current && Math.abs(delta) < 8) return;
+      sheetDragMovedRef.current = true;
+      const next = detentForHeight(startHeight + delta);
+      withSheetAnchor(() => setSheetDetent(current => (current === 'closed' ? current : next)));
+    };
+    const end = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+  }
+
+  // The Choose step is the tile browser's search field, not a native
+  // <select>, so "opening the picker" is just moving focus there — the tile
+  // grid underneath is already visible, there is no dropdown to trigger.
+  function openPatternPicker(target) {
+    if (!target) return;
+    target.scrollIntoView({ block: 'nearest' });
+    target.focus({ preventScroll: true });
   }
 
   function openWorkflowStep(index) {
     setActiveWorkflowStep(index);
-    if (mobileDrawer) setDrawerOpen(true);
+    // Step 0 is the pattern browser, which only exists at full height; the
+    // other three are reachable at whatever detent the owner is already on,
+    // so a tap on "Sculpt" from the play strip does not swallow the artwork.
+    if (mobileDrawer) {
+      setSheetDetent(current => (current === 'closed' || index === 0 ? 'full' : current));
+    }
     const targetId = [
       'plab-base-pattern',
       'plab-sculpt-heading',
@@ -692,13 +944,20 @@ export default function PatternLabScreen() {
     ][index];
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const target = document.getElementById(targetId);
-      target?.scrollIntoView({ block: 'nearest' });
-      target?.focus({ preventScroll: true });
+      if (index === 0) openPatternPicker(target);
+      else {
+        target?.scrollIntoView({ block: 'nearest' });
+        target?.focus({ preventScroll: true });
+      }
     }));
   }
 
   function trapDrawerFocus(event) {
-    if (!mobileDrawer || !drawerOpen || event.key !== 'Tab') return;
+    // A focus trap belongs to a modal, and only the full detent is modal.
+    // At peek and half the sheet is a non-modal companion to a live preview:
+    // Tab walks out of it into the play button and the artwork, which is the
+    // whole point of the redesign.
+    if (!sheetModal || event.key !== 'Tab') return;
     const focusable = [...drawerRef.current.querySelectorAll(
       'button:not(:disabled), input:not(:disabled), select:not(:disabled), summary, [href], [tabindex]:not([tabindex="-1"])',
     )].filter(element => element.getClientRects().length > 0);
@@ -714,54 +973,11 @@ export default function PatternLabScreen() {
     }
   }
 
-  function changeLayers(layers) {
-    setDraft(current => current ? { ...current, layers: cloneRecipe(layers) } : current);
-    setComparison('draft');
-    setMessage('');
-  }
-
-  function addLayer() {
-    setDraft(current => {
-      if (!current || current.layers.length >= 3) return current;
-      const index = current.layers.length + 1;
-      const patternId = current.base?.patternId === 'gradient' ? 'candle' : 'gradient';
-      const layerSource = recipeFromPattern(patternId, { palette: current.palette });
-      return {
-        ...current,
-        layers: [...current.layers, {
-          id: `layer-${current.id}-${index}`,
-          name: `${layerSource.name} layer`,
-          generator: cloneRecipe(layerSource.base),
-          blendMode: 'screen',
-          opacity: 0.35,
-        }],
-      };
-    });
-    setComparison('draft');
-  }
-
-  function changeLayerPattern(index, patternId) {
-    if (!isBuiltInPattern(patternId)) return;
-    const source = recipeFromPattern(patternId, { palette: draft?.palette || project.palette });
-    setDraft(current => current ? {
-      ...current,
-      layers: current.layers.map((layer, layerIndex) => layerIndex === index ? {
-        ...layer,
-        name: `${source.name} layer`,
-        generator: cloneRecipe(source.base),
-      } : layer),
-    } : current);
-    setComparison('draft');
-    setMessage('');
-  }
-
   function useDraftVariant(variant, status) {
     if (!variant) return;
     const next = normalizePatternLabRecipe(cloneRecipe(variant));
     setDraft(next);
-    setComparison('draft');
     setPreviewTime(0);
-    setPlaying(false);
     setMessage(`${status} ${next.name}. The source recipe is unchanged.`);
   }
 
@@ -791,13 +1007,9 @@ export default function PatternLabScreen() {
     const normalized = normalizePatternLabRecipe(saved);
     setSourceRecipe(sourceFromRecipe(normalized));
     setDraft(cloneRecipe(normalized));
-    setComparison('draft');
     setPreviewTime(0);
-    setPlaying(false);
     setMessage(`Opened ${normalized.name}`);
     setImportErrors([]);
-    setVariationRound(0);
-    setSeedLocked(false);
   }
 
   function saveDraft() {
@@ -817,8 +1029,13 @@ export default function PatternLabScreen() {
 
   async function exportRecipe() {
     if (!draft) return;
-    const canonical = normalizePatternLabRecipe(draft);
-    await downloadJsonFile(safeFilename(canonical.name), canonical, { preferPicker: false });
+    try {
+      const canonical = normalizePatternLabRecipe(draft);
+      const exported = await downloadJsonFile(safeFilename(canonical.name), canonical, { preferPicker: false });
+      setMessage(exported ? `Exported ${canonical.name}` : 'Export was canceled. Nothing was downloaded.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not export this recipe.');
+    }
   }
 
   async function bakeForCard(_compatibility, { signal } = {}) {
@@ -885,6 +1102,40 @@ export default function PatternLabScreen() {
     return { ok: true, message: `Added and selected ${result.look.label} in the project.` };
   }
 
+  // Promoted top-level entry point for the project-handoff badge. Only
+  // "live-on-card" can succeed as a genuine one tap: createPatternLabHandoff
+  // returns blocked('bake-required') for "bake-to-card" without a completed
+  // bake, and has no direct path at all for "simplify-for-card" or
+  // "studio-only". So this button only calls the handoff for the case that
+  // can actually complete; every other classification reveals the "Card
+  // compatibility & diagnostics" section, where the real recording /
+  // simplify flow lives, instead of promising a one-click add it cannot
+  // deliver.
+  function openRuntimeTools() {
+    const node = runtimeToolsRef.current;
+    if (!node) return;
+    node.open = true;
+    requestAnimationFrame(() => {
+      node.scrollIntoView({ block: 'nearest' });
+      node.querySelector('summary')?.focus();
+    });
+  }
+
+  async function useInProjectPrimary() {
+    if (!draft || !compatibility) return;
+    if (compatibility.classification !== 'live-on-card') {
+      openRuntimeTools();
+      return;
+    }
+    setMessage('Adding to project…');
+    try {
+      const result = await useInProject();
+      setMessage(result.message);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not add this pattern to the project.');
+    }
+  }
+
   async function importRecipe(event) {
     const file = event.target.files?.[0];
     event.target.value = '';
@@ -906,12 +1157,9 @@ export default function PatternLabScreen() {
       const source = sourceFromRecipe(normalized);
       setSourceRecipe(source);
       setDraft(cloneRecipe(normalized));
-      setComparison('draft');
       setPreviewTime(0);
       setImportErrors([]);
       setMessage(`Imported ${normalized.name}. Save when you want to keep it privately.`);
-      setVariationRound(0);
-      setSeedLocked(false);
     } catch (error) {
       const detail = error instanceof Error ? error.message : 'The file is not a valid Pattern Lab recipe.';
       setImportErrors([detail].slice(0, 4));
@@ -920,9 +1168,14 @@ export default function PatternLabScreen() {
   }
 
   return (
-    <main className="screen plab-screen" data-testid="pattern-lab-screen">
+    <main
+      className="screen plab-screen"
+      data-testid="pattern-lab-screen"
+      data-sheet-detent={mobileDrawer ? sheetDetent : "desktop"}
+      ref={screenRef}
+    >
       <div className="plab-scroll">
-        <header className="plab-toolbar" data-testid="pattern-lab-toolbar" inert={mobileDrawer && drawerOpen ? '' : undefined}>
+        <header className="plab-toolbar" data-testid="pattern-lab-toolbar" inert={sheetModal ? '' : undefined}>
           <div className="plab-toolbar-identity">
             <svg className="plab-toolbar-mark" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M9 3h6M10 3v5l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3"/>
@@ -959,8 +1212,8 @@ export default function PatternLabScreen() {
           </nav>
         </header>
 
-        <section className="plab-workspace" aria-label="Pattern authoring workspace">
-          <div className="plab-preview" inert={mobileDrawer && drawerOpen ? '' : undefined}>
+        <section className="plab-workspace" aria-label="Pattern authoring workspace" ref={workspaceRef}>
+          <div className="plab-preview" inert={sheetModal ? '' : undefined}>
             <div className="plab-preview-bar">
               <span>{previewRecipe ? <strong data-testid="pattern-lab-draft-name">{previewRecipe.name}</strong> : 'Artwork preview'}</span>
               <div className="plab-preview-meta">
@@ -973,7 +1226,7 @@ export default function PatternLabScreen() {
                   aria-label="Pattern controls"
                   aria-expanded={drawerOpen}
                   aria-controls="plab-controls-drawer"
-                  onClick={() => setDrawerOpen(open => !open)}
+                  onClick={toggleDrawer}
                 >Controls</button>
               </div>
             </div>
@@ -1001,8 +1254,11 @@ export default function PatternLabScreen() {
                     <h2>Begin with a pattern</h2>
                     <p>Choose a built-in look in the inspector. Pattern Lab makes a private copy you can stretch into a longer, less repetitive experience.</p>
                     <button type="button" className="btn primary" onClick={() => {
-                      if (mobileDrawer) setDrawerOpen(true);
-                      requestAnimationFrame(() => document.getElementById('plab-base-pattern')?.focus());
+                      setActiveWorkflowStep(0);
+                      if (mobileDrawer) setSheetDetent('full');
+                      requestAnimationFrame(() => requestAnimationFrame(() => {
+                        openPatternPicker(document.getElementById('plab-base-pattern'));
+                      }));
                     }}>Choose pattern</button>
                   </div>
                 </>
@@ -1020,7 +1276,7 @@ export default function PatternLabScreen() {
             </div>
           </div>
 
-          {mobileDrawer && drawerOpen && (
+          {sheetModal && (
             <button className="plab-drawer-backdrop" type="button" aria-label="Dismiss pattern controls" onClick={closeDrawer} />
           )}
           <aside
@@ -1028,14 +1284,26 @@ export default function PatternLabScreen() {
             id="plab-controls-drawer"
             className={`plab-controls${drawerOpen ? ' drawer-open' : ''}`}
             aria-label="Pattern Lab controls"
+            data-detent={mobileDrawer ? sheetDetent : undefined}
             role={mobileDrawer ? 'dialog' : undefined}
-            aria-modal={mobileDrawer && drawerOpen ? 'true' : undefined}
+            aria-modal={mobileDrawer && drawerOpen ? (sheetModal ? 'true' : 'false') : undefined}
             aria-hidden={mobileDrawer && !drawerOpen ? 'true' : undefined}
             inert={mobileDrawer && !drawerOpen ? '' : undefined}
             onFocusCapture={activateInspectorStep}
             onPointerDownCapture={activateInspectorStep}
             onKeyDown={trapDrawerFocus}
           >
+            {mobileDrawer && (
+              <button
+                type="button"
+                className="plab-sheet-handle"
+                aria-label="Adjust the controls sheet height"
+                title={`Controls sheet: ${sheetDetent}. Drag or tap to resize.`}
+                data-testid="pattern-lab-sheet-handle"
+                onPointerDown={beginSheetDrag}
+                onClick={cycleSheetDetent}
+              ><span aria-hidden="true" /></button>
+            )}
             <div className="plab-control-heading">
               <span>Pattern inspector</span>
               <span>{draft ? 'Private draft' : 'Choose below'}</span>
@@ -1047,6 +1315,12 @@ export default function PatternLabScreen() {
                 onClick={closeDrawer}
               >Close</button>
             </div>
+            {/* On a phone the sheet is a flex column: handle, heading, this
+                scroller, then the action bar as a sibling rather than an
+                overlay — so the save row can no longer sit on top of the last
+                section. `display: contents` above the breakpoint keeps the
+                desktop two-pane column byte-identical to what it was. */}
+            <div className="plab-sheet-scroll" ref={sheetScrollRef}>
             <div id="plab-pattern-select">
               <PatternLabControls
                 patterns={patterns}
@@ -1057,8 +1331,10 @@ export default function PatternLabScreen() {
                 onPatternChange={choosePattern}
                 onMacroChange={changeMacro}
                 onPlaybackChange={changePlayback}
-                onPaletteChange={changePalette}
+                onPieceColorChange={changePieceColor}
+                pieceColorHue={draft ? paletteBaseHue(draft.palette) : 30}
                 onAdvancedChange={changeAdvanced}
+                onParamChange={changeParam}
                 activeWorkflowStep={activeWorkflowStep}
                 instrumentResponse={instrumentResponse}
               />
@@ -1072,34 +1348,10 @@ export default function PatternLabScreen() {
               activeWorkflowStep={activeWorkflowStep}
               instrumentResponse={instrumentResponse}
             />
-            <PatternLabVariants
-              recipe={draft}
-              sourceSeed={sourceRecipe?.seed}
-              variantSeeds={variantSeeds}
-              geometry={geometry}
-              previewTime={previewTime}
-              renderPreviews={!mobileDrawer || drawerOpen}
-              comparison={comparison}
-              seedLocked={seedLocked}
-              onComparison={setComparison}
-              onSelectSeed={chooseSeed}
-              onSeedLock={setSeedLocked}
-              onNewVariations={createNewVariations}
-            />
-            {draft && (
-              <div className="plab-layer-inspector">
-                <PatternLabLayers
-                  layers={draft.layers}
-                  patterns={patterns}
-                  onAddLayer={addLayer}
-                  onLayerPatternChange={changeLayerPattern}
-                  onLayersChange={changeLayers}
-                />
-              </div>
-            )}
 
             {draft && (
               <details
+                ref={runtimeToolsRef}
                 className="plab-runtime-tools"
                 data-testid="pattern-lab-runtime-tools"
                 data-source-recipe-id={sourceRecipe?.id}
@@ -1187,6 +1439,25 @@ export default function PatternLabScreen() {
               </div>
             )}
             {message && <p className="plab-save-status" data-testid="pattern-lab-save-status" aria-live="polite">{message}</p>}
+
+            {draft && compatibility && (
+              <div className="plab-use-in-project-promoted" data-testid="pattern-lab-use-in-project-promoted">
+                <button
+                  type="button"
+                  className="btn primary"
+                  disabled={compatibility.classification === 'studio-only'}
+                  onClick={() => void useInProjectPrimary()}
+                >{promotedActionLabel(compatibility)}</button>
+                <span
+                  className="plab-compat-badge"
+                  data-testid="pattern-lab-compat-badge"
+                  data-classification={compatibility.classification}
+                >{compatibilityBadge(compatibility)}</span>
+                <small className="plab-compat-hint">{promotedActionHint(compatibility)}</small>
+              </div>
+            )}
+
+            </div>
 
             <div className="plab-actions">
               <button id="plab-save-private" type="button" className="btn primary" disabled={!draft} onClick={saveDraft}>Save private draft</button>
