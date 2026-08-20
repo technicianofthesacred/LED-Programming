@@ -133,6 +133,28 @@ function action(id, additions = {}) {
   return { id, ...copy, ...additions };
 }
 
+// A reason the owner can clear by simply trying again — as opposed to
+// evidence that something is wrong with the card, project, or firmware.
+// Exported for cardActionAuthority, which marks these verdicts retryable.
+export function isTransientCardConnectionReason(reason) {
+  return TRANSIENT_REASONS.has(reason);
+}
+
+// The busy "Studio is checking the card" presentation. One copy source: the
+// connecting/reconnecting/revalidating branch below and the authority's
+// `confirming` verdict (a verified transport whose readiness evidence has not
+// arrived yet) both render exactly this.
+export function connectingCardAction() {
+  return action('recoverable-failure', {
+    title: 'Connecting to the Lightweaver card',
+    explanation: 'Keep the card powered and leave its page open while Studio checks it.',
+    primaryLabel: 'Connecting…',
+    busy: true,
+    pending: true,
+    primaryDisabled: true,
+  });
+}
+
 function hasCardIdentity(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const candidate = value.id ?? value.cardId;
@@ -339,14 +361,7 @@ export function nextCardConnectionAction(input = {}) {
   }
 
   if (link.state === 'connecting' || link.state === 'reconnecting' || link.state === 'reconnecting-bridge' || link.state === 'revalidating') {
-    return action('recoverable-failure', {
-      title: 'Connecting to the Lightweaver card',
-      explanation: 'Keep the card powered and leave its page open while Studio checks it.',
-      primaryLabel: 'Connecting…',
-      busy: true,
-      pending: true,
-      primaryDisabled: true,
-    });
+    return connectingCardAction();
   }
 
   return action('recoverable-failure');

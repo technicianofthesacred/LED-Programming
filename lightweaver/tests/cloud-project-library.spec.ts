@@ -908,6 +908,7 @@ class LibraryFixture {
 
 async function openLibrary(page: Page) {
   await page.goto('/#screen=card&section=preferences', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
   await expect(page.getByTestId('project-library-panel')).toBeVisible();
 }
 
@@ -945,7 +946,7 @@ async function freshWorkspacePage(browser: Browser, fixture: LibraryFixture, has
   return { context, page };
 }
 
-test('top-bar Load lists only active online projects, filters them, and opens the selected project', async ({ page }) => {
+test('top-bar Projects lists only active online projects, filters them, and opens the selected project', async ({ page }) => {
   const fixture = new LibraryFixture('worker');
   fixture.seed('Amber Canopy');
   fixture.seed('Blue Current');
@@ -953,17 +954,16 @@ test('top-bar Load lists only active online projects, filters them, and opens th
   await fixture.install(page);
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
 
-  await page.getByRole('button', { name: 'Load project' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Load project' });
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Projects' });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText('Amber Canopy', { exact: true })).toBeVisible();
   await expect(dialog.getByText('Blue Current', { exact: true })).toBeVisible();
   await expect(dialog.getByText('Archived Study', { exact: true })).toHaveCount(0);
 
-  await dialog.getByRole('searchbox', { name: 'Search projects' }).fill('blue');
+  await dialog.getByRole('searchbox', { name: 'Search online projects' }).fill('blue');
   await expect(dialog.getByText('Amber Canopy', { exact: true })).toHaveCount(0);
   await dialog.getByRole('button', { name: 'Open Blue Current' }).click();
-  await expect(dialog).toHaveCount(0);
   await expect(page.locator('.crumb .proj')).toHaveText('Blue Current');
 });
 
@@ -972,8 +972,8 @@ test('top-bar Load imports a project from the computer through replacement flow'
   await fixture.install(page);
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
 
-  await page.getByRole('button', { name: 'Load project' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Load project' });
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Projects' });
   const chooserPromise = page.waitForEvent('filechooser');
   await dialog.getByRole('button', { name: 'Import from computer' }).click();
   const chooser = await chooserPromise;
@@ -987,18 +987,17 @@ test('top-bar Load imports a project from the computer through replacement flow'
   await expect(page.locator('.crumb .proj')).toHaveText('Computer Project');
 });
 
-test('signed-out Load shows guidance and routes to Preferences without exposing projects', async ({ page }) => {
+test('signed-out Projects panel offers sign-in without exposing online projects', async ({ page }) => {
   const fixture = new LibraryFixture(null);
   fixture.seed('Private Online Project');
   await fixture.install(page);
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
 
-  await page.getByRole('button', { name: 'Load project' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Load project' });
-  await expect(dialog).toContainText('Sign in from Preferences to open online projects.');
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Projects' });
+  await expect(dialog.getByText('Sign in to use the online project library')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Sign in' })).toBeVisible();
   await expect(dialog.getByText('Private Online Project', { exact: true })).toHaveCount(0);
-  await dialog.getByRole('button', { name: 'Open Preferences' }).click();
-  await expect(page.getByTestId('project-library-panel')).toBeVisible();
 });
 
 test('top-bar Load keeps browser saves recoverable after New while signed out', async ({ page }) => {
@@ -1034,8 +1033,8 @@ test('top-bar Load keeps browser saves recoverable after New while signed out', 
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
 
   await page.getByRole('button', { name: 'New project' }).click();
-  await page.getByRole('button', { name: 'Load project' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Load project' });
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Projects' });
   await expect(dialog.getByText('Browser recovery piece', { exact: true })).toBeVisible();
   await dialog.getByRole('button', { name: 'Open Browser recovery piece' }).click();
 
@@ -1081,8 +1080,8 @@ test('saved starter project stays visibly unplaced through New and Load until it
   await page.getByRole('button', { name: 'Save project', exact: true }).click();
   await expect(page.getByTestId('workspace-notice')).toContainText('saved in browser library');
   await page.getByRole('button', { name: 'New project' }).click();
-  await page.getByRole('button', { name: 'Load project' }).click();
-  await page.getByRole('dialog', { name: 'Load project' })
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Projects' })
     .getByRole('button', { name: 'Open Unplaced starter project' }).click();
 
   await expect(page.getByTestId('layout-primitive-picker')).toBeVisible();
@@ -1090,6 +1089,100 @@ test('saved starter project stays visibly unplaced through New and Load until it
     .getByRole('button', { name: 'Create line' }).click();
   await expect(page.getByTestId('layout-primitive-picker')).toHaveCount(0);
   await expect(page.locator('.la-strip-row')).toHaveCount(1);
+});
+
+test('Projects panel renames, duplicates, and deletes browser records and shows the 24-record cap', async ({ page }) => {
+  const fixture = new LibraryFixture(null);
+  const bulk = Array.from({ length: 20 }, (_, index) => ({
+    id: `bulk-record-${index}`,
+    name: `Bulk piece ${index}`,
+    createdAt: index + 1,
+    updatedAt: index + 1,
+    projectVersion: 3,
+    project: portable(`Bulk piece ${index}`, `lwproj-bulk-${index}`),
+  }));
+  await page.addInitScript(records => {
+    localStorage.setItem('lw_project_library_v1', JSON.stringify({ version: 1, records }));
+  }, bulk);
+  await fixture.install(page);
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Projects' });
+  await expect(dialog.getByTestId('browser-library-cap')).toHaveText('20 of 24 saved');
+
+  await dialog.getByRole('button', { name: 'Rename Bulk piece 19' }).click();
+  await dialog.getByRole('textbox', { name: 'Rename browser project' }).fill('Renamed piece');
+  await dialog.getByRole('button', { name: 'Save name' }).click();
+  await expect(dialog.getByText('Renamed piece', { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => {
+    const records = JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records || [];
+    const record = records.find((entry: any) => entry.id === 'bulk-record-19');
+    return { name: record?.name, projectName: record?.project?.name };
+  })).toEqual({ name: 'Renamed piece', projectName: 'Renamed piece' });
+
+  await dialog.getByRole('button', { name: 'Duplicate Renamed piece', exact: true }).click();
+  await expect(dialog.getByText('Renamed piece copy', { exact: true })).toBeVisible();
+  await expect(dialog.getByTestId('browser-library-cap')).toHaveText('21 of 24 saved');
+
+  page.once('dialog', confirmDialog => confirmDialog.accept());
+  await dialog.getByRole('button', { name: 'Delete Renamed piece copy' }).click();
+  await expect(dialog.getByText('Renamed piece copy', { exact: true })).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (
+    (JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records || []).length
+  ))).toBe(20);
+});
+
+test('save-block banner offers Retry that re-establishes a safe destination and unblocks saving', async ({ page }) => {
+  const fixture = new LibraryFixture(null);
+  const savedProject = portable('Banner retry target', 'lwproj-banner-retry');
+  await page.addInitScript((project) => {
+    localStorage.setItem('lw_project_library_v1', JSON.stringify({
+      version: 1,
+      records: [{
+        id: 'banner-retry-record',
+        name: project.name,
+        createdAt: 1,
+        updatedAt: 2,
+        projectVersion: project.version,
+        project,
+      }],
+    }));
+  }, savedProject);
+  await fixture.install(page);
+  await page.goto('/#screen=card&section=preferences', { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('Project name').fill('Unsaved before banner');
+
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Projects' })
+    .getByRole('button', { name: 'Open Banner retry target' }).click();
+  const confirmation = page.getByRole('dialog', { name: 'Replace current project?' });
+  await expect(confirmation).toBeVisible();
+  // Empty the library while the replacement is pending so the guarded
+  // association fails and the sticky save block engages.
+  await page.evaluate(() => {
+    const library = JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}');
+    library.records = [];
+    localStorage.setItem('lw_project_library_v1', JSON.stringify(library));
+  });
+  await confirmation.getByRole('button', { name: 'Replace project' }).click();
+  await expect(page.locator('.crumb .proj')).toHaveText('Banner retry target');
+
+  const banner = page.getByTestId('association-save-blocked');
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText('Saving is paused');
+
+  await banner.getByRole('button', { name: 'Retry' }).click();
+  await expect(banner).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Save project', exact: true }).click();
+  await expect(page.getByTestId('workspace-notice')).not.toContainText('Saving is blocked');
+  await expect.poll(() => page.evaluate(() => (
+    (JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records || []).length
+  ))).toBe(1);
+  await expect.poll(() => page.evaluate(() => (
+    JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records?.[0]?.name
+  ))).toBe('Banner retry target');
 });
 
 test('claimed browser records remain available to signed-out Save, New, and Load', async ({ page }) => {
@@ -1130,8 +1223,8 @@ test('claimed browser records remain available to signed-out Save, New, and Load
   ))).toBe('Claimed browser piece revised');
 
   await page.getByRole('button', { name: 'New project' }).click();
-  await page.getByRole('button', { name: 'Load project' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Load project' });
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Projects' });
   await expect(dialog.getByText('Claimed browser piece revised', { exact: true })).toBeVisible();
   await dialog.getByRole('button', { name: 'Open Claimed browser piece revised' }).click();
 
@@ -1160,8 +1253,8 @@ test('browser Load keeps Save fail-closed when its guarded association goes stal
   await page.goto('/#screen=card&section=preferences', { waitUntil: 'domcontentloaded' });
   await page.getByLabel('Project name').fill('Unsaved current work');
 
-  await page.getByRole('button', { name: 'Load project' }).click();
-  await page.getByRole('dialog', { name: 'Load project' })
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Projects' })
     .getByRole('button', { name: 'Open Stale association target' }).click();
   const confirmation = page.getByRole('dialog', { name: 'Replace current project?' });
   await expect(confirmation).toBeVisible();
@@ -1217,8 +1310,8 @@ test('association failure remains fail-closed after reload and cannot overwrite 
   await page.goto('/#screen=card&section=preferences', { waitUntil: 'domcontentloaded' });
   await page.getByLabel('Project name').fill('Unsaved workspace before recovery');
 
-  await page.getByRole('button', { name: 'Load project' }).click();
-  await page.getByRole('dialog', { name: 'Load project' })
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Projects' })
     .getByRole('button', { name: 'Open Recovery before association' }).click();
   const confirmation = page.getByRole('dialog', { name: 'Replace current project?' });
   await expect(confirmation).toBeVisible();
@@ -1286,8 +1379,8 @@ test('late browser association cannot attach to a superseding New workspace', as
   });
   await expect.poll(() => page.evaluate(() => (window as any).__heldProjectLockReady)).toBe(true);
 
-  await page.getByRole('button', { name: 'Load project' }).click();
-  await page.getByRole('dialog', { name: 'Load project' })
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Projects' })
     .getByRole('button', { name: 'Open Held association target' }).click();
   await expect(page.locator('.crumb .proj')).toHaveText('Held association target');
   await page.getByRole('button', { name: 'New project' }).click();
@@ -1302,40 +1395,36 @@ test('late browser association cannot attach to a superseding New workspace', as
   await expect(page.getByTestId('workspace-notice')).not.toContainText('Saving is blocked');
 });
 
-test('Load closes with Escape and restores focus to the top-bar action', async ({ page }) => {
+test('Projects panel closes with Escape and restores focus to the top-bar action', async ({ page }) => {
   const fixture = new LibraryFixture('worker');
   fixture.seed('Focus Study');
   await fixture.install(page);
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
 
-  const load = page.getByRole('button', { name: 'Load project' });
+  const load = page.getByRole('button', { name: 'Projects', exact: true });
   await load.click();
-  const dialog = page.getByRole('dialog', { name: 'Load project' });
-  await expect(dialog.getByRole('searchbox', { name: 'Search projects' })).toBeFocused();
+  const dialog = page.getByRole('dialog', { name: 'Projects' });
+  await expect(dialog.getByRole('button', { name: 'Close Projects' })).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
   await expect(load).toBeFocused();
 });
 
-test('Load closes immediately and reports a failed online project read persistently', async ({ page }) => {
+test('a failed online project read is reported persistently in the Projects panel', async ({ page }) => {
   const fixture = new LibraryFixture('worker');
   fixture.seed('Unavailable Project');
   fixture.projectReadFailures.push(503);
   await fixture.install(page);
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
 
-  await page.getByRole('button', { name: 'Load project' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Load project' });
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Projects' });
   await dialog.getByRole('button', { name: 'Open Unavailable Project' }).click();
-  await expect(dialog).toHaveCount(0);
 
-  const notice = page.getByTestId('workspace-notice');
+  const notice = dialog.locator('.cloud-library-notice');
   await expect(notice).toContainText('Fixture read failure 503.');
-  await expect(notice.getByRole('button', { name: 'Review' })).toBeVisible();
   await page.waitForTimeout(2400);
   await expect(notice).toBeVisible();
-  await notice.getByRole('button', { name: 'Dismiss notice' }).click();
-  await expect(notice).toHaveCount(0);
 });
 
 test('first authenticated top-bar Save prompts for a title and creates an associated online project', async ({ page }) => {
@@ -1362,7 +1451,7 @@ test('first online Save explains a session change while keeping the dialog usabl
   const fixture = new LibraryFixture('worker');
   await fixture.install(page);
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
-  await page.getByLabel('Preferences').first().click();
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
 
   fixture.holdNextCreate();
@@ -1379,7 +1468,7 @@ test('first online Save explains a session change while keeping the dialog usabl
   await expect.poll(() => fixture.role).toBeNull();
   fixture.releaseCreate();
 
-  await expect(dialog.getByRole('alert')).toHaveText('Your session changed. Sign in again from Preferences.');
+  await expect(dialog.getByRole('alert')).toHaveText('Your session changed. Sign in again from Projects.');
   await expect(dialog.getByLabel('Project title')).toBeEnabled();
   await expect(dialog.getByRole('button', { name: 'Save online' })).toBeEnabled();
 });
@@ -1389,8 +1478,8 @@ test('top-bar Save writes an associated authenticated project through the online
   const remote = fixture.seed('Associated Project');
   await fixture.install(page);
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Load project' }).click();
-  await page.getByRole('dialog', { name: 'Load project' }).getByRole('button', { name: 'Open Associated Project' }).click();
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Projects' }).getByRole('button', { name: 'Open Associated Project' }).click();
   await page.getByLabel('Preferences').first().click();
   await page.getByLabel('Project name').fill('Associated Project Revised');
   await page.getByRole('button', { name: 'Save project', exact: true }).click();
@@ -1406,8 +1495,8 @@ test('associated Save error dismissal and recovery do not reveal a stale workspa
   const remote = fixture.seed('Recoverable Save');
   await fixture.install(page);
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Load project' }).click();
-  await page.getByRole('dialog', { name: 'Load project' }).getByRole('button', { name: 'Open Recoverable Save' }).click();
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Projects' }).getByRole('button', { name: 'Open Recoverable Save' }).click();
   await page.getByLabel('Preferences').first().click();
   await page.getByLabel('Project name').fill('Recoverable Save Revised');
   fixture.updateFailures.push(400);
@@ -1430,8 +1519,8 @@ test('associated Save reports a queued transient failure until its automatic ret
   const remote = fixture.seed('Transient Save');
   await fixture.install(page);
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Load project' }).click();
-  await page.getByRole('dialog', { name: 'Load project' }).getByRole('button', { name: 'Open Transient Save' }).click();
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Projects' }).getByRole('button', { name: 'Open Transient Save' }).click();
   await page.getByLabel('Preferences').first().click();
   await page.getByLabel('Project name').fill('Transient Save Revised');
   fixture.updateFailures.push(503);
@@ -1450,15 +1539,15 @@ test('associated Save authentication rejection reports a persistent sign-in erro
   fixture.seed('Expired Save');
   await fixture.install(page);
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Load project' }).click();
-  await page.getByRole('dialog', { name: 'Load project' }).getByRole('button', { name: 'Open Expired Save' }).click();
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Projects' }).getByRole('button', { name: 'Open Expired Save' }).click();
   await page.getByLabel('Preferences').first().click();
   await page.getByLabel('Project name').fill('Expired Save Revised');
   fixture.updateFailures.push(401);
 
   await page.getByRole('button', { name: 'Save project', exact: true }).click();
   const notice = page.getByTestId('workspace-notice');
-  await expect(notice).toContainText('Your session changed. Sign in again from Preferences.');
+  await expect(notice).toContainText('Your session changed. Sign in again from Projects.');
   await expect(notice.getByRole('button', { name: 'Review' })).toBeVisible();
   await page.waitForTimeout(2400);
   await expect(notice).toBeVisible();
@@ -1532,8 +1621,8 @@ test('customer top-bar Save keeps unassociated work in browser and saves only an
   expect(official.revision).toBe(officialRevision);
   expect(draft.revision).toBe(1);
 
-  await page.getByRole('button', { name: 'Load project' }).click();
-  await page.getByRole('dialog', { name: 'Load project' }).getByRole('button', { name: 'Open Official Installation' }).click();
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Projects' }).getByRole('button', { name: 'Open Official Installation' }).click();
   await page.getByLabel('Preferences').first().click();
   await page.getByLabel('Project name').fill('Customer Draft Revision');
   await page.getByRole('button', { name: 'Save project', exact: true }).click();
@@ -1585,8 +1674,8 @@ test('conflict notice persists until dismissed and offers Preferences review', a
   fixture.seed('Conflict Notice Project');
   await fixture.install(page);
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Load project' }).click();
-  await page.getByRole('dialog', { name: 'Load project' }).getByRole('button', { name: 'Open Conflict Notice Project' }).click();
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Projects' }).getByRole('button', { name: 'Open Conflict Notice Project' }).click();
   await page.getByLabel('Preferences').first().click();
   fixture.forceNextConflict = true;
   await page.getByLabel('Project name').fill('Conflicting local revision');
@@ -1608,8 +1697,8 @@ test('offline and error notices persist, remember dismissal, and reappear after 
   fixture.seed('Persistent Notice Project');
   await fixture.install(page);
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Load project' }).click();
-  await page.getByRole('dialog', { name: 'Load project' }).getByRole('button', { name: 'Open Persistent Notice Project' }).click();
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Projects' }).getByRole('button', { name: 'Open Persistent Notice Project' }).click();
 
   await context.setOffline(true);
   const notice = page.getByTestId('workspace-notice');
@@ -1638,7 +1727,7 @@ for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 760 });
     await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
 
-    const actions = ['New project', 'Load project', 'Preferences', 'Export project', 'Save project'];
+    const actions = ['New project', 'Projects', 'Preferences', 'Export project', 'Save project'];
     const boxes = [];
     for (const name of actions) {
       const action = page.getByRole('button', { name, exact: true });
@@ -1654,14 +1743,14 @@ for (const width of [320, 390]) {
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
-    await page.getByRole('button', { name: 'Load project' }).click();
-    const dialog = page.getByRole('dialog', { name: 'Load project' });
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Projects' });
     const dialogBox = await dialog.boundingBox();
     expect(dialogBox).not.toBeNull();
     expect(dialogBox!.x).toBeGreaterThanOrEqual(0);
     expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(width);
     expect(dialogBox!.y + dialogBox!.height).toBeLessThanOrEqual(760);
-    const closeBox = await dialog.getByRole('button', { name: 'Close Load project' }).boundingBox();
+    const closeBox = await dialog.getByRole('button', { name: 'Close Projects' }).boundingBox();
     expect(closeBox!.width).toBeGreaterThanOrEqual(44);
     expect(closeBox!.height).toBeGreaterThanOrEqual(44);
     await page.keyboard.press('Escape');
@@ -1686,10 +1775,10 @@ for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 760 });
     await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
 
-    await page.getByRole('button', { name: 'Load project' }).click();
-    const dialog = page.getByRole('dialog', { name: 'Load project' });
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Projects' });
     const controls = [
-      dialog.getByRole('searchbox', { name: 'Search projects' }),
+      dialog.getByRole('searchbox', { name: 'Search online projects' }),
       dialog.getByRole('button', { name: 'Open Touch Target Project' }),
       dialog.getByRole('button', { name: 'Import from computer' }),
     ];
@@ -1976,6 +2065,7 @@ test('offers owner bootstrap only to a verified transitional owner session', asy
   await page.unroute('**/api/**');
   await signedOut.install(page);
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await openLibrary(page);
   await expect(page.getByRole('button', { name: 'Create owner account' })).toHaveCount(0);
   await expect(page.getByLabel('Username')).toBeVisible();
 });
@@ -2114,6 +2204,7 @@ test('owner assigns and unassigns official projects while workers have no accoun
   const project = worker.seed('Worker project');
   await worker.install(page);
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await openLibrary(page);
   await expect(page.getByText('Accounts', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Review drafts' })).toHaveCount(0);
   const statuses = await page.evaluate(async id => Promise.all([
@@ -2153,7 +2244,7 @@ test('customer sees only assigned drafts, autosaves them, and cannot use shared-
     fetch(`/api/library/projects/${draftId}/duplicate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }).then(response => response.status),
   ]), { officialId: assigned.id, draftId: draft.id });
   expect(denied).toEqual([403, 403, 403, 404, 403]);
-  await page.getByRole('button', { name: 'History' }).click();
+  await page.getByRole('button', { name: 'History', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Project history' }).getByRole('button', { name: 'Restore' })).toHaveCount(0);
   await expect(page.locator('body')).not.toContainText('owner@example.test');
 });
@@ -2588,7 +2679,7 @@ test('turns a remembered remote revision divergence into an explicit conflict wi
   await openLibrary(page);
 
   await expect(page.getByTestId('cloud-sync-status')).toHaveText('Online conflict');
-  await expect(page.getByRole('button', { name: 'Open latest' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open latest', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Save as copy' })).toBeVisible();
   await page.waitForTimeout(1200);
   expect(fixture.updateCount).toBe(0);
@@ -2654,7 +2745,7 @@ test('create and active rename acknowledge only captured markers and queue newer
   await expect.poll(() => fixture.projects.get(created.id)?.document.name).toBe('Edited while creating');
 
   const row = page.getByTestId('cloud-project-row').filter({ hasText: 'Edited while creating' });
-  await row.getByRole('button', { name: 'Rename' }).click();
+  await row.getByRole('button', { name: 'Rename', exact: true }).click();
   await page.getByLabel('Rename project').fill('Captured rename');
   fixture.holdNextUpdate();
   await page.getByRole('button', { name: 'Save name' }).click();
@@ -2741,7 +2832,7 @@ test('reconnect replays a committed save with its original request ID and reconc
   await context.setOffline(false);
   await expect.poll(() => fixture.updateCount).toBe(2);
   await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
-  await expect(page.getByRole('button', { name: 'Open latest' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Open latest', exact: true })).toHaveCount(0);
   expect(fixture.updateRequestIds[1]).toBe(fixture.updateRequestIds[0]);
   expect(fixture.projects.get(remote.id)?.document.name).toBe('Recovered after reconnect');
 });
@@ -2762,7 +2853,7 @@ test('same-project rename wins over an in-flight stale replay without creating a
   fixture.holdNextUpdate();
   await fixture.delayedUpdateStarted;
   const row = page.getByTestId('cloud-project-row').filter({ hasText: 'Rename retry project' });
-  await row.getByRole('button', { name: 'Rename' }).click();
+  await row.getByRole('button', { name: 'Rename', exact: true }).click();
   await page.getByLabel('Rename project').fill('Renamed after transient failure');
   await page.getByRole('button', { name: 'Save name' }).click();
   await expect.poll(() => fixture.projects.get(remote.id)?.title).toBe('Renamed after transient failure');
@@ -2771,7 +2862,7 @@ test('same-project rename wins over an in-flight stale replay without creating a
 
   await expect.poll(() => fixture.projects.get(remote.id)?.document.name).toBe('Edited while rename completed');
   await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
-  await expect(page.getByRole('button', { name: 'Open latest' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Open latest', exact: true })).toHaveCount(0);
   expect(fixture.projects.get(remote.id)?.revision).toBe(3);
   expect(fixture.updateCount).toBe(4);
 });
@@ -2790,13 +2881,13 @@ test('same-project archive wins over an in-flight stale replay and saves the pen
   await expect(page.getByTestId('cloud-sync-status')).toHaveText('Waiting to save online');
   fixture.holdNextUpdate();
   await fixture.delayedUpdateStarted;
-  await page.getByTestId('cloud-project-row').getByRole('button', { name: 'Archive' }).click();
+  await page.getByTestId('cloud-project-row').getByRole('button', { name: 'Archive', exact: true }).click();
   await expect.poll(() => fixture.projects.get(remote.id)?.archived).toBe(true);
   fixture.releaseUpdate();
 
   await expect.poll(() => fixture.projects.get(remote.id)?.document.name).toBe('Pending through archive');
   await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
-  await expect(page.getByRole('button', { name: 'Open latest' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Open latest', exact: true })).toHaveCount(0);
   expect(fixture.projects.get(remote.id)?.archived).toBe(true);
   expect(fixture.projects.get(remote.id)?.revision).toBe(3);
   expect(fixture.updateCount).toBe(3);
@@ -2819,7 +2910,7 @@ test('same-project history restore wins over an in-flight stale replay so later 
   await expect(page.getByTestId('cloud-sync-status')).toHaveText('Waiting to save online');
   fixture.holdNextUpdate();
   await fixture.delayedUpdateStarted;
-  await row.getByRole('button', { name: 'History' }).click();
+  await row.getByRole('button', { name: 'History', exact: true }).click();
   await page.getByTestId('history-revision-1').getByRole('button', { name: 'Restore' }).click();
   await expect(page.getByLabel('Project name')).toHaveValue('Earlier restore state');
   fixture.releaseUpdate();
@@ -2827,7 +2918,7 @@ test('same-project history restore wins over an in-flight stale replay so later 
   await page.getByLabel('Project name').fill('Edited after restore');
   await expect.poll(() => fixture.projects.get(remote.id)?.document.name).toBe('Edited after restore');
   await expect(page.getByTestId('cloud-sync-status')).toHaveText('Saved online');
-  await expect(page.getByRole('button', { name: 'Open latest' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Open latest', exact: true })).toHaveCount(0);
   expect(fixture.projects.get(remote.id)?.revision).toBe(4);
   expect(fixture.updateCount).toBe(3);
 });
@@ -2914,7 +3005,7 @@ test('opens, renames, duplicates, archives, restores history, and unarchives pro
   const row = page.getByTestId('cloud-project-row').filter({ hasText: 'Current sculpture' });
   await row.getByRole('button', { name: 'Open' }).click();
   await expect(page.getByLabel('Project name')).toHaveValue('Current sculpture');
-  await row.getByRole('button', { name: 'Rename' }).click();
+  await row.getByRole('button', { name: 'Rename', exact: true }).click();
   await page.getByLabel('Rename project').fill('Temple sculpture');
   await page.getByRole('button', { name: 'Save name' }).click();
   await expect.poll(() => fixture.projects.get(seeded.id)?.title).toBe('Temple sculpture');
@@ -2926,13 +3017,13 @@ test('opens, renames, duplicates, archives, restores history, and unarchives pro
 
   await page.getByTestId('cloud-project-row').filter({ hasText: 'Temple sculpture' }).getByRole('button', { name: 'Duplicate' }).click();
   await expect(page.getByText('Temple sculpture Copy', { exact: true })).toBeVisible();
-  await page.getByTestId('cloud-project-row').filter({ hasText: 'Temple sculpture' }).first().getByRole('button', { name: 'History' }).click();
+  await page.getByTestId('cloud-project-row').filter({ hasText: 'Temple sculpture' }).first().getByRole('button', { name: 'History', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Project history' })).toBeVisible();
   await page.getByTestId('history-revision-1').getByRole('button', { name: 'Restore' }).click();
   await expect(page.getByRole('dialog', { name: 'Project history' })).toHaveCount(0);
   await expect(page.getByLabel('Project name')).toHaveValue('First draft');
 
-  await page.getByTestId('cloud-project-row').filter({ has: page.getByText('Temple sculpture', { exact: true }) }).getByRole('button', { name: 'Archive' }).click();
+  await page.getByTestId('cloud-project-row').filter({ has: page.getByText('Temple sculpture', { exact: true }) }).getByRole('button', { name: 'Archive', exact: true }).click();
   await page.getByRole('button', { name: 'Archived projects' }).click();
   await expect(page.getByTestId('cloud-project-row').getByText('Temple sculpture', { exact: true })).toBeVisible();
   await page.getByTestId('cloud-project-row').filter({ has: page.getByText('Temple sculpture', { exact: true }) }).getByRole('button', { name: 'Unarchive' }).click();
@@ -2951,7 +3042,7 @@ test('preserves both sides of a conflict with Open latest and Save as copy', asy
   fixture.forceNextConflict = true;
   await page.getByLabel('Project name').fill('My unsent version');
   await expect(page.getByTestId('cloud-sync-status')).toHaveText('Online conflict');
-  await page.getByRole('button', { name: 'Open latest' }).click();
+  await page.getByRole('button', { name: 'Open latest', exact: true }).click();
   await expect(page.getByLabel('Project name')).toHaveValue('Latest online version');
 
   fixture.forceNextConflict = true;
@@ -2978,6 +3069,7 @@ test('never offers worker delete and requires an owner to type an archived proje
   owner.seed('Owner archive', { archived: true });
   await owner.install(page);
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await openLibrary(page);
   await page.getByRole('button', { name: 'Archived projects' }).click();
   await page.getByRole('button', { name: 'Delete permanently' }).click();
   const dialog = page.getByRole('dialog', { name: 'Delete Owner archive permanently?' });
@@ -2998,7 +3090,7 @@ test('history and delete dialogs trap focus, close on Escape, isolate the backgr
   expect(await studioRoot.evaluate(element => ({ aria: element.getAttribute('aria-hidden'), inert: element.inert })))
     .toEqual({ aria: null, inert: false });
 
-  const historyTrigger = page.getByTestId('cloud-project-row').filter({ hasText: 'History focus' }).getByRole('button', { name: 'History' });
+  const historyTrigger = page.getByTestId('cloud-project-row').filter({ hasText: 'History focus' }).getByRole('button', { name: 'History', exact: true });
   await historyTrigger.focus();
   await historyTrigger.click();
   const historyDialog = page.getByRole('dialog', { name: 'Project history' });
@@ -3063,9 +3155,9 @@ test('claims browser projects and supports individual and master import/export',
   await fixture.install(page);
   await openLibrary(page);
 
-  await expect(page.getByText('Browser-only piece', { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId('cloud-project-row').getByText('Browser-only piece', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Bring browser projects online' }).click();
-  await expect(page.getByText('Browser-only piece', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('cloud-project-row').getByText('Browser-only piece', { exact: true })).toBeVisible();
   await expect(page.getByText('1 browser project brought online')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Bring browser projects online' })).toHaveCount(0);
 

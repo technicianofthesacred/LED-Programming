@@ -103,6 +103,41 @@ test('duplicates and deletes saved project records', () => {
   assert.deepEqual(listProjectLibraryRecords({ storage }).map(record => record.id), ['b']);
 });
 
+test('renameProjectLibraryRecordGuarded renames record and project under the save lock with readback', async () => {
+  const storage = memoryStorage();
+  const lockManager = controlledLockManager();
+  const first = createProjectLibraryRecord({ ...createDefaultProject(), name: 'Original' }, { id: 'a', now: 1000 });
+  saveProjectLibraryRecord(first, { storage });
+
+  const pending = projectStorageApi.renameProjectLibraryRecordGuarded('a', '  Renamed Piece  ', { storage, lockManager, now: 2000 });
+  assert.equal(lockManager.pending(), 1);
+  await lockManager.runNext();
+  const result = await pending;
+
+  assert.equal(result.ok, true);
+  const [record] = listProjectLibraryRecords({ storage });
+  assert.equal(record.name, 'Renamed Piece');
+  assert.equal(record.project.name, 'Renamed Piece');
+  assert.equal(record.project.id, first.project.id);
+  assert.equal(record.createdAt, 1000);
+  assert.equal(record.updatedAt, 2000);
+});
+
+test('renameProjectLibraryRecordGuarded refuses empty names and missing records', async () => {
+  const storage = memoryStorage();
+  const lockManager = controlledLockManager();
+
+  assert.deepEqual(
+    await projectStorageApi.renameProjectLibraryRecordGuarded('a', '   ', { storage, lockManager }),
+    { ok: false, reason: 'invalid-name' },
+  );
+  assert.equal(lockManager.pending(), 0);
+
+  const pending = projectStorageApi.renameProjectLibraryRecordGuarded('missing', 'New name', { storage, lockManager });
+  await lockManager.runNext();
+  assert.deepEqual(await pending, { ok: false, reason: 'record-missing' });
+});
+
 test('fails instead of reporting a save when browser storage is unavailable', () => {
   const record = createProjectLibraryRecord(createDefaultProject(), { id: 'a', now: 1000 });
 

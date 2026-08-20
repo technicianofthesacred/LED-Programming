@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createBridgeResultChannel, resumeBridgeReturnCode } from '../../lib/bridgeLaunch.js';
-import { STRIP_DISCOVERY_LABEL, STRIP_DISCOVERY_ROUTE } from '../../lib/cardAction.js';
 import {
   acquireCardBridgeFromGesture,
   adoptDiscoveredCardBridgeIdentity,
@@ -15,7 +14,10 @@ import {
   readStoredCardHost,
   writeStoredCardHost,
 } from '../../lib/cardConnection.js';
-import { nextCardConnectionAction } from '../../lib/cardConnectionFlow.js';
+import { deriveCardAction } from '../../lib/cardActionAuthority.js';
+import { openCardFlow } from '../../lib/cardFlowEntry.js';
+import { cardTaskCopy } from '../../lib/cardTaskCopy.js';
+import { connectPanelRouteOut } from '../../lib/connectPanelRouting.js';
 import { cardBuildLabel, readPersistedCardIdentity, setupNetworkLabelForCardId } from '../../lib/cardIdentity.js';
 import { adoptDiscoveredDirectCard, connectCardLink } from '../../lib/cardLink.js';
 import { connectCardTransport, getActiveCardTransportAuthority } from '../../lib/cardTransport.js';
@@ -43,40 +45,16 @@ function goToInstall() {
   window.location.hash = 'screen=flash&mode=install';
 }
 
-function goToLayout() {
-  window.location.hash = 'screen=layout';
-}
-
-function goToStripDiscovery() {
-  window.location.hash = STRIP_DISCOVERY_ROUTE;
-}
-
 const SETUP_HOST = '192.168.4.1';
 const NEUTRAL_FIRST_RUN_REASONS = new Set(['never-connected', 'card-unreachable']);
-const LIFECYCLE_OWNED_ACTIONS = new Set([
-  'recovering',
-  'updating',
-  'update-recovering',
-  'update-rolled-back',
-  'target-mismatch',
-  'project-changed',
-  'project-mismatch',
-  'attention-required',
-]);
-
-function lifecycleConnectionAction(lifecycle, flowAction) {
-  if (!lifecycle || lifecycle.state === 'ready') return flowAction;
-  if (lifecycle.state === 'wrong-card' && flowAction.id === 'wrong-card') return flowAction;
-  if (!LIFECYCLE_OWNED_ACTIONS.has(lifecycle.state) && flowAction.id !== 'ready-local-card') return flowAction;
-  return {
-    id: 'lifecycle-attention',
-    title: lifecycle.label,
-    explanation: 'Studio is using the exact card, firmware-update, and installed-project evidence shown in Setup. Finish that recovery step before card controls are available.',
-  };
-}
 
 export function CardConnectionCenter({
   open,
+  // Why the panel was opened, when a resolver asked for it (openCardFlow's
+  // connect-panel event detail). 'setup-network' pre-selects the working-card
+  // flow with setup-network evidence, so the owner lands directly on the
+  // "join the card's setup network" steps instead of the triage choices.
+  connectIntent = '',
   link,
   lifecycle = null,
   onClose,
@@ -109,6 +87,7 @@ export function CardConnectionCenter({
   const rememberedCard = readPersistedCardIdentity();
   const hasKnownCard = Boolean(link.card?.id || link.expectedCard?.id || rememberedCard?.id);
   const hasSetupHost = [host, link.host, setupEvidence.host].includes(SETUP_HOST);
+  const setupNetworkRequested = connectIntent === 'setup-network';
   // The card's real hotspot name is derivable from its card id (same eFuse MAC
   // as the firmware's apSsid()). Nothing here is guaranteed to know the card
   // yet — a blank or unreachable card has no id — so this falls back to a
@@ -117,25 +96,30 @@ export function CardConnectionCenter({
     link.card?.id || link.expectedCard?.id || link.discoveredCard?.id || rememberedCard?.id || '',
   );
   const flowEvidence = {
-    // Evidence only: a stored setup-host proves the setup network is in play.
-    // It carries no SSID because Studio has not observed one — the copy below
-    // derives the real name from card identity when it has it.
-    setupNetwork: hasSetupHost ? { available: true } : setupEvidence.setupNetwork,
+    // Evidence only: a stored setup-host proves the setup network is in play,
+    // and a setup-network connect intent means the derived setup journey
+    // already diagnosed configure-wifi from the card's own commissioning
+    // evidence. Neither carries an SSID because Studio has not observed one —
+    // the copy below derives the real name from card identity when it has it.
+    setupNetwork: hasSetupHost || setupNetworkRequested
+      ? { available: true }
+      : setupEvidence.setupNetwork,
     setupMode: setupEvidence.mode,
   };
-  const actionLink = intent === 'blank-card' && link.reason !== 'wrong-card'
-    ? { state: 'disconnected', reason: link.reason }
-    : link;
-  const flowIntent = intent || (hasKnownCard ? 'working-card' : '');
-  const flowAction = nextCardConnectionAction({
-    link: actionLink,
-    intent: flowIntent,
+  // The one action verdict: lifecycle diagnosis + transport routing +
+  // lifecycle-owned collapse all live in cardActionAuthority now.
+  const verdict = deriveCardAction({
+    lifecycle,
+    link,
     capabilities,
-    rememberedCard,
-    discoveredCard: link.discoveredCard,
-    ...flowEvidence,
+    intent,
+    evidence: {
+      rememberedCard,
+      discoveredCard: link.discoveredCard,
+      ...flowEvidence,
+    },
   });
-  const action = lifecycleConnectionAction(lifecycle, flowAction);
+  const action = { ...verdict, id: verdict.actionId };
   const showFirmwareUpdate = action.id === 'ready-local-card'
     && firmwareStatus?.state === 'update-available';
   const incompatibleFirmware = directAttempt?.reason === 'firmware-incompatible'
@@ -152,7 +136,10 @@ export function CardConnectionCenter({
     restoreFocusRef.current = document.activeElement;
     shouldRestoreFocusRef.current = false;
     setFailure('');
-    setIntent('');
+    // A setup-network open lands directly on the join steps: the working-card
+    // flow with setup evidence resolves to the setup-network route, which is
+    // exactly what pressing "It was working before" would have chosen.
+    setIntent(connectIntent === 'setup-network' ? 'working-card' : '');
     setBridgeLaunchState('idle');
     const activeAuthority = getActiveCardTransportAuthority();
     setDirectAttempt(activeAuthority);
@@ -177,7 +164,7 @@ export function CardConnectionCenter({
       document.removeEventListener('pointerdown', onPointerDown);
       if (shouldRestoreFocusRef.current) restoreFocusRef.current?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open, connectIntent, onClose]);
 
   useEffect(() => {
     if (!bridgeResult) return;
@@ -206,21 +193,20 @@ export function CardConnectionCenter({
     goToInstall();
   };
 
-  const openLayout = () => {
+  // The one exit for lifecycle-owned verdicts (connectPanelRouting.js): close
+  // this panel and continue on Card Home. 'setup-task' goes through the
+  // shell's onOpenSetup so the derived setup journey names the task; the
+  // recover destination is pinned, because the journey cannot re-derive it
+  // from a link the panel already failed to read.
+  const routeOut = connectPanelRouteOut(action.id);
+  const followRouteOut = () => {
     shouldRestoreFocusRef.current = false;
-    onClose();
-    goToLayout();
-  };
-
-  // A card with no project on it used to be sent to Layout, which is a dead end:
-  // Layout's install button needs a bench LED check, the check sends 'frame'
-  // messages, and the bridge refuses frames while the card reports
-  // playbackReady=false — which is exactly what a card with no project reports.
-  // Discovery is the only entrance that works from here.
-  const openStripDiscovery = () => {
-    shouldRestoreFocusRef.current = false;
-    onClose();
-    goToStripDiscovery();
+    if (routeOut?.destination === 'recover-operation') {
+      onClose();
+      openCardFlow('recover-operation');
+      return;
+    }
+    onOpenSetup();
   };
 
   const restartUsbCardForWifi = async () => {
@@ -288,12 +274,14 @@ export function CardConnectionCenter({
 
   const chooseWorkingCard = () => {
     setIntent('working-card');
-    const next = nextCardConnectionAction({
+    // Raw flow probe (lifecycle deliberately absent): the question here is
+    // only whether the setup network owns the next step, not the diagnosis.
+    const next = deriveCardAction({
+      lifecycle: null,
       link,
-      intent: 'working-card',
       capabilities,
-      rememberedCard,
-      ...flowEvidence,
+      intent: 'working-card',
+      evidence: { rememberedCard, ...flowEvidence },
     });
     if (next.route !== 'setup-network') connect();
   };
@@ -403,13 +391,16 @@ export function CardConnectionCenter({
     } finally { channel.close(); }
   };
 
-  const bridgeOperation = action.id === 'needs-safe-recovery' ? 'recover-current-release' : 'install-current-release';
+  // Safe recovery no longer launches Bridge from this panel (it routes out to
+  // Card Home's recover task), so the panel's own launches are always the
+  // install operation. Bridge recovery retries still ride BridgeResumePanel.
+  const bridgeOperation = 'install-current-release';
   const bridgeBusy = ['opening', 'waiting-for-bridge', 'return-pending'].includes(bridgeLaunchState);
   const effectiveActionId = action.id;
   const bridgeLifecycleState = bridgeLaunchState === 'idle' && action.id === 'install-native-bridge'
     ? 'installer-unavailable' : bridgeLaunchState;
   const showManualReturn = !capabilities.canWebSerialInstall
-    && ['launch-native-bridge', 'install-native-bridge', 'needs-card-update', 'needs-safe-recovery'].includes(action.id);
+    && ['launch-native-bridge', 'install-native-bridge', 'needs-card-update'].includes(action.id);
 
   const initialChoice = !intent
     && link.state === 'disconnected'
@@ -424,25 +415,16 @@ export function CardConnectionCenter({
   const showSetupSteps = setupSteps || setupRecovery;
 
   const renderPrimaryAction = () => {
+    // Lifecycle-owned verdicts have exactly one rendering: the route-out
+    // button. There is no case below that can offer a remedy for them.
+    if (routeOut) {
+      return <button type="button" className="btn primary" onClick={followRouteOut}>{routeOut.label}</button>;
+    }
     switch (action.id) {
       case 'ready-local-card':
         return <button type="button" className="btn primary" onClick={closeAndRestore}>Done</button>;
-      case 'lifecycle-attention':
-        return <button type="button" className="btn primary" onClick={onOpenSetup}>Continue in Setup</button>;
       case 'pair-local-card':
         return <button type="button" className="btn primary" onClick={useDiscoveredCard} disabled={pairingBusy}>{pairingBusy ? 'Connecting…' : 'Connect'}</button>;
-      case 'card-needs-project':
-        return (
-          <>
-            <button type="button" className="btn primary" data-testid="connection-find-strips" onClick={openStripDiscovery}>
-              {STRIP_DISCOVERY_LABEL}
-            </button>
-            {/* Kept as the secondary path for an owner who already knows the
-                strip counts and only wants to draw. It stays honest about the
-                order: nothing installs until the strips are known. */}
-            <button type="button" className="btn" onClick={openLayout}>Start layout</button>
-          </>
-        );
       case 'ready-browser-usb':
         return <button type="button" className="btn primary" onClick={openInstall}>Start installation</button>;
       case 'escape-insecure-card-frame':
@@ -492,10 +474,6 @@ export function CardConnectionCenter({
             )}
           </>
         );
-      case 'needs-safe-recovery':
-        return capabilities.canWebSerialInstall
-          ? <button type="button" className="btn primary" onClick={openInstall}>Start safe recovery</button>
-          : <button type="button" className="btn primary" onClick={() => launchBridge('recover-current-release')} disabled={bridgeBusy}>Open Lightweaver Bridge</button>;
       default:
         return null;
     }
@@ -590,12 +568,20 @@ export function CardConnectionCenter({
                 <dt>Current</dt>
                 <dd className="card-fact-value-with-action">
                   <span className="card-firmware-version">{firmwareRelease?.firmwareVersion ? `v${firmwareRelease.firmwareVersion}` : 'Version unknown'}{cardBuildLabel(firmwareRelease) ? ` · ${cardBuildLabel(firmwareRelease)}` : ''}</span>
-                  {showDirectFirmwareUpdate && (
-                    <button type="button" className="btn card-inline-firmware-update" onClick={onOpenFirmwareUpdate || openInstall}>Update firmware</button>
-                  )}
                 </dd>
               </div>
             </dl>
+          )}
+          {showDirectFirmwareUpdate && (
+            <div className="card-firmware-update" role="note">
+              {/* Same route-out as the bridge-connected case above: one line,
+                  one button to Card Home's install section — never an inline
+                  update remedy inside the identity facts. */}
+              <p>{cardTaskCopy('update-firmware')}</p>
+              <div className="card-connection-actions">
+                <button type="button" className="btn primary" onClick={onOpenFirmwareUpdate || openInstall}>Update firmware</button>
+              </div>
+            </div>
           )}
           {directAttempt?.reason === 'wrong-card' && (
             <p role="alert">Expected {directAttempt.expectedCardId || 'the paired card'}; found {directAttempt.observedCardId || 'a different card'}. No card changes are available.</p>
@@ -632,15 +618,12 @@ export function CardConnectionCenter({
       ) : (
         <div className="card-connection-action" data-action-id={effectiveActionId} aria-live="polite" aria-busy={(action.busy || bridgeBusy) || undefined}>
           <h3>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Waiting for Lightweaver Bridge' : bridgeLifecycleState === 'return-pending' ? 'Return pending' : bridgeLifecycleState === 'installer-unavailable' ? 'Signed Bridge installer unavailable' : setupRecovery ? 'Join the Lightweaver setup network' : action.title}</h3>
-          <p>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Studio sent the launch request but cannot confirm whether Bridge opened. Keep this tab available for the result, or paste the return code below.' : bridgeLifecycleState === 'return-pending' ? 'Studio is validating the one-time return. Bridge will clear its saved result only after this tab accepts it.' : setupRecovery ? `If the card is pulsing amber, join ${setupNetworkLabel}, then continue.` : action.explanation}</p>
+          <p>{bridgeLifecycleState === 'opening' || bridgeLifecycleState === 'waiting-for-bridge' ? 'Studio sent the launch request but cannot confirm whether Bridge opened. Keep this tab available for the result, or paste the return code below.' : bridgeLifecycleState === 'return-pending' ? 'Studio is validating the one-time return. Bridge will clear its saved result only after this tab accepts it.' : setupRecovery ? `If the card is pulsing amber, join ${setupNetworkLabel}, then continue.` : (routeOut?.line || action.explanation)}</p>
           {action.id === 'escape-insecure-card-frame' && (
             <p>Your browser only allows USB install from a separate secure top-level tab, so the installer opens in the Lightweaver Studio tab.</p>
           )}
           {(effectiveActionId === 'install-native-bridge') && (
             <p>A verified signed installer is not yet available. No unsigned download is offered. Use secure browser USB or continue on a supported computer.</p>
-          )}
-          {action.id === 'needs-safe-recovery' && !capabilities.canWebSerialInstall && (
-            <p>Keep the card powered while Bridge performs safe recovery.</p>
           )}
           {action.id === 'needs-card-update' && !capabilities.canWebSerialInstall && (
             <p>Keep the card powered while Bridge installs the current release.</p>
@@ -673,11 +656,12 @@ export function CardConnectionCenter({
 
           {showFirmwareUpdate && (
             <div className="card-firmware-update" role="note">
-              <strong>Your card firmware is out of date.</strong>
-              <p>Installed build {firmwareStatus.installedBuildNumber}; latest build {firmwareStatus.releaseBuildNumber}.</p>
+              {/* The update itself is Card Home's remedy (section=install);
+                  this panel only names it and routes there — no build
+                  comparison, no deferral offer (closing the panel defers). */}
+              <p>{cardTaskCopy('update-firmware')}</p>
               <div className="card-connection-actions">
                 <button type="button" className="btn primary" onClick={onOpenFirmwareUpdate}>Update firmware</button>
-                <button type="button" className="btn" onClick={onClose}>Not now</button>
               </div>
             </div>
           )}
@@ -725,8 +709,8 @@ export function CardConnectionCenter({
             <button type="submit" className="btn">Save</button>
           </div>
         </form>
-        <p>The card-page bridge is retained temporarily as a rollout fallback.</p>
-        <button type="button" className="btn" onClick={() => connect(host, { bridge: true })}>Use legacy card-page bridge</button>
+        <p>Connecting through the card&rsquo;s own page is retained temporarily as a rollout fallback.</p>
+        <button type="button" className="btn" onClick={() => connect(host, { bridge: true })}>Connect through the card&rsquo;s own page (fallback)</button>
       </details>
     </section>
   );
