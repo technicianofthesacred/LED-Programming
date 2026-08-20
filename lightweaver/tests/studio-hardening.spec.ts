@@ -498,7 +498,7 @@ test('reduced motion disables status and preview animation names', async ({ page
 });
 
 test('installer signoff persists and exposes a ready state', async ({ page }) => {
-  await page.locator('.rail-item', { hasText: 'Hardware' }).click();
+  await page.locator('.rail-item', { hasText: 'Setup' }).click();
   await page.getByRole('button', { name: 'Advanced & Support' }).click();
   await page.getByRole('button', { name: 'GPIO & install guide' }).click();
   const checks = page.locator('.inst-signoff input[type="checkbox"]');
@@ -575,7 +575,7 @@ test('Settings controls expose stable accessible names', async ({ page }) => {
   await expect(page.getByRole('button', { name: /Remove palette color 1/i })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Add palette color' })).toBeVisible();
   // The designer config JSON now lives in Hardware > Advanced & Support > Designer JSON.
-  await page.locator('.rail-item', { hasText: 'Hardware' }).click();
+  await page.locator('.rail-item', { hasText: 'Setup' }).click();
   await page.getByRole('button', { name: 'Advanced & Support' }).click();
   await page.getByRole('button', { name: 'Designer JSON' }).click();
   await page.getByRole('button', { name: 'Show JSON' }).click();
@@ -731,7 +731,7 @@ test('replacement dialog traps keyboard focus and restores its trigger', async (
 });
 
 test('flash erase requires a final confirmation before starting', async ({ page }) => {
-  await page.locator('.rail-item', { hasText: 'Hardware' }).click();
+  await page.locator('.rail-item', { hasText: 'Setup' }).click();
   await page.getByRole('button', { name: 'Advanced & Support' }).click();
   await page.getByRole('button', { name: 'Technician firmware & logs' }).click();
   await page.getByRole('checkbox', { name: /Wipes the chip first/i }).check();
