@@ -57,29 +57,63 @@ async function openStudio(page, card = null, { marker = currentStudioMarker(), r
   if (releaseUnknown) {
     await page.route('**/firmware/release-manifest.sig', route => route.fulfill({ status: 200, body: 'invalid' }));
   }
+  // Filled in once the Studio has an autosaved project: a real card names the
+  // project it holds, and the footer only shows the card's name when Studio and
+  // card agree about it. Without this the fixture models a healthy card holding
+  // an unnamed project, which no firmware reports, and the footer correctly
+  // renders that contradiction as "Needs attention".
+  let projectEvidence: Record<string, unknown> = {};
+  const cardStatus = () => ({
+    app: 'Lightweaver',
+    provisioningContractVersion: 1,
+    cardId: 'lw-aabbccddeeff',
+    cardName: 'Gallery card',
+    firmwareVersion: '1.0.0',
+    buildNumber: card.buildNumber,
+    buildId: card.buildId,
+    bootId: 'footer-test-boot',
+    runtimePhase: 'ready',
+    knownGoodProject: true,
+    commandReady: true,
+    playbackReady: true,
+    outputReady: true,
+    ...projectEvidence,
+  });
   const cardRoute = route => card
-    ? route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          app: 'Lightweaver',
-          provisioningContractVersion: 1,
-          cardId: 'lw-aabbccddeeff',
-          cardName: 'Gallery card',
-          firmwareVersion: '1.0.0',
-          buildNumber: card.buildNumber,
-          buildId: card.buildId,
-          bootId: 'footer-test-boot',
-          runtimePhase: 'ready',
-          knownGoodProject: true,
-          commandReady: true,
-          outputReady: true,
-        }),
-      })
+    ? route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(cardStatus()) })
     : route.abort();
   await page.route('http://lightweaver.local/**', cardRoute);
   await page.route('http://192.168.4.1/**', cardRoute);
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  if (!card) return;
+
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_autosave_v3'))).not.toBeNull();
+  projectEvidence = await page.evaluate(async () => {
+    const { cardProjectFingerprint } = await import('/src/lib/cardProjectResolver.js');
+    const project = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    return { projectId: project.id, projectRevision: 0, projectFingerprint: cardProjectFingerprint(project) };
+  });
+  await page.evaluate(async readiness => {
+    const { getSharedCardLink } = await import('/src/lib/cardLink.js');
+    const link = getSharedCardLink();
+    const event = {
+      type: 'card-verified',
+      via: 'direct',
+      host: 'lightweaver.local',
+      card: {
+        id: readiness.cardId,
+        name: readiness.cardName,
+        firmwareVersion: readiness.firmwareVersion,
+        buildId: readiness.buildId,
+        buildNumber: readiness.buildNumber,
+      },
+      readiness,
+    };
+    // Two matching envelopes: the link requires a stable revalidation before it
+    // treats a card as trusted.
+    link.dispatch(event);
+    link.dispatch(event);
+  }, cardStatus());
 }
 
 test('footer reduces telemetry to card, firmware, Studio and Test strip controls', async ({ page }) => {
@@ -124,7 +158,12 @@ test('desktop footer is one row in Card, Firmware, Studio, Test strip order', as
       footerRight: node.getBoundingClientRect().right,
     };
   });
-  expect(layout.order).toEqual(['card', 'footer-firmware-status', 'studio-freshness', 'test-strip-control']);
+  // Relative order of the four controls this test is about. The footer also
+  // carries the offline-update control, which renders only in some states, so
+  // an exact-equality assertion here fails on an unrelated footer addition
+  // rather than on the ordering it is meant to protect.
+  const subjects = ['card', 'footer-firmware-status', 'studio-freshness', 'test-strip-control'];
+  expect(layout.order.filter(id => subjects.includes(id))).toEqual(subjects);
   expect(new Set(layout.centers).size).toBe(1);
   expect(layout.lefts).toEqual([...layout.lefts].sort((a, b) => a - b));
   expect(layout.cardWidth).toBeLessThan(300);
