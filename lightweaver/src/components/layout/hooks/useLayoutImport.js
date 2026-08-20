@@ -4,11 +4,10 @@ import {
   measureLayers,
 } from '../../../lib/layoutGeometry.js';
 import { normalizePatchBoard } from '../../../lib/patchBoard.js';
-import { download } from '../../../lib/export.js';
-import { canonicalProjectFileName, PROJECT_IMPORT_ACCEPT } from '../../../lib/projectFiles.js';
-import { importProjectFromFile } from '../../../lib/projectImportFile.js';
-import { writeActiveProjectLibraryRecordId } from '../../../lib/projectStorage.js';
+import { PROJECT_IMPORT_ACCEPT } from '../../../lib/projectFiles.js';
+import { exportProjectToFile, importProjectFromPickedFile } from '../../../lib/projectTransfer.js';
 import { useProject } from '../../../state/ProjectContext.jsx';
+import { useCardActions } from '../../../v3/CardActionsProvider.jsx';
 
 // SVG import (button + drag-drop), project save/load, and import error state.
 // `ctx` is the shared layout bundle; view-state resets flow in via `deps`.
@@ -33,6 +32,10 @@ export function useLayoutImport(ctx, deps) {
   // bundle): exports carry the canonical project file name and count as a
   // "file" persistence destination, exactly like the top-bar download.
   const { projectName, markProjectPersisted } = useProject();
+  // Imports run through the shell's CardActionsProvider so the association
+  // cleanup (browser record, cloud detach, save-block reset) is the app's
+  // canonical sequence — identical to the top bar's.
+  const cardActions = useCardActions();
 
   const { resetView, setDrawMode, setWaypoints } = deps;
 
@@ -109,28 +112,33 @@ export function useLayoutImport(ctx, deps) {
   };
 
   // ── Save / Load project ────────────────────────────────────────────────────
-  const saveProject = () => {
-    const data = {
-      ...serializeProject(),
-      layout: {
-        ...serializeProject().layout,
-        strips,
-        layers,
-        svgText,
-        viewBox,
-        density,
-        pxPerMm,
-        editCounts,
-        hidden,
-        layerGroups,
-        layerOrder,
-      },
-    };
-    // Canonical download() (src/lib/export.js): (content, filename, mimeType).
-    // The file carries the canonical `<project-name>.lw.json` name and counts
-    // as a "file" save in the project lifecycle.
-    download(JSON.stringify(data, null, 2), canonicalProjectFileName(projectName), 'application/json');
-    markProjectPersisted('file');
+  const saveProject = async () => {
+    // THE project export (lib/projectTransfer.js): canonical
+    // `<project-name>.lw.json` name, shared download mechanics, "file"
+    // persistence in the lifecycle. Layout's payload folds the live geometry
+    // state over the serialized project — that re-spread is this screen's
+    // own and stays exactly as it was.
+    await exportProjectToFile({
+      serializeProject,
+      projectName,
+      markPersisted: markProjectPersisted,
+      buildPayload: () => ({
+        ...serializeProject(),
+        layout: {
+          ...serializeProject().layout,
+          strips,
+          layers,
+          svgText,
+          viewBox,
+          density,
+          pxPerMm,
+          editCounts,
+          hidden,
+          layerGroups,
+          layerOrder,
+        },
+      }),
+    });
   };
 
   const handleLoad = async (e) => {
@@ -138,11 +146,12 @@ export function useLayoutImport(ctx, deps) {
     if (!file) return;
     e.target.value = '';
     try {
-      const result = await importProjectFromFile(file, replaceProject);
-      // Loading a file detaches the workspace from any browser-library record
-      // ONLY (mirrors nothing else — this site's narrower cleanup is
-      // deliberate until the cleanup unification phase).
-      if (result.ok) writeActiveProjectLibraryRecordId('');
+      // THE project import; a bare render without the provider (test
+      // harnesses) still imports, just without the app-level association
+      // handles.
+      const result = cardActions?.importProjectFile
+        ? await cardActions.importProjectFile(file, replaceProject)
+        : await importProjectFromPickedFile(file, { replaceProject });
       if (result.reason === 'invalid') alert('Unrecognised file format.');
     } catch (err) {
       alert('Could not load file: ' + err.message);

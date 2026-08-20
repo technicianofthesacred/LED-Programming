@@ -12,7 +12,8 @@ import { deriveCardLifecycle } from '../lib/cardLifecycle.js';
 import { useProject } from '../state/ProjectContext.jsx';
 import { currentInstallation, structurallyInstalledRecord } from '../lib/projectLifecycle.js';
 import { guardedResolutionRun, resolvedMatchKey } from '../lib/cardProjectAdoption.js';
-import { importProjectFromFile } from '../lib/projectImportFile.js';
+import { importProjectFromPickedFile } from '../lib/projectTransfer.js';
+import { PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
 import { useCardActions } from './CardActionsProvider.jsx';
 
 // The reconstruction itself moved to lib/cardProjectAdoption.js (the
@@ -451,9 +452,15 @@ export function SetupScreen({
     const file = event.target.files?.[0];
     if (!file) return;
     setAdoptionError('');
-    // Shared file mechanics only; this screen deliberately clears no
-    // library/cloud associations (cleanup unification is a later phase).
-    importProjectFromFile(file, data => replaceProject?.(data))
+    // THE project-file import (lib/projectTransfer.js), through the shell's
+    // CardActionsProvider so the association cleanup (browser record, cloud
+    // detach, save-block reset) is the app's canonical sequence — identical
+    // to the top bar's. A bare render without the provider (test harnesses)
+    // still imports, just without the app-level association handles.
+    const importFile = cardActions?.importProjectFile
+      ? file => cardActions.importProjectFile(file, data => replaceProject?.(data))
+      : file => importProjectFromPickedFile(file, { replaceProject: data => replaceProject?.(data) });
+    importFile(file)
       .then(replacement => {
         if (!replacement?.ok) reportAdoptionFailure(replacement?.reason);
       })
@@ -683,7 +690,7 @@ export function SetupScreen({
         </ol>
       </section>
 
-      <input ref={importRef} className="lw-setup-import" type="file" accept="application/json" hidden data-testid="setup-import-input" onChange={onImportFile} />
+      <input ref={importRef} className="lw-setup-import" type="file" accept={PROJECT_IMPORT_ACCEPT} hidden data-testid="setup-import-input" onChange={onImportFile} />
     </>
   );
 }

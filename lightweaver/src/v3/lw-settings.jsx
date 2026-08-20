@@ -37,12 +37,11 @@ import {
 import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard, readCardProjectEvidence, readCardStatusEnvelope } from '../lib/cardPushClient.js';
 import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
 import { pushLiveHardwareToCard } from '../lib/cardLiveControl.js';
-import { downloadJsonFile } from '../lib/downloadFile.js';
 import { STAGED_WIRING_CONFLICT_MESSAGE } from '../lib/cardInstallGate.js';
-import { importProjectFromFile } from '../lib/projectImportFile.js';
-import { writeActiveProjectLibraryRecordId } from '../lib/projectStorage.js';
+import { exportProjectToFile } from '../lib/projectTransfer.js';
+import { useCardActions } from './CardActionsProvider.jsx';
 import { cardActionReducer, createCardActionState } from '../lib/cardAction.js';
-import { canonicalProjectFileName, PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
+import { PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
 import { openLocalCardPage } from '../lib/cardBridge.js';
 import { getActiveCardTransportAuthority } from '../lib/cardTransport.js';
 import { saveProjectToCardFromGesture } from '../lib/cardProjectSave.js';
@@ -180,6 +179,7 @@ const SettingsFieldContext = createContext(null);
       projectRepositorySource,
     } = useProject();
     const cloudLibrary = useCloudLibrary();
+    const cardActions = useCardActions();
     const { tweaks, set: setTweak } = useTweaks();
     useEffect(() => {
       document.documentElement.dataset.theme = tweaks.theme === 'daylight' ? 'daylight' : 'studio';
@@ -393,10 +393,16 @@ const SettingsFieldContext = createContext(null);
     };
 
     // ── Portable project files (online library is mounted below) ───────
+    // Export and import both go through lib/projectTransfer.js — the import
+    // via the shell's CardActionsProvider so the association cleanup (browser
+    // record, cloud detach, save-block reset) is the app's canonical sequence,
+    // identical to the top bar's. This screen only owns the status UI.
     const saveProjectFile = async () => {
-      const data = serializeProject();
-      const ok = await downloadJsonFile(canonicalProjectFileName(projectName), data);
-      if (ok) markProjectPersisted('file');
+      const ok = await exportProjectToFile({
+        serializeProject,
+        projectName,
+        markPersisted: markProjectPersisted,
+      });
       setStatusKind(ok ? 'ok' : 'err');
       setStatus(ok ? 'Project file download started.' : 'Could not start the project file download.');
     };
@@ -404,9 +410,7 @@ const SettingsFieldContext = createContext(null);
     const importProjectFile = (event) => {
       const file = event.target.files?.[0];
       if (!file) return;
-      // Shared file mechanics; this screen's cleanup (browser + cloud
-      // detach, no save-block reset) is deliberate and stays byte-for-byte.
-      importProjectFromFile(file, replaceProject)
+      cardActions.importProjectFile(file, replaceProject)
         .then(result => {
           if (result.reason === 'invalid') {
             setStatusKind('err');
@@ -414,8 +418,6 @@ const SettingsFieldContext = createContext(null);
             return;
           }
           if (!result.ok) return;
-          writeActiveProjectLibraryRecordId('');
-          cloudLibrary.detachProject();
           setStatusKind('ok');
           setStatus('Project opened in Studio.');
         })

@@ -30,7 +30,7 @@ import {
   reportDirectCardStatus,
   subscribeCardLink,
 } from '../lib/cardLink.js';
-import { downloadJsonFile } from '../lib/downloadFile.js';
+import { exportProjectToFile, importProjectFromPickedFile } from '../lib/projectTransfer.js';
 import {
   associateProjectLibraryRecordGuarded,
   clearProjectLibraryAssociationGuarded,
@@ -43,7 +43,6 @@ import {
   writeActiveProjectLibraryRecordId,
 } from '../lib/projectStorage.js';
 import { runProjectSwitchSaveBarrier } from '../lib/projectSwitchSaveBarrier.js';
-import { importProjectFromFile } from '../lib/projectImportFile.js';
 import { CardActionsProvider } from './CardActionsProvider.jsx';
 import { formatBrowserProjectSaveLabel } from '../lib/studioActionStatus.js';
 import {
@@ -71,7 +70,7 @@ import {
   normalizeStudioView,
   studioViewFromHash,
 } from '../lib/studioRoute.js';
-import { canonicalProjectFileName, PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
+import { PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
 import { clearScreenFailure, rememberScreenFailure } from '../lib/screenRecoveryDiagnostics.js';
 import { createStudioFreshnessMonitor } from '../lib/studioFreshness.js';
 import { STUDIO_HARDWARE_OPERATION_EVENT } from '../lib/studioHardwareOperation.js';
@@ -315,7 +314,27 @@ const I = {
 };
 
 /* ---------- Top bar (wired to real project state via props) ---------- */
-function TopBar({ projectName, onNew, onLoad, onDownload, onSave, onPreferences }) {
+function TopBar({ projectName, lifecycleLabel, hasUnsavedChanges, onRenameProject, onNew, onLoad, onDownload, onSave, onPreferences }) {
+  // In-place project rename: click the breadcrumb name → input; Enter/blur
+  // commit through the SAME state path as the Preferences editor
+  // (setProjectName); Escape cancels. The blur that follows an Enter/Escape
+  // must not double-commit, so key handling marks the edit settled first.
+  const [nameDraft, setNameDraft] = useState(null);
+  const nameSettledRef = useRef(false);
+  const startRename = () => { nameSettledRef.current = false; setNameDraft(projectName); };
+  const commitRename = () => {
+    if (nameSettledRef.current) return;
+    nameSettledRef.current = true;
+    // Close the editor before renaming so a throwing rename handler can
+    // never strand the breadcrumb in a stuck edit state.
+    const next = (nameDraft || '').trim();
+    setNameDraft(null);
+    if (next && next !== projectName) onRenameProject?.(next);
+  };
+  const cancelRename = () => {
+    nameSettledRef.current = true;
+    setNameDraft(null);
+  };
   const action = ({ label, title, icon, primary = false, tooltipAlign, onClick }) => (
     <button
       type="button"
@@ -334,7 +353,37 @@ function TopBar({ projectName, onNew, onLoad, onDownload, onSave, onPreferences 
     <header className="topbar">
       <div className="brand" role="img" aria-label="Lightweaver"><span className="glyph" /><span className="name">Lightweaver</span></div>
       <nav className="crumb">
-        <span>Projects</span><span className="sep">/</span><span className="proj">{projectName}</span>
+        <span>Projects</span><span className="sep">/</span>
+        {nameDraft !== null ? (
+          <input
+            className="proj proj-edit"
+            data-testid="project-name-input"
+            aria-label="Project name"
+            value={nameDraft}
+            autoFocus
+            onFocus={e => e.target.select()}
+            onChange={e => setNameDraft(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { e.preventDefault(); commitRename(); }
+              else if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+            }}
+          />
+        ) : (
+          <button
+            type="button"
+            className="proj proj-name"
+            data-testid="project-name-edit"
+            title="Rename project"
+            onClick={startRename}
+          >{projectName}</button>
+        )}
+        {hasUnsavedChanges && (
+          <span className="proj-dirty" data-testid="project-dirty-dot" role="img" aria-label="Unsaved changes" title="Unsaved changes" />
+        )}
+        {lifecycleLabel && (
+          <span className="proj-status" data-testid="project-lifecycle-label">{lifecycleLabel}</span>
+        )}
       </nav>
       <div className="top-right">
         {action({ label: 'New project', title: 'Start a new empty project', icon: I.newProject, onClick: onNew })}
@@ -556,7 +605,7 @@ function Shell({ offlineUpdateController = null }) {
     routeStore.replace(canonicalStudioHash(routeStore.read(), target));
   }, [routeStore]);
   const {
-    projectName, serializeProject, flushProjectAutosave, replaceProject, replaceWithNewProject, requestReplacementConfirmation,
+    projectName, setProjectName, serializeProject, flushProjectAutosave, replaceProject, replaceWithNewProject, requestReplacementConfirmation,
     projectLifecycle, projectLifecycleLabel, markProjectPersisted, markProjectEdited, markProjectInstalled, isProjectLifecycleMarkerCurrent,
     projectHasUnsavedChanges, reverifyProjectInstallation,
   } = useProject();
@@ -1215,12 +1264,12 @@ function Shell({ offlineUpdateController = null }) {
     });
   }, [markProjectPersisted, projectLifecycle.editedRevision, projectLifecycle.generation, saveProjectToBrowserGuarded, serializeProject]);
   const onDownload = useCallback(async () => {
-    const ok = await downloadJsonFile(
-      canonicalProjectFileName(projectName),
-      serializeProject(),
-    );
-    if (ok) markProjectPersisted('file');
-    else showWorkspaceEvent('Download failed', { kind: 'error', persistent: true, review: true });
+    const ok = await exportProjectToFile({
+      serializeProject,
+      projectName,
+      markPersisted: markProjectPersisted,
+    });
+    if (!ok) showWorkspaceEvent('Download failed', { kind: 'error', persistent: true, review: true });
   }, [markProjectPersisted, projectName, serializeProject, showWorkspaceEvent]);
   const onLoad = useCallback(() => setLoadDialogOpen(true), []);
   const onMatchedCardProjectLoaded = useCallback(async ({ source, recordId, recordSnapshot, expectedMarker }) => {
@@ -1342,26 +1391,30 @@ function Shell({ offlineUpdateController = null }) {
     if (result?.ok) navigateStudio('layout');
     return result;
   }, [navigateStudio, onNew]);
+  // THE association cleanup a project-file import performs after a committed
+  // replacement — lib/projectTransfer.js owns the order; these are the app's
+  // handles on the three association stores. Shared with every import surface
+  // through the CardActionsProvider (importProjectFile), so Setup, Layout, and
+  // Preferences imports run exactly this sequence too.
+  const projectImportCleanup = useMemo(() => ({
+    clearBrowserAssociation: () => {
+      browserAssociationRef.current = null;
+      writeActiveProjectLibraryRecordId('');
+    },
+    detachCloudProject: () => cloudLibrary.detachProject(),
+    clearSaveBlock: () => setProjectAssociationSaveBlocked(false),
+  }), [cloudLibrary, setProjectAssociationSaveBlocked]);
   const onFile = useCallback((e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    // Shared file mechanics (lib/projectImportFile.js); the top-bar import's
-    // FULL cleanup — browser association, cloud detach, save-block reset —
-    // is this site's own policy and stays here byte-for-byte.
-    importProjectFromFile(file, replaceProject)
+    importProjectFromPickedFile(file, { replaceProject, ...projectImportCleanup })
       .then(result => {
-        if (result.ok) {
-          browserAssociationRef.current = null;
-          writeActiveProjectLibraryRecordId('');
-          cloudLibrary.detachProject();
-          setProjectAssociationSaveBlocked(false);
-          setLoadDialogOpen(false);
-        }
+        if (result.ok) setLoadDialogOpen(false);
         if (result.reason === 'invalid') alert('Invalid project file (version mismatch).');
       })
       .catch(() => { alert('Could not parse project file.'); });
     e.target.value = '';
-  }, [cloudLibrary, replaceProject]);
+  }, [projectImportCleanup, replaceProject]);
 
   const cardSetupOpen = view === 'discovery';
   const underlyingView = cardSetupOpen
@@ -1420,6 +1473,7 @@ function Shell({ offlineUpdateController = null }) {
         readBrowserProjects: listProjectLibraryRecords,
         readCloudProject: cloudLibrary.readCardProjectCandidate,
         replaceProject,
+        projectImportCleanup,
         saveBeforeCardProjectSwitch,
         isProjectSwitchSnapshotCurrent,
         openMatchingCardProject: cloudLibrary.openMatchingCardProject,
@@ -1431,6 +1485,9 @@ function Shell({ offlineUpdateController = null }) {
     <div className="app">
       <TopBar
         projectName={projectName || 'Untitled'}
+        lifecycleLabel={projectLifecycleLabel}
+        hasUnsavedChanges={projectHasUnsavedChanges}
+        onRenameProject={setProjectName}
         onNew={onNew} onLoad={onLoad} onDownload={onDownload} onSave={onSave}
         onPreferences={() => openCardSection('preferences')}
       />

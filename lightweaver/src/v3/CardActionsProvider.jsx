@@ -6,8 +6,12 @@
 //                       verification handlers. Screens supply only their UI
 //                       seams (report/openPatterns/flight refs) per call.
 //   recoverLights     — lib/cardRecoverLights.recoverCardLightsVerified.
-//   importProjectFile — lib/projectImportFile mechanics with the app's
-//                       replaceProject; callers keep their own cleanup.
+//   importProjectFile — THE project-file import (lib/projectTransfer.js) with
+//                       the app's replaceProject and the app's canonical
+//                       association cleanup (browser record + in-memory
+//                       snapshot, cloud detach, save-block reset). Every
+//                       screen-level import goes through this so all four
+//                       surfaces share one cleanup behavior.
 //   openCard          — the footer's openCardControl routing (Connected →
 //                       control drawer; needs attention → exact Setup task;
 //                       otherwise → Connection Center).
@@ -30,7 +34,7 @@ import { readCardProjectEvidence, readCardStatusEnvelope } from '../lib/cardPush
 import { loadProductionJobFromIndexEntry, loadProductionJobIndex } from '../lib/productionJobPackage.js';
 import { readCardPatternsFromCard, readCardZonesFromCard } from '../lib/cardLiveControl.js';
 import { recoverCardLightsVerified } from '../lib/cardRecoverLights.js';
-import { importProjectFromFile } from '../lib/projectImportFile.js';
+import { importProjectFromPickedFile } from '../lib/projectTransfer.js';
 import { getCardLinkState, isCardLinkConnected } from '../lib/cardLink.js';
 import { clearAbandonedCardEditIntent, readCardEditIntent } from '../lib/cardEditIntent.js';
 import {
@@ -128,7 +132,10 @@ export function CardActionsProvider({ deps, children }) {
   );
 
   const importProjectFile = useCallback(
-    (file, replaceProject = null) => importProjectFromFile(file, replaceProject || depsRef.current.replaceProject),
+    (file, replaceProject = null) => importProjectFromPickedFile(file, {
+      replaceProject: replaceProject || depsRef.current.replaceProject,
+      ...depsRef.current.projectImportCleanup,
+    }),
     [],
   );
 
