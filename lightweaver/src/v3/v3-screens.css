@@ -702,8 +702,6 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 .pm-color-order-pop .lwb-swatch { width: 48px; height: 48px; margin: 8px auto 10px; }
 .pm-color-order-pop .lwb-quiz-hint { margin-bottom: 8px; }
 .pm-color-order-pop .lwb-detail[role="note"] { text-align: center; }
-.pm-color-order-pop .lwb-quick-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
-.pm-color-order-pop .lwb-quick-actions .btn { min-height: 42px; justify-content: center; }
 
 @media (max-width: 640px) {
   .pm-color-order-pop {
