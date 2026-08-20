@@ -282,6 +282,25 @@ test('required CI lanes run every preserving updater unit, browser, firmware, an
   assert.doesNotMatch(browserJob, /test:firmware-update:firmware/);
 });
 
+// The two release-side gates that make a card release on-demand rather than a
+// tax on every visual change. If either drifts back, a colour tweak once again
+// mints a signed release and holds the site behind twenty minutes of signing.
+test('a Studio-only revision skips the signer and deploys without waiting for one', async () => {
+  const signerWorkflow = await readFile(resolve(repoRoot, '.github/workflows/build-firmware.yml'), 'utf8');
+  const deployWorkflow = await readFile(resolve(repoRoot, '.github/workflows/deploy-site.yml'), 'utf8');
+  assert.match(
+    signerWorkflow,
+    /if: needs\.classify\.outputs\.firmware == 'true' && needs\.classify\.outputs\.firmware_bundle_only != 'true'/,
+  );
+  assert.match(signerWorkflow, /firmware_bundle_only: \$\{\{ steps\.changes\.outputs\.firmware_bundle_only \}\}/);
+  const resolveStep = deployWorkflow.slice(deployWorkflow.indexOf('- name: Authorize direct deployment or defer to signer'));
+  const bundleGate = resolveStep.indexOf('[ "$FIRMWARE_BUNDLE_ONLY" = "true" ]');
+  const signerGate = resolveStep.indexOf('[ "$SIGNED_RELEASE_COMMIT" != "true" ]');
+  // Order matters: the bundle-only branch must be reached before the branch
+  // that would park the deploy waiting for a signer that never runs.
+  assert.ok(bundleGate >= 0 && signerGate >= 0 && bundleGate < signerGate);
+});
+
 test('live firmware graph verification shares the bounded production convergence retry', async () => {
   const deployWorkflow = await readFile(resolve(repoRoot, '.github/workflows/deploy-site.yml'), 'utf8');
   const step = deployWorkflow.slice(

@@ -85,17 +85,29 @@ Two paths, chosen by one question: **is the card on a USB cable?**
 Iterating never needs the release path. A bench card can live on dev builds
 indefinitely and jump to a signed release any time (USB flash or Wi-Fi update).
 
-**"Ship it" defaults to quick.** CI proves whether a merge actually changes the
-card-embedded Studio bundle (`scripts/ci-card-bundle-check.mjs`, byte-level
-against the last signed release). Studio-only merges whose bundle is unchanged
-skip the firmware signer entirely — no VERSION bump, site live in ~10 minutes.
-Merges that DO change firmware or the embedded bundle take the full signed
-path automatically (~30 min, VERSION bump required); call that one
-**"finalize firmware"** when asking for it explicitly. The proof is
-fail-closed: when it cannot prove "unchanged", the signer runs, exactly as
-before. Predict which path a diff gets before pushing:
-`node scripts/ci-preflight.mjs` (add `--bundle-check` for the byte-level
-answer).
+**"Ship it" defaults to quick, and a signed card release is on demand.**
+Studio source is embedded in the card bundle, so every visual change is
+technically firmware-sensitive. It is NOT treated as a release: when the
+firmware lane fires only because of that embedded copy
+(`firmwareBundleOnly` in `scripts/ci-changed-lanes.mjs`), the signer is
+skipped and the site deploys straight away — no VERSION bump, live in
+~10 minutes. Bundle drift accumulates harmlessly and ships with the next
+release.
+
+A signed card release happens when either is true: real firmware changed
+(`firmware/**` source, platformio, release machinery), or **VERSION was
+bumped** — the bump IS the on-demand trigger, so "finalize firmware" means
+bump `firmware/lightweaver-controller/VERSION` plus its pinned literal in
+`tests/firmware-version-policy.mjs` and merge (~30 min, signed, published).
+
+The firmware TEST lane is unchanged: Studio changes still compile against the
+card, so a bundle that no longer fits fails on the PR rather than twenty
+minutes into a release. Predict what a diff gets before pushing:
+`node scripts/ci-preflight.mjs`.
+
+Consequence to keep in mind: between releases, the signed download and any
+Wi-Fi update are older than the live site. A bench card on a dev build is
+unaffected; a customer card gets the drift at the next release.
 
 ## Agent ownership boundaries
 - `led-art-mapper/app/src/` — owned by led-art-mapper agent; do not edit

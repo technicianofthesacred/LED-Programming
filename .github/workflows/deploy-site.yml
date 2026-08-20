@@ -16,9 +16,12 @@ name: Deploy site
 # on THIS repo. Until then the deploy step skips cleanly and nothing reaches the
 # live domain.
 #
-# A successful main Tests run supplies the exact revision. Firmware-sensitive
-# revisions wait for the protected signer, which dispatches the resulting
-# signed commit explicitly. Deploy never silently substitutes a newer main.
+# A successful main Tests run supplies the exact revision. Revisions that
+# change real firmware wait for the protected signer, which dispatches the
+# resulting signed commit explicitly. Revisions that are firmware-sensitive
+# only because Studio source is embedded in the card bundle deploy straight
+# away: no signed release is coming for them, so waiting would strand the site.
+# Deploy never silently substitutes a newer main.
 
 on:
   workflow_run:
@@ -118,6 +121,7 @@ jobs:
           ARTIFACT_ONLY: ${{ steps.changes.outputs.artifact }}
           DEPLOY_REVISION: ${{ steps.revision.outputs.revision }}
           EVENT_NAME: ${{ github.event_name }}
+          FIRMWARE_BUNDLE_ONLY: ${{ steps.changes.outputs.firmware_bundle_only }}
           FIRMWARE_SENSITIVE: ${{ steps.changes.outputs.firmware }}
           SIGNED_RELEASE_COMMIT: ${{ steps.changes.outputs.signed_release }}
         run: |
@@ -128,6 +132,14 @@ jobs:
           elif [ "$EVENT_NAME" = "workflow_run" ] && [ "$ARTIFACT_ONLY" = "true" ] && [ "$FIRMWARE_SENSITIVE" != "true" ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             echo "reason=Signer artifact commits deploy only through their explicit signed-SHA dispatch." >> "$GITHUB_OUTPUT"
+          elif [ "$FIRMWARE_SENSITIVE" = "true" ] && [ "$FIRMWARE_BUNDLE_ONLY" = "true" ]; then
+            # Firmware-sensitive only because Studio source is embedded in the
+            # card bundle. No signed release is coming for this revision, so
+            # waiting for one would strand the site forever. The published
+            # firmware artifacts are unchanged and keep serving the last
+            # signed release.
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "reason=Studio-only revision; no signed release is pending." >> "$GITHUB_OUTPUT"
           elif [ "$FIRMWARE_SENSITIVE" = "true" ] && [ "$SIGNED_RELEASE_COMMIT" != "true" ]; then
             if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
               echo "::error::Manual deploy cannot bypass the protected firmware signer. Deploy the exact signer-generated commit instead."

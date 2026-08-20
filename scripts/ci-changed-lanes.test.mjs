@@ -7,6 +7,7 @@ import test from 'node:test';
 
 import {
   classifyChangedPaths,
+  firmwareBundleOnly,
   resolveChangedPaths,
 } from './ci-changed-lanes.mjs';
 
@@ -18,6 +19,42 @@ const allLanes = {
   firmware: true,
   artifact: true,
 };
+
+// A signed card release is on demand, not a tax on every visual change: the
+// firmware lane still runs its TESTS for Studio changes (a bundle that no
+// longer fits must fail on the pull request), but the signer and the site
+// deploy read firmwareBundleOnly so a colour tweak neither mints a release nor
+// waits twenty minutes for one.
+test('Studio-only changes are firmware-sensitive for tests but produce no signed release', () => {
+  assert.equal(firmwareBundleOnly(['lightweaver/src/v3/lw-pattern.jsx']), true);
+  assert.equal(firmwareBundleOnly(['lightweaver/src/lib/cardProjectResolver.js']), true);
+  assert.equal(classifyChangedPaths(['lightweaver/src/v3/lw-pattern.jsx']).firmware, true);
+});
+
+test('real firmware changes still produce a signed release automatically', () => {
+  assert.equal(firmwareBundleOnly(['firmware/lightweaver-controller/src/main.cpp']), false);
+  assert.equal(firmwareBundleOnly(['firmware/lightweaver-controller/platformio.ini']), false);
+  assert.equal(firmwareBundleOnly(['scripts/sign-release-artifacts.mjs']), false);
+});
+
+test('a VERSION bump is the on-demand card release trigger', () => {
+  assert.equal(firmwareBundleOnly(['firmware/lightweaver-controller/VERSION']), false);
+  // Bundled with Studio work: still a real release, so the whole merge signs.
+  assert.equal(firmwareBundleOnly([
+    'firmware/lightweaver-controller/VERSION',
+    'lightweaver/src/v3/lw-pattern.jsx',
+  ]), false);
+});
+
+test('changes that never touch firmware are not bundle-only either', () => {
+  assert.equal(firmwareBundleOnly(['README.md']), false);
+  assert.equal(firmwareBundleOnly(['lightweaver/functions/api/library/session.js']), false);
+  assert.equal(firmwareBundleOnly([]), false);
+});
+
+test('the conservative everything-runs answer never skips a release', () => {
+  assert.equal(firmwareBundleOnly(['lightweaver/src/v3/lw-pattern.jsx'], { conservative: true }), false);
+});
 
 test('shared Studio UI changes select source, browser, and firmware-sensitive lanes', () => {
   assert.deepEqual(classifyChangedPaths(['lightweaver/src/v3/lw-pattern.jsx']), {

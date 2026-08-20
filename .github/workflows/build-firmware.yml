@@ -22,6 +22,7 @@ jobs:
       contents: read
     outputs:
       firmware: ${{ steps.changes.outputs.firmware }}
+      firmware_bundle_only: ${{ steps.changes.outputs.firmware_bundle_only }}
       build_number: ${{ steps.buildnumber.outputs.value }}
       firmware_version: ${{ steps.firmwaremeta.outputs.version }}
     steps:
@@ -68,9 +69,16 @@ jobs:
 
   # This job has no environment and no secrets. The tested revision must pass
   # the signing-specific contract before GitHub can unlock the protected job.
+  # A signed release is produced for real firmware changes, and on demand for
+  # everything else. Studio source is embedded in the card bundle, so a colour
+  # tweak would otherwise mint a release, demand a VERSION bump, and hold the
+  # website behind twenty minutes of signing for a change no card is waiting
+  # on. When the firmware lane fired ONLY because of that embedded copy, the
+  # release is skipped and the drift ships with the next one. Bumping VERSION
+  # is a hard firmware path, so it is also the on-demand trigger.
   verify:
     needs: classify
-    if: needs.classify.outputs.firmware == 'true'
+    if: needs.classify.outputs.firmware == 'true' && needs.classify.outputs.firmware_bundle_only != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
