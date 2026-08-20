@@ -4,7 +4,7 @@ status: active
 stack: [ESP32-S3, Lightweaver firmware, React, Vite]
 deploy: public Studio at led.mandalacodes.com; local Lightweaver card command path
 family: installation
-last_reviewed: 2026-08-15
+last_reviewed: 2026-08-20
 ---
 
 # Lightweaver — branded LED installation controller
