@@ -6,7 +6,8 @@
    the real handlers ported from the old PatternsScreen. No visual markup, class
    names, or LED-render helpers changed. */
 import React, { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
-import { I, PATTERN_CATS, SWATCHES, GEOMETRY, JourneyHint } from './lw-shared.jsx';
+import { I, PATTERN_CATS, SWATCHES, GEOMETRY } from './lw-shared.jsx';
+import { SetupJourneyChip } from '../components/SetupJourneyChip.jsx';
 import { REAL_PATTERNS, REAL_PATTERN_BY_ID, adaptPattern, adaptSavedLook, defaultWarmPatternId } from './v3-data.js';
 import { useProject } from '../state/ProjectContext.jsx';
 import { useCloudLibrary } from '../state/CloudLibraryContext.jsx';
@@ -54,8 +55,8 @@ import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js
 import { classifyCardReadiness, installedProjectIdFromCardStatus } from '../lib/cardReadiness.js';
 import { markCardEditIntentAbandoned } from '../lib/cardEditIntent.js';
 import { openCardFlow } from '../lib/cardFlowEntry.js';
-import { isCardLinkPlaybackReady } from '../lib/cardConnectionFlow.js';
-import { evaluateCardInstallGate, readCardAccessLevel, STAGED_WIRING_CONFLICT_MESSAGE } from '../lib/cardInstallGate.js';
+import { deriveCardAccess } from '../lib/cardAccess.js';
+import { evaluateCardInstallGate, STAGED_WIRING_CONFLICT_MESSAGE } from '../lib/cardInstallGate.js';
 import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
 import { currentInstallation, structurallyInstalledRecord } from '../lib/projectLifecycle.js';
 import {
@@ -328,7 +329,7 @@ import { PatternPreview } from './PatternPreview.jsx';
     return 'This card is not ready for pattern commands. Recover and verify it before sending lights.';
   }
 
-  function PatternScreen({ connected, cardLink, go }) {
+  function PatternScreen({ connected, cardLink, cardLifecycle, currentProject, go }) {
     const { workspaceAssets } = useCloudLibrary();
     const {
       projectId,
@@ -492,23 +493,14 @@ import { PatternPreview } from './PatternPreview.jsx';
       return () => clearTimeout(timeout);
     }, [authorizationExpiresAt]);
 
-    const patternCardAccess = useMemo(() => {
-      const expectedCard = cardLink?.expectedCard || null;
-      const readiness = classifyCardReadiness(cardLink?.readiness || {}, { expectedCard });
-      const expectedCardId = String(expectedCard?.id || expectedCard?.cardId || '').trim().toLowerCase();
-      const exactPair = Boolean(expectedCardId) && readiness.cardId.toLowerCase() === expectedCardId;
-      if (!exactPair) return 'recovery';
-      // Playback access, not command access: this screen only sends patterns,
-      // brightness, and scenes, which the card keeps serving across a WiFi
-      // transition. Installs from here re-check the command gate themselves.
-      if (readiness.playbackAccess === 'blank') return 'blank';
-      // `connected` is the command gate (isCardLinkConnected), which closes
-      // during a WiFi transition. Use its playback sibling so a lit, matching
-      // card does not lose pattern control while the radio reassociates.
-      const playbackLinkReady = isCardLinkPlaybackReady(cardLink || {}, { expectedCard })
-        && !cardLink?.cardBlank;
-      return readiness.playbackAccess === 'ready' && (connected || playbackLinkReady) ? 'ready' : 'recovery';
-    }, [cardLink, connected]);
+    // The playback gate, extracted verbatim into lib/cardAccess.js (phase 6):
+    // patterns, brightness, and scenes stay available while the card's radio
+    // reassociates, even though the command gate (`connected`) is shut.
+    // Installs from here re-check the command gate themselves.
+    const patternCardAccess = useMemo(
+      () => deriveCardAccess(cardLink, { connected }).playback,
+      [cardLink, connected],
+    );
     const patternAccessRef = useRef(patternCardAccess);
     patternAccessRef.current = patternCardAccess;
     const previousPatternAccessRef = useRef(patternCardAccess);
@@ -1882,15 +1874,14 @@ import { PatternPreview } from './PatternPreview.jsx';
     // so its project fingerprint cannot match the open project and the check
     // below downgrades it to 'project' — the "somebody else's artwork is
     // installed" verdict. That warning is wrong here: Studio put that config
-    // there itself, minutes ago. readCardAccessLevel re-reads the card's own
-    // project evidence and upgrades exactly that case to 'bench', so trying a
-    // look straight after discovery is not refused as a mismatch.
-    const authorizedPatternCardAccess = readCardAccessLevel(
-      patternCardAccess === 'ready' && !projectAuthorizationCurrent
-        ? 'project'
-        : patternCardAccess,
-      cardLink?.readiness,
-    );
+    // there itself, minutes ago. deriveCardAccess's install verdict re-reads
+    // the card's own project evidence (readCardAccessLevel) and upgrades
+    // exactly that case to 'bench', so trying a look straight after discovery
+    // is not refused as a mismatch.
+    const authorizedPatternCardAccess = deriveCardAccess(cardLink, {
+      connected,
+      authorized: projectAuthorizationCurrent,
+    }).install;
     // Shared install precondition (src/lib/cardInstallGate.js). savePreviewToCard
     // only sets allowLayoutChange for the explicit bench test-strip override, and
     // it aborts if the card stages the write as a wiring change, so a normal
@@ -1932,7 +1923,7 @@ import { PatternPreview } from './PatternPreview.jsx';
               <div className="pm-title">
                 <h1>Patterns &amp; Looks</h1>
                 <p>Choose chip-ready patterns, tune the colors, then install the finished look on the card.</p>
-                <JourneyHint step={2} nextLabel="Arrange playlist" onNext={() => go?.('playlist')} />
+                <SetupJourneyChip cardLink={cardLink} cardLifecycle={cardLifecycle} project={currentProject} />
               </div>
               <div className="pm-actions">
                 <button className="btn primary" title="Install the current look on the card" onClick={savePreviewToCard} disabled={!installGate.allowed}>{I.bolt}{cardSave.status === 'pending' ? 'Sending…' : cardSave.status === 'failed' ? 'Retry install' : 'Install on card'}</button>

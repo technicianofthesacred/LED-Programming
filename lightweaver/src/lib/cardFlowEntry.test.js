@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   CARD_FLOW_INTENTS,
   OPEN_CONNECT_PANEL_EVENT,
+  hasResumableCommissioning,
   openCardFlow,
   resolveCardIntent,
 } from './cardFlowEntry.js';
@@ -57,10 +58,13 @@ const GOLDEN = {
     disconnected: { action: 'route', hash: '#screen=card&section=install' },
     needsProject: { action: 'route', hash: '#screen=card&section=install' },
   },
+  // Without a resumable commissioning stage (none of the representative
+  // contexts carry one), Wi-Fi is a join problem: the Connect panel's
+  // setup-network steps, never the USB installer.
   'configure-wifi': {
-    ready: { action: 'route', hash: '#screen=card&section=install' },
-    disconnected: { action: 'route', hash: '#screen=card&section=install' },
-    needsProject: { action: 'route', hash: '#screen=card&section=install' },
+    ready: { action: 'connect-panel', connectIntent: 'setup-network' },
+    disconnected: { action: 'connect-panel', connectIntent: 'setup-network' },
+    needsProject: { action: 'connect-panel', connectIntent: 'setup-network' },
   },
   'discover-strips': {
     ready: { action: 'route', hash: '#screen=discovery' },
@@ -122,6 +126,63 @@ test('a caller with no derived state gets the connect panel, matching the footer
   assert.deepEqual(resolveCardIntent('connect'), { action: 'connect-panel', connectIntent: 'connect-card' });
   // fix with nothing derived still lands on the Setup front door.
   assert.deepEqual(resolveCardIntent('fix', {}), { action: 'route', hash: '#screen=card&section=setup' });
+});
+
+test('configure-wifi routes to Install only while a commissioning stage is resumable', () => {
+  for (const context of [READY, DISCONNECTED, NEEDS_PROJECT]) {
+    assert.deepEqual(
+      resolveCardIntent('configure-wifi', { ...context, resumableCommissioning: true }),
+      { action: 'route', hash: '#screen=card&section=install' },
+    );
+    assert.deepEqual(
+      resolveCardIntent('configure-wifi', { ...context, resumableCommissioning: false }),
+      { action: 'connect-panel', connectIntent: 'setup-network' },
+    );
+  }
+});
+
+test('hasResumableCommissioning recognizes exactly the resumable stages', () => {
+  assert.equal(hasResumableCommissioning({ stage: 'set-up-card' }), true);
+  assert.equal(hasResumableCommissioning({ stage: 'check-lights' }), true);
+  assert.equal(hasResumableCommissioning({ flow: { stage: 'set-up-card' } }), true);
+  assert.equal(hasResumableCommissioning({ stage: 'install-safely' }), false);
+  assert.equal(hasResumableCommissioning({ stage: '' }), false);
+  assert.equal(hasResumableCommissioning(null), false);
+  assert.equal(hasResumableCommissioning(undefined), false);
+});
+
+test('openCardFlow reads the commissioning state at call time for configure-wifi', () => {
+  const originalWindow = globalThis.window;
+  const originalCustomEvent = globalThis.CustomEvent;
+  const dispatched = [];
+  globalThis.CustomEvent = class {
+    constructor(type, options = {}) {
+      this.type = type;
+      this.detail = options.detail;
+    }
+  };
+  globalThis.window = {
+    location: { hash: '#screen=pattern' },
+    dispatchEvent: event => { dispatched.push(event); return true; },
+  };
+  try {
+    // No commissioning storage exists in this environment, so the read-at-call
+    // default resolves to "not resumable" — the Connect panel's join steps.
+    const panel = openCardFlow('configure-wifi', DISCONNECTED);
+    assert.deepEqual(panel, { action: 'connect-panel', connectIntent: 'setup-network' });
+    assert.equal(dispatched.length, 1);
+    assert.deepEqual(dispatched[0].detail, { connectIntent: 'setup-network' });
+    assert.equal(globalThis.window.location.hash, '#screen=pattern');
+
+    // A caller that already knows the commissioning state wins over the read.
+    const install = openCardFlow('configure-wifi', { ...DISCONNECTED, resumableCommissioning: true });
+    assert.deepEqual(install, { action: 'route', hash: '#screen=card&section=install' });
+    assert.equal(globalThis.window.location.hash, '#screen=card&section=install');
+    assert.equal(dispatched.length, 1);
+  } finally {
+    globalThis.window = originalWindow;
+    globalThis.CustomEvent = originalCustomEvent;
+  }
 });
 
 test('an unknown intent throws instead of guessing a destination', () => {

@@ -928,15 +928,15 @@ input[type=range].lw::-moz-range-thumb { width: 14px; height: 14px; border-radiu
 /* ============================================================
    PLAYLIST screen
    ============================================================ */
-/* ── Journey hint (canonical workflow strip) ─────────────────── */
-.journey-hint { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
-.journey-hint .jh-step { font-size: 11px; font-family: var(--font-mono); color: var(--text-faint); letter-spacing: 0.03em; }
-.journey-hint .jh-next {
+/* ── Setup journey chip (derived four-phase journey, hidden once done) ── */
+.setup-journey-chip {
+  display: inline-flex; align-items: center; margin-top: 6px;
   font-size: 11px; font-family: var(--font-mono); color: var(--accent);
+  letter-spacing: 0.03em; text-align: left;
   background: transparent; border: 1px solid var(--accent-line); border-radius: 100px;
   padding: 2px 10px; cursor: pointer; transition: background .12s;
 }
-.journey-hint .jh-next:hover { background: var(--bg-elev); }
+.setup-journey-chip:hover { background: var(--bg-elev); }
 
 .pl-hostrow { display: flex; align-items: center; gap: 8px 12px; padding: 10px 14px; background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: var(--r-md); margin-bottom: 14px; flex-wrap: wrap; }
 .pl-count { margin-left: auto; font-size: 11.5px; font-family: var(--font-mono); color: var(--text-faint); white-space: nowrap; }

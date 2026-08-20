@@ -1169,7 +1169,7 @@ function normalizePreviewError(host, error) {
     return new CardPushError(
       'mixed-content',
       error?.reason === 'bridge-missing' || error?.reason === 'bridge-timeout'
-        ? 'Open the card page once by clicking Card disconnected, then return to Studio so it can use the card as a local bridge.'
+        ? 'Open the card page once by clicking Card disconnected, then return to Studio so it can send controls through the card’s own page.'
         : 'Browser blocked the local card connection. Open the Studio from localhost or copy the config to the card page.',
       error,
     );

@@ -10,6 +10,7 @@
 // executor that moves the URL or dispatches the connect-panel event.
 
 import { setupTaskRoute } from './setupJourney.js';
+import { readCardCommissioning } from './cardCommissioningFlow.js';
 
 // The Connection Center lives in the app shell. Screens used to open it by
 // document.querySelector('[data-testid="card-link-status"]').click() — a DOM
@@ -85,9 +86,16 @@ export function resolveCardIntent(intent, context = {}) {
     case 'install-project':
       return route('#screen=card&section=install');
     case 'configure-wifi':
-      // Phase 6 refines this misdirect (Wi-Fi lives in setup, not install);
-      // kept as-is for behavioural parity with today's entry points.
-      return route('#screen=card&section=install');
+      // Wi-Fi is a JOIN problem unless an in-flight commissioning stage owns
+      // the owner's next step. With a resumable stage, the Install screen's
+      // commissioning panel is mid-conversation with this exact card, so it
+      // keeps the owner. Without one, routing to Install landed on the USB
+      // "Find your connected card" installer — a misdirect for an owner whose
+      // card is sitting on its own setup network. The Connect panel's
+      // setup-network join steps are the surface that actually finishes it.
+      return context.resumableCommissioning === true
+        ? route('#screen=card&section=install')
+        : connectPanel('setup-network');
     case 'discover-strips':
       return route('#screen=discovery');
     case 'recover-lights':
@@ -104,8 +112,23 @@ export function resolveCardIntent(intent, context = {}) {
   }
 }
 
+// The stages lw-flash's Install screen resumes its commissioning panel for
+// (the third lw-flash trigger, web-serial install-safely, additionally
+// depends on that screen's own install state, so it is deliberately not part
+// of this routing question).
+const RESUMABLE_COMMISSIONING_STAGES = new Set(['set-up-card', 'check-lights']);
+
+export function hasResumableCommissioning(flow = readCardCommissioning()) {
+  return RESUMABLE_COMMISSIONING_STAGES.has(flow?.stage ?? flow?.flow?.stage ?? '');
+}
+
 export function openCardFlow(intent, context = {}) {
-  const resolution = resolveCardIntent(intent, context);
+  // The resolver stays pure: commissioning state is an input. Callers that
+  // already know it pass it; everyone else gets it read here, at call time.
+  const enriched = intent === 'configure-wifi' && context.resumableCommissioning === undefined
+    ? { ...context, resumableCommissioning: hasResumableCommissioning() }
+    : context;
+  const resolution = resolveCardIntent(intent, enriched);
   if (resolution.action === 'route') {
     window.location.hash = resolution.hash;
   } else if (resolution.action === 'connect-panel') {

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import './lw-setup.css';
 import { CONNECTED_CARD_LINK_STATES, SETUP_SKIP_STORAGE_KEY, deriveSetupJourney } from '../lib/setupJourney.js';
 import { CARD_COMMISSIONING_CHANGED_EVENT, inspectCardCommissioning } from '../lib/cardCommissioningFlow.js';
+import { hasResumableCommissioning, openCardFlow } from '../lib/cardFlowEntry.js';
 import { readCardProjectEvidence, readCardStatusEnvelope } from '../lib/cardPushClient.js';
 import { cardProjectFingerprint, resolveCardProject, describeResolvedCardProject } from '../lib/cardProjectResolver.js';
 import { isBenchProjectEvidence } from '../lib/benchConfig.js';
@@ -528,7 +529,20 @@ export function SetupScreen({
           ) : taskId === 'install-project' ? (
             <button type="button" className="btn primary" onClick={() => go('#screen=card&section=install')}>Install project on card</button>
           ) : taskId === 'configure-wifi' ? (
-            <button type="button" className="btn primary" onClick={() => go('#screen=card&section=install')}>Continue Wi-Fi setup</button>
+            // The one entry contract decides where Wi-Fi continues: Install's
+            // commissioning panel while a stage is resumable, otherwise the
+            // Connect panel's setup-network join steps (phase 6). This screen
+            // already tracks the live commissioning flow, so it passes what it
+            // knows instead of having openCardFlow re-read storage.
+            <button
+              type="button"
+              className="btn primary"
+              onClick={() => openCardFlow('configure-wifi', {
+                lifecycle: cardLifecycle,
+                journey,
+                resumableCommissioning: hasResumableCommissioning(commissioningFlow),
+              })}
+            >Continue Wi-Fi setup</button>
           ) : (
             <>
               <button type="button" className="btn primary" data-testid="setup-connect-card" onClick={() => onOpenConnectionCenter?.()}>{connectionLabel}</button>
@@ -612,7 +626,7 @@ export function SetupScreen({
         {matchesOpenProject && (
           <section className="card-support-panel lw-setup-banner">
             <h2>This exact card is already set up</h2>
-            <p>Its installed project matches the project open in Studio. The verified card bridge remains available for controls.</p>
+            <p>Its installed project matches the project open in Studio. The card&rsquo;s own page stays connected for controls.</p>
             <button type="button" className="btn primary" data-testid="setup-open-patterns" onClick={() => go('#screen=pattern')}>Open Patterns</button>
           </section>
         )}

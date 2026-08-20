@@ -543,6 +543,10 @@ function Shell({ offlineUpdateController = null }) {
   const commissioningActiveRef = useRef(commissioningActive);
   const installRouteRef = useRef('#screen=card&section=install');
   const [connectionCenterOpen, setConnectionCenterOpen] = useState(false);
+  // The connect intent the panel was opened FOR (openCardFlow's connect-panel
+  // event detail). '' for every other way in — footer chip, bridge results —
+  // so the panel only pre-selects a flow when a resolver actually asked for it.
+  const [connectPanelIntent, setConnectPanelIntent] = useState('');
   const [cardControlOpen, setCardControlOpen] = useState(false);
   // Every navigation in the shell goes through here: it moves the URL, and the
   // screen follows because it is derived from the URL. Nothing sets the screen
@@ -971,8 +975,14 @@ function Shell({ offlineUpdateController = null }) {
     });
     routeStore.replace(`#screen=card&section=setup&task=${encodeURIComponent(taskId || journey.taskId)}`);
   }, [cardLifecycle, cardLink, flushProjectAutosave, routeStore, serializeProject]);
-  const openConnectionCenter = useCallback(() => setConnectionCenterOpen(true), []);
-  const closeConnectionCenter = useCallback(() => setConnectionCenterOpen(false), []);
+  const openConnectionCenter = useCallback(() => {
+    setConnectPanelIntent('');
+    setConnectionCenterOpen(true);
+  }, []);
+  const closeConnectionCenter = useCallback(() => {
+    setConnectPanelIntent('');
+    setConnectionCenterOpen(false);
+  }, []);
   // Intent-completion close (phase 5). "Established" for this purpose is a
   // verified command-ready link OR a lifecycle already past the connection
   // question (ready, or confirming — a verified transport whose remaining
@@ -989,8 +999,9 @@ function Shell({ offlineUpdateController = null }) {
   // for a not-ready card: the control drawer closes so the panel is the one
   // card surface showing.
   useEffect(() => {
-    const openPanel = () => {
+    const openPanel = event => {
       setCardControlOpen(false);
+      setConnectPanelIntent(String(event?.detail?.connectIntent || ''));
       setConnectionCenterOpen(true);
       // A panel opened FOR connecting (the event always carries a connect
       // intent) closes itself when the link becomes established while open,
@@ -1005,6 +1016,9 @@ function Shell({ offlineUpdateController = null }) {
   useEffect(() => {
     if (!connectionCenterOpen) {
       connectCloseArmedRef.current = false;
+      // The intent belongs to one opening. Clearing it on close keeps a later
+      // footer-chip or drawer open from replaying a stale pre-selection.
+      setConnectPanelIntent('');
       return;
     }
     // Only a transition observed while open completes the intent. A pair or
@@ -1501,6 +1515,7 @@ function Shell({ offlineUpdateController = null }) {
       />
       <CardConnectionCenter
         open={connectionCenterOpen}
+        connectIntent={connectPanelIntent}
         link={cardLink}
         lifecycle={cardLifecycle}
         onOpenSetup={() => {

@@ -4,8 +4,10 @@
    from the SAMPLE arrays to the live app's real playlist, real pattern bank,
    and real card handlers. No visual structure was altered. */
 import React, { useCallback, useMemo, useReducer, useRef, useState } from 'react';
-import { I, JourneyHint } from './lw-shared.jsx';
+import { I } from './lw-shared.jsx';
+import { SetupJourneyChip } from '../components/SetupJourneyChip.jsx';
 import { openLocalCardPage } from '../lib/cardBridge.js';
+import { deriveCardAccess } from '../lib/cardAccess.js';
 import { openCardFlow } from '../lib/cardFlowEntry.js';
 import { useProject } from '../state/ProjectContext.jsx';
 import { REAL_PATTERN_BY_ID, adaptPattern, adaptSavedLook } from './v3-data.js';
@@ -113,7 +115,7 @@ function realPatternShape(patternId) {
   return REAL_PATTERN_BY_ID.get(patternId) || adaptPattern(patternId);
 }
 
-  function PlaylistScreen({ connected, cardLink, go }) {
+  function PlaylistScreen({ connected, cardLink, cardLifecycle, currentProject, go }) {
     const {
       projectId,
       projectName,
@@ -566,13 +568,15 @@ function realPatternShape(patternId) {
     const baseInstallFacts = {
       hardwareIssue: hardwareConfigurationIssue,
       busy: playlistSyncing || recoveryPending,
-      // Deliberately NOT run through readCardAccessLevel. That upgrade exists to
+      // Deliberately the COMMAND gate (deriveCardAccess(...).command), not the
+      // install verdict. The install upgrade in lib/cardAccess.js exists to
       // undo a 'project' verdict on a card holding Studio's own discovery bench
       // config, and this screen never produces 'project' — a connected card is
       // always 'ready' here. Plumbing card project evidence in to reach an
       // upgrade that can never apply would be dead weight. If this verdict ever
-      // grows a 'project' branch it needs the upgrade too (see lw-pattern.jsx).
-      cardAccess: connected ? 'ready' : 'recovery',
+      // grows a 'project' branch it needs the install verdict too (see
+      // lw-pattern.jsx).
+      cardAccess: deriveCardAccess(cardLink, { connected }).command ? 'ready' : 'recovery',
     };
     const installGate = evaluateCardInstallGate(baseInstallFacts);
     const layoutChangeInstallGate = evaluateCardInstallGate({
@@ -704,7 +708,7 @@ function realPatternShape(patternId) {
               <div className="pm-title">
                 <h1>Playlist</h1>
                 <p>The order the dial press cycles through on the card. The first look starts on boot.</p>
-                <JourneyHint step={3} nextLabel="Install on card & verify" onNext={() => go?.('card')} />
+                <SetupJourneyChip cardLink={cardLink} cardLifecycle={cardLifecycle} project={currentProject} />
               </div>
               <div className="pm-actions">
                 <button className="btn" disabled={recoveryPending} onClick={resetLiveOutput}>{I.refresh}Reset live</button>

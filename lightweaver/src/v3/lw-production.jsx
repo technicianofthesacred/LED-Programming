@@ -223,7 +223,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
       } catch (reason) { lastError = reason; }
       await new Promise(resolve => setTimeout(resolve, 100));
     }
-    throw lastError || new Error('The configured bridge did not become ready for exact production pairing.');
+    throw lastError || new Error('The card’s own page did not become ready for exact production pairing.');
   }
 
   const displayedCardLink = testDriver()?.getCardLink?.() || cardLink || {};
@@ -1164,7 +1164,7 @@ export function ProductionScreen({ cardHost, cardLink, onConnectCard, embedded =
   if (!cap.canProductionWebSerial) {
     const mobile = cap.isMobile;
     const retainedCode = new URLSearchParams(window.location.hash.slice(1)).get('job');
-    const handoff = <ProductionLandmark className="prod-handoff" ref={primaryRef} tabIndex={-1}><span className="prod-kicker">Production setup</span><ProductionHeading>{mobile ? 'Continue on a workshop computer' : 'Open this page in Chrome or Edge'}</ProductionHeading><p>{mobile ? 'Production USB setup needs a desktop or laptop. On that computer, open led.mandalacodes.com in Chrome or Edge and choose Production setup.' : 'Use the secure top-level led.mandalacodes.com page in desktop Chrome or Edge. Studio uses direct local HTTP when allowed and the existing card-page bridge from HTTPS.'}</p><code>led.mandalacodes.com/#screen=production{retainedCode ? `&job=${retainedCode}` : ''}</code>{retainedCode && <p>Job code <strong>{retainedCode}</strong> is retained in this address.</p>}</ProductionLandmark>;
+    const handoff = <ProductionLandmark className="prod-handoff" ref={primaryRef} tabIndex={-1}><span className="prod-kicker">Production setup</span><ProductionHeading>{mobile ? 'Continue on a workshop computer' : 'Open this page in Chrome or Edge'}</ProductionHeading><p>{mobile ? 'Production USB setup needs a desktop or laptop. On that computer, open led.mandalacodes.com in Chrome or Edge and choose Production setup.' : 'Use the secure top-level led.mandalacodes.com page in desktop Chrome or Edge. Studio uses direct local HTTP when allowed and the card&rsquo;s own page from HTTPS.'}</p><code>led.mandalacodes.com/#screen=production{retainedCode ? `&job=${retainedCode}` : ''}</code>{retainedCode && <p>Job code <strong>{retainedCode}</strong> is retained in this address.</p>}</ProductionLandmark>;
     return embedded ? <div className="prod-screen prod-embedded">{handoff}</div> : <div className="screen prod-screen">{handoff}</div>;
   }
 

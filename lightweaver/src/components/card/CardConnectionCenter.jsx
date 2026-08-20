@@ -50,6 +50,11 @@ const NEUTRAL_FIRST_RUN_REASONS = new Set(['never-connected', 'card-unreachable'
 
 export function CardConnectionCenter({
   open,
+  // Why the panel was opened, when a resolver asked for it (openCardFlow's
+  // connect-panel event detail). 'setup-network' pre-selects the working-card
+  // flow with setup-network evidence, so the owner lands directly on the
+  // "join the card's setup network" steps instead of the triage choices.
+  connectIntent = '',
   link,
   lifecycle = null,
   onClose,
@@ -82,6 +87,7 @@ export function CardConnectionCenter({
   const rememberedCard = readPersistedCardIdentity();
   const hasKnownCard = Boolean(link.card?.id || link.expectedCard?.id || rememberedCard?.id);
   const hasSetupHost = [host, link.host, setupEvidence.host].includes(SETUP_HOST);
+  const setupNetworkRequested = connectIntent === 'setup-network';
   // The card's real hotspot name is derivable from its card id (same eFuse MAC
   // as the firmware's apSsid()). Nothing here is guaranteed to know the card
   // yet — a blank or unreachable card has no id — so this falls back to a
@@ -90,10 +96,14 @@ export function CardConnectionCenter({
     link.card?.id || link.expectedCard?.id || link.discoveredCard?.id || rememberedCard?.id || '',
   );
   const flowEvidence = {
-    // Evidence only: a stored setup-host proves the setup network is in play.
-    // It carries no SSID because Studio has not observed one — the copy below
-    // derives the real name from card identity when it has it.
-    setupNetwork: hasSetupHost ? { available: true } : setupEvidence.setupNetwork,
+    // Evidence only: a stored setup-host proves the setup network is in play,
+    // and a setup-network connect intent means the derived setup journey
+    // already diagnosed configure-wifi from the card's own commissioning
+    // evidence. Neither carries an SSID because Studio has not observed one —
+    // the copy below derives the real name from card identity when it has it.
+    setupNetwork: hasSetupHost || setupNetworkRequested
+      ? { available: true }
+      : setupEvidence.setupNetwork,
     setupMode: setupEvidence.mode,
   };
   // The one action verdict: lifecycle diagnosis + transport routing +
@@ -126,7 +136,10 @@ export function CardConnectionCenter({
     restoreFocusRef.current = document.activeElement;
     shouldRestoreFocusRef.current = false;
     setFailure('');
-    setIntent('');
+    // A setup-network open lands directly on the join steps: the working-card
+    // flow with setup evidence resolves to the setup-network route, which is
+    // exactly what pressing "It was working before" would have chosen.
+    setIntent(connectIntent === 'setup-network' ? 'working-card' : '');
     setBridgeLaunchState('idle');
     const activeAuthority = getActiveCardTransportAuthority();
     setDirectAttempt(activeAuthority);
@@ -151,7 +164,7 @@ export function CardConnectionCenter({
       document.removeEventListener('pointerdown', onPointerDown);
       if (shouldRestoreFocusRef.current) restoreFocusRef.current?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open, connectIntent, onClose]);
 
   useEffect(() => {
     if (!bridgeResult) return;
@@ -696,7 +709,7 @@ export function CardConnectionCenter({
             <button type="submit" className="btn">Save</button>
           </div>
         </form>
-        <p>The card-page bridge is retained temporarily as a rollout fallback.</p>
+        <p>Connecting through the card&rsquo;s own page is retained temporarily as a rollout fallback.</p>
         <button type="button" className="btn" onClick={() => connect(host, { bridge: true })}>Connect through the card&rsquo;s own page (fallback)</button>
       </details>
     </section>
