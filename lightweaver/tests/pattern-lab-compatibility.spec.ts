@@ -1,5 +1,6 @@
 import { type Route } from '@playwright/test';
 import { test, expect } from './studioTest';
+import { choosePattern } from './helpers/pattern-lab.ts';
 
 const AUTOSAVE_KEY = 'lw_autosave_v3';
 let cardMutationRequests: string[];
@@ -44,7 +45,7 @@ test.beforeEach(async ({ page }) => {
 test('exposes card compatibility and clock-linked diagnostics without mutating the source recipe', async ({ page }) => {
   await expect.poll(() => page.evaluate(key => localStorage.getItem(key), AUTOSAVE_KEY)).not.toBeNull();
   const projectBefore = await page.evaluate(key => localStorage.getItem(key), AUTOSAVE_KEY);
-  await page.getByLabel('Base pattern').selectOption('aurora');
+  await choosePattern(page, 'aurora');
 
   const tools = page.getByTestId('pattern-lab-runtime-tools');
   await expect(tools).toBeVisible();
@@ -76,7 +77,9 @@ test('exposes card compatibility and clock-linked diagnostics without mutating t
   await expect(diagnostics).toContainText(/No known mask|brightness is at zero|active mask removes/);
 
   const time = page.getByLabel('Preview time');
-  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  // Pattern Lab opens already playing (patternlab-rebuild.md Phase 1), so
+  // there is no "Play" button to press here — choosePattern above already
+  // started it moving. Go straight to pausing and prove the pause holds.
   await expect(diagnostics.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
   await diagnostics.getByRole('button', { name: 'Pause', exact: true }).click();
   const pausedTime = Number(await time.inputValue());
@@ -114,7 +117,7 @@ test('keeps the advanced tools usable in the phone controls drawer', async ({ pa
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Pattern controls', exact: true }).click();
-  await page.getByLabel('Base pattern').selectOption('aurora');
+  await choosePattern(page, 'aurora');
 
   const tools = page.getByTestId('pattern-lab-runtime-tools');
   await tools.locator(':scope > summary').click();
@@ -128,33 +131,11 @@ test('keeps the advanced tools usable in the phone controls drawer', async ({ pa
   expect(overflow).toBeLessThanOrEqual(1);
 });
 
-test('adds a concrete visible layer and routes the compositor through baking', async ({ page }) => {
-  await page.getByLabel('Base pattern').selectOption('aurora');
-  const preview = page.getByTestId('pattern-lab-mapped-preview');
-  await expect(preview).toHaveAttribute('data-worker-state', 'frame');
-  const canvas = preview.locator('canvas');
-  const before = await canvas.evaluate(element => element.toDataURL());
-  await page.getByTestId('pattern-lab-layers').locator(':scope > summary').click();
-  await page.getByRole('button', { name: 'Add layer' }).click();
-  const layerPattern = page.getByLabel('Gradient layer pattern');
-  await expect(layerPattern).toHaveValue('gradient');
-  await expect.poll(async () => canvas.evaluate(element => element.toDataURL())).not.toBe(before);
-  const layered = await canvas.evaluate(element => element.toDataURL());
-  await page.getByLabel('Gradient layer spatial treatment').selectOption('mirror');
-  await expect.poll(async () => canvas.evaluate(element => element.toDataURL())).not.toBe(layered);
-  const mirroredLayer = await canvas.evaluate(element => element.toDataURL());
-  await layerPattern.selectOption('candle');
-  await expect(page.getByLabel('Candle layer pattern')).toHaveValue('candle');
-  await expect.poll(async () => canvas.evaluate(element => element.toDataURL())).not.toBe(mirroredLayer);
-  await page.getByTestId('pattern-lab-runtime-tools').locator(':scope > summary').click();
-
-  const compatibility = page.getByTestId('pattern-lab-export');
-  await expect(compatibility.locator('[data-classification]')).toHaveAttribute('data-classification', 'bake-to-card');
-  await expect(compatibility.getByLabel('Card compatibility budgets')).toContainText('Pixels');
-  await expect(compatibility.getByLabel('Card compatibility budgets')).not.toContainText('Operations / frameUnknown');
-  await expect(compatibility).toContainText('layers are composited into a deterministic card sequence');
-  await expect(page.getByTestId('pattern-lab-diagnostics')).toHaveCount(1);
-});
+// PatternLabLayers.jsx (the optional-layers panel this test drove — "Add
+// layer", per-layer pattern/spatial-treatment selects, pattern-lab-layers
+// testid) was deleted in this rebuild (see
+// todo/plans/patternlab-rebuild.md §7 Phase 1). There is no replacement
+// layer-authoring UI, so there is nothing left here to test.
 
 test('explains when every visible strip has zero brightness', async ({ page }) => {
   await expect.poll(() => page.evaluate(key => localStorage.getItem(key), AUTOSAVE_KEY)).not.toBeNull();
@@ -167,7 +148,7 @@ test('explains when every visible strip has zero brightness', async ({ page }) =
     localStorage.setItem(key, JSON.stringify(project));
   }, AUTOSAVE_KEY);
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.getByLabel('Base pattern').selectOption('aurora');
+  await choosePattern(page, 'aurora');
   await page.getByTestId('pattern-lab-runtime-tools').locator(':scope > summary').click();
   const diagnostics = page.getByTestId('pattern-lab-diagnostics');
   await diagnostics.locator(':scope > summary').click();
@@ -207,7 +188,7 @@ test('downloads xLights, MADRIX, and Art-Net setup files from verified physical 
     localStorage.setItem(key, JSON.stringify(project));
   }, AUTOSAVE_KEY);
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.getByLabel('Base pattern').selectOption('aurora');
+  await choosePattern(page, 'aurora');
   await page.getByTestId('pattern-lab-runtime-tools').locator(':scope > summary').click();
 
   const downloads = [
@@ -245,7 +226,7 @@ test('starts and safely cancels a real baked card export', async ({ page }) => {
     localStorage.setItem(key, JSON.stringify(project));
   }, AUTOSAVE_KEY);
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.getByLabel('Base pattern').selectOption('generator:particles');
+  await choosePattern(page, 'generator:particles');
   await page.getByTestId('pattern-lab-runtime-tools').locator(':scope > summary').click();
 
   const cardExport = page.getByTestId('pattern-lab-export');

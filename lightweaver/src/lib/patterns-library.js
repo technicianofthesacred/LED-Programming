@@ -1127,7 +1127,7 @@ const v = 0.7 + sin(x2 * 4 + time * 0.6) * 0.2;
 return hsv(h, s, v);`,
   },
   {
-    id: 'digitrain', name: 'Digital Rain',
+    id: 'digitrain', name: 'Matrix Code Rain',
     desc: 'Matrix-style falling columns of green characters',
     preview: 'linear-gradient(180deg, #001500, #003300, #00ff41 80%, #ffffff)',
     code:
@@ -1232,7 +1232,7 @@ return hsv(h, 0.05 + v * 0.1, v * 0.8);`,
 
   // ── Batch 4: 10 more patterns ───────────────────────────────────────────
   {
-    id: 'lava-lamp', name: 'Lava Lamp',
+    id: 'lava-lamp', name: 'Molten Blobs',
     desc: 'Slow blobs of color rising and falling',
     preview: 'linear-gradient(180deg, #ff6600 0%, #cc0044 50%, #440022 100%)',
     code:
@@ -1327,7 +1327,7 @@ return hsv(hue, 0.95, shimmer);`,
   },
 
   {
-    id: 'meteor-shower', name: 'Meteor Shower',
+    id: 'meteor-shower', name: 'Streaking Meteors',
     desc: 'Streaking meteors with glowing tails',
     preview: 'linear-gradient(150deg, #000011 0%, #001133 40%, #ffffff88 50%, #000011 60%)',
     code:
@@ -1440,7 +1440,7 @@ return hsv(hue, 1, flash);`,
   },
 
   {
-    id: 'neon-sign', name: 'Neon Sign',
+    id: 'neon-sign', name: 'Neon Glow',
     desc: 'Flickering neon tube effect with color glow',
     preview: 'linear-gradient(90deg, #ff44ff 0%, #cc00cc 30%, #ff88ff 50%, #cc00cc 70%, #ff44ff 100%)',
     code:
@@ -1513,7 +1513,7 @@ return hsv(hue, 0.85, v);`,
   },
 
   {
-    id: 'digital-rain-v2', name: 'Digital Rain II',
+    id: 'digital-rain-v2', name: 'Glowing Code Rain',
     desc: 'Matrix-style falling code columns with glow',
     preview: 'linear-gradient(180deg, #00ff44 0%, #004422 50%, #000000 100%)',
     code:
@@ -1803,7 +1803,7 @@ return hsv(hue, 1, clamp(glow, 0, 1));`,
 
   // ── Batch 8: Artistic and show-ready patterns ────────────────────────────
   {
-    id: 'watercolor-wash', name: 'Watercolor Wash',
+    id: 'watercolor-wash', name: 'Wet Paper Bloom',
     desc: 'Soft watercolor paint bleeding through wet paper',
     preview: 'radial-gradient(ellipse at 30% 40%, #ff9988 0%, #cc88ff 40%, #88ccff 80%)',
     code:

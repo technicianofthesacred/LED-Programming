@@ -7,9 +7,11 @@
 .plab-scroll {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
+  overflow-x: hidden;
   padding: 0;
 }
 
@@ -22,12 +24,13 @@
   padding: 4px 10px;
   border-bottom: 1px solid var(--border-hair);
   background: var(--bg-app);
+  overflow: hidden;
 }
 
 .plab-section-index {
   color: var(--text-mid);
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 650;
   letter-spacing: .11em;
   text-transform: uppercase;
@@ -35,10 +38,11 @@
 
 .plab-toolbar-identity {
   min-width: 0;
+  overflow: hidden;
   display: flex;
   align-items: center;
   gap: 6px;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
 }
 
 .plab-toolbar-mark {
@@ -54,12 +58,15 @@
 }
 
 .plab-toolbar h1 {
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-hi);
   font-size: 14px;
   font-weight: 640;
   letter-spacing: -.015em;
   line-height: 1.2;
   white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .plab-private-status {
@@ -162,7 +169,7 @@
   gap: 12px;
   color: var(--text-mid);
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 400;
 }
 
@@ -180,7 +187,14 @@
 .plab-play[aria-pressed="true"] { border-color: var(--accent); }
 .plab-drawer-trigger,
 .plab-drawer-close,
-.plab-drawer-backdrop { display: none; }
+.plab-drawer-backdrop,
+.plab-sheet-handle { display: none; }
+
+/* The phone sheet's scroll box. Above the mobile breakpoint it is not a box
+   at all — `display: contents` hands its children straight back to the
+   desktop control column / two-column tablet grid, so the desktop layout is
+   unchanged by its existence. */
+.plab-sheet-scroll { display: contents; }
 
 .plab-stage {
   position: relative;
@@ -230,6 +244,58 @@
   inset: 0;
 }
 
+/* Honest failure states (Finding C / §6.4 of the rebuild plan): three
+   distinct causes get their own message and Retry button instead of an
+   eternal "Preparing accurate preview…". Two layouts share this class:
+   - alone (no .plab-preview-notice): the worker has never produced a frame,
+     so this stands in for the whole preview and can take up all the room.
+   - with .plab-preview-notice: a frame IS already showing (workerFunction
+     exists) and this overlays it without displacing it, per Finding C. */
+.plab-preview-preparing {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  color: var(--text-mid);
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: none;
+}
+
+.plab-preview-preparing.plab-preview-notice {
+  background: color-mix(in srgb, var(--bg-canvas) 74%, transparent);
+  backdrop-filter: blur(6px);
+  pointer-events: auto;
+}
+
+.plab-preview-preparing-message {
+  max-width: 320px;
+  color: var(--text-hi);
+  font-size: 12.5px;
+  font-weight: 560;
+}
+
+.plab-preview-retry {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm);
+  background: var(--bg-elev);
+  color: var(--text-hi);
+  font: 650 11px/1 var(--font-sans);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.plab-preview-retry:hover { border-color: var(--accent); }
+.plab-preview-retry:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 .plab-live-preview {
   position: absolute;
   z-index: 4;
@@ -267,7 +333,7 @@
 
 .plab-live-preview span {
   color: var(--text-mid);
-  font: 500 9.5px/1.35 var(--font-mono);
+  font: 500 11px/1.35 var(--font-mono);
 }
 
 .plab-mapped-preview-thumbnail {
@@ -324,6 +390,7 @@
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  overflow-x: hidden;
   background: var(--bg-panel);
 }
 
@@ -337,7 +404,7 @@
 .plab-control-heading span:last-child {
   color: var(--text-mid);
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 11px;
   font-weight: 400;
 }
 
@@ -442,6 +509,106 @@
   font: 600 11px/1 var(--font-sans);
 }
 
+/* Pattern tile browser — replaces browsing-by-select with a searchable,
+   badged grid. Static CSS-gradient previews only; no per-tile worker. */
+.plab-tile-browser {
+  display: grid;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.plab-tile-search input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm);
+  background: var(--bg-elev);
+  color: var(--text-hi);
+  font: 500 13px/1 var(--font-sans);
+}
+
+.plab-tile-search input::placeholder { color: var(--text-mid); }
+
+.plab-tile-empty {
+  padding: 16px 4px;
+  color: var(--text-mid);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.plab-tile-shelves {
+  display: grid;
+  gap: 18px;
+}
+
+.plab-tile-shelf-title {
+  margin-bottom: 8px;
+  color: var(--text-hi);
+  font-size: 11px;
+  font-weight: 640;
+  letter-spacing: -.01em;
+}
+
+.plab-tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 10px;
+}
+
+.plab-tile {
+  position: relative;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+  color: var(--text-hi);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.plab-tile.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.plab-tile-swatch {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background-size: cover;
+}
+
+.plab-tile-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  min-width: 20px;
+  min-height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-canvas) 62%, transparent);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.plab-tile-badge.is-native { background: color-mix(in srgb, var(--accent) 32%, var(--bg-canvas)); }
+
+.plab-tile-name {
+  padding: 0 8px 8px;
+  color: var(--text-hi);
+  font-size: 11px;
+  font-weight: 590;
+  line-height: 1.3;
+}
+
 .plab-compact-step-title {
   min-width: 0;
   display: flex;
@@ -452,7 +619,7 @@
 .plab-step-meta {
   color: var(--text-mid);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -463,7 +630,7 @@
   align-items: center;
   gap: 8px;
   color: var(--text-mid);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
@@ -513,6 +680,69 @@
   font: inherit;
 }
 
+/* Piece color — the single honest hue control that replaced the 6-swatch
+   palette editor (Finding A). It always drives the card's actual on-wall
+   color (see lookFromRecipe in patternLabHandoff.js), unlike the editor it
+   replaced, which only 2 of 130 library patterns ever showed in preview. */
+.plab-piece-color {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-hair);
+}
+
+.plab-piece-color-control input[type="range"] {
+  appearance: none;
+  height: 14px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    hsl(0, 70%, 55%), hsl(60, 70%, 55%), hsl(120, 70%, 55%),
+    hsl(180, 70%, 55%), hsl(240, 70%, 55%), hsl(300, 70%, 55%), hsl(360, 70%, 55%)
+  );
+}
+
+.plab-piece-color-control input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--bg-canvas);
+  border-radius: 50%;
+  background: var(--plab-hue-thumb, var(--accent));
+  box-shadow: 0 0 0 1px var(--border-soft);
+  cursor: pointer;
+}
+
+.plab-piece-color-control input[type="range"]::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--bg-canvas);
+  border-radius: 50%;
+  background: var(--plab-hue-thumb, var(--accent));
+  box-shadow: 0 0 0 1px var(--border-soft);
+  cursor: pointer;
+}
+
+.plab-piece-palette p {
+  color: var(--text-mid);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.plab-piece-palette-swatches {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.plab-piece-palette-swatch {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm);
+}
+
 .plab-macros,
 .plab-evolution-fields {
   display: grid;
@@ -542,8 +772,8 @@
 }
 
 .plab-macro-label strong { color: var(--text-hi); font-weight: 590; }
-.plab-macro output { font-family: var(--font-mono); font-size: 9.5px; }
-.plab-macro small { color: var(--text-mid); font-size: 9.5px; line-height: 1.35; }
+.plab-macro output { font-family: var(--font-mono); font-size: 11px; }
+.plab-macro small { color: var(--text-mid); font-size: 11px; line-height: 1.35; }
 
 .plab-macro input,
 .plab-time-range {
@@ -565,42 +795,18 @@
 .plab-evolution-fields[aria-disabled="true"] { opacity: .45; }
 .plab-evolution-fields[aria-disabled="true"] { transform: translateY(4px); }
 
-.plab-palette-control {
+.plab-generator-controls {
   display: grid;
-  gap: 9px;
+  gap: 16px;
   margin-top: 16px;
   padding-top: 14px;
   border-top: 1px solid var(--border-hair);
 }
 
-.plab-palette-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.plab-palette-heading strong,
-.plab-palette-heading small { display: block; }
-.plab-palette-heading strong { color: var(--text-hi); font-size: 11px; }
-.plab-palette-heading small { margin-top: 2px; color: var(--text-mid); font-size: 9.5px; }
-.plab-palette-heading .btn { min-height: 40px; }
-
-.plab-palette-swatches {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(42px, 1fr));
-  gap: 7px;
-}
-
-.plab-palette-swatches label { min-width: 0; }
-.plab-palette-swatches input {
-  width: 100%;
-  min-height: 44px;
-  padding: 3px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--r-sm);
-  background: var(--bg-elev);
-  cursor: pointer;
+.plab-generator-controls-heading {
+  color: var(--text-hi);
+  font-size: 11px;
+  font-weight: 590;
 }
 
 .plab-advanced {
@@ -620,15 +826,6 @@
   cursor: pointer;
 }
 
-.plab-advanced-disabled > span {
-  min-height: 44px;
-  display: flex;
-  align-items: center;
-  color: var(--text-mid);
-  font-size: 10.5px;
-  opacity: .55;
-}
-
 .plab-advanced dl {
   display: grid;
   gap: 7px;
@@ -639,7 +836,7 @@
   display: flex;
   justify-content: space-between;
   color: var(--text-mid);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .plab-advanced dd { color: var(--text-hi); font-family: var(--font-mono); }
@@ -686,7 +883,7 @@
   border: 1px solid var(--border-soft);
   border-radius: var(--r-sm);
   color: var(--text-mid);
-  font-size: 9px;
+  font-size: 11px;
   text-align: center;
 }
 
@@ -702,7 +899,7 @@
   border: 1px solid var(--accent);
   border-radius: var(--r-sm);
   color: var(--text-mid);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.45;
 }
 
@@ -714,7 +911,7 @@
   margin-top: 8px;
   color: var(--text-hi);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .plab-export-budgets {
@@ -729,7 +926,7 @@
   gap: 12px;
   min-width: 0;
   color: var(--text-mid);
-  font-size: 9.5px;
+  font-size: 11px;
 }
 
 .plab-export-budgets dd { min-width: 0; color: var(--text-hi); font-family: var(--font-mono); text-align: right; }
@@ -739,7 +936,7 @@
 .plab-diagnostics section {
   margin-top: 14px;
   color: var(--text-mid);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
 }
 
@@ -774,7 +971,7 @@
 
 .plab-project-handoff h3,
 .plab-handoff-review strong { color: var(--text-hi); font-size: 11px; }
-.plab-project-handoff p { color: var(--text-mid); font-size: 9.5px; line-height: 1.5; }
+.plab-project-handoff p { color: var(--text-mid); font-size: 11px; line-height: 1.5; }
 .plab-project-handoff > .btn { min-height: 42px; justify-content: center; }
 
 .plab-handoff-review {
@@ -791,34 +988,15 @@
 }
 
 .plab-runtime-cleanup .btn { min-height: 40px; justify-content: center; }
-.plab-runtime-cleanup small { color: var(--text-mid); font-size: 9.5px; line-height: 1.45; }
+.plab-runtime-cleanup small { color: var(--text-mid); font-size: 11px; line-height: 1.45; }
 
 .plab-diagnostics {
   margin: 0 14px 14px;
   padding-top: 0;
 }
 
-.plab-diagnostic-playback { justify-content: space-between; color: var(--text-mid); font-size: 10px; }
+.plab-diagnostic-playback { justify-content: space-between; color: var(--text-mid); font-size: 11px; }
 .plab-diagnostic-playback strong { color: var(--text-hi); font-family: var(--font-mono); }
-
-.plab-switch-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  min-height: 48px;
-  margin-bottom: 16px;
-  padding: 8px 11px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--r-sm);
-  background: var(--bg-elev);
-}
-
-.plab-switch-row strong,
-.plab-switch-row small { display: block; }
-.plab-switch-row strong { color: var(--text-hi); font-size: 11px; }
-.plab-switch-row small { margin-top: 2px; color: var(--text-mid); font-size: 9.5px; }
-.plab-switch-row input { width: 20px; height: 20px; accent-color: var(--accent); }
 
 .plab-evolution-fields .plab-macro { margin-top: 4px; }
 
@@ -830,9 +1008,7 @@
   border-top: 1px solid var(--border-hair);
 }
 
-.plab-scrub-heading,
-.plab-seed-heading,
-.plab-ab-row {
+.plab-scrub-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -842,85 +1018,21 @@
 }
 
 .plab-scrub-heading strong { color: var(--text-hi); font-weight: 590; }
-.plab-scrub-heading output { font-family: var(--font-mono); font-size: 9px; }
+.plab-scrub-heading output { font-family: var(--font-mono); font-size: 11px; }
 
-.plab-position-buttons,
-.plab-ab-row div {
+.plab-position-buttons {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 5px;
 }
 
-.plab-position-buttons .btn,
-.plab-ab-row .btn {
+.plab-position-buttons .btn {
   min-width: 0;
   min-height: 36px;
   justify-content: center;
   padding-inline: 7px;
-  font-size: 10px;
+  font-size: 11px;
 }
-
-.plab-ab-row div { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.plab-ab-row .btn[aria-pressed="true"] { border-color: var(--accent); background: var(--bg-elev); color: var(--text-hi); }
-
-.plab-seed-heading { margin: 16px 0 9px; }
-.plab-seed-heading strong { color: var(--text-hi); font-family: var(--font-mono); font-size: 9px; }
-
-.plab-variation-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.plab-variation {
-  min-height: 110px;
-  display: grid;
-  place-items: start;
-  padding: 0;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--r-sm);
-  background: var(--bg-elev);
-  color: var(--text-hi);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.plab-variation[aria-pressed="true"] { border-color: var(--accent); }
-.plab-variation > span { padding: 7px 9px 0; font-size: 10.5px; font-weight: 600; }
-.plab-variation > small { padding: 0 9px 8px; color: var(--text-mid); font-family: var(--font-mono); font-size: 8.5px; }
-
-.plab-seed-actions {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 8px;
-  margin-top: 9px;
-}
-
-.plab-seed-actions label {
-  min-height: 40px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-mid);
-  font-size: 10px;
-}
-
-.plab-seed-actions input { width: 18px; height: 18px; accent-color: var(--accent); }
-.plab-seed-actions .btn { min-height: 40px; }
-.plab-seed-note { margin-top: 7px; color: var(--text-mid); font-size: 9.5px; line-height: 1.4; }
-
-.plab-layer-inspector {
-  padding: 0 18px;
-  border-bottom: 1px solid var(--border-hair);
-}
-
-.plab-layers { margin-top: 0; padding-block: 7px 14px; border-top: 0; }
-.plab-layer-stack { display: grid; gap: 12px; padding-bottom: 4px; }
-.plab-layer-stack > p { color: var(--text-mid); font-size: 10px; line-height: 1.45; }
-.plab-layer { display: grid; gap: 12px; padding: 10px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); }
-.plab-layer legend { padding-inline: 4px; color: var(--text-hi); font-size: 10px; font-weight: 600; }
 
 .plab-library-heading {
   display: flex;
@@ -931,7 +1043,7 @@
 }
 
 .plab-library-heading > div { display: flex; align-items: baseline; gap: 10px; }
-.plab-library-heading > span { color: var(--text-mid); font-family: var(--font-mono); font-size: 9px; }
+.plab-library-heading > span { color: var(--text-mid); font-family: var(--font-mono); font-size: 11px; }
 .plab-private-library ul { display: grid; gap: 5px; list-style: none; }
 
 .plab-private-library li button {
@@ -951,7 +1063,7 @@
   cursor: pointer;
 }
 
-.plab-private-library li small { color: var(--text-mid); font-size: 9px; text-transform: capitalize; }
+.plab-private-library li small { color: var(--text-mid); font-size: 11px; text-transform: capitalize; }
 
 .plab-import-errors,
 .plab-save-status {
@@ -960,13 +1072,55 @@
   border: 1px solid var(--border-soft);
   border-radius: var(--r-sm);
   color: var(--text-mid);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
 }
 
 .plab-import-errors { border-color: var(--danger); }
 .plab-import-errors strong { color: var(--text-hi); }
 .plab-import-errors ul { margin: 4px 0 0 16px; }
+
+/* Promoted project-handoff button + honesty badge (Finding B). The badge
+   text and the button's own label/enabled-state are both derived from the
+   same compatibility classification in PatternLabScreen.jsx, so this block
+   never has to guess at meaning independent of that data. */
+.plab-use-in-project-promoted {
+  display: grid;
+  gap: 8px;
+  margin: 12px 18px 0;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border-soft));
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-elev));
+  text-align: center;
+}
+
+.plab-use-in-project-promoted .btn {
+  min-height: 44px;
+  justify-content: center;
+}
+
+.plab-use-in-project-promoted .btn:disabled {
+  border-color: var(--border-soft);
+  background: var(--bg-elev);
+  color: var(--text-mid);
+}
+
+.plab-compat-badge {
+  color: var(--text-hi);
+  font-size: 11.5px;
+  font-weight: 590;
+  line-height: 1.4;
+}
+
+.plab-compat-badge[data-classification="live-on-card"] { color: var(--ok); }
+.plab-compat-badge[data-classification="studio-only"] { color: var(--danger); }
+
+.plab-compat-hint {
+  color: var(--text-mid);
+  font-size: 11px;
+  line-height: 1.4;
+}
 
 .plab-actions {
   position: sticky;
@@ -1051,15 +1205,48 @@
   }
   .plab-stage { min-height: 0; }
   .plab-empty { width: calc(100% - 24px); padding: 20px; }
+  /* --- Three-detent control sheet ----------------------------------
+     peek: the play strip. Sliders under a live, fully visible preview.
+     half: the same non-modal contract with room for the depth controls.
+     full: browser / drafts / save. The only modal detent.
+     The preview is shrunk by exactly the sheet's height at peek and half,
+     so the artwork sits ABOVE the sheet rather than half-hidden behind it —
+     the mapped preview is centred in .plab-stage, so simply overlaying it
+     would bury the middle of the piece. */
+  .plab-screen {
+    --plab-sheet-peek: min(45dvh, 372px);
+    --plab-sheet-half: min(60dvh, 500px);
+    --plab-sheet-full: min(90dvh, 780px);
+    --plab-sheet-h: var(--plab-sheet-peek);
+    /* Overwritten from JS with the measured distance between the workspace's
+       bottom edge and the bottom of the viewport — the Studio status bar the
+       sheet also covers. The sheet is anchored to the VIEWPORT, so shrinking
+       the preview by the sheet's full height double-counts that strip and
+       collapses the artwork to nothing. */
+    --plab-sheet-gap: 0px;
+  }
+  .plab-screen[data-sheet-detent="half"] { --plab-sheet-h: var(--plab-sheet-half); }
+  .plab-screen[data-sheet-detent="full"] { --plab-sheet-h: var(--plab-sheet-full); }
+
+  .plab-preview {
+    transition: padding-bottom 240ms cubic-bezier(.22, 1, .36, 1);
+  }
+  .plab-screen[data-sheet-detent="peek"] .plab-preview,
+  .plab-screen[data-sheet-detent="half"] .plab-preview {
+    padding-bottom: max(0px, calc(var(--plab-sheet-h) - var(--plab-sheet-gap)));
+  }
+
   .plab-controls {
     position: fixed;
     z-index: 101;
     right: 0;
     bottom: 0;
     left: 0;
-    max-height: min(82dvh, 680px);
+    height: var(--plab-sheet-h);
+    max-height: none;
     display: flex;
-    overflow-y: auto;
+    flex-direction: column;
+    overflow: hidden;
     border: 1px solid var(--border-soft);
     border-bottom: 0;
     border-radius: var(--r-lg) var(--r-lg) 0 0;
@@ -1067,15 +1254,98 @@
     transform: translateY(calc(100% + 40px));
     visibility: hidden;
     pointer-events: none;
+    /* Only the detent change is animated. Opening and closing stay
+       instantaneous, as they always were: a transform transition here means
+       the sheet's rectangle is still travelling for a quarter second after
+       the tap, which any measurement — or thumb — taken in that window reads
+       in the wrong place. */
+    transition: height 240ms cubic-bezier(.22, 1, .36, 1);
   }
   .plab-controls.drawer-open {
     transform: translateY(0);
     visibility: visible;
     pointer-events: auto;
   }
-  .plab-control-heading { min-height: 56px; }
+
+  .plab-sheet-handle {
+    flex: 0 0 auto;
+    width: 100%;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    background: var(--bg-panel);
+    cursor: grab;
+    /* The handle owns its vertical gesture; without this the browser scrolls
+       the sheet body instead of resizing the sheet. */
+    touch-action: none;
+  }
+  .plab-sheet-handle > span {
+    display: block;
+    width: 44px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--border-soft);
+  }
+  .plab-sheet-handle:active { cursor: grabbing; }
+  .plab-sheet-handle:active > span { background: var(--accent); }
+
+  /* The action bar is a flex sibling of the scroller, not a sticky overlay
+     inside it, so no section can ever be clipped underneath it. */
+  .plab-sheet-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+  }
+
+  .plab-control-heading { flex: 0 0 auto; min-height: 56px; }
   .plab-control-heading > span:last-of-type { display: none; }
   .plab-control-body { border-right: 0; }
+
+  /* At peek the sheet is the play strip: the hue wheel and its swatch strip
+     are tuning, not playing, and they cost ~110px that Brightness and Speed
+     need. They come back the moment the sheet is dragged to half. Kept as
+     visibility-in-layout terms only — nothing is removed from the DOM, so
+     the controls stay findable and the sheet stays scrollable. */
+  .plab-screen[data-sheet-detent="peek"] .plab-piece-color { display: none; }
+
+  /* Peek is the play strip, and a phone gives it about 270px of body. All
+     four sliders have to be under the thumb there without a scroll — the
+     whole defect was "reach a control OR watch the art, never both" — so
+     they pair up two to a row. Nothing is hidden and nothing shrinks below
+     the 44px touch floor; only the stacking changes. */
+  .plab-screen[data-sheet-detent="peek"] .plab-macros,
+  .plab-screen[data-sheet-detent="half"] .plab-macros {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 12px;
+  }
+  .plab-screen[data-sheet-detent="peek"] .plab-compact-step-body,
+  .plab-screen[data-sheet-detent="half"] .plab-compact-step-body { padding: 10px 14px 14px; }
+  .plab-screen[data-sheet-detent="peek"] .plab-macro small,
+  .plab-screen[data-sheet-detent="half"] .plab-macro small { display: none; }
+  /* One compact row of actions at peek instead of two: Keep stays reachable
+     without stealing the height the sliders need. */
+  .plab-screen[data-sheet-detent="peek"] .plab-actions,
+  .plab-screen[data-sheet-detent="half"] .plab-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    padding-block: 10px;
+  }
+  .plab-screen[data-sheet-detent="peek"] .plab-actions .btn:first-child,
+  .plab-screen[data-sheet-detent="half"] .plab-actions .btn:first-child { grid-column: auto; }
+  .plab-screen[data-sheet-detent="peek"] .plab-actions .btn,
+  .plab-screen[data-sheet-detent="half"] .plab-actions .btn {
+    padding-inline: 4px;
+    font-size: 10.5px;
+    text-align: center;
+    overflow: hidden;
+  }
   .plab-control-section,
   .plab-private-library { padding: 18px 14px; }
   .plab-control-section.plab-compact-step { padding: 0; }
@@ -1083,17 +1353,18 @@
   .plab-compact-step-body { padding: 14px; }
   .plab-source-field select { min-height: 44px; }
   .plab-runtime-tools { padding-inline: 14px; }
+  .plab-use-in-project-promoted { margin-inline: 14px; }
   .plab-actions {
-    position: sticky;
+    position: static;
+    flex: 0 0 auto;
+    margin-top: 0;
     padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
   }
   .plab-play { min-height: 44px; }
   .plab-actions .btn,
   .plab-field select,
-  .plab-variation,
   .plab-private-library li button { min-height: 44px; }
-  .plab-position-buttons .btn,
-  .plab-ab-row .btn { min-height: 42px; }
+  .plab-position-buttons .btn { min-height: 42px; }
   .plab-export-actions .btn,
   .plab-diagnostic-playback .btn,
   .plab-runtime-cleanup .btn { min-height: 44px; }

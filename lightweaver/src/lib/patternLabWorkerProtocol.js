@@ -23,7 +23,7 @@ export const PATTERN_LAB_WORKER_BUDGETS = Object.freeze({
   maxGeometryBytes: 512 * 1024,
   maxGeometryMetadataBytes: 64 * 1024,
   maxAllocationBytes: 4 * 1024 * 1024,
-  renderWarningMs: 40,
+  renderWarningMs: 120,
   exportWarningMs: 250,
 });
 

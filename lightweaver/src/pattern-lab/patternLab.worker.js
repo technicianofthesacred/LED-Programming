@@ -28,6 +28,12 @@ let initialized = false;
 let staticGeometry = null;
 let staticGeneration = 0;
 const cancelledRequests = new Set();
+// The worker now lives for the whole session, so a cancel for a request that has
+// already been handled must never be retained — otherwise this set grows forever.
+// Every 'render' message retires its id in a finally block, including one rejected
+// before rendering starts, and a cancel naming an already-retired id is ignored.
+// Ids only ever increase, so the set holds at most the not-yet-rendered requests.
+let lastHandledRequestId = 0;
 let generatorRuntime = null;
 
 function reply(type, requestId, payload = {}, transfer = []) {
@@ -354,12 +360,14 @@ async function handleMessage(message) {
     }
     if (type === 'cancel') {
       const targetRequestId = Number(payload.targetRequestId);
-      if (Number.isSafeInteger(targetRequestId) && targetRequestId > 0) cancelledRequests.add(targetRequestId);
+      if (Number.isSafeInteger(targetRequestId) && targetRequestId > 0
+        && targetRequestId > lastHandledRequestId) cancelledRequests.add(targetRequestId);
       reply('stats', requestId, { cancelledRequestId: targetRequestId || null });
       return;
     }
     if (type === 'dispose') {
       disposeGeneratorRuntime();
+      cancelledRequests.clear();
       staticGeometry = null;
       staticGeneration = 0;
       initialized = false;
@@ -368,8 +376,17 @@ async function handleMessage(message) {
       return;
     }
     if (type !== 'render') throw new RangeError(`Unsupported Pattern Lab worker request: ${String(type)}`);
-    if (!initialized) throw new Error('Pattern Lab worker must be initialized before rendering');
-    await renderRequest(requestId, payload);
+    try {
+      // Inside the try/finally on purpose: a render rejected before it starts must still
+      // retire its id, or a cancel recorded against it would be retained forever.
+      if (!initialized) throw new Error('Pattern Lab worker must be initialized before rendering');
+      await renderRequest(requestId, payload);
+    } finally {
+      if (Number.isSafeInteger(requestId)) {
+        lastHandledRequestId = Math.max(lastHandledRequestId, requestId);
+        cancelledRequests.delete(requestId);
+      }
+    }
   } catch (error) {
     reply('error', requestId, {
       name: error instanceof Error ? error.name : 'Error',

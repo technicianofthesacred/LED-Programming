@@ -21,5 +21,12 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     timeout: 30000,
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    // The owner uses a phone. A suite that only ever drove Desktop Chrome is
+    // how mobile-only defects (like the inner-scroll-container overflow in
+    // Pattern Lab) shipped without a single red test — see
+    // todo/plans/patternlab-rebuild.md §7 Phase 1.
+    { name: 'Mobile Chrome', use: { ...devices['Pixel 5'] } },
+  ],
 });

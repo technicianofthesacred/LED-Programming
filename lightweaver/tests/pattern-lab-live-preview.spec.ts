@@ -1,4 +1,5 @@
 import { test, expect, type Page, type Route } from '@playwright/test';
+import { choosePattern, closeControls } from './helpers/pattern-lab.ts';
 
 declare global {
   interface Window { __patternLabFrames: string[]; }
@@ -60,9 +61,16 @@ async function installCardHarness(page: Page) {
     if (url.pathname === '/api/control' && request.method() === 'POST') {
       const body = request.postDataJSON() as Record<string, unknown>;
       controlBodies.push(body);
+      // requireLivePreviewAcknowledgement (cardLiveControl.js) confirms the
+      // applied look via response.appliedPatternId, not response.patternId —
+      // every other card-control test fixture in this suite echoes it
+      // (card-control-drawer.spec.ts, patterns-v3.spec.ts,
+      // wiring-workspace.spec.ts). This fixture was missing it, so any push
+      // that actually named a pattern (the restore-after-stop call) failed
+      // acknowledgement with "did not report which pattern … it applied".
       await route.fulfill({ status: 200, headers, json: body.cancelStream && !body.patternId
         ? { ok: true }
-        : { ok: true, cardId: 'test-card', patternId: body.patternId || 'aurora' } });
+        : { ok: true, cardId: 'test-card', patternId: body.patternId || 'aurora', appliedPatternId: body.patternId || 'aurora' } });
       return;
     }
     await route.fulfill({ status: 404, headers, json: { ok: false } });
@@ -73,10 +81,18 @@ async function installCardHarness(page: Page) {
 test('physical preview is opt-in and Stop cancels the stream before restoring the snapshot', async ({ page }) => {
   const controls = await installCardHarness(page);
   await page.goto('/#screen=pattern-lab', { waitUntil: 'domcontentloaded' });
-  await page.getByLabel('Base pattern').selectOption('aurora');
-  await page.getByRole('slider', { name: 'Movement', exact: true }).fill('75');
+  await choosePattern(page, 'aurora');
+  await page.getByRole('slider', { name: 'Color', exact: true }).fill('75');
+  // "Preview on Lights" lives in the always-present preview stage
+  // (PatternLabPreview.jsx), not the controls drawer — but on mobile that
+  // stage is the ancestor PatternLabScreen.jsx marks `inert` for as long as
+  // the drawer stays open, so it is unreachable until the drawer closes.
+  // This is a real product behaviour, not a markup detail to route around:
+  // an owner has to close the sheet to reach the physical-preview action.
+  await closeControls(page);
 
   const preview = page.getByRole('button', { name: 'Preview on Lights' });
+  await expect(preview).toBeVisible();
   await expect(preview).toBeEnabled();
   expect(controls).toEqual([]);
   expect(await page.evaluate(() => window.__patternLabFrames.length)).toBe(0);
@@ -99,7 +115,8 @@ test('physical preview is opt-in and Stop cancels the stream before restoring th
 test('leaving Pattern Lab rolls back an active physical preview', async ({ page }) => {
   const controls = await installCardHarness(page);
   await page.goto('/#screen=pattern-lab', { waitUntil: 'domcontentloaded' });
-  await page.getByLabel('Base pattern').selectOption('aurora');
+  await choosePattern(page, 'aurora');
+  await closeControls(page);
   await page.getByRole('button', { name: 'Preview on Lights' }).click();
   await expect(page.getByRole('button', { name: 'Stop preview' })).toBeVisible();
 

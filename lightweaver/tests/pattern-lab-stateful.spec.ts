@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { choosePattern, openControls } from './helpers/pattern-lab.ts';
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/#screen=pattern-lab', { waitUntil: 'domcontentloaded' });
@@ -22,25 +23,27 @@ test('chooses and sculpts a living simulation through the simple Pattern Lab con
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
 
-  await page.getByLabel('Base pattern').selectOption('generator:particles');
+  await choosePattern(page, 'generator:particles');
   await expect(page.getByTestId('pattern-lab-mapped-preview')).toHaveAttribute('data-worker-state', 'frame');
   await expect(page.getByTestId('pattern-lab-draft-name')).toHaveText('Particle Drift');
-  const thumbnails = page.getByTestId('pattern-lab-variation-preview');
-  await expect(thumbnails).toHaveCount(4);
-  for (let index = 0; index < 4; index += 1) {
-    await expect(thumbnails.nth(index)).toHaveAttribute('data-worker-available', 'true');
-    await expect(thumbnails.nth(index)).toHaveAttribute('data-worker-state', 'frame');
-  }
-  await page.getByText('Advanced controls').click();
+  // PatternLabVariants.jsx (the four thumbnail previews this used to check)
+  // was deleted in this rebuild, and the generator's advanced sliders are no
+  // longer behind an "Advanced controls" disclosure — they render directly
+  // once a procedural pattern is chosen (see PatternLabControls.jsx).
   await page.getByRole('slider', { name: 'Particle count' }).fill('48');
-  await page.getByRole('slider', { name: 'Movement', exact: true }).fill('68');
-  await expect(page.getByLabel('Movement value')).toHaveText('68%');
+  // Movement's macro slider is context-dependent (see controlsForContext in
+  // PatternLabControls.jsx) and only shows for built-in library patterns —
+  // a procedural generator like Particle Drift shows Shape/Texture instead.
+  // Color is universal, so it stands in here for "a macro change reaches
+  // the worker alongside the generator's own advanced control".
+  await page.getByRole('slider', { name: 'Color', exact: true }).fill('68');
+  await expect(page.getByLabel('Color value', { exact: true })).toHaveText('68%');
   await expect.poll(() => page.evaluate(() => {
     const recipes = (window as typeof window & { __LW_STATEFUL_RECIPES__: Array<Record<string, unknown>> })
       .__LW_STATEFUL_RECIPES__;
     return recipes.some(recipe => (
       (recipe.base as { kind?: string })?.kind === 'particles'
-      && (recipe.macros as { movement?: number })?.movement === 0.68
+      && (recipe.macros as { color?: number })?.color === 0.68
       && (recipe.base as { params?: { advanced?: { particleCount?: number } } })
         ?.params?.advanced?.particleCount === 48
     ));
@@ -53,15 +56,20 @@ test('chooses and sculpts a living simulation through the simple Pattern Lab con
   const stateful = recipes.filter(recipe => (recipe.base as { kind?: string })?.kind === 'particles');
   expect(stateful.length).toBeGreaterThan(0);
   expect(stateful.every(recipe => Number.isInteger(recipe.seed))).toBe(true);
-  expect(stateful.some(recipe => (recipe.macros as { movement?: number })?.movement === 0.68)).toBe(true);
+  expect(stateful.some(recipe => (recipe.macros as { color?: number })?.color === 0.68)).toBe(true);
   await page.getByTestId('pattern-lab-runtime-tools').evaluate((element: HTMLDetailsElement) => { element.open = true; });
   await expect(page.getByTestId('pattern-lab-export').locator('.plab-export-status'))
     .toHaveAttribute('data-classification', 'bake-to-card');
 
   await page.getByRole('button', { name: 'Save private draft' }).click();
   await page.reload({ waitUntil: 'domcontentloaded' });
+  // The private-drafts list ("Open Particle Drift") lives inside the same
+  // drawer the tile grid and sliders do (PatternLabScreen.jsx renders it in
+  // `.plab-private-library`, inside `#plab-controls-drawer`). A reload drops
+  // React state, so the drawer starts closed again on mobile — reopen it
+  // before reaching in, same as the initial choosePattern() call does.
+  await openControls(page);
   await page.getByRole('button', { name: /Open Particle Drift/ }).click();
-  await page.getByText('Advanced controls').click();
   await expect(page.getByRole('slider', { name: 'Particle count' })).toHaveValue('48');
   const sourceSnapshot = JSON.parse(
     await page.getByTestId('pattern-lab-runtime-tools').getAttribute('data-source-recipe-snapshot') || '{}',
