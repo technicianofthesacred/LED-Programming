@@ -74,4 +74,57 @@ assert.match(
   'Patterns screen should render a bounded DOM LedRow preview rather than one node per hardware pixel',
 );
 
+// ── Speed is a rate, not a multiplier on elapsed time ───────────────────────
+// `stripT = t * speed` teleports the pattern by `t * delta` the instant Speed
+// changes, and the jump grows with how long the tab has been open: measured on
+// aurora, one 0.01 notch after ten minutes moved the strip 158x as far as an
+// ordinary frame does. Feeding an accumulated phase keeps the pattern where it
+// is and only changes how fast it travels from that moment on.
+{
+  const pattern = 'aurora';
+  const paletteNorm = normalizePalette();
+  const fn = compilePattern(pattern);
+  const frame = (t, speed, stripPhases) => renderPixelFrame({
+    t,
+    strips: [{ id: 'outer', speed, brightness: 1, hueShift: 0, pts: ring }],
+    patternId: pattern,
+    activeFn: fn,
+    paletteNorm,
+    stripPhases,
+  }).pixels;
+  const drift = (a, b) => {
+    let sum = 0;
+    for (let i = 0; i < a.length; i++) {
+      sum += Math.abs(a[i].r - b[i].r) + Math.abs(a[i].g - b[i].g) + Math.abs(a[i].b - b[i].b);
+    }
+    return sum / (a.length * 3);
+  };
+
+  const dt = 1 / 60;
+  const openSeconds = 600;
+  const phases = new Map();
+  let clock = 0;
+  for (let i = 0; i < openSeconds * 60; i++) {
+    clock += dt;
+    phases.set('outer', (phases.get('outer') ?? clock) + dt * 1);
+  }
+
+  const held = frame(clock, 1, phases);
+  const oneOrdinaryFrame = drift(held, frame(clock + dt, 1, new Map([['outer', phases.get('outer') + dt]])));
+  const afterSpeedChange = drift(held, frame(clock + dt, 1.01, new Map([['outer', phases.get('outer') + dt * 1.01]])));
+  assert.ok(
+    afterSpeedChange <= oneOrdinaryFrame * 6,
+    `a 0.01 speed notch after ${openSeconds}s moved ${afterSpeedChange} against an ordinary frame's ${oneOrdinaryFrame}`,
+  );
+
+  // The old product is still the fallback for callers that render at one fixed
+  // speed (sequence baking, offline frame audits), and it still scrubs — which
+  // is exactly why the accumulated phase has to win when it is supplied.
+  const withoutPhases = drift(frame(clock, 1, null), frame(clock, 1.01, null));
+  assert.ok(
+    withoutPhases > oneOrdinaryFrame * 20,
+    'the no-phase fallback is the scrubbing path this guard exists to keep out of the live preview',
+  );
+}
+
 console.log('preview-animation tests passed');

@@ -16,6 +16,15 @@ static inline uint32_t scaleTime(uint32_t now, float speed) {
   return static_cast<uint32_t>((static_cast<uint64_t>(now) * speedQ10) >> 10);
 }
 
+// The clock every animation runs on. When the caller integrates speed into a
+// per-zone clock (see PatternModifiers::patternClockMs) that clock IS the
+// answer, and changing speed changes how fast the pattern runs from here on.
+// Without one, fall back to scaling uptime — correct only while speed is fixed.
+static inline uint32_t patternClock(uint32_t now, const PatternModifiers& mods) {
+  if (mods.hasPatternClock) return mods.patternClockMs;
+  return scaleTime(now, mods.speed);
+}
+
 static inline uint8_t shiftHue(uint8_t base, int16_t shift) {
   int16_t v = int16_t(base) + shift;
   while (v < 0) v += 256;
@@ -43,10 +52,66 @@ static uint8_t resolveDriftHue(uint32_t t, const PatternModifiers& mods) {
   return uint8_t((uint16_t(lo) + step) & 0xff);
 }
 
+// Exact RGB -> HSV and its exact inverse, both on FastLED's 0-255 hue wheel.
+//
+// Was: `rgb2hsv_approximate()` in, `leds[i] = hsv` (i.e. hsv2rgb_rainbow) out.
+// Neither is invertible, and the rainbow ramp is a different set of colors than
+// the pattern just produced, so the pair recolored every pixel by 30-54 units
+// (0-255) even at zero shift. Since the whole post-pass is skipped when hue and
+// saturation sit exactly on their defaults, that entire recolor landed on the
+// FIRST notch either control moved: a 44-unit lurch, then about 1 unit over the
+// next thirty notches. The controls felt broken because they were.
+//
+// With an exact pair, zero shift is a true no-op and a shift rotates the
+// pattern's own colors. The Studio preview uses the same math so the screen
+// still matches the strip (lightweaver/src/lib/previewColorModifiers.js).
+struct LwExactHsv {
+  uint8_t hue;
+  uint8_t saturation;
+  uint8_t value;
+};
+
+static LwExactHsv rgbToExactHsv(const CRGB& color) {
+  const uint8_t maximum = max(color.r, max(color.g, color.b));
+  const uint8_t minimum = min(color.r, min(color.g, color.b));
+  const uint8_t delta = uint8_t(maximum - minimum);
+  LwExactHsv hsv{0, 0, maximum};
+  if (delta == 0 || maximum == 0) return hsv;
+  hsv.saturation = uint8_t((uint16_t(delta) * 255u + (maximum / 2)) / maximum);
+  // Sixths of the wheel are 0..255 wide in FastLED units; 1530 = 6 * 255.
+  int32_t scaled;
+  if (maximum == color.r) scaled = (int32_t(color.g) - int32_t(color.b)) * 255 / delta;
+  else if (maximum == color.g) scaled = (int32_t(color.b) - int32_t(color.r)) * 255 / delta + 510;
+  else scaled = (int32_t(color.r) - int32_t(color.g)) * 255 / delta + 1020;
+  if (scaled < 0) scaled += 1530;
+  hsv.hue = uint8_t((uint32_t(scaled) * 256u) / 1530u);
+  return hsv;
+}
+
+static CRGB exactHsvToRgb(const LwExactHsv& hsv) {
+  if (hsv.saturation == 0) return CRGB(hsv.value, hsv.value, hsv.value);
+  const uint16_t sector = uint16_t((uint32_t(hsv.hue) * 1530u) / 256u);
+  const uint8_t index = uint8_t(sector / 255u);
+  const uint8_t fraction = uint8_t(sector % 255u);
+  const uint8_t p = uint8_t((uint16_t(hsv.value) * (255u - hsv.saturation)) / 255u);
+  const uint8_t q = uint8_t((uint32_t(hsv.value) *
+      (255u * 255u - uint32_t(hsv.saturation) * fraction)) / (255u * 255u));
+  const uint8_t t = uint8_t((uint32_t(hsv.value) *
+      (255u * 255u - uint32_t(hsv.saturation) * (255u - fraction))) / (255u * 255u));
+  switch (index) {
+    case 0: return CRGB(hsv.value, t, p);
+    case 1: return CRGB(q, hsv.value, p);
+    case 2: return CRGB(p, hsv.value, t);
+    case 3: return CRGB(p, q, hsv.value);
+    case 4: return CRGB(t, p, hsv.value);
+    default: return CRGB(hsv.value, p, q);
+  }
+}
+
 void applyGlobalColorModifiers(CRGB* leds, uint16_t totalPixels, uint32_t now, const PatternModifiers& mods) {
   int16_t hueShift = int16_t(mods.customHue) - int16_t(LW_DEFAULT_CUSTOM_HUE);
   if (mods.customDrift) {
-    hueShift += int16_t(resolveDriftHue(scaleTime(now, mods.speed), mods)) - int16_t(mods.customHue);
+    hueShift += int16_t(resolveDriftHue(patternClock(now, mods), mods)) - int16_t(mods.customHue);
   }
   const bool shiftsHue = hueShift != 0;
   const bool changesSaturation = mods.customSaturation != LW_DEFAULT_CUSTOM_SATURATION;
@@ -58,13 +123,13 @@ void applyGlobalColorModifiers(CRGB* leds, uint16_t totalPixels, uint32_t now, c
   for (uint16_t i = 0; i < totalPixels; i++) {
     if (!(leds[i].r || leds[i].g || leds[i].b)) continue;
     if (shiftsHue || changesSaturation) {
-      CHSV hsv = rgb2hsv_approximate(leds[i]);
+      LwExactHsv hsv = rgbToExactHsv(leds[i]);
       if (shiftsHue) hsv.hue = shiftHue(hsv.hue, hueShift);
       if (changesSaturation) {
         uint16_t sat = (uint16_t(hsv.saturation) * mods.customSaturation + (LW_DEFAULT_CUSTOM_SATURATION / 2)) / LW_DEFAULT_CUSTOM_SATURATION;
         hsv.saturation = uint8_t(sat > 255 ? 255 : sat);
       }
-      leds[i] = hsv;
+      leds[i] = exactHsvToRgb(hsv);
     }
     if (breatheScale < 255) leds[i].nscale8(breatheScale);
   }
@@ -216,7 +281,7 @@ bool renderNativeRecipe(const lightweaver::NativeRecipe& recipe, CRGB* leds,
   if (!leds || totalPixels == 0 || recipe.version != lightweaver::LW_RECIPE_SCHEMA_VERSION ||
       recipe.paletteCount < lightweaver::LW_RECIPE_MIN_PALETTE_COLORS ||
       recipe.layerCount > lightweaver::LW_RECIPE_MAX_LAYERS) return false;
-  const uint32_t recipeNow = scaleTime(now, mods.speed);
+  const uint32_t recipeNow = patternClock(now, mods);
   for (uint16_t pixel = 0; pixel < totalPixels; pixel++) {
     const uint16_t spatialPixel = patternSpatialIndex(pixel, context);
     float coordinate = patternUnitCoordinate(pixel, totalPixels, context);
@@ -261,9 +326,12 @@ bool renderNativeRecipe(const lightweaver::NativeRecipe& recipe, CRGB* leds,
     }
     leds[pixel] = composed;
     if (mods.hueShift != 0 && (leds[pixel].r || leds[pixel].g || leds[pixel].b)) {
-      CHSV hsv = rgb2hsv_approximate(leds[pixel]);
+      // Same exact pair as applyGlobalColorModifiers: the advanced Hue shift
+      // is skipped at 0, so a lossy round trip would dump its whole recolor onto
+      // the first notch instead of shifting by one notch's worth of hue.
+      LwExactHsv hsv = rgbToExactHsv(leds[pixel]);
       hsv.hue = shiftHue(hsv.hue, mods.hueShift);
-      leds[pixel] = hsv;
+      leds[pixel] = exactHsvToRgb(hsv);
     }
   }
   applyGlobalColorModifiers(leds, totalPixels, now, mods);
@@ -337,7 +405,7 @@ bool renderProceduralPattern(const String& preset, CRGB* leds, uint16_t totalPix
     const lightweaver::NativeRecipe* recipe = lightweaver::findNativeRecipe(preset.c_str());
     return recipe ? renderNativeRecipe(*recipe, leds, totalPixels, now, mods, context) : false;
   }
-  uint32_t t = scaleTime(now, mods.speed);
+  uint32_t t = patternClock(now, mods);
   // Pattern motion follows the speed-scaled clock. These levels are uniform
   // across the frame, so calculate each active envelope once rather than once
   // per LED. The optional custom-Breathe post-pass intentionally remains on

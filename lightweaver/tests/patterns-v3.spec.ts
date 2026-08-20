@@ -1840,8 +1840,10 @@ test('a slider changes its readout and sends a tuned color modifier', async ({ p
   await setRangeValue(page.getByTestId('look-brightness-slider'), '0.42');
   await expect(page.getByTestId('look-brightness-readout')).toHaveText('42%');
 
-  // Speed slider readout follows the input value.
-  await setRangeValue(page.getByTestId('look-speed-slider'), '1.75');
+  // Speed slider readout follows the input value. The track is logarithmic over
+  // 0.05x-3x (see lookSpeedToSliderValue), so equal travel is an equal ratio and
+  // the input's own units are slider positions, not multipliers: 868 is 1.75x.
+  await setRangeValue(page.getByTestId('look-speed-slider'), '868');
   await expect(page.getByTestId('look-speed-readout')).toHaveText('1.75×');
 
   // The hue spectrum slider readout updates too.

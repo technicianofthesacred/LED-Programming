@@ -15,7 +15,13 @@ import { getCardPatternById } from '../lib/cardPatternBank.js';
 import { getPatternById } from '../lib/patternRegistry.js';
 import { loadCustomPatterns } from '../lib/customPatterns.js';
 import { compilePattern, normalizePalette, renderPixelFrame } from '../lib/frameEngine.js';
-import { applyLookColorModifiers } from '../lib/previewColorModifiers.js';
+import { applyLookColorModifiers, LW_DEFAULT_CUSTOM_SATURATION } from '../lib/previewColorModifiers.js';
+import {
+  LOOK_SPEED_SLIDER_MAX,
+  LOOK_SPEED_SLIDER_MIN,
+  lookSpeedToSliderValue,
+  sliderValueToLookSpeed,
+} from '../lib/controlScale.js';
 import {
   DEFAULT_CARD_VISUAL_LOOK,
   cardColorToHex,
@@ -1840,9 +1846,16 @@ import { PatternPreview } from './PatternPreview.jsx';
     // ── color/geometry mapping for the mockup sliders ───────────────────
     const colorHex = cardColorToHex(look.customHue, look.customSaturation);
     const hueDeg = cardHueToDegrees(look.customHue);
-    const satPct = Math.round((look.customSaturation / 255) * 100);
+    // Saturation is a SCALE on the pattern's own colors, not an absolute level:
+    // the card divides by LW_DEFAULT_CUSTOM_SATURATION (230), so 230 means "leave
+    // this pattern's colors alone". Showing 230/255 = 90% made the default look
+    // like it had a tenth of the track still to climb, when in truth an already
+    // saturated pixel is at its ceiling there and the whole useful travel runs
+    // downward. Reading it against 230 puts the default at an honest 100%.
+    const satPct = Math.round((look.customSaturation / LW_DEFAULT_CUSTOM_SATURATION) * 100);
     const briPct = Math.round(look.brightness * 100);
     const spd = look.speed;
+    const speedSlider = lookSpeedToSliderValue(spd);
     const geo = geometryIdFromSettings(symSettings);
     const updateGeo = (id) => setSymSettings(prev => ({ ...(prev || {}), ...(GEOMETRY_SETTINGS[id] || GEOMETRY_SETTINGS.none) }));
     const patchGeo = (patch) => setSymSettings(prev => ({ ...(prev || {}), enabled: true, ...patch }));
@@ -2296,7 +2309,7 @@ import { PatternPreview } from './PatternPreview.jsx';
                   </div>
                   <Slider k="Saturation" v={`${satPct}%`} value={look.customSaturation} min={0} max={255} step={1} testId="look-saturation" onChange={(customSaturation) => updatePreviewLook({ customSaturation })} />
                   <Slider k="Brightness" v={`${briPct}%`} value={look.brightness} min={0.05} max={1} step={0.01} testId="look-brightness" onChange={(brightness) => updatePreviewLook({ brightness })} />
-                  <Slider k="Speed" v={`${spd.toFixed(2)}×`} value={spd} min={0.05} max={3} step={0.01} testId="look-speed" onChange={(speed) => updatePreviewLook({ speed })} />
+                  <Slider k="Speed" v={`${spd.toFixed(2)}×`} value={speedSlider} min={LOOK_SPEED_SLIDER_MIN} max={LOOK_SPEED_SLIDER_MAX} step={1} testId="look-speed" onChange={(position) => updatePreviewLook({ speed: sliderValueToLookSpeed(position) })} />
 
                   {/* Advanced: Breathe / Drift + Hue-shift, tucked in the mockup idiom */}
                   <details className="pmx-advanced">

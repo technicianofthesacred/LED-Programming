@@ -1591,6 +1591,43 @@ bool renderZoneSlice(const ZoneConfig& zone, const LookConfig* look,
   return true;
 }
 
+// One animation clock per zone, advanced by `elapsed * speed` each frame.
+//
+// Speed is a rate. The previous `uptime * speed` product meant every change to a
+// zone's Speed teleported that zone's pattern by `uptime * delta` — 35 seconds
+// of animation for a single 0.01 notch on a card that had been running an hour,
+// growing without bound the longer the piece stayed on. Owners saw the strip
+// lurch rather than speed up, and a drag across the slider looked like a scrub.
+// Integrating instead keeps the pattern exactly where it is and only changes how
+// fast it moves from that instant on.
+struct ZoneAnimationClock {
+  uint32_t virtualMs = 0;
+  uint32_t lastNow = 0;
+  bool started = false;
+};
+static ZoneAnimationClock zoneAnimationClocks[LW_MAX_ZONES];
+
+// millis() wraps every ~49.7 days; unsigned subtraction gives the true elapsed
+// time across the wrap, which is why the delta is taken rather than the total.
+static uint32_t advanceZoneAnimationClock(uint8_t zoneIndex, uint32_t now, float speed) {
+  if (zoneIndex >= LW_MAX_ZONES) return now;
+  ZoneAnimationClock& clock = zoneAnimationClocks[zoneIndex];
+  if (!clock.started) {
+    clock.started = true;
+    clock.lastNow = now;
+    clock.virtualMs = now;
+    return clock.virtualMs;
+  }
+  const uint32_t elapsed = now - clock.lastNow;
+  clock.lastNow = now;
+  if (speed > 0.0f && elapsed) {
+    uint32_t speedQ10 = static_cast<uint32_t>(speed * 1024.0f + 0.5f);
+    if (speedQ10 == 0) speedQ10 = 1;
+    clock.virtualMs += static_cast<uint32_t>((static_cast<uint64_t>(elapsed) * speedQ10) >> 10);
+  }
+  return clock.virtualMs;
+}
+
 bool renderZone(const ZoneConfig& zone, uint8_t zoneIndex, uint32_t now) {
   if (zone.rangeCount == 0) return false;
   const LookConfig* look = isSupportedCompiledPattern(zone.patternId) ? nullptr : findLookById(zone.patternId);
@@ -1607,6 +1644,8 @@ bool renderZone(const ZoneConfig& zone, uint8_t zoneIndex, uint32_t now) {
   mods.customDrift = zone.customDrift;
   mods.driftHueMin = zone.driftHueMin;
   mods.driftHueMax = zone.driftHueMax;
+  mods.patternClockMs = advanceZoneAnimationClock(zoneIndex, now, zone.speed);
+  mods.hasPatternClock = true;
 
   // Traverse each range once. The bounded lookup was built when the runtime
   // config was applied, so frame rendering performs no mapping scans or zone

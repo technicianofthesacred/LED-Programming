@@ -16,6 +16,16 @@ struct PatternModifiers {
   bool customDrift = false;
   uint8_t driftHueMin = 0;
   uint8_t driftHueMax = 255;
+  // Animation clock in milliseconds, already advanced at `speed`. Speed is a
+  // RATE, so the caller integrates `dt * speed` into a per-zone clock and hands
+  // the result down. Multiplying wall-clock uptime by speed instead — what this
+  // replaced — teleports the pattern by `uptime * delta` the instant the control
+  // moves: one 0.01 notch jumps a card that has been on for an hour by 35
+  // seconds of animation, so the Speed control read as a scrub, not a speed.
+  // `hasPatternClock == false` keeps the old product for callers with no clock
+  // of their own (one-shot renders, tests), where speed never changes mid-render.
+  uint32_t patternClockMs = 0;
+  bool hasPatternClock = false;
 };
 
 struct PatternCoordinateContext {

@@ -80,3 +80,30 @@ export function curvedRangeValueToSlider(value, { min = 0, max = 1, steps = 1000
   const pos = Math.sqrt((normalized - rangeMin) / (rangeMax - rangeMin));
   return Math.round(pos * steps);
 }
+
+// ── Look speed ───────────────────────────────────────────────────────────────
+// The look's speed is clamped to 0.05–3 by `normalizeCardVisualLook`, narrower
+// than the SPEED_MIN/SPEED_MAX pair above (which scales the pattern-lab engine).
+//
+// Was: a linear `min=0.05 max=3 step=0.01` range input. Linear travel spends 68%
+// of the slider on 1×–3× and only 32% on 0.05×–1×, so the slow half — where a
+// gallery piece actually lives — was cramped into a third of the track while
+// half a percent of travel near the top did nothing anyone could see. On a log
+// track every equal movement is an equal RATIO, so halving and doubling cost the
+// same distance wherever you are.
+export const LOOK_SPEED_MIN = 0.05;
+export const LOOK_SPEED_MAX = 3;
+export const LOOK_SPEED_SLIDER_MIN = 0;
+export const LOOK_SPEED_SLIDER_MAX = 1000;
+
+export function sliderValueToLookSpeed(value) {
+  const pos = clamp(value, LOOK_SPEED_SLIDER_MIN, LOOK_SPEED_SLIDER_MAX) / LOOK_SPEED_SLIDER_MAX;
+  const speed = LOOK_SPEED_MIN * ((LOOK_SPEED_MAX / LOOK_SPEED_MIN) ** pos);
+  return Math.round(speed * 100) / 100;
+}
+
+export function lookSpeedToSliderValue(speed) {
+  const normalized = clamp(speed, LOOK_SPEED_MIN, LOOK_SPEED_MAX);
+  const pos = Math.log(normalized / LOOK_SPEED_MIN) / Math.log(LOOK_SPEED_MAX / LOOK_SPEED_MIN);
+  return Math.round(pos * LOOK_SPEED_SLIDER_MAX);
+}
