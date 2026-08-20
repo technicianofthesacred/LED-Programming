@@ -9,7 +9,40 @@ const header = readFileSync(resolve(here, '../src/LightweaverPatterns.h'), 'utf8
 const runtime = readFileSync(resolve(here, '../src/main.cpp'), 'utf8');
 
 assert.match(source, /void applyGlobalColorModifiers\(/);
-assert.match(source, /rgb2hsv_approximate/);
+// The hue/saturation post-pass must use an EXACT RGB<->HSV pair. FastLED's
+// rgb2hsv_approximate + hsv2rgb_rainbow is not invertible and lands a ~44/255
+// recolor on the first notch either control moves off its default (the post-pass
+// is skipped entirely AT the default), which is what made the Studio's Color
+// sliders lurch once and then appear dead.
+assert.match(source, /LwExactHsv hsv = rgbToExactHsv\(leds\[i\]\);/);
+assert.match(source, /leds\[i\] = exactHsvToRgb\(hsv\);/);
+assert.doesNotMatch(
+  source.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, ''),
+  /rgb2hsv_approximate|hsv2rgb_rainbow/,
+  'the color post-pass must not reintroduce a lossy HSV round trip',
+);
+
+// Speed is a rate: every animation clock comes from patternClock(), which
+// prefers the caller's integrated per-zone clock over uptime * speed.
+assert.match(source, /static inline uint32_t patternClock\(uint32_t now, const PatternModifiers& mods\)/);
+assert.match(source, /if \(mods\.hasPatternClock\) return mods\.patternClockMs;/);
+{
+  // The one surviving `scaleTime(now, mods.speed)` is patternClock()'s own
+  // fallback for callers that render at a single fixed speed. Any other use is a
+  // render path that would still teleport when its speed changes.
+  const bare = source.replace(/\/\/[^\n]*/g, '');
+  const uses = bare.match(/scaleTime\(now, mods\.speed\)/g) || [];
+  assert.equal(uses.length, 1, 'render paths must read the clock through patternClock()');
+  const clockStart = bare.indexOf('static inline uint32_t patternClock(');
+  const clockEnd = bare.indexOf('\n}', clockStart);
+  assert.ok(clockStart !== -1 && bare.indexOf('scaleTime(now, mods.speed)') < clockEnd
+    && bare.indexOf('scaleTime(now, mods.speed)') > clockStart,
+    'the remaining uptime scaling must live inside patternClock() as its fallback');
+}
+assert.match(runtime, /mods\.patternClockMs = advanceZoneAnimationClock\(zoneIndex, now, zone\.speed\);/,
+  'each zone must render on its own integrated animation clock');
+assert.match(runtime, /const uint32_t elapsed = now - clock\.lastNow;/,
+  'the zone clock must integrate elapsed time so a speed change never teleports the pattern');
 assert.match(source, /int16_t\(mods\.customHue\) - int16_t\(LW_DEFAULT_CUSTOM_HUE\)/);
 assert.match(source, /hsv\.saturation = uint8_t\(sat > 255 \? 255 : sat\)/);
 assert.match(source, /resolveBreatheScale\(now, mods\.breatheLowerPct, mods\.breatheUpperPct, mods\.breatheCycleSeconds\)/);

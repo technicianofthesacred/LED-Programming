@@ -105,6 +105,7 @@ function renderFrame(canvas, t, p) {
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
     gammaLUT, symSettings, symOverlay, audioBands, blendAmount, blendType,
     perStripFns, perStripPalettes, vb, heat, motionSmoothing, previousPixels, frameDt,
+    stripPhases,
   } = p;
 
   // ViewBox → canvas pixel mapping (letterbox, maintain aspect ratio)
@@ -119,6 +120,7 @@ function renderFrame(canvas, t, p) {
     blendAmount, blendType, params: resolvedParams, paletteNorm, bpm,
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
     gammaLUT, symSettings, audioBands, normBounds, perStripFns, perStripPalettes, patternParamsById,
+    stripPhases,
   });
   applyPatternPreviewSegmentLooks(frame.pixels, visibleStrips, t * 1000);
   const framePixels = smoothPixelFrame(frame.pixels, previousPixels, {
@@ -384,6 +386,11 @@ export function PatternPreview({
   const staticRenderRef = useRef(0);
   const lastRenderRef = useRef(0);
   const propsRef  = useRef({});
+  // Per-strip animation phase in seconds. Advanced by `dt * rate` every frame so
+  // the Speed control sets a rate; deriving it as `t * speed` instead makes any
+  // change to speed scrub the pattern forward by `t * delta` seconds, a jump
+  // that grows with how long the tab has been open.
+  const stripPhasesRef = useRef(new Map());
 
   const paletteNorm = useMemo(
     () => paletteProp ? normalizePalette(paletteProp) : PALETTE_NORM,
@@ -500,6 +507,7 @@ export function PatternPreview({
     activeFn, blendFn, blendAmount, blendType,
     perStripFns, perStripPalettes, visibleStrips, normBounds, medianSpacing, pixelCount,
     masterSpeed, masterBrightness, masterSaturation, masterHueShift,
+    stripPhases: stripPhasesRef.current,
     gammaLUT, symSettings, symOverlay, audioBands, vb, heat,
     motionSmoothing, targetFps, controlledTime,
     onFrame, onFps, onTick,
@@ -548,6 +556,28 @@ export function PatternPreview({
         p.onTick?.(tRef.current);
       }
       const renderTime = hasControlledTime ? Number(p.controlledTime) : tRef.current;
+
+      // Advance each strip's own phase. A controlled time is a deterministic
+      // scrub (tests, sequence scrubbing), so phases are derived from it
+      // directly rather than accumulated.
+      const phases = p.stripPhases;
+      const live = new Set();
+      for (const s of p.visibleStrips || []) {
+        const rate = (p.masterSpeed ?? 1) * (s.speed ?? 1);
+        live.add(s.id);
+        if (hasControlledTime) {
+          phases.set(s.id, renderTime * rate);
+          continue;
+        }
+        let phase = phases.get(s.id);
+        if (!Number.isFinite(phase)) {
+          // A strip that appears mid-session joins its siblings rather than
+          // restarting the pattern from zero underneath them.
+          phase = phases.size ? Math.max(...phases.values()) : renderTime;
+        }
+        phases.set(s.id, p.playing ? phase + dt * rate : phase);
+      }
+      for (const id of [...phases.keys()]) if (!live.has(id)) phases.delete(id);
 
       fpsRef.current.count++;
       if (now - fpsRef.current.last >= 500) {

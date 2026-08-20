@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import {
   LED_COUNT_SLIDER_MAX,
+  LOOK_SPEED_SLIDER_MAX,
   SPEED_SLIDER_MAX,
+  lookSpeedToSliderValue,
+  sliderValueToLookSpeed,
   ledCountToSliderValue,
   sliderValueToLedCount,
   sliderValueToCurvedRange,
@@ -35,5 +38,29 @@ for (const count of [300, 1000, 3000]) {
 assert.equal(sliderValueToCurvedRange(0, { min: 0, max: 4 }), 0);
 assert.equal(sliderValueToCurvedRange(1000, { min: 0, max: 4 }), 4);
 assert.ok(curvedRangeValueToSlider(0.5, { min: 0, max: 4 }) - curvedRangeValueToSlider(0, { min: 0, max: 4 }) > curvedRangeValueToSlider(4, { min: 0, max: 4 }) - curvedRangeValueToSlider(3.5, { min: 0, max: 4 }));
+
+// ── Look speed: a log track, so equal travel is an equal ratio ──────────────
+// A linear 0.05-3 range input spent 68% of its travel on 1x-3x and crammed the
+// slow half — where a gallery piece actually lives — into the other 32%.
+assert.equal(sliderValueToLookSpeed(0), 0.05);
+assert.equal(sliderValueToLookSpeed(LOOK_SPEED_SLIDER_MAX), 3);
+
+for (const speed of [0.05, 0.1, 0.25, 0.5, 1, 1.75, 2, 3]) {
+  assert.ok(
+    Math.abs(sliderValueToLookSpeed(lookSpeedToSliderValue(speed)) - speed) < 0.01,
+    `look speed round trip ${speed}`,
+  );
+}
+
+const halving = lookSpeedToSliderValue(1) - lookSpeedToSliderValue(0.5);
+const doubling = lookSpeedToSliderValue(2) - lookSpeedToSliderValue(1);
+assert.ok(
+  Math.abs(halving - doubling) <= 2,
+  `halving (${halving}) and doubling (${doubling}) must cost the same travel`,
+);
+assert.ok(
+  lookSpeedToSliderValue(0.5) - lookSpeedToSliderValue(0.25) >= halving - 2,
+  'the slow end must not be compressed relative to the middle',
+);
 
 console.log('control-scale tests passed');

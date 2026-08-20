@@ -14,6 +14,10 @@
  *   - customBreathe  → modulates brightness with a breathing sine.
  *
  * Operates in place on an array of { r, g, b } (0–255) pixels, at time `tMs`.
+ *
+ * Hue/saturation are applied through an EXACT RGB<->HSV pair, so leaving both at
+ * their defaults is a true no-op and the first notch off default does a notch's
+ * worth of work. See `hsv2rgbSpectrum` below for what this replaced and why.
  */
 
 import { resolveBreatheScale } from './breatheEnvelope.js';
@@ -28,19 +32,9 @@ function wrapHue(v) {
   return v;
 }
 
-// FastLED sin8: 0–255 input across one full period, output 0–255 centered ~128.
-function sin8(x) {
-  return Math.round(128 + 127 * Math.sin((wrapHue(x) / 256) * Math.PI * 2));
-}
-
 // FastLED scale8 (SCALE8_FIXED=1, the firmware default): (i * (1 + sc)) >> 8.
 function scale8(value, scale) {
   return (value * (1 + scale)) >> 8;
-}
-
-// FastLED scale8_video: never fully dims a lit channel to 0.
-function scale8Video(value, scale) {
-  return ((value * scale) >> 8) + (value && scale ? 1 : 0);
 }
 
 function clamp8(v) {
@@ -81,64 +75,47 @@ function rgbToHsv255(r, g, b) {
   };
 }
 
-// Faithful port of FastLED's hsv2rgb_rainbow — the exact HSV→RGB mapping the
-// card uses when it recolors (firmware assigns `leds[i] = CHSV(...)`). This is
-// what gives the strip its color character (its yellows/greens sit differently
-// than a textbook HSV wheel), so matching it here is what makes the preview's
-// recolored output correspond to the hardware. Hue/sat/val are 0–255.
-function hsv2rgbRainbow(h, s, v) {
-  const hue = h & 0xff;
-  const sat = s & 0xff;
-  const val = v & 0xff;
-  const offset = hue & 0x1f;          // 0..31 within the current 1/8 of the wheel
-  const offset8 = (offset << 3) & 0xff; // 0..248
-  const third = scale8(offset8, 85);   // = offset8 / 3
-
+// HSV(0-255) -> RGB, the exact inverse of `rgbToHsv255` above.
+//
+// Was: a port of FastLED's `hsv2rgb_rainbow`, chosen so the preview matched the
+// card's `leds[i] = CHSV(...)` assignment. The problem is that the rainbow ramp
+// is a DIFFERENT set of colors than the pattern produced, so the round trip is
+// not the identity: measured across aurora/rainbow/fire/ocean it recolors every
+// pixel by 30-54 units (0-255 scale) all on its own. Because the post-pass is
+// skipped entirely at the default hue/saturation, that whole recolor landed the
+// instant either control moved one notch off default — a 44-unit snap on the
+// first notch, then ~1 unit over the next thirty. The control read as broken:
+// it lurched, then stopped responding.
+//
+// An exact inverse makes zero shift a true no-op (measured residue 0.1-0.5
+// units, invisible) so the first notch does a notch's worth of work, and a
+// nonzero shift rotates the pattern's OWN colors instead of re-quantizing them
+// onto the rainbow ramp. The firmware post-pass is changed to match.
+function hsv2rgbSpectrum(h, s, v) {
+  const sat = (s & 0xff) / 255;
+  const val = (v & 0xff) / 255;
+  const sector = ((h & 0xff) / 255) * 6;
+  const index = Math.floor(sector) % 6;
+  const fraction = sector - Math.floor(sector);
+  const p = val * (1 - sat);
+  const q = val * (1 - sat * fraction);
+  const t = val * (1 - sat * (1 - fraction));
   let r;
   let g;
   let b;
-  if (!(hue & 0x80)) {
-    if (!(hue & 0x40)) {
-      if (!(hue & 0x20)) { r = 255 - third; g = third; b = 0; }                 // red → orange
-      else { r = 171; g = 85 + third; b = 0; }                                   // orange → yellow
-    } else if (!(hue & 0x20)) {
-      const twothirds = scale8(offset8, 170); r = 171 - twothirds; g = 170 + third; b = 0; // yellow → green
-    } else { r = 0; g = 255 - third; b = third; }                                // green → aqua
-  } else if (!(hue & 0x40)) {
-    if (!(hue & 0x20)) {
-      const twothirds = scale8(offset8, 170); r = 0; g = 171 - twothirds; b = 85 + twothirds; // aqua → blue
-    } else { r = third; g = 0; b = 255 - third; }                                // blue → purple
-  } else if (!(hue & 0x20)) {
-    r = 85 + third; g = 0; b = 171 - third;                                       // purple → pink
-  } else {
-    r = 171 + third; g = 0; b = 85 - third;                                       // pink → red
+  switch (index) {
+    case 0: r = val; g = t; b = p; break;
+    case 1: r = q; g = val; b = p; break;
+    case 2: r = p; g = val; b = t; break;
+    case 3: r = p; g = q; b = val; break;
+    case 4: r = t; g = p; b = val; break;
+    default: r = val; g = p; b = q; break;
   }
-
-  if (sat !== 255) {
-    if (sat === 0) {
-      r = 255; g = 255; b = 255;
-    } else {
-      const desat = scale8Video(255 - sat, 255 - sat);
-      const satscale = 255 - desat;
-      if (r) r = scale8(r, satscale) + 1;
-      if (g) g = scale8(g, satscale) + 1;
-      if (b) b = scale8(b, satscale) + 1;
-      r += desat; g += desat; b += desat;
-    }
-  }
-
-  if (val !== 255) {
-    const vs = scale8Video(val, val);
-    if (vs === 0) {
-      r = 0; g = 0; b = 0;
-    } else {
-      if (r) r = scale8(r, vs) + 1;
-      if (g) g = scale8(g, vs) + 1;
-      if (b) b = scale8(b, vs) + 1;
-    }
-  }
-
-  return { r: clamp8(r), g: clamp8(g), b: clamp8(b) };
+  return {
+    r: clamp8(Math.round(r * 255)),
+    g: clamp8(Math.round(g * 255)),
+    b: clamp8(Math.round(b * 255)),
+  };
 }
 
 function clampInt(value, fallback, min, max) {
@@ -181,7 +158,7 @@ export function applyLookColorModifiers(pixels, tMs, look = {}) {
         );
         hsv.s = sat > 255 ? 255 : sat;
       }
-      const rgb = hsv2rgbRainbow(hsv.h, hsv.s, hsv.v);
+      const rgb = hsv2rgbSpectrum(hsv.h, hsv.s, hsv.v);
       px.r = rgb.r; px.g = rgb.g; px.b = rgb.b;
     }
     if (breatheScale < 255) {

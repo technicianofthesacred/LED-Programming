@@ -186,6 +186,7 @@ export function renderPixelFrame({
   perStripFns = new Map(),
   perStripPalettes = new Map(),
   patternParamsById = {},
+  stripPhases = null,
 }) {
   const visibleStrips = strips.filter(s => s && !s.hidden);
   const allPts = visibleStrips.flatMap(s => s.pts || []);
@@ -212,7 +213,18 @@ export function renderPixelFrame({
   let globalIdx = 0;
 
   for (const s of visibleStrips) {
-    const stripT = t * masterSpeed * (journey?.speed ?? 1) * (s.speed ?? 1);
+    // Speed is a RATE, not a multiplier on elapsed time. `stripPhases` carries a
+    // phase the caller advanced by `dt * rate` each frame, so moving the Speed
+    // control changes how fast the pattern runs from here on instead of
+    // teleporting it: `t * speed` jumps the pattern by `t * delta` seconds the
+    // instant the value changes, and that jump grows without bound with uptime.
+    // Callers that render at one fixed speed (sequence baking, offline frame
+    // audits) pass no phases and keep the direct product.
+    const stripPhase = stripPhases?.get?.(s.id);
+    const stripBase = Number.isFinite(stripPhase)
+      ? stripPhase
+      : t * masterSpeed * (s.speed ?? 1);
+    const stripT = stripBase * (journey?.speed ?? 1);
     const stripTime = (stripT / 65.536) % 1;
     const stripFn = (s.patternId ? perStripFns.get(s.patternId) : null) ?? fnA;
     const stripParams = s.patternId ? paramsForPattern.get(s.patternId) || resolvedParams : resolvedParams;
