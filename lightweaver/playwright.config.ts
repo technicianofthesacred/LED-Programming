@@ -21,12 +21,14 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     timeout: 30000,
   },
+  // Desktop only. A phone profile deliberately does NOT live here: two scripts
+  // in ci:browser-smoke (`test:show`, `test:screen-recovery`) run playwright
+  // WITHOUT --project, so any project added to this file is picked up
+  // implicitly and runs specs never written for it. Adding Pixel 5 here failed
+  // browser smoke on four show-screen tests that click controls sitting behind
+  // the mobile drawer. The phone lens lives in tests/mobile-playwright.config.ts
+  // and is run deliberately, never implicitly.
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    // The owner uses a phone. A suite that only ever drove Desktop Chrome is
-    // how mobile-only defects (like the inner-scroll-container overflow in
-    // Pattern Lab) shipped without a single red test — see
-    // todo/plans/patternlab-rebuild.md §7 Phase 1.
-    { name: 'Mobile Chrome', use: { ...devices['Pixel 5'] } },
   ],
 });
