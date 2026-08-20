@@ -127,6 +127,82 @@ test('transport identity and all runtime readiness fields stay fail-closed', () 
   }
 });
 
+test('a fresh connect with incomplete readiness evidence is confirming, not attention', () => {
+  // The card answered on a verified transport but its readiness envelope has
+  // not carried the evidence fields yet — that is a probe in flight, and it
+  // used to flash "Needs attention" on every connect.
+  const freshConnect = deriveCardLifecycle({
+    link: {
+      state: 'connected-bridge',
+      card: { id: 'lw-card-a' },
+      expectedCard: { id: 'lw-card-a' },
+      readiness: { cardId: 'lw-card-a' },
+    },
+  });
+  assert.equal(freshConnect.state, 'confirming');
+  assert.equal(freshConnect.label, 'Checking card');
+  assert.equal(freshConnect.setupTaskId, 'reconnect-card');
+
+  // Any single missing evidence boolean keeps it confirming…
+  for (const missing of ['knownGoodProject', 'commandReady', 'outputReady']) {
+    const readiness = { ...READY_LINK.readiness };
+    delete readiness[missing];
+    assert.equal(
+      deriveCardLifecycle({ link: { ...READY_LINK, readiness } }).state,
+      'confirming',
+      `missing ${missing}`,
+    );
+  }
+  // …and a missing bootId keeps an unready answer confirming too (the same
+  // evidence-incomplete notion classifyCardReadiness applies), while the
+  // command gate still rules once every boolean answers true.
+  const noBoot = { ...READY_LINK.readiness, commandReady: false };
+  delete noBoot.bootId;
+  assert.equal(deriveCardLifecycle({ link: { ...READY_LINK, readiness: noBoot } }).state, 'confirming');
+
+  // …but confirming never outranks real failure, update, or blank evidence.
+  assert.equal(deriveCardLifecycle({
+    link: { state: 'connected-bridge', card: { id: 'lw-card-a' }, readiness: { cardId: 'lw-card-a' }, activity: 'failed' },
+  }).state, 'attention-required');
+  assert.equal(deriveCardLifecycle({
+    link: { state: 'connected-bridge', card: { id: 'lw-card-a' }, readiness: { cardId: 'lw-card-a' }, cardBlank: true },
+  }).state, 'setup-required');
+  assert.equal(deriveCardLifecycle({
+    link: { state: 'connected-bridge', card: { id: 'lw-card-a' }, expectedCard: { id: 'lw-card-b' }, readiness: { cardId: 'lw-card-a' } },
+  }).state, 'wrong-card');
+  assert.equal(deriveCardLifecycle({
+    link: { state: 'connected-bridge', card: { id: 'lw-card-a' }, readiness: { cardId: 'lw-card-a' } },
+    update: { phase: 'blocked', reason: 'target-mismatch' },
+  }).state, 'target-mismatch');
+});
+
+test('complete-but-failed readiness evidence stays attention-required', () => {
+  const refused = deriveCardLifecycle({
+    link: { ...READY_LINK, readiness: { ...READY_LINK.readiness, commandReady: false } },
+  });
+  assert.equal(refused.state, 'attention-required');
+  assert.equal(refused.label, 'Needs attention');
+
+  const notReady = deriveCardLifecycle({
+    link: {
+      ...READY_LINK,
+      readiness: { ...READY_LINK.readiness, runtimePhase: 'recovering', commandReady: false },
+    },
+  });
+  assert.equal(notReady.state, 'attention-required');
+});
+
+test('a ready→ready poll never passes through confirming', () => {
+  const project = { id: 'piece-a', revision: 7, fingerprint: 'a'.repeat(64) };
+  const first = deriveCardLifecycle({ link: READY_LINK, project });
+  const second = deriveCardLifecycle({
+    link: { ...READY_LINK, readiness: { ...READY_LINK.readiness } },
+    project,
+  });
+  assert.equal(first.state, 'ready');
+  assert.equal(second.state, 'ready');
+});
+
 test('project ids match across the card sanitizing boundary instead of stranding a correct card', () => {
   // The card lowercases and slugifies whatever id it was given before storing
   // it, so a raw string comparison reported a permanent project-mismatch for a

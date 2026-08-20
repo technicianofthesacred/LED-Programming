@@ -19,6 +19,7 @@ const LABELS = Object.freeze({
   'setup-required': 'Needs project',
   'project-mismatch': 'Needs attention',
   'attention-required': 'Needs attention',
+  confirming: 'Checking card',
   ready: 'Connected',
 });
 
@@ -39,6 +40,7 @@ const SETUP_TASKS = Object.freeze({
   'setup-required': 'install-project',
   'project-mismatch': 'load-matching-project',
   'attention-required': 'recover-operation',
+  confirming: 'reconnect-card',
   ready: 'open-patterns',
 });
 
@@ -97,6 +99,16 @@ export function deriveCardLifecycle({ link = {}, update = null, project = null }
     && readiness.outputReady === true
     && readiness.playbackReady === true
     && readiness.provisionalSetup !== true;
+  // The same evidence-complete gate classifyCardReadiness applies
+  // (cardReadiness.js, the 'evidence-incomplete' branch): a card that has not
+  // yet SAID whether it is ready is different from a card that said no. A
+  // verified transport whose readiness envelope still misses any of these
+  // fields is a fresh connect mid-probe, not a failure — landing it on
+  // `attention-required` flashed "Needs attention" on every connect.
+  const evidenceIncomplete = typeof readiness.knownGoodProject !== 'boolean'
+    || typeof readiness.commandReady !== 'boolean'
+    || typeof readiness.outputReady !== 'boolean'
+    || !normalized(readiness.bootId);
 
   let state = 'disconnected';
   if (updateEvidence?.phase === 'rolled-back') state = 'update-rolled-back';
@@ -117,6 +129,13 @@ export function deriveCardLifecycle({ link = {}, update = null, project = null }
   else if (link.activity === 'failed' || link.reason === 'operation-uncertain' || link.reason === 'popup-blocked') state = 'attention-required';
   else if (commandReady && !exactProject) state = 'project-mismatch';
   else if (commandReady && exactProject) state = 'ready';
+  // Every failure, update, wrong-card, and blank branch above has already
+  // declined this link, so what remains on a verified transport is only the
+  // readiness verdict. Incomplete evidence is `confirming` (still checking);
+  // complete-but-false evidence is a genuinely not-ready card and stays
+  // `attention-required`. A ready→ready poll never lands here: its evidence
+  // is complete and true, so the commandReady branches above take it.
+  else if (verifiedTransport && evidenceIncomplete) state = 'confirming';
   else if (verifiedTransport) state = 'attention-required';
   else if (link.state === 'connecting') state = 'connecting';
 

@@ -56,14 +56,14 @@ test('a stored Bridge result that moves the owner to Layout moves the URL with i
 
   await expect(railItem(page, 'Layout')).toHaveAttribute('aria-current', 'page');
   await expect.poll(() => routeHash(page)).toBe('#screen=layout');
-  await expect(railItem(page, 'Setup')).not.toHaveAttribute('aria-current', 'page');
+  await expect(railItem(page, 'Card')).not.toHaveAttribute('aria-current', 'page');
 });
 
 test('a screen that hands off by writing the hash keeps the screen it asked for', async ({ page }) => {
   // The card's "continue to Patterns" handoff. The hash assignment moves the
   // URL a task before hashchange lands; nothing may rewrite it in that gap.
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });
-  await expect(railItem(page, 'Setup')).toHaveAttribute('aria-current', 'page');
+  await expect(railItem(page, 'Card')).toHaveAttribute('aria-current', 'page');
 
   await page.evaluate(() => { window.location.hash = '#screen=pattern'; });
 
@@ -95,13 +95,13 @@ test('rail navigation canonicalizes the route it lands on', async ({ page }) => 
   // A card section means nothing on Patterns and must not follow the owner.
   await expect.poll(() => routeHash(page)).toBe('#screen=pattern');
 
-  await railItem(page, 'Setup').click();
+  await railItem(page, 'Card').click();
   await expect.poll(() => routeHash(page)).toBe('#screen=card&section=setup');
 });
 
 test('a legacy card entrance still resolves and is left in the URL as written', async ({ page }) => {
   // Printed handoff cards and old bookmarks carry these.
   await page.goto('/#screen=setup', { waitUntil: 'domcontentloaded' });
-  await expect(railItem(page, 'Setup')).toHaveAttribute('aria-current', 'page');
+  await expect(railItem(page, 'Card')).toHaveAttribute('aria-current', 'page');
   await expect.poll(() => routeHash(page)).toBe('#screen=setup');
 });

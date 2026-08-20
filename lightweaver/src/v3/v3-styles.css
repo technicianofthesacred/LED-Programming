@@ -276,11 +276,56 @@ input[type=number]::-webkit-outer-spin-button {
 .crumb .proj {
   min-width: 0;
   overflow: hidden;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   color: var(--text-hi);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* The name is a click-to-rename button; keep it reading as breadcrumb text. */
+.crumb .proj-name {
+  background: none;
+  border: 0;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border-radius: var(--r-sm);
+  font: inherit;
+  text-align: left;
+  cursor: text;
+}
+.crumb .proj-name:hover,
+.crumb .proj-name:focus-visible { background: var(--bg-inset, rgba(128, 128, 128, 0.12)); }
+.crumb .proj-edit {
+  background: var(--bg-inset, rgba(128, 128, 128, 0.12));
+  border: 1px solid var(--border-hair);
+  border-radius: var(--r-sm);
+  padding: 1px 4px;
+  font: inherit;
+  color: var(--text-hi);
+  min-width: 60px;
+  width: 220px;
+  max-width: 40vw;
+}
+/* Lifecycle truth next to the name: dirty dot + status chip. */
+.crumb .proj-dirty {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-soft);
+}
+.crumb .proj-status {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 8px;
+  border: 1px solid var(--border-hair);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--text-lo);
+  background: var(--bg-inset, rgba(128, 128, 128, 0.08));
 }
 .top-right { min-width: 0; display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .top-div { width: 1px; height: 18px; background: var(--border-hair); margin: 0 5px; }
@@ -815,10 +860,6 @@ button.sb-firmware:hover { background: var(--bg-elev-2); color: var(--text-hi); 
 .card-direct-firmware-facts .card-firmware-version {
   min-width: 0; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap;
 }
-.card-inline-firmware-update {
-  justify-self: end; width: 112px; min-height: 32px; padding: 5px 9px;
-  font-size: 11.5px; white-space: nowrap;
-}
 .card-firmware-update {
   display: grid; gap: 5px; margin-top: 12px; padding: 11px 12px;
   border: 1px solid var(--accent-line); border-radius: var(--r-md); background: var(--bg-sel);
@@ -973,7 +1014,6 @@ button.sb-firmware:hover { background: var(--bg-elev-2); color: var(--text-hi); 
   .card-connection-details summary,
   .card-connection-details input { min-height: 44px; }
   .card-connection-details summary { display: flex; align-items: center; }
-  .card-direct-firmware-facts .card-inline-firmware-update { justify-self: end; }
 }
 
 @media (min-width: 641px) and (max-width: 720px) {

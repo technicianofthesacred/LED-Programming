@@ -632,6 +632,10 @@ export function CardCommissioningPanel({
   );
   if (!flow) return <div className="card-commissioning" aria-live="polite"><CardCommissioningSteps stage="connect-card" />{failure && <p className="card-connection-failure" role="alert">{failure}</p>}</div>;
 
+  // Restore is deliberately NOT routed through cardProjectAdoption: adoption
+  // is a card→Studio read (rebuild the open project from the card's own
+  // readback), while this restore is a Studio→card WRITE with its own durable
+  // claim registry — the opposite direction, sharing nothing worth deduping.
   const restore = async () => {
     const requestedGeneration = projectLifecycle.generation;
     if (restoreState === 'working' || !flow.cardAcknowledgedAt) return;

@@ -13,8 +13,7 @@
 import React, { createContext, useContext, useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
 import { I, SWATCHES } from './lw-shared.jsx';
 import { useProject } from '../state/ProjectContext.jsx';
-import { useCloudLibrary } from '../state/CloudLibraryContext.jsx';
-import { ProjectLibraryPanel } from '../components/projects/ProjectLibraryPanel.jsx';
+import { requestProjectsPanel } from '../components/projects/ProjectsPanel.jsx';
 import { useTweaks } from '../components/Tweaks.jsx';
 import { MOTION_SMOOTHING_MODES } from '../lib/motionSmoothing.js';
 import { STANDALONE_RUNTIME_MODES, DEFAULT_STANDALONE_OUTPUTS } from '../lib/standaloneController.js';
@@ -37,10 +36,8 @@ import {
 import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard, readCardProjectEvidence, readCardStatusEnvelope } from '../lib/cardPushClient.js';
 import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
 import { pushLiveHardwareToCard } from '../lib/cardLiveControl.js';
-import { downloadJsonFile } from '../lib/downloadFile.js';
-import { writeActiveProjectLibraryRecordId } from '../lib/projectStorage.js';
+import { STAGED_WIRING_CONFLICT_MESSAGE } from '../lib/cardInstallGate.js';
 import { cardActionReducer, createCardActionState } from '../lib/cardAction.js';
-import { canonicalProjectFileName, PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
 import { openLocalCardPage } from '../lib/cardBridge.js';
 import { getActiveCardTransportAuthority } from '../lib/cardTransport.js';
 import { saveProjectToCardFromGesture } from '../lib/cardProjectSave.js';
@@ -117,11 +114,6 @@ const SettingsFieldContext = createContext(null);
 
   const COLOR_ORDER_LABELS = ['RGB', 'GRB', 'BRG'];
 
-  function formatSavedTime(lastSaved) {
-    if (!lastSaved) return 'no recovery copy yet';
-    return `recovery copy ${new Date(lastSaved).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
-  }
-
   // ── Ring hardware summary (live RingSummary visual) ──────────────────
   function RingSummary({ sections, targets, activeLookLabel }) {
     const sectionRows = sections.slice(0, 5).map((section, index) => {
@@ -171,19 +163,15 @@ const SettingsFieldContext = createContext(null);
       patchBoard,
       compiledWiring,
       standaloneController, setStandaloneController,
-      serializeProject, replaceProject,
+      serializeProject,
       markProjectPersisted, markProjectInstalled, markCardLookConfirmed,
-      lastSaved,
-      autosaveStatus,
       projectRepositorySource,
     } = useProject();
-    const cloudLibrary = useCloudLibrary();
     const { tweaks, set: setTweak } = useTweaks();
     useEffect(() => {
       document.documentElement.dataset.theme = tweaks.theme === 'daylight' ? 'daylight' : 'studio';
     }, [tweaks.theme]);
 
-    const importRef = useRef(null);
     const [cardHost, setCardHost] = useState(readStoredCardHost);
     const [status, setStatus] = useState('');
     const [statusKind, setStatusKind] = useState('');
@@ -333,7 +321,7 @@ const SettingsFieldContext = createContext(null);
           factoryBlank: cardLink.cardBlank === true,
         });
         if (response?.state === 'staged') {
-          throw new Error('The card kept this hardware change staged. Open Test & Install and confirm it on the real LEDs before it can be installed.');
+          throw new Error(STAGED_WIRING_CONFLICT_MESSAGE);
         }
         setStatus('Verifying the exact project on the card…');
         const exactPrepared = { ...preparedDeployment, cardId: before.cardId };
@@ -388,42 +376,6 @@ const SettingsFieldContext = createContext(null);
           ? error.message
           : 'Clipboard was blocked. Use Download card settings instead.');
       }
-    };
-
-    // ── Portable project files (online library is mounted below) ───────
-    const saveProjectFile = async () => {
-      const data = serializeProject();
-      const ok = await downloadJsonFile(canonicalProjectFileName(projectName), data);
-      if (ok) markProjectPersisted('file');
-      setStatusKind(ok ? 'ok' : 'err');
-      setStatus(ok ? 'Project file download started.' : 'Could not start the project file download.');
-    };
-
-    const importProjectFile = (event) => {
-      const file = event.target.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = async (ev) => {
-        try {
-          const data = JSON.parse(ev.target.result);
-          const result = await replaceProject(data);
-          if (result.reason === 'invalid') {
-            setStatusKind('err');
-            setStatus('That project file does not look like a Lightweaver Studio project.');
-            return;
-          }
-          if (!result.ok) return;
-          writeActiveProjectLibraryRecordId('');
-          cloudLibrary.detachProject();
-          setStatusKind('ok');
-          setStatus('Project opened in Studio.');
-        } catch {
-          setStatusKind('err');
-          setStatus('Could not read that project file.');
-        }
-      };
-      reader.readAsText(file);
-      event.target.value = '';
     };
 
     const saveProjectToCard = async () => {
@@ -666,28 +618,17 @@ const SettingsFieldContext = createContext(null);
                   <Row label="Brightness step" hint="How much each click changes brightness"><Range value={encoderStep} set={(v) => updateController({ controls: { encoder: { brightnessStep: Math.max(1, Math.min(64, Math.round(v))) } } })} min={1} max={64} step={1} fmt={(v) => `${v}`} /></Row>
                 </section>}
 
-                {/* Projects — ONE consolidated persistence area: recovery-copy
-                    status, browser library, import, and export. Autosave is the
-                    automatic recovery copy, never the user's intentional save. */}
+                {/* Projects — management moved to the one Projects panel
+                    (top bar → Projects): browser library, online library,
+                    import/export, and the recovery copy live there now.
+                    Preferences keeps only the doorway. */}
                 {showPreferences && <section className="card set-card" data-testid="projects-area">
-                  <div className="sec-h"><span className="t">Projects</span><span className="m">{formatSavedTime(lastSaved)}</span></div>
-                  <Row label="Recovery copy" hint="Automatic backup Studio keeps while you work — not your saved project" stack>
-                    <div className="set-recovery" data-testid="autosave-status">
-                      <span>{formatSavedTime(lastSaved)}{autosaveStatus?.restoredFrom ? ` · restored from ${autosaveStatus.restoredFrom === 'legacy' ? 'an older Studio save' : 'the recovery copy'} this session` : ''}</span>
-                      {autosaveStatus?.quarantine && (
-                        <span className="set-recovery-warn" data-testid="autosave-quarantine">
-                          A saved copy from a newer or damaged Studio session could not be opened. It was preserved untouched so support can recover it.
-                          <button type="button" className="btn ghost-sm" onClick={() => autosaveStatus.dismissQuarantine()}>Dismiss</button>
-                        </span>
-                      )}
+                  <div className="sec-h"><span className="t">Projects</span></div>
+                  <Row label="Saved projects" hint="Browser library, online library, import & export, recovery copy" stack>
+                    <div className="set-actions">
+                      <button className="btn" data-testid="manage-projects" onClick={() => requestProjectsPanel()}>{I.doc}Manage projects</button>
                     </div>
                   </Row>
-                  <Row label="Project file" hint={`Portable ${'.lw.json'} file — export to keep or share, import to open`}>
-                    <button className="btn" onClick={saveProjectFile}>{I.download}Export project</button>
-                    <button className="btn" onClick={() => importRef.current?.click()}>{I.doc}Import project</button>
-                    <FieldInput ref={importRef} type="file" accept={PROJECT_IMPORT_ACCEPT} className="set-file-input" onChange={importProjectFile} />
-                  </Row>
-                  <ProjectLibraryPanel />
                 </section>}
               </div>
 

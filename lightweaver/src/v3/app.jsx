@@ -8,9 +8,10 @@ import { useCardStatus } from '../hooks/useCardStatus.js';
 import { CardConnectionCenter } from '../components/card/CardConnectionCenter.jsx';
 import { CardControlDrawer } from '../components/card/CardControlDrawer.jsx';
 import { cardEditIntentForPattern } from '../lib/cardCustomerControlContract.js';
-import { CardStatusControl, cardConnectionStatus } from '../components/card/CardStatusControl.jsx';
+import { CardStatusControl } from '../components/card/CardStatusControl.jsx';
 import { useFirmwareReleaseIdentity } from '../hooks/useFirmwareReleaseIdentity.js';
-import { ProjectLoadDialog, ProjectSaveDialog } from '../components/projects/TopBarProjectDialogs.jsx';
+import { ProjectSaveDialog } from '../components/projects/TopBarProjectDialogs.jsx';
+import { OPEN_PROJECTS_PANEL_EVENT, ProjectsPanel } from '../components/projects/ProjectsPanel.jsx';
 import { WorkspaceNotice } from '../components/projects/WorkspaceNotice.jsx';
 import { releaseCardBridge } from '../lib/cardBridge.js';
 import { bootstrapCardHostFromLocation, canPushDirectlyToCard, readStoredCardHost } from '../lib/cardConnection.js';
@@ -30,7 +31,7 @@ import {
   reportDirectCardStatus,
   subscribeCardLink,
 } from '../lib/cardLink.js';
-import { downloadJsonFile } from '../lib/downloadFile.js';
+import { exportProjectToFile, importProjectFromPickedFile } from '../lib/projectTransfer.js';
 import {
   associateProjectLibraryRecordGuarded,
   clearProjectLibraryAssociationGuarded,
@@ -42,7 +43,16 @@ import {
   setProjectLibrarySaveBlocked,
   writeActiveProjectLibraryRecordId,
 } from '../lib/projectStorage.js';
+import {
+  adoptBrowserRecordAssociation,
+  adoptCloudProjectAssociation,
+  adoptUnassociatedWorkspace,
+  clearAllProjectAssociations,
+  createImportAssociationCleanup,
+  retryAssociationHandoff,
+} from '../lib/projectAssociation.js';
 import { runProjectSwitchSaveBarrier } from '../lib/projectSwitchSaveBarrier.js';
+import { CardActionsProvider } from './CardActionsProvider.jsx';
 import { formatBrowserProjectSaveLabel } from '../lib/studioActionStatus.js';
 import {
   CARD_COMMISSIONING_CHANGED_EVENT,
@@ -69,14 +79,16 @@ import {
   normalizeStudioView,
   studioViewFromHash,
 } from '../lib/studioRoute.js';
-import { canonicalProjectFileName, PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
+import { PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
 import { clearScreenFailure, rememberScreenFailure } from '../lib/screenRecoveryDiagnostics.js';
 import { createStudioFreshnessMonitor } from '../lib/studioFreshness.js';
 import { STUDIO_HARDWARE_OPERATION_EVENT } from '../lib/studioHardwareOperation.js';
 import { getRunningStudioRelease } from '../lib/studioRelease.js';
 import { bootstrapStudioCardConnection } from '../lib/studioCardBootstrap.js';
-import { CONNECTED_CARD_LINK_STATES, deriveSetupJourney } from '../lib/setupJourney.js';
+import { CONNECTED_CARD_LINK_STATES, SETUP_SKIP_STORAGE_KEY, deriveSetupJourney } from '../lib/setupJourney.js';
+import { OPEN_CONNECT_PANEL_EVENT } from '../lib/cardFlowEntry.js';
 import { deriveCardLifecycle } from '../lib/cardLifecycle.js';
+import { cardSurfaceForLifecycle } from '../lib/cardActionAuthority.js';
 import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
 import { currentInstallation, structurallyInstalledRecord } from '../lib/projectLifecycle.js';
 import {
@@ -92,11 +104,11 @@ const ShowScreen = lazy(() => import('./lw-show.jsx').then(module => ({ default:
 const CardScreen = lazy(() => import('./lw-card.jsx').then(module => ({ default: module.CardScreen })));
 const CardSetupOverlay = lazy(() => import('../components/card/CardSetupOverlay.jsx'));
 
-// Setup is no longer a rail destination of its own. It is the first section of
-// the card workspace, which is where every other answer about the card already
-// lived — see SECTION_LABELS in lw-card.jsx.
+// One rail entry owns the card. It lands on Card Home — the merged guided
+// setup + card status page (see SECTION_LABELS in lw-card.jsx); the rail
+// label names the thing (the card), not one of the jobs done to it.
 const STUDIO_SCREENS = [
-  { id: 'card', label: 'Setup', Component: CardScreen },
+  { id: 'card', label: 'Card', Component: CardScreen },
   { id: 'layout', label: 'Layout', Component: LayoutScreen },
   { id: 'pattern', label: 'Patterns', Component: PatternScreen },
   { id: 'pattern-lab', label: 'Pattern Lab', Component: PatternLabScreen },
@@ -104,9 +116,10 @@ const STUDIO_SCREENS = [
   { id: 'show', label: 'Show', Component: ShowScreen },
 ];
 // Routable, but deliberately not in the rail: strip discovery is where a blank
-// card is SENT, not a place the owner browses to. Its two entrances are the
-// connection center and Test & Install — the exact two moments the question
-// "which strips does this card even have?" comes up.
+// card is SENT, not a place the owner browses to. Its entrances are the
+// connection center, Layout/Wire, the card overview, and the Setup lights
+// phase — the moments the question "which strips does this card even have?"
+// comes up.
 const SCREEN_KEYS = [...STUDIO_SCREENS.map(screen => screen.id), 'discovery'];
 const SCREEN_BY_ID = Object.fromEntries(STUDIO_SCREENS.map(screen => [screen.id, screen.Component]));
 const PROTECTED_COMMISSIONING_STAGES = new Set(['install-safely', 'set-up-card', 'check-lights']);
@@ -257,7 +270,7 @@ class ScreenErrorBoundary extends Component {
 // placeholder circle and no route to their card. Once the owner has said they
 // are done with it, the fallback returns to Layout. Deep links are untouched:
 // only the FALLBACK moves, so #screen=layout still opens Layout for everyone.
-const SETUP_SKIP_KEY = 'lw_setup_skip_v1';
+const SETUP_SKIP_KEY = SETUP_SKIP_STORAGE_KEY;
 function defaultView() {
   try {
     return window.localStorage.getItem(SETUP_SKIP_KEY) === '1' ? 'layout' : 'card';
@@ -310,8 +323,28 @@ const I = {
 };
 
 /* ---------- Top bar (wired to real project state via props) ---------- */
-function TopBar({ projectName, onNew, onLoad, onDownload, onSave, onPreferences }) {
-  const action = ({ label, title, icon, primary = false, tooltipAlign, onClick }) => (
+function TopBar({ projectName, lifecycleLabel, hasUnsavedChanges, onRenameProject, onNew, onLoad, onDownload, onSave, onPreferences }) {
+  // In-place project rename: click the breadcrumb name → input; Enter/blur
+  // commit through the SAME state path as the Preferences editor
+  // (setProjectName); Escape cancels. The blur that follows an Enter/Escape
+  // must not double-commit, so key handling marks the edit settled first.
+  const [nameDraft, setNameDraft] = useState(null);
+  const nameSettledRef = useRef(false);
+  const startRename = () => { nameSettledRef.current = false; setNameDraft(projectName); };
+  const commitRename = () => {
+    if (nameSettledRef.current) return;
+    nameSettledRef.current = true;
+    // Close the editor before renaming so a throwing rename handler can
+    // never strand the breadcrumb in a stuck edit state.
+    const next = (nameDraft || '').trim();
+    setNameDraft(null);
+    if (next && next !== projectName) onRenameProject?.(next);
+  };
+  const cancelRename = () => {
+    nameSettledRef.current = true;
+    setNameDraft(null);
+  };
+  const action = ({ label, title, icon, primary = false, tooltipAlign, testId, onClick }) => (
     <button
       type="button"
       className={`${primary ? 'btn primary' : 'link-btn'} top-action`}
@@ -319,6 +352,7 @@ function TopBar({ projectName, onNew, onLoad, onDownload, onSave, onPreferences 
       title={title}
       data-tooltip={label}
       data-tooltip-align={tooltipAlign}
+      data-testid={testId}
       onClick={onClick}
     >
       <span className="top-action-icon" aria-hidden="true">{icon}</span>
@@ -329,11 +363,41 @@ function TopBar({ projectName, onNew, onLoad, onDownload, onSave, onPreferences 
     <header className="topbar">
       <div className="brand" role="img" aria-label="Lightweaver"><span className="glyph" /><span className="name">Lightweaver</span></div>
       <nav className="crumb">
-        <span>Projects</span><span className="sep">/</span><span className="proj">{projectName}</span>
+        <span>Projects</span><span className="sep">/</span>
+        {nameDraft !== null ? (
+          <input
+            className="proj proj-edit"
+            data-testid="project-name-input"
+            aria-label="Project name"
+            value={nameDraft}
+            autoFocus
+            onFocus={e => e.target.select()}
+            onChange={e => setNameDraft(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { e.preventDefault(); commitRename(); }
+              else if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+            }}
+          />
+        ) : (
+          <button
+            type="button"
+            className="proj proj-name"
+            data-testid="project-name-edit"
+            title="Rename project"
+            onClick={startRename}
+          >{projectName}</button>
+        )}
+        {hasUnsavedChanges && (
+          <span className="proj-dirty" data-testid="project-dirty-dot" role="img" aria-label="Unsaved changes" title="Unsaved changes" />
+        )}
+        {lifecycleLabel && (
+          <span className="proj-status" data-testid="project-lifecycle-label">{lifecycleLabel}</span>
+        )}
       </nav>
       <div className="top-right">
         {action({ label: 'New project', title: 'Start a new empty project', icon: I.newProject, onClick: onNew })}
-        {action({ label: 'Load project', title: 'Open an online project or import from your computer', icon: I.importProject, onClick: onLoad })}
+        {action({ label: 'Projects', title: 'Your saved projects — this browser, the online library, import and export', icon: I.importProject, testId: 'topbar-projects', onClick: onLoad })}
         {action({ label: 'Preferences', title: 'Open Studio preferences', icon: I.preferences, onClick: onPreferences })}
         <span className="top-div" />
         {action({ label: 'Export project', title: 'Download a portable project file to your computer (import it anytime)', icon: I.exportProject, onClick: onDownload })}
@@ -440,7 +504,7 @@ function StatusBar({ link, lifecycle, connectionCenterOpen, cardControlOpen, onO
           lifecycle={lifecycle}
           onOpen={onOpenCardControl}
           open={connectionCenterOpen || cardControlOpen}
-          dialogId={cardConnectionStatus(link, lifecycle) === 'Connected' ? 'card-control-drawer' : 'card-connection-center'}
+          dialogId={cardSurfaceForLifecycle(lifecycle) === 'card-control' ? 'card-control-drawer' : 'card-connection-center'}
         />
       </div>
 
@@ -538,6 +602,10 @@ function Shell({ offlineUpdateController = null }) {
   const commissioningActiveRef = useRef(commissioningActive);
   const installRouteRef = useRef('#screen=card&section=install');
   const [connectionCenterOpen, setConnectionCenterOpen] = useState(false);
+  // The connect intent the panel was opened FOR (openCardFlow's connect-panel
+  // event detail). '' for every other way in — footer chip, bridge results —
+  // so the panel only pre-selects a flow when a resolver actually asked for it.
+  const [connectPanelIntent, setConnectPanelIntent] = useState('');
   const [cardControlOpen, setCardControlOpen] = useState(false);
   // Every navigation in the shell goes through here: it moves the URL, and the
   // screen follows because it is derived from the URL. Nothing sets the screen
@@ -547,7 +615,7 @@ function Shell({ offlineUpdateController = null }) {
     routeStore.replace(canonicalStudioHash(routeStore.read(), target));
   }, [routeStore]);
   const {
-    projectName, serializeProject, flushProjectAutosave, replaceProject, replaceWithNewProject, requestReplacementConfirmation,
+    projectName, setProjectName, serializeProject, flushProjectAutosave, replaceProject, replaceWithNewProject, requestReplacementConfirmation,
     projectLifecycle, projectLifecycleLabel, markProjectPersisted, markProjectEdited, markProjectInstalled, isProjectLifecycleMarkerCurrent,
     projectHasUnsavedChanges, reverifyProjectInstallation,
   } = useProject();
@@ -589,13 +657,27 @@ function Shell({ offlineUpdateController = null }) {
     },
     remoteId: cloudLibrary.activeRemoteProject?.id || '',
   };
-  const [loadDialogOpen, setLoadDialogOpen] = useState(false);
+  const [projectsPanelOpen, setProjectsPanelOpen] = useState(false);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [projectAssociationSaveBlocked, setProjectAssociationSaveBlockedState] = useState(isProjectLibrarySaveBlocked);
   const setProjectAssociationSaveBlocked = useCallback(blocked => {
     setProjectLibrarySaveBlocked(blocked);
     setProjectAssociationSaveBlockedState(blocked === true);
   }, []);
+  const cloudLibraryRef = useRef(cloudLibrary);
+  cloudLibraryRef.current = cloudLibrary;
+  // The io bundle every association transition runs through — see
+  // lib/projectAssociation.js for the transition set and its fail-closed
+  // contract. Stable identity: every handle reads fresh state through refs.
+  const associationIo = useMemo(() => ({
+    writeActiveRecordId: writeActiveProjectLibraryRecordId,
+    readActiveRecordId: readActiveProjectLibraryRecordId,
+    associateRecordGuarded: associateProjectLibraryRecordGuarded,
+    clearRecordAssociationGuarded: clearProjectLibraryAssociationGuarded,
+    detachCloudProject: () => cloudLibraryRef.current.detachProject(),
+    setBrowserAssociationSnapshot: snapshot => { browserAssociationRef.current = snapshot; },
+    setSaveBlocked: blocked => setProjectAssociationSaveBlocked(blocked),
+  }), [setProjectAssociationSaveBlocked]);
   const currentProjectId = latestProjectSaveStateRef.current.project.id;
   useEffect(() => {
     if (browserAssociationRef.current || cloudLibrary.activeRemoteProject?.id) return;
@@ -609,15 +691,21 @@ function Shell({ offlineUpdateController = null }) {
   }, [cloudLibrary.activeRemoteProject?.id, currentProjectId, projectLifecycle.generation]);
   useEffect(() => {
     if (!cloudLibrary.activeRemoteProject?.id) return;
-    browserAssociationRef.current = null;
+    adoptCloudProjectAssociation(associationIo);
+  }, [associationIo, cloudLibrary.activeRemoteProject?.id]);
+  // A library row mutation (rename/duplicate/delete in the Projects panel) may
+  // have changed or removed the record the in-memory association snapshot
+  // describes; refresh it so the next guarded save compares against reality.
+  const refreshBrowserAssociationSnapshot = useCallback(() => {
+    const current = browserAssociationRef.current;
+    if (!current?.recordId) return;
     try {
-      writeActiveProjectLibraryRecordId('');
-      if (readActiveProjectLibraryRecordId() !== '') throw new Error('browser association clear failed');
-      setProjectAssociationSaveBlocked(false);
+      const snapshot = readProjectLibraryRecordSnapshot(current.recordId);
+      browserAssociationRef.current = snapshot.record ? snapshot : null;
     } catch {
-      setProjectAssociationSaveBlocked(true);
+      // Keep the stale snapshot; the guarded save fails closed against it.
     }
-  }, [cloudLibrary.activeRemoteProject?.id, setProjectAssociationSaveBlocked]);
+  }, []);
   const [workspaceEvent, setWorkspaceEvent] = useState(null);
   const [dismissedPersistentKey, setDismissedPersistentKey] = useState('');
   const workspaceEventIdRef = useRef(0);
@@ -914,6 +1002,7 @@ function Shell({ offlineUpdateController = null }) {
     projectLifecycle.generation,
     projectLifecycle.installation?.projectFingerprint,
     projectLifecycle.installation?.projectRevision,
+    projectLifecycle.installation?.studioFingerprint,
     projectLifecycle.installation?.verified,
     projectLifecycle.installedRevision,
     serializeProject,
@@ -966,12 +1055,68 @@ function Shell({ offlineUpdateController = null }) {
     });
     routeStore.replace(`#screen=card&section=setup&task=${encodeURIComponent(taskId || journey.taskId)}`);
   }, [cardLifecycle, cardLink, flushProjectAutosave, routeStore, serializeProject]);
-  const openConnectionCenter = useCallback(() => setConnectionCenterOpen(true), []);
-  const closeConnectionCenter = useCallback(() => setConnectionCenterOpen(false), []);
+  const openConnectionCenter = useCallback(() => {
+    setConnectPanelIntent('');
+    setConnectionCenterOpen(true);
+  }, []);
+  const closeConnectionCenter = useCallback(() => {
+    setConnectPanelIntent('');
+    setConnectionCenterOpen(false);
+  }, []);
+  // Intent-completion close (phase 5). "Established" for this purpose is a
+  // verified command-ready link OR a lifecycle already past the connection
+  // question (ready, or confirming — a verified transport whose remaining
+  // evidence is not the Connect panel's job).
+  const cardLinkEstablished = connected
+    || cardLifecycle?.state === 'ready'
+    || cardLifecycle?.state === 'confirming';
+  const cardLinkEstablishedRef = useRef(cardLinkEstablished);
+  cardLinkEstablishedRef.current = cardLinkEstablished;
+  const connectCloseArmedRef = useRef(false);
+  // Screens ask for the Connection Center by dispatching the connect-panel
+  // event (via openCardFlow in lib/cardFlowEntry.js) instead of DOM-clicking
+  // the footer chip's test id. This takes the same path openCardControl takes
+  // for a not-ready card: the control drawer closes so the panel is the one
+  // card surface showing.
+  useEffect(() => {
+    const openPanel = event => {
+      setCardControlOpen(false);
+      setConnectPanelIntent(String(event?.detail?.connectIntent || ''));
+      setConnectionCenterOpen(true);
+      // A panel opened FOR connecting (the event always carries a connect
+      // intent) closes itself when the link becomes established while open,
+      // so the owner lands back where they asked from instead of on a "Done"
+      // resting state. Opened while already established, it stays a normal
+      // inspectable panel — nothing to complete, nothing to auto-close.
+      connectCloseArmedRef.current = !cardLinkEstablishedRef.current;
+    };
+    window.addEventListener(OPEN_CONNECT_PANEL_EVENT, openPanel);
+    return () => window.removeEventListener(OPEN_CONNECT_PANEL_EVENT, openPanel);
+  }, []);
+  useEffect(() => {
+    if (!connectionCenterOpen) {
+      connectCloseArmedRef.current = false;
+      // The intent belongs to one opening. Clearing it on close keeps a later
+      // footer-chip or drawer open from replaying a stale pre-selection.
+      setConnectPanelIntent('');
+      return;
+    }
+    // Only a transition observed while open completes the intent. A pair or
+    // take-over mid-flight has not established the link yet, so nothing
+    // closes under it; the close fires when its verification lands.
+    if (connectCloseArmedRef.current && cardLinkEstablished) {
+      connectCloseArmedRef.current = false;
+      setConnectionCenterOpen(false);
+    }
+  }, [connectionCenterOpen, cardLinkEstablished]);
   const openCardControl = useCallback(() => {
-    const status = cardConnectionStatus(cardLink, cardLifecycle);
-    if (status === 'Connected') setCardControlOpen(true);
-    else if (status === 'Needs attention' || status === 'Needs project') {
+    // The action authority's surface routing: ready → direct card controls,
+    // "Needs attention"/"Needs project" diagnoses → guided Setup, everything
+    // else (including a confirming card still being checked) → Connection
+    // Center.
+    const surface = cardSurfaceForLifecycle(cardLifecycle);
+    if (surface === 'card-control') setCardControlOpen(true);
+    else if (surface === 'setup') {
       setCardControlOpen(false);
       setConnectionCenterOpen(false);
       openSetupTask();
@@ -979,7 +1124,7 @@ function Shell({ offlineUpdateController = null }) {
       setCardControlOpen(false);
       setConnectionCenterOpen(true);
     }
-  }, [cardLifecycle, cardLink, openSetupTask]);
+  }, [cardLifecycle, openSetupTask]);
   const closeCardControl = useCallback(() => setCardControlOpen(false), []);
   const reconnectFromCardControl = useCallback(() => {
     setCardControlOpen(false);
@@ -1097,7 +1242,7 @@ function Shell({ offlineUpdateController = null }) {
       else if (result.reason === 'queued' || Number(result.error?.status) >= 500) {
         showWorkspaceEvent('Save queued — waiting to retry online.', { kind: 'offline', persistent: true, review: true, source: 'cloud-save-waiting' });
       } else if (result.reason === 'stale-session' || [401, 403].includes(Number(result.error?.status))) {
-        showWorkspaceEvent('Your session changed. Sign in again from Preferences.', { kind: 'error', persistent: true, review: true, source: 'cloud-save-session' });
+        showWorkspaceEvent('Your session changed. Sign in again from Projects.', { kind: 'error', persistent: true, review: true, source: 'cloud-save-session' });
       }
       return;
     }
@@ -1150,14 +1295,30 @@ function Shell({ offlineUpdateController = null }) {
     });
   }, [markProjectPersisted, projectLifecycle.editedRevision, projectLifecycle.generation, saveProjectToBrowserGuarded, serializeProject]);
   const onDownload = useCallback(async () => {
-    const ok = await downloadJsonFile(
-      canonicalProjectFileName(projectName),
-      serializeProject(),
-    );
-    if (ok) markProjectPersisted('file');
-    else showWorkspaceEvent('Download failed', { kind: 'error', persistent: true, review: true });
+    const ok = await exportProjectToFile({
+      serializeProject,
+      projectName,
+      markPersisted: markProjectPersisted,
+    });
+    if (!ok) showWorkspaceEvent('Download failed', { kind: 'error', persistent: true, review: true });
   }, [markProjectPersisted, projectName, serializeProject, showWorkspaceEvent]);
-  const onLoad = useCallback(() => setLoadDialogOpen(true), []);
+  const onLoad = useCallback(() => setProjectsPanelOpen(true), []);
+  // Preferences' "Manage projects" button (and any other surface) opens the
+  // panel through this event, the same pattern as the Connect panel.
+  useEffect(() => {
+    const openPanel = () => setProjectsPanelOpen(true);
+    window.addEventListener(OPEN_PROJECTS_PANEL_EVENT, openPanel);
+    return () => window.removeEventListener(OPEN_PROJECTS_PANEL_EVENT, openPanel);
+  }, []);
+  // Retry for the association save block: re-run the exact handoff the current
+  // workspace needs; success lifts the block (the banner disappears).
+  const retryAssociationSaveBlock = useCallback(async () => {
+    const result = await retryAssociationHandoff({
+      hasActiveCloudProject: Boolean(cloudLibraryRef.current.activeRemoteProject?.id),
+      io: associationIo,
+    });
+    if (result.ok) showWorkspaceEvent('Saving works again. Save the project to keep this work.');
+  }, [associationIo, showWorkspaceEvent]);
   const onMatchedCardProjectLoaded = useCallback(async ({ source, recordId, recordSnapshot, expectedMarker }) => {
     const markerPresent = Number.isSafeInteger(expectedMarker?.generation)
       && Number.isSafeInteger(expectedMarker?.revision);
@@ -1165,64 +1326,28 @@ function Shell({ offlineUpdateController = null }) {
       return { ok: false, reason: 'lifecycle-marker-required' };
     }
     const associationIsCurrent = () => !markerPresent || isProjectLifecycleMarkerCurrent(expectedMarker);
+    // Every destination change runs through lib/projectAssociation.js — the
+    // one audited set of mutual-exclusion transitions (cloud clears the
+    // browser pointer, browser detaches cloud, failures block saving).
     if (source === 'cloud') {
       if (!associationIsCurrent()) return { ok: false, reason: 'superseded' };
-      try {
-        writeActiveProjectLibraryRecordId('');
-        if (readActiveProjectLibraryRecordId() !== '') {
-          throw new Error('browser project association was not cleared');
-        }
-        browserAssociationRef.current = null;
-        setProjectAssociationSaveBlocked(false);
-        return { ok: true };
-      } catch {
-        browserAssociationRef.current = null;
-        setProjectAssociationSaveBlocked(true);
-        return { ok: false, reason: 'association-handoff-failed' };
-      }
+      return adoptCloudProjectAssociation(associationIo);
     }
     if (!['browser', 'production', 'unassociated'].includes(source)) return { ok: true };
-    // Detach cloud first and clear the old browser association before selecting
-    // the new destination. If browser storage fails at either step, manual and
-    // card-switch saves remain blocked so the previous project cannot be overwritten.
-    cloudLibrary.detachProject();
-    try {
-      if (source === 'browser') {
-        if (!recordId || !recordSnapshot || recordSnapshot.recordId !== recordId) {
-          throw new Error('missing browser project record snapshot');
-        }
-        const association = await associateProjectLibraryRecordGuarded(recordSnapshot);
-        if (!associationIsCurrent()) {
-          if (association?.ok) {
-            await clearProjectLibraryAssociationGuarded({
-              recordId,
-              ownershipToken: association.associationOwnershipToken,
-            });
-          }
-          return { ok: false, reason: 'superseded' };
-        }
-        if (!association?.ok) throw new Error(association?.reason || 'browser project association failed');
-        browserAssociationRef.current = association.associationSnapshot;
-        markProjectPersisted('browser', expectedMarker);
-      } else {
-        if (!associationIsCurrent()) return { ok: false, reason: 'superseded' };
-        writeActiveProjectLibraryRecordId('');
-        if (readActiveProjectLibraryRecordId() !== '') {
-          throw new Error('browser project association was not cleared');
-        }
-        browserAssociationRef.current = null;
-      }
-      setProjectAssociationSaveBlocked(false);
-      return { ok: true };
-    } catch {
-      if (!associationIsCurrent()) return { ok: false, reason: 'superseded' };
-      cloudLibrary.detachProject();
-      browserAssociationRef.current = null;
-      if (source === 'browser') markProjectEdited();
-      setProjectAssociationSaveBlocked(true);
-      return { ok: false, reason: 'association-handoff-failed' };
+    if (source === 'browser') {
+      return adoptBrowserRecordAssociation({
+        recordId,
+        recordSnapshot,
+        isMarkerCurrent: associationIsCurrent,
+        io: {
+          ...associationIo,
+          markProjectPersisted: () => markProjectPersisted('browser', expectedMarker),
+          markProjectEdited,
+        },
+      });
     }
-  }, [cloudLibrary, isProjectLifecycleMarkerCurrent, markProjectEdited, markProjectPersisted]);
+    return adoptUnassociatedWorkspace({ isMarkerCurrent: associationIsCurrent, io: associationIo });
+  }, [associationIo, isProjectLifecycleMarkerCurrent, markProjectEdited, markProjectPersisted]);
   const onMatchedCardProjectVerified = useCallback(({ evidence, expectedMarker }) => {
     if (!Number.isSafeInteger(expectedMarker?.generation)
       || !Number.isSafeInteger(expectedMarker?.revision)
@@ -1264,40 +1389,34 @@ function Shell({ offlineUpdateController = null }) {
   const onImport = useCallback(() => fileInputRef.current?.click(), []);
   const onNew = useCallback(async () => {
     const result = await replaceWithNewProject();
-    if (result.ok) {
-      browserAssociationRef.current = null;
-      writeActiveProjectLibraryRecordId('');
-      cloudLibrary.detachProject();
-      setProjectAssociationSaveBlocked(false);
-    }
+    if (result.ok) clearAllProjectAssociations(associationIo);
     return result;
-  }, [cloudLibrary, replaceWithNewProject]);
+  }, [associationIo, replaceWithNewProject]);
   const onStartNewProject = useCallback(async () => {
     const result = await onNew();
     if (result?.ok) navigateStudio('layout');
     return result;
   }, [navigateStudio, onNew]);
+  // THE association cleanup a project-file import performs after a committed
+  // replacement — lib/projectTransfer.js owns the order; these are the app's
+  // handles on the three association stores. Shared with every import surface
+  // through the CardActionsProvider (importProjectFile), so Setup, Layout, and
+  // Preferences imports run exactly this sequence too.
+  const projectImportCleanup = useMemo(
+    () => createImportAssociationCleanup(associationIo),
+    [associationIo],
+  );
   const onFile = useCallback((e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      try {
-        const data = JSON.parse(ev.target.result);
-        const result = await replaceProject(data);
-        if (result.ok) {
-          browserAssociationRef.current = null;
-          writeActiveProjectLibraryRecordId('');
-          cloudLibrary.detachProject();
-          setProjectAssociationSaveBlocked(false);
-          setLoadDialogOpen(false);
-        }
+    importProjectFromPickedFile(file, { replaceProject, ...projectImportCleanup })
+      .then(result => {
+        if (result.ok) setProjectsPanelOpen(false);
         if (result.reason === 'invalid') alert('Invalid project file (version mismatch).');
-      } catch { alert('Could not parse project file.'); }
-    };
-    reader.readAsText(file);
+      })
+      .catch(() => { alert('Could not parse project file.'); });
     e.target.value = '';
-  }, [cloudLibrary, replaceProject]);
+  }, [projectImportCleanup, replaceProject]);
 
   const cardSetupOpen = view === 'discovery';
   const underlyingView = cardSetupOpen
@@ -1340,9 +1459,37 @@ function Shell({ offlineUpdateController = null }) {
   const visibleWorkspaceNotice = visiblePersistentNotice || workspaceEvent;
 
   return (
+    // Mounted ONCE, unconditionally, above the screen switch: the provider's
+    // component identity must never change across renders (remount-reset-guard
+    // history — THINKING.md 2026-08-07). Its `deps` object is rebuilt per
+    // render, but the provider reads it through a ref, so the context VALUE
+    // identity stays stable too.
+    <CardActionsProvider
+      deps={{
+        cardLink,
+        cardHost: cardLink.host || cardStatus.host,
+        serializeProject,
+        projectGeneration: projectLifecycle.generation,
+        activeCloudProjects: cloudLibrary.activeProjects,
+        browserProjects: cloudLibrary.browserProjects,
+        readBrowserProjects: listProjectLibraryRecords,
+        readCloudProject: cloudLibrary.readCardProjectCandidate,
+        replaceProject,
+        projectImportCleanup,
+        saveBeforeCardProjectSwitch,
+        isProjectSwitchSnapshotCurrent,
+        openMatchingCardProject: cloudLibrary.openMatchingCardProject,
+        onMatchedProjectLoaded: onMatchedCardProjectLoaded,
+        onMatchedProjectVerified: onMatchedCardProjectVerified,
+        openCardControl,
+      }}
+    >
     <div className="app">
       <TopBar
         projectName={projectName || 'Untitled'}
+        lifecycleLabel={projectLifecycleLabel}
+        hasUnsavedChanges={projectHasUnsavedChanges}
+        onRenameProject={setProjectName}
         onNew={onNew} onLoad={onLoad} onDownload={onDownload} onSave={onSave}
         onPreferences={() => openCardSection('preferences')}
       />
@@ -1407,6 +1554,21 @@ function Shell({ offlineUpdateController = null }) {
         onReview={() => openCardSection('preferences')}
       />
 
+      {projectAssociationSaveBlocked && (
+        <aside
+          className="workspace-notice workspace-notice-error association-save-banner"
+          data-testid="association-save-blocked"
+          role="alert"
+          aria-live="assertive"
+          aria-label="Saving blocked"
+        >
+          <span>Saving is paused — Studio could not establish a safe place to keep this project.</span>
+          <div className="workspace-notice-actions">
+            <button type="button" onClick={() => void retryAssociationSaveBlock()}>Retry</button>
+          </div>
+        </aside>
+      )}
+
       <StatusBar
         link={cardLink}
         lifecycle={cardLifecycle}
@@ -1427,6 +1589,7 @@ function Shell({ offlineUpdateController = null }) {
       />
       <CardConnectionCenter
         open={connectionCenterOpen}
+        connectIntent={connectPanelIntent}
         link={cardLink}
         lifecycle={cardLifecycle}
         onOpenSetup={() => {
@@ -1460,21 +1623,20 @@ function Shell({ offlineUpdateController = null }) {
         onAdvanced={openAdvancedPattern}
         onReconnect={reconnectFromCardControl}
       />
-      {loadDialogOpen && (
-        <ProjectLoadDialog
-          browserProjects={listProjectLibraryRecords()}
-          onClose={() => setLoadDialogOpen(false)}
-          onImport={onImport}
-          onOpenBrowserProject={openBrowserProject}
-          onOpenFailure={result => showWorkspaceEvent(
-            result?.error?.message || (result?.reason === 'stale-session'
-              ? 'Your session changed. Sign in again from Preferences.'
-              : 'The online project could not be opened.'),
-            { kind: 'error', persistent: true, review: true },
-          )}
-          onOpenPreferences={() => openCardSection('preferences')}
-        />
-      )}
+      <ProjectsPanel
+        open={projectsPanelOpen}
+        onClose={() => setProjectsPanelOpen(false)}
+        onImport={onImport}
+        onExport={onDownload}
+        onOpenBrowserProject={openBrowserProject}
+        onOpenFailure={result => showWorkspaceEvent(
+          result?.error?.message || (result?.reason === 'stale-session'
+            ? 'Your session changed. Sign in again from Projects.'
+            : 'The project could not be opened.'),
+          { kind: 'error', persistent: true, review: true },
+        )}
+        onLibraryMutated={refreshBrowserAssociationSnapshot}
+      />
       {saveDialogOpen && (
         <ProjectSaveDialog
           projectName={projectName}
@@ -1484,8 +1646,9 @@ function Shell({ offlineUpdateController = null }) {
           }}
         />
       )}
-      <input ref={fileInputRef} type="file" accept={PROJECT_IMPORT_ACCEPT} style={{ display: 'none' }} onChange={onFile} />
+      <input ref={fileInputRef} data-testid="project-file-input" type="file" accept={PROJECT_IMPORT_ACCEPT} style={{ display: 'none' }} onChange={onFile} />
     </div>
+    </CardActionsProvider>
   );
 }
 

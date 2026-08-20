@@ -445,6 +445,59 @@ export function duplicateProjectLibraryRecord(id, options = {}) {
   return duplicate;
 }
 
+// Rename a stored browser-library record in place. Serialized under the same
+// Web Lock as every interactive library write, with a post-write readback so a
+// rename that did not land is reported instead of assumed — the module's
+// guarded save pattern applied to the one record field a rename may change.
+export async function renameProjectLibraryRecordGuarded(id, name, options = {}) {
+  const recordId = String(id || '');
+  const cleanName = String(name || '').trim();
+  if (!recordId || !cleanName) return { ok: false, reason: 'invalid-name' };
+  const storage = storageFromOptions(options);
+  if (!storage) return { ok: false, reason: 'browser-library-failed' };
+  const lockManager = options.lockManager
+    ?? (typeof navigator !== 'undefined' ? navigator.locks : null);
+  if (!lockManager || typeof lockManager.request !== 'function') {
+    return { ok: false, reason: 'locking-unavailable' };
+  }
+
+  try {
+    const result = await lockManager.request(
+      PROJECT_LIBRARY_SAVE_LOCK,
+      { mode: 'exclusive' },
+      async () => {
+        const source = listProjectLibraryRecords({ storage }).find(record => record.id === recordId);
+        if (!source) return { ok: false, reason: 'record-missing' };
+        let saved;
+        try {
+          saved = saveProjectLibraryRecord({
+            ...source,
+            name: cleanName,
+            project: { ...source.project, name: cleanName },
+          }, { storage, now: options.now });
+        } catch {
+          return { ok: false, reason: 'browser-library-failed' };
+        }
+        let readback;
+        try {
+          readback = listProjectLibraryRecords({ storage }).find(record => record.id === recordId);
+        } catch {
+          return { ok: false, reason: 'browser-readback-failed' };
+        }
+        if (readback?.name !== cleanName || readback?.project?.name !== cleanName) {
+          return { ok: false, reason: 'browser-readback-failed' };
+        }
+        return { ok: true, record: saved };
+      },
+    );
+    return result && typeof result === 'object'
+      ? result
+      : { ok: false, reason: 'locking-failed' };
+  } catch {
+    return { ok: false, reason: 'locking-failed' };
+  }
+}
+
 // Legacy synchronous entry point retained for migrations and existing callers.
 // Interactive UI saves should use saveCurrentProjectToLibraryGuarded so every
 // participating tab shares one serialized read/validate/write boundary.

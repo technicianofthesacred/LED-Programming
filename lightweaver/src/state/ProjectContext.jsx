@@ -58,6 +58,7 @@ import {
   replaceProjectLifecycle,
   replaceProjectSafely,
 } from '../lib/projectLifecycle.js';
+import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
 import { createProjectEnvelope } from '../lib/projectRepository.js';
 
 const LS_AUTOSAVE_KEY = 'lw_autosave_v3';
@@ -869,19 +870,6 @@ export function ProjectProvider({ children, repository = null, initialProjectEnv
     } catch {}
   }, [applyProject, initialProjectEnvelope]);
 
-  // Keep the persisted lifecycle record in sync with the live lifecycle so a
-  // reload can distinguish "Saved in browser" from restored-unsaved work. The
-  // first run is skipped: it still sees the pre-boot placeholder state and
-  // must not clobber the record the boot effect just read.
-  const lifecycleRecordWriteReadyRef = useRef(false);
-  useEffect(() => {
-    if (!lifecycleRecordWriteReadyRef.current) {
-      lifecycleRecordWriteReadyRef.current = true;
-      return;
-    }
-    writeProjectLifecycleRecord(lifecycleRecordFromState(projectLifecycle));
-  }, [projectLifecycle]);
-
   // ── Debounced auto-save ───────────────────────────────────────────────────
   const saveTimerRef = useRef(null);
   const serializeProject = useCallback(() => {
@@ -970,6 +958,27 @@ export function ProjectProvider({ children, repository = null, initialProjectEnv
     }
     dispatchProjectLifecycle({ type: 'edited' });
   }, [serializeProject]);
+
+  // Keep the persisted lifecycle record in sync with the live lifecycle so a
+  // reload can distinguish "Saved in browser" from restored-unsaved work. The
+  // first run is skipped: it still sees the pre-boot placeholder state and
+  // must not clobber the record the boot effect just read. (Declared after
+  // `serializeProject` because its deps reference it.)
+  const lifecycleRecordWriteReadyRef = useRef(false);
+  useEffect(() => {
+    if (!lifecycleRecordWriteReadyRef.current) {
+      lifecycleRecordWriteReadyRef.current = true;
+      return;
+    }
+    // The current structural fingerprint is supplied lazily: it is what lets a
+    // verified installation record survive look edits into the persisted
+    // record (structurallyInstalledRecord's condition), and it is only
+    // computed when such a survived record actually needs proving.
+    writeProjectLifecycleRecord(lifecycleRecordFromState(
+      projectLifecycle,
+      () => cardProjectFingerprint(serializeProject()),
+    ));
+  }, [projectLifecycle, serializeProject]);
 
   const flushProjectAutosave = useCallback(() => {
     clearTimeout(saveTimerRef.current);

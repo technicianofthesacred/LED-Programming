@@ -277,7 +277,7 @@ export function ProjectLibraryPanel() {
                   <span>{formatTime(project.updatedAt)}{library.session.role === 'customer' ? '' : ` · ${project.lastEditor || 'Unknown editor'}`} · revision {project.revision}</span>
                 </div>
                 <div className="cloud-project-actions">
-                  <button type="button" className="btn ghost-sm" onClick={() => run(`open-${project.id}`, () => library.openProject(project))}>Open</button>
+                  <button type="button" className="btn ghost-sm" aria-label={`Open ${project.title}`} onClick={() => run(`open-${project.id}`, () => library.openProject(project))}>Open</button>
                   {library.session.role !== 'customer' && <button type="button" className="btn ghost-sm" onClick={() => setRename({ project, title: project.title })}>Rename</button>}
                   {library.session.role !== 'customer' && <button type="button" className="btn ghost-sm" onClick={() => run(`duplicate-${project.id}`, () => library.duplicateProject(project))}>Duplicate</button>}
                   <button type="button" className="btn ghost-sm" onClick={() => beginHistory(project)}>History</button>

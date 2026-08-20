@@ -51,12 +51,16 @@ export function markInstalled(state, revision = state.editedRevision) {
   const projectRevision = Number(source.projectRevision);
   const projectFingerprint = String(source.projectFingerprint || '').trim().toLowerCase();
   // What `cardProjectFingerprint` computed for the Studio project at the moment
-  // it was bound to this card. Installs performed FROM Studio need it for
-  // nothing — the two fingerprints are the same hash. It exists for the project
-  // adopted back OFF a card, whose reconstruction can never recompute the bytes
-  // the card hashed: it is the only way to later tell "this is still the
-  // structure that was installed" from "this has been rewired since".
-  const studioFingerprint = String(source.studioFingerprint || '').trim().toLowerCase();
+  // it was bound to this card. It exists for the project adopted back OFF a
+  // card, whose reconstruction can never recompute the bytes the card hashed:
+  // it is the only way to later tell "this is still the structure that was
+  // installed" from "this has been rewired since". Installs performed FROM
+  // Studio produce the same value on both sides (the two fingerprints are the
+  // same hash), so when the caller supplies none, the install fingerprint
+  // itself is recorded as the stand-in — every verified record then names the
+  // structure it was bound to, which is what lets a record survive look edits
+  // and reloads (`structurallyInstalledRecord`, `lifecycleRecordFromState`).
+  const requestedStudioFingerprint = String(source.studioFingerprint || '').trim().toLowerCase();
   // A card flashed before fingerprint reporting answers with an empty
   // `projectFingerprint` for a project it genuinely holds. Adoption from such
   // a card still carries real evidence — the structural fingerprint of the
@@ -68,8 +72,13 @@ export function markInstalled(state, revision = state.editedRevision) {
     && Number.isSafeInteger(projectRevision)
     && projectRevision >= 0
     && (/^[a-f0-9]{16,64}$/.test(projectFingerprint)
-      || (!projectFingerprint && /^[a-f0-9]{16,64}$/.test(studioFingerprint))),
+      || (!projectFingerprint && /^[a-f0-9]{16,64}$/.test(requestedStudioFingerprint))),
   );
+  const studioFingerprint = /^[a-f0-9]{16,64}$/.test(requestedStudioFingerprint)
+    ? requestedStudioFingerprint
+    : /^[a-f0-9]{16,64}$/.test(projectFingerprint)
+      ? projectFingerprint
+      : '';
   return {
     ...state,
     installedRevision,
@@ -77,7 +86,7 @@ export function markInstalled(state, revision = state.editedRevision) {
       cardId,
       projectRevision: Number.isSafeInteger(projectRevision) ? projectRevision : null,
       projectFingerprint,
-      studioFingerprint: /^[a-f0-9]{16,64}$/.test(studioFingerprint) ? studioFingerprint : '',
+      studioFingerprint,
       verified: source.verified === false ? false : exactIdentity,
     },
   };
@@ -103,9 +112,16 @@ export function markInstalled(state, revision = state.editedRevision) {
 export function reverifyInstallation(state, evidence = {}) {
   const installation = state.installation;
   if (!installation || installation.verified === true) return state;
-  // A record that no longer describes the project as it stands is not a
-  // candidate — an edit since the restore means the card holds something else.
-  if (state.installedRevision !== state.editedRevision) return state;
+  // A record that survived edits can only re-verify structurally: it must name
+  // the structure it was bound to (`studioFingerprint`), and the equality
+  // check against the live `studioProjectFingerprint` below proves the edits
+  // changed nothing structural — the same reasoning as
+  // `structurallyInstalledRecord`, so a look tap between the restore and the
+  // card's evidence does not cost the binding. The card must still hold the
+  // RECORD's exact revision (checked unconditionally below); a record with no
+  // recorded structure keeps the revision-exact gate it always had.
+  if (state.installedRevision !== state.editedRevision
+    && !String(installation.studioFingerprint || '')) return state;
 
   const cardId = String(evidence.cardId || '').trim();
   if (!cardId || cardId !== String(installation.cardId || '').trim()) return state;
@@ -164,9 +180,10 @@ export function currentInstallation(state) {
 // does before every send; gating on the revision instead would revoke a card's
 // own project the moment the owner tapped a pattern on it.
 //
-// Records written by a Studio install carry no `studioFingerprint` (the two
-// hashes are the same value there, so nothing needs standing in) and are
-// deliberately not eligible.
+// Records written by a Studio install record the install fingerprint itself as
+// the stand-in (the two hashes are the same value there — see `markInstalled`),
+// so every verified record is eligible while the structure it names is
+// unchanged. A record with no recorded structure at all binds nothing here.
 export function structurallyInstalledRecord(state, studioFingerprint) {
   const installation = state?.installation;
   if (installation?.verified !== true) return null;
@@ -216,22 +233,39 @@ export function hasUnsavedChanges(state) {
 
 export const PROJECT_LIFECYCLE_RECORD_VERSION = 2;
 
-export function lifecycleRecordFromState(state) {
+// `studioFingerprint` is the project's CURRENT structural fingerprint
+// (`cardProjectFingerprint` of the open project), passed as a string or as a
+// lazy provider so callers only pay for the hash when a survived record
+// actually needs proving. Without it, only a revision-exact installation is
+// persisted — the pre-stand-in behaviour.
+export function lifecycleRecordFromState(state, studioFingerprint) {
   const persisted = state.persistence?.revision === state.editedRevision
     ? state.persistence.destination
     : null;
-  const currentInstallation = state.installedRevision === state.editedRevision && state.installation
+  let installationSource = state.installedRevision === state.editedRevision && state.installation
+    ? state.installation
+    : null;
+  // A verified record that survived edits still speaks for the project while
+  // the structure it names is unchanged (`structurallyInstalledRecord`) — a
+  // look tap before a reload must not cost the card binding, so the record is
+  // persisted on the same structural condition that keeps it live in-session.
+  if (!installationSource
+    && state?.installation?.verified === true
+    && state.installation.studioFingerprint) {
+    const current = typeof studioFingerprint === 'function' ? studioFingerprint() : studioFingerprint;
+    installationSource = structurallyInstalledRecord(state, current);
+  }
+  const currentInstallation = installationSource
     ? {
-        cardId: String(state.installation.cardId || ''),
-        projectRevision: Number.isSafeInteger(state.installation.projectRevision)
-          ? state.installation.projectRevision
+        cardId: String(installationSource.cardId || ''),
+        projectRevision: Number.isSafeInteger(installationSource.projectRevision)
+          ? installationSource.projectRevision
           : null,
-        projectFingerprint: String(state.installation.projectFingerprint || ''),
-        // Only records that actually carry one write it, so an install made
-        // from Studio (where the two fingerprints are the same hash) keeps the
-        // record shape it has always had.
-        ...(state.installation.studioFingerprint
-          ? { studioFingerprint: String(state.installation.studioFingerprint) }
+        projectFingerprint: String(installationSource.projectFingerprint || ''),
+        // Only records that actually carry one write it, so a record bound
+        // with no structural stand-in keeps the record shape it always had.
+        ...(installationSource.studioFingerprint
+          ? { studioFingerprint: String(installationSource.studioFingerprint) }
           : {}),
       }
     : null;

@@ -357,7 +357,7 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
       throw new CardPushError(
         'mixed-content',
         err?.reason === 'bridge-missing' || err?.reason === 'bridge-timeout'
-          ? 'Open the card page once by clicking Card disconnected, then return to Studio so it can save through the local bridge.'
+          ? 'Open the card page once by clicking Card disconnected, then return to Studio so it can save through the card’s own page.'
           : 'Browser blocked the connection (mixed content). Use the local card installer handoff.',
         err,
       );
@@ -460,7 +460,7 @@ export async function pushConfigToCard(runtimePackage, options = {}) {
       throw new CardPushError(
         'mixed-content',
         err?.reason === 'bridge-missing' || err?.reason === 'bridge-timeout'
-          ? 'Open the card page once by clicking Card disconnected, then return to Studio so it can save through the local bridge.'
+          ? 'Open the card page once by clicking Card disconnected, then return to Studio so it can save through the card’s own page.'
           : 'Browser blocked the connection (mixed content). Use the local card installer handoff.',
         err,
       );

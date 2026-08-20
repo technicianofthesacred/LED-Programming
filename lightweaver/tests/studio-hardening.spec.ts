@@ -122,8 +122,8 @@ async function importSeededProjectFileThroughTopBar(page: any, recordId: string)
     const records = JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records || [];
     return records.find((record: any) => record.id === id)?.project;
   }, recordId);
-  await page.getByRole('button', { name: 'Load project' }).click();
-  const loadDialog = page.getByRole('dialog', { name: 'Load project' });
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  const loadDialog = page.getByRole('dialog', { name: 'Projects' });
   const chooserPromise = page.waitForEvent('filechooser');
   await loadDialog.getByRole('button', { name: 'Import from computer' }).click();
   const chooser = await chooserPromise;
@@ -245,7 +245,9 @@ test('Settings installs the exact requested revision when an edit happens during
   const save = page.locator('.set-row', { hasText: 'Install on card' }).getByRole('button', { name: 'Install on card' });
   await save.click();
   await expect.poll(() => configRequested).toBe(true);
-  await page.getByRole('navigation', { name: 'Hardware sections' }).getByRole('button', { name: 'Preferences' }).click();
+  // Preferences left the Hardware section tabs in the Card Home merge; it now
+  // opens from the top bar (still the same full-body view).
+  await page.getByRole('button', { name: 'Preferences', exact: true }).click();
   await name.fill('Revision two');
   releaseConfig?.();
   await page.getByRole('navigation', { name: 'Hardware sections' }).getByRole('button', { name: 'Hardware settings' }).click();
@@ -498,7 +500,7 @@ test('reduced motion disables status and preview animation names', async ({ page
 });
 
 test('installer signoff persists and exposes a ready state', async ({ page }) => {
-  await page.locator('.rail-item', { hasText: 'Setup' }).click();
+  await page.locator('.rail-item', { hasText: 'Card' }).click();
   await page.getByRole('button', { name: 'Advanced & Support' }).click();
   await page.getByRole('button', { name: 'GPIO & install guide' }).click();
   const checks = page.locator('.inst-signoff input[type="checkbox"]');
@@ -574,8 +576,8 @@ test('Settings controls expose stable accessible names', async ({ page }) => {
   await expect(page.getByRole('group', { name: 'Theme' })).toBeVisible();
   await expect(page.getByRole('button', { name: /Remove palette color 1/i })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Add palette color' })).toBeVisible();
-  // The designer config JSON now lives in Hardware > Advanced & Support > Designer JSON.
-  await page.locator('.rail-item', { hasText: 'Setup' }).click();
+  // The designer config JSON now lives in Card > Advanced & Support > Designer JSON.
+  await page.locator('.rail-item', { hasText: 'Card' }).click();
   await page.getByRole('button', { name: 'Advanced & Support' }).click();
   await page.getByRole('button', { name: 'Designer JSON' }).click();
   await page.getByRole('button', { name: 'Show JSON' }).click();
@@ -658,7 +660,7 @@ test('replacement guard names both projects and keeps editing until explicitly r
     buffer: Buffer.from(JSON.stringify(incoming)),
   };
 
-  const fileInput = page.locator('.set-file-input');
+  const fileInput = page.getByTestId('project-file-input');
   await fileInput.setInputFiles(projectFile);
   const dialog = page.getByRole('dialog', { name: 'Replace current project?' });
   await expect(dialog).toContainText('Current Mandala');
@@ -731,7 +733,7 @@ test('replacement dialog traps keyboard focus and restores its trigger', async (
 });
 
 test('flash erase requires a final confirmation before starting', async ({ page }) => {
-  await page.locator('.rail-item', { hasText: 'Setup' }).click();
+  await page.locator('.rail-item', { hasText: 'Card' }).click();
   await page.getByRole('button', { name: 'Advanced & Support' }).click();
   await page.getByRole('button', { name: 'Technician firmware & logs' }).click();
   await page.getByRole('checkbox', { name: /Wipes the chip first/i }).check();

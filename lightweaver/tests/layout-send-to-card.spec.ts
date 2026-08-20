@@ -7,6 +7,15 @@ import { testPort as port } from './testPort.mjs';
 const TEST_CARD_ID = 'lw-layout-tests';
 const TEST_BUILD_ID = 'a'.repeat(40);
 
+// Project export runs through the ONE download implementation
+// (src/lib/projectTransfer.js), which prefers the File System Access save
+// picker. Headless Chromium can never show that dialog, so stub it out (as
+// tests/show-screen.spec.ts does) so the export falls back to the anchor
+// download that `page.waitForEvent('download')` observes.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => { (window as any).showSaveFilePicker = undefined; });
+});
+
 // Test & Install finish line: one card installation path. Reuses the
 // `mockLocalCard` route pattern
 // from workflow.spec.ts. The default project boots the two-circle hardware
