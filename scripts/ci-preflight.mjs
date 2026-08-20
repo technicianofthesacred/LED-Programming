@@ -8,7 +8,9 @@
 // It reports:
 //   1. which CI lanes the diff selects (the same classifier CI runs);
 //   2. whether a firmware-sensitive change needs a VERSION bump the signer
-//      will accept (the check that otherwise fails only in the firmware job);
+//      will accept (the check that otherwise fails only in the firmware job),
+//      and whether this revision produces a signed card release at all —
+//      Studio-only revisions do not, so they deploy without one;
 //   3. the pages-staging source guards that scan exact files (no cloud
 //      library or /design references in card command and flashing paths).
 //
@@ -18,6 +20,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { classifyChangedPaths, LANE_NAMES } from './ci-changed-lanes.mjs';
 import { cardBundleCheckRelevant } from './ci-card-bundle-check.mjs';
+import { firmwareBundleOnly } from './ci-changed-lanes.mjs';
 
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 // NOT trimmed: an unstaged porcelain line begins with a space (" M path"), and
@@ -45,8 +48,18 @@ function versionNumbers(value) {
   return match ? match.slice(1).map(Number) : null;
 }
 
+// Firmware-sensitive only because Studio source is embedded in the card
+// bundle: no signed release is produced for this revision, so no VERSION bump
+// is demanded and the site deploys straight away. A card release is on demand
+// — bump VERSION when you want one.
+const bundleOnly = firmwareBundleOnly(paths);
+if (bundleOnly) {
+  console.log('Card release: none — Studio-only revision, so the site deploys without waiting for the signer.');
+  console.log('Want a signed card release? Bump firmware/lightweaver-controller/VERSION (and its pinned literal) in the same merge.');
+}
+
 let bundleVerdict = '';
-if (lanes.firmware && cardBundleCheckRelevant(paths, false)) {
+if (!bundleOnly && lanes.firmware && cardBundleCheckRelevant(paths, false)) {
   // The firmware lane here comes only from Studio paths. CI drops it (no
   // signer, no VERSION bump, site deploys directly) when the canonical card
   // bundle provably matches the last signed release.
@@ -65,7 +78,7 @@ if (lanes.firmware && cardBundleCheckRelevant(paths, false)) {
   }
 }
 
-if (lanes.firmware && bundleVerdict !== 'unchanged') {
+if (lanes.firmware && !bundleOnly && bundleVerdict !== 'unchanged') {
   const previous = JSON.parse(
     readFileSync('lightweaver/public/firmware/release-manifest.json', 'utf8'),
   ).firmwareVersion;

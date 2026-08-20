@@ -202,11 +202,37 @@ function parseArguments(argv) {
   return parsed;
 }
 
-function writeOutputs(lanes, paths, outputPath, signedRelease = false) {
+// Does the firmware lane fire ONLY because Studio source is embedded in the
+// card bundle — with no hard firmware path touched at all?
+//
+// This is the difference between "the card's behaviour changed" and "the
+// card's built-in copy of the browser interface drifted". The first must
+// produce a signed release. The second must not: it would mean every colour
+// tweak mints a card release, bumps a version, and holds the website behind
+// twenty minutes of signing for a change no card is waiting on. Bundle drift
+// accumulates harmlessly and ships with the next release, which a VERSION bump
+// (a hard firmware path) triggers on demand.
+//
+// The firmware TEST lane is unaffected — Studio changes still compile against
+// the card, so a bundle that no longer fits is caught on the pull request
+// rather than twenty minutes into a release.
+export function firmwareBundleOnly(paths, {
+  conservative = false,
+  generatedRelease = false,
+} = {}) {
+  if (conservative) return false;
+  const options = { conservative, generatedRelease };
+  const withBundle = classifyChangedPaths(paths, { ...options, cardBundleUnchanged: false });
+  if (!withBundle.firmware) return false;
+  return classifyChangedPaths(paths, { ...options, cardBundleUnchanged: true }).firmware === false;
+}
+
+function writeOutputs(lanes, paths, outputPath, signedRelease = false, bundleOnly = false) {
   if (!outputPath) return;
   const lines = [
     ...LANE_NAMES.map(name => `${name}=${lanes[name] ? 'true' : 'false'}`),
     `signed_release=${signedRelease ? 'true' : 'false'}`,
+    `firmware_bundle_only=${bundleOnly ? 'true' : 'false'}`,
     `changed_paths=${JSON.stringify(paths)}`,
   ];
   appendFileSync(outputPath, `${lines.join('\n')}\n`);
@@ -229,8 +255,12 @@ function main() {
     // short of that leaves it unset and classification stays fail-closed.
     cardBundleUnchanged: process.env.CI_CARD_BUNDLE_UNCHANGED === 'true',
   });
-  writeOutputs(lanes, resolved.paths, process.env.GITHUB_OUTPUT || '', signedRelease);
-  process.stdout.write(`${JSON.stringify({ ...lanes, signedRelease, paths: resolved.paths, conservative: resolved.conservative })}\n`);
+  const bundleOnly = firmwareBundleOnly(resolved.paths, {
+    conservative: resolved.conservative,
+    generatedRelease: signedRelease,
+  });
+  writeOutputs(lanes, resolved.paths, process.env.GITHUB_OUTPUT || '', signedRelease, bundleOnly);
+  process.stdout.write(`${JSON.stringify({ ...lanes, signedRelease, firmwareBundleOnly: bundleOnly, paths: resolved.paths, conservative: resolved.conservative })}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
