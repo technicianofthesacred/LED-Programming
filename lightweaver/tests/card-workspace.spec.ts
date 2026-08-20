@@ -1409,9 +1409,11 @@ test('a saved match on a connected card offers exactly one Load — the Setup ba
   await expect(banner).toContainText(/^Load /);
   // One project, one Load button: while the Setup journey's saved-match banner
   // offers the Load, the Matching-card-project panel stands down instead of
-  // offering a second copy of the same guarded adoption.
+  // offering a second copy of the same guarded adoption. Count only the card
+  // workspace (main): the app header's global "Load project" toolbar button
+  // also matches /^Load / and is not a card-project offer.
   await expect(page.getByRole('region', { name: 'Matching card project' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: /^Load / })).toHaveCount(1);
+  await expect(page.getByRole('main').getByRole('button', { name: /^Load / })).toHaveCount(1);
 });
 
 test('Card section navigation becomes one compact switcher on a 390px viewport', async ({ page }) => {

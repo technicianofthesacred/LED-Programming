@@ -318,10 +318,18 @@ export function SetupScreen({
     return Boolean(installedProjectId) && installedProjectId === String(currentProject?.id || '').trim();
   }, [cardLink?.card, cardLink?.readiness, cardState.status, currentProject, projectLifecycle]);
   const matchesOpenProject = resolution.kind === 'matches-current' || installationMatch;
-  // The saved-match banner below is showing its Load. Report it up so Card
-  // Home's Matching-card-project panel suppresses the duplicate offer — one
-  // project, one Load button (they call the same guarded adoption machine).
-  const savedMatchLoadOffer = resolution.kind === 'saved-match' && !installationMatch;
+  // The saved-match banner below offers its Load only while the shared
+  // adoption machine can actually run it — cardActions comes from
+  // CardActionsProvider, mounted at the Shell. Report the offer up so Card
+  // Home's Matching-card-project panel suppresses the duplicate — one
+  // project, one Load button (both run the identical guarded machine).
+  // Without the provider (CardScreen rendered standalone — the documented
+  // project-switch harness contract in tests/card-workspace.spec.ts and the
+  // CardActionsProvider header), the banner stands down instead: it must
+  // never offer a Load that cannot run, and the panel — which binds the
+  // machine from its own injected props — keeps the one working offer.
+  const savedMatchLoadOffer = resolution.kind === 'saved-match' && !installationMatch
+    && Boolean(cardActions?.adoptCardProject);
   useEffect(() => {
     if (!onLoadOfferChange) return undefined;
     onLoadOfferChange(savedMatchLoadOffer);
@@ -480,7 +488,9 @@ export function SetupScreen({
                   : 'This exact card is connected, but Studio has not matched the project it holds to the project open here.'}
             </p>
             <div className="lw-setup-banner-actions">
-              {resolution.resolved ? (
+              {/* Load runs the shared adoption machine (cardActions); without
+                  the provider fall back to the self-contained adoption. */}
+              {resolution.resolved && cardActions?.adoptCardProject ? (
                 <button type="button" className="btn primary" data-testid="setup-load-matched" onClick={() => void loadResolvedProject()}>
                   {`Load ${describeResolvedCardProject(resolution.resolved)}`}
                 </button>
@@ -606,7 +616,7 @@ export function SetupScreen({
             <button type="button" className="btn primary" data-testid="setup-open-patterns" onClick={() => go('#screen=pattern')}>Open Patterns</button>
           </section>
         )}
-        {resolution.kind === 'saved-match' && !installationMatch && (
+        {savedMatchLoadOffer && (
           <section className="card-support-panel lw-setup-banner">
             <h2>A saved project matches this exact card</h2>
             <p>Load the matching project instead of replaying blank-card setup.</p>
