@@ -299,19 +299,23 @@ test('existing Studio routes remain available beside Pattern Lab', async ({ page
   await page.goto('/#screen=pattern-lab', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('pattern-lab-screen')).toBeVisible();
 
+  // Each route is proved mounted by a CSS selector rather than a test id: the
+  // Setup screen has no test id that renders in every card state, so its root
+  // class is the only always-present anchor. Keeping one form for all five
+  // keeps the loop honest about what it is asserting.
   const routes = [
-    { label: 'Layout', mountedContent: 'layout-mode-switch' },
-    { label: 'Patterns', mountedContent: 'pattern-project-preview' },
-    { label: 'Playlist', mountedContent: 'playlist-physical-preview-status' },
-    { label: 'Show', mountedContent: 'show-stage' },
-    { label: 'Hardware', mountedContent: 'card-setup-steps' },
+    { label: 'Layout', mounted: '[data-testid="layout-mode-switch"]' },
+    { label: 'Patterns', mounted: '[data-testid="pattern-project-preview"]' },
+    { label: 'Playlist', mounted: '[data-testid="playlist-physical-preview-status"]' },
+    { label: 'Show', mounted: '[data-testid="show-stage"]' },
+    { label: 'Setup', mounted: '.card-workspace-screen' },
   ];
 
   for (const route of routes) {
     const railItem = page.getByRole('button', { name: route.label, exact: true });
     await railItem.click();
     await expect(railItem).toHaveAttribute('aria-current', 'page');
-    await expect(page.getByTestId(route.mountedContent)).toBeVisible();
+    await expect(page.locator(route.mounted).first()).toBeVisible();
     await expect(page.getByTestId('pattern-lab-screen')).toHaveCount(0);
   }
 });
