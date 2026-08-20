@@ -2139,16 +2139,34 @@ import { PatternPreview } from './PatternPreview.jsx';
                       return (
                     <div key={p.id} className="pmcard-wrap">
                       <button type="button" className={"pmcard" + (p.id === selId ? " on" : "") + (cardInPlaylist ? " in-playlist" : "")} data-pattern-id={p.id} aria-pressed={p.id === selId} onClick={() => selectCard(p)}>
-                        <div className="pmcard-led"><LedRow pal={p.pal} n={9} /></div>
+                        {/* Speed rides the LED window's top-right corner; the
+                            playlist star takes the row slot it used to hold.
+                            Speed is a property of the preview you are looking
+                            at, the star is the action — each now sits where it
+                            belongs. */}
+                        <div className="pmcard-led"><LedRow pal={p.pal} n={9} /><span className="pmcard-sp">{p.sp}</span></div>
                         <div className="pmcard-row">
                           <span className="pmcard-nm">{p.label}</span>
                           {p.mix && <span className="mixtag">mix</span>}
-                          <span className="pmcard-sp">{p.sp}</span>
                         </div>
                       </button>
-                        <button type="button" aria-pressed={cardInPlaylist} className={"pmcard-pl" + (cardInPlaylist ? " on" : "")} onClick={(e) => togglePl(p.id, e)}>
-                          <svg viewBox="0 0 24 24" className="plstar"><path d="M12 3l2.6 5.6 6 .7-4.4 4.1 1.2 6L12 16.8 6.6 19.4l1.2-6L3.4 9.3l6-.7z" /></svg>
-                          {cardInPlaylist ? "In playlist" : "Add to playlist"}
+                        {/* Rides the top-right corner of the card's LED window
+                            instead of a full-width row underneath it. Same tap
+                            target, ~33px less height per card. Icon-only at
+                            rest; the label slides out on hover/focus, where
+                            there is room for it to explain itself. */}
+                        <button
+                          type="button"
+                          aria-pressed={cardInPlaylist}
+                          aria-label={cardInPlaylist ? `Remove ${p.label} from playlist` : `Add ${p.label} to playlist`}
+                          title={cardInPlaylist ? "In playlist \u2014 tap to remove" : "Add to playlist"}
+                          className={"pmcard-pl" + (cardInPlaylist ? " on" : "")}
+                          onClick={(e) => togglePl(p.id, e)}
+                        >
+                          <span className="pmcard-pl-pill">
+                            <svg viewBox="0 0 24 24" className="plstar" aria-hidden="true"><path d="M12 3l2.6 5.6 6 .7-4.4 4.1 1.2 6L12 16.8 6.6 19.4l1.2-6L3.4 9.3l6-.7z" /></svg>
+                            <span className="pmcard-pl-lab">{cardInPlaylist ? "In playlist" : "Playlist"}</span>
+                          </span>
                         </button>
                     </div>
                       );

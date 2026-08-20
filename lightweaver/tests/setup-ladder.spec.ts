@@ -9,20 +9,38 @@ const CARD_ID = 'lw-setup-ladder';
 // ignored by the reducer, so the mock answers on this one.
 const CARD_HOST = 'lightweaver.local';
 
-function readyStatus() {
+// A factory-blank card, reported the way the firmware actually reports one.
+// The previous fixture claimed to be blank in a comment while answering
+// runtimePhase 'ready' with knownGoodProject true, which no card does: the
+// readiness classifier read it as a healthy card holding a project it would
+// not name, and every screen below derived its state from that contradiction.
+function blankStatus() {
   return {
     app: 'Lightweaver', provisioningContractVersion: 1,
     cardId: CARD_ID, firmwareVersion: '1.4.0', buildId: 'b'.repeat(40),
-    bootId: 'boot-ladder-1', runtimePhase: 'ready', knownGoodProject: true,
-    commandReady: true, outputReady: true,
+    bootId: 'boot-ladder-1', runtimePhase: 'factory', knownGoodProject: false,
+    commandReady: false, playbackReady: false, outputReady: false,
+    mode: 'factory-flash', source: 'defaults',
     projectId: '', outputs: [],
     wifi: { transport: 'station', transition: 'station', transitionPending: false, stationIp: '192.168.18.70', ip: '192.168.18.70' },
   };
 }
 
+// A commissioned card that is running normally. Used by the one test about a
+// failed operation: 'blank' outranks a failed operation in the lifecycle, so a
+// factory card can never reach the recover-operation task that test is about.
+function commissionedStatus() {
+  return {
+    ...blankStatus(),
+    runtimePhase: 'ready', knownGoodProject: true,
+    commandReady: true, playbackReady: true, outputReady: true,
+    mode: 'project', source: 'stored', projectId: 'ladder-piece',
+  };
+}
+
 test.beforeEach(async ({ page }) => {
   await page.route(`http://${CARD_HOST}/api/status`, route => route.fulfill({
-    status: 200, contentType: 'application/json', body: JSON.stringify(readyStatus()),
+    status: 200, contentType: 'application/json', body: JSON.stringify(blankStatus()),
   }));
   // No project on the card: this is a blank card being set up for the first time.
   await page.route(`http://${CARD_HOST}/**`, route => route.fulfill({
@@ -35,20 +53,17 @@ test.beforeEach(async ({ page }) => {
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: /Set up your Lightweaver/i })).toBeVisible();
 
-  await page.evaluate(async ({ cardId, host }) => {
+  // Drive the link with the same payload the route serves, so the screen and
+  // the card agree about what this card is.
+  await page.evaluate(async ({ cardId, host, readiness }) => {
     const { getSharedCardLink } = await import('/src/lib/cardLink.js');
     const link = getSharedCardLink();
-    const readiness = {
-      app: 'Lightweaver', cardId, firmwareVersion: '1.4.0', buildId: 'b'.repeat(40),
-      bootId: 'boot-ladder-1', runtimePhase: 'ready', knownGoodProject: true,
-      commandReady: true, outputReady: true, provisioningContractVersion: 1,
-    };
     const event = { type: 'card-verified', via: 'direct', host, card: { id: cardId }, readiness };
     // Two matching envelopes: the link requires a stable revalidation before it
     // treats a card as trusted.
     link.dispatch(event);
     link.dispatch(event);
-  }, { cardId: CARD_ID, host: CARD_HOST });
+  }, { cardId: CARD_ID, host: CARD_HOST, readiness: blankStatus() });
 });
 
 test('Setup presents four outcome phases with one active task', async ({ page }) => {
@@ -64,10 +79,17 @@ test('Setup presents four outcome phases with one active task', async ({ page })
 });
 
 test('bottom-left attention opens the exact Setup task instead of a competing connection screen', async ({ page }) => {
-  await page.evaluate(async () => {
+  await page.route(`http://${CARD_HOST}/api/status`, route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(commissionedStatus()),
+  }));
+  await page.evaluate(async ({ cardId, host, readiness }) => {
     const { getSharedCardLink } = await import('/src/lib/cardLink.js');
-    getSharedCardLink().dispatch({ type: 'operation-failed' });
-  });
+    const link = getSharedCardLink();
+    const event = { type: 'card-verified', via: 'direct', host, card: { id: cardId }, readiness };
+    link.dispatch(event);
+    link.dispatch(event);
+    link.dispatch({ type: 'operation-failed' });
+  }, { cardId: CARD_ID, host: CARD_HOST, readiness: commissionedStatus() });
   const status = page.getByTestId('card-link-status');
   await expect(status).toHaveAccessibleName(/Needs attention/);
   await status.click();
@@ -96,7 +118,12 @@ test('Setup identity row names the exact card project and installed match', asyn
   const identity = page.getByTestId('setup-identity-row');
   await expect(identity).toBeVisible();
   await expect(identity).toContainText(CARD_ID);
-  await expect(identity).toContainText(/connected/i);
+  // A reached factory card is linked but holds nothing, and the row must say
+  // which of those two facts it is reporting. 'Not connected' would be the
+  // wrong answer here and is asserted against explicitly, because it contains
+  // the word 'connected' and would otherwise satisfy a looser pattern.
+  await expect(identity).not.toContainText('Not connected');
+  await expect(identity).toContainText(/needs project/i);
   await expect(identity).toContainText(/project/i);
   await expect(identity).toContainText(/not installed|temporary setup|match/i);
 });

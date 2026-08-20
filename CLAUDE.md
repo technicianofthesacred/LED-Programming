@@ -56,7 +56,7 @@ Use these words precisely in every Lightweaver handoff:
 - **Deployed**: the production workflow used real production credentials, published the exact integrated revision, and succeeded. A credential-skipped green workflow is not deployed.
 - **Shipped**: tested, merged into `origin/main`, deployed successfully, and then independently proven live at `https://led.mandalacodes.com` by its strict no-store `/studio-release.json` revision and the exact deployed files in the staged build graph.
 
-Every **Deployed** and **Shipped** report must name the **build numbers** — the repository's first-parent commit count, which is exactly the number GitHub prints as "N Commits" at the top of the file list. Adrian checks GitHub, checks the screen, and knows whether he is running the newest code. Never switch this to a prettier counter that steps by one per change — neat increments are worthless if they match nothing he can see. The same number is used for both surfaces:
+Every **Deployed** and **Shipped** report must name the **build numbers** — the repository's total commit count, which is exactly the number GitHub prints as "N Commits" at the top of the file list. Adrian checks GitHub, checks the screen, and knows whether he is running the newest code. Never switch this to a prettier counter that steps by one per change — neat increments are worthless if they match nothing he can see. The same number is used for both surfaces:
 
 - **Studio build** — `buildNumber` in `/studio-release.json`, shown in the Studio footer beacon.
 - **Firmware build** — `buildNumber` in the signed `/firmware/release-manifest.json`, compiled into the binary as `LW_BUILD_NUMBER` and reported by the card on `/api/firmware-info` and `/api/status`. A card and the release it was flashed from always report the same number.
@@ -85,17 +85,29 @@ Two paths, chosen by one question: **is the card on a USB cable?**
 Iterating never needs the release path. A bench card can live on dev builds
 indefinitely and jump to a signed release any time (USB flash or Wi-Fi update).
 
-**"Ship it" defaults to quick.** CI proves whether a merge actually changes the
-card-embedded Studio bundle (`scripts/ci-card-bundle-check.mjs`, byte-level
-against the last signed release). Studio-only merges whose bundle is unchanged
-skip the firmware signer entirely — no VERSION bump, site live in ~10 minutes.
-Merges that DO change firmware or the embedded bundle take the full signed
-path automatically (~30 min, VERSION bump required); call that one
-**"finalize firmware"** when asking for it explicitly. The proof is
-fail-closed: when it cannot prove "unchanged", the signer runs, exactly as
-before. Predict which path a diff gets before pushing:
-`node scripts/ci-preflight.mjs` (add `--bundle-check` for the byte-level
-answer).
+**"Ship it" defaults to quick, and a signed card release is on demand.**
+Studio source is embedded in the card bundle, so every visual change is
+technically firmware-sensitive. It is NOT treated as a release: when the
+firmware lane fires only because of that embedded copy
+(`firmwareBundleOnly` in `scripts/ci-changed-lanes.mjs`), the signer is
+skipped and the site deploys straight away — no VERSION bump, live in
+~10 minutes. Bundle drift accumulates harmlessly and ships with the next
+release.
+
+A signed card release happens when either is true: real firmware changed
+(`firmware/**` source, platformio, release machinery), or **VERSION was
+bumped** — the bump IS the on-demand trigger, so "finalize firmware" means
+bump `firmware/lightweaver-controller/VERSION` plus its pinned literal in
+`tests/firmware-version-policy.mjs` and merge (~30 min, signed, published).
+
+The firmware TEST lane is unchanged: Studio changes still compile against the
+card, so a bundle that no longer fits fails on the PR rather than twenty
+minutes into a release. Predict what a diff gets before pushing:
+`node scripts/ci-preflight.mjs`.
+
+Consequence to keep in mind: between releases, the signed download and any
+Wi-Fi update are older than the live site. A bench card on a dev build is
+unaffected; a customer card gets the drift at the next release.
 
 ## Agent ownership boundaries
 - `led-art-mapper/app/src/` — owned by led-art-mapper agent; do not edit

@@ -8,7 +8,7 @@ test('card tools menu closes when navigating to Card preferences', async ({ page
   await page.evaluate(() => { window.location.hash = 'screen=settings'; });
 
   await expect(page.getByRole('menu', { name: 'Card tools' })).toHaveCount(0);
-  await expect(page.locator('.rail-item.active', { hasText: 'Hardware' })).toBeVisible();
+  await expect(page.locator('.rail-item.active', { hasText: 'Setup' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Preferences', level: 1 })).toBeVisible();
 });
 

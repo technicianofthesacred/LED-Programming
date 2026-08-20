@@ -641,7 +641,7 @@ If the card reports rollback, provisional state, a changed project, or different
 
 Follow the repository’s standing shipment flow: push the reviewed branch, open the integration PR, merge to `origin/main`, wait for any protected signer commit, run the production deployment workflow with real production credentials, then fetch `https://led.mandalacodes.com/studio-release.json` with no-store semantics.
 
-Require the live Studio revision to equal terminal `origin/main`, require every file in the staged build graph to match the deployed artifact, and run the real-card acceptance harness against the signed firmware build that the card reports. Record both repository first-parent build numbers in the final shipment report.
+Require the live Studio revision to equal terminal `origin/main`, require every file in the staged build graph to match the deployed artifact, and run the real-card acceptance harness against the signed firmware build that the card reports. Record both repository build numbers in the final shipment report.
 
 - [ ] **Step 6: Complete LoopX todos with evidence**
 

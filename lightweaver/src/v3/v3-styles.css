@@ -145,9 +145,93 @@ input[type=number]::-webkit-outer-spin-button {
 .project-replacement-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 
 .pm-target > .chips { max-width: 480px; }
-.pmcard-wrap { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
+/* The playlist toggle used to be a full-width row under each pattern card,
+   which cost ~33px of height per card and read as a second, competing button.
+   The two now swap places: speed becomes a tag over the LED window (it
+   describes the preview), and the star takes the meta-row slot speed used to
+   hold (it is the action, and it sits with the name it acts on).
+
+   The star stays a sibling of the card button (buttons cannot nest) and is
+   absolutely positioned into the row. The <button> is the touch target and
+   stays invisible; the pill inside it is the visual. That split is what lets a
+   22px pill keep a 44px finger target without the coarse-pointer rule at the
+   top of this file inflating the thing people actually see. */
+.pmcard-wrap { position: relative; display: flex; min-width: 0; flex-direction: column; }
 .pmcard-wrap > .pmcard { flex: 1; width: 100%; }
-.pmcard-wrap > .pmcard-pl { min-height: 28px; padding: 2px 8px; }
+/* Room for the star at the row's right edge, so long names truncate before
+   they reach it instead of sliding underneath. */
+.pmcard-wrap > .pmcard .pmcard-row { padding-right: 30px; }
+.pmcard-wrap > .pmcard .pmcard-led { position: relative; }
+.pmcard-wrap > .pmcard .pmcard-led .pmcard-sp {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  padding: 1px 4px;
+  border-radius: 5px;
+  background: oklch(0.12 0.005 60 / 0.55);
+  color: var(--text-lo);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+.pmcard-wrap > .pmcard-pl {
+  position: absolute;
+  right: 0;
+  /* The 10px padding is finger slack, not layout: the negative offset pulls
+     the visible pill back onto the meta row's baseline. */
+  bottom: -5px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 10px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.pmcard-wrap > .pmcard-pl .pmcard-pl-pill {
+  display: flex;
+  /* Reversed so the star sits at the pinned right edge and the label grows
+     out to its left: the star is the thing you aim at, and it must not move
+     when the label appears. Horizontal padding stays constant for the same
+     reason — a 2px shift on hover reads as a twitch. */
+  flex-direction: row-reverse;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  max-width: 22px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: 99px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: max-width .18s ease, color .12s, background .12s, border-color .12s;
+}
+.pmcard-wrap > .pmcard-pl .plstar { width: 14px; height: 14px; flex: none; }
+.pmcard-wrap > .pmcard-pl .pmcard-pl-lab { flex: none; padding-left: 2px; }
+/* Hover reveals the label over the tail of the name — the card background is
+   solid there, so it reads as an inline chip rather than a floating overlay.
+   Keyboard focus expands it too, but a mouse click does not (:focus-visible,
+   not :focus-within), or the label would stay parked after every tap. */
+.pmcard-wrap:hover > .pmcard-pl .pmcard-pl-pill,
+.pmcard-wrap > .pmcard-pl:focus-visible .pmcard-pl-pill {
+  max-width: 112px;
+  border-color: var(--border-soft);
+  background: var(--bg-elev);
+}
+.pmcard-wrap > .pmcard-pl:hover .pmcard-pl-pill { color: var(--text-hi); border-color: var(--border); }
+.pmcard-wrap > .pmcard-pl.on .pmcard-pl-pill { color: var(--accent); }
+.pmcard-wrap:hover > .pmcard-pl.on .pmcard-pl-pill,
+.pmcard-wrap > .pmcard-pl.on:focus-visible .pmcard-pl-pill { border-color: var(--accent-line); }
+.pmcard-wrap > .pmcard-pl.on .plstar { fill: var(--accent); stroke: var(--accent); }
+.pmcard-wrap > .pmcard-pl:focus-visible { outline: 2px solid var(--accent); outline-offset: -6px; border-radius: 99px; }
+@media (prefers-reduced-motion: reduce) {
+  .pmcard-wrap > .pmcard-pl .pmcard-pl-pill { transition: none; }
+}
 
 /* ============================================================
    App shell — single continuous grid

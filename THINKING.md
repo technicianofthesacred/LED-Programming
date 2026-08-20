@@ -393,3 +393,44 @@ fix — and until it runs, ALL /api/library features (cloud project library,
 accounts) still require an Access session in the browser. The grant was NOT
 moved outside the wall: it must stay owner-authenticated, and pre-cutover the
 Access wall IS the owner authentication.
+
+---
+
+## 2026-08-20 — Correction: the build number is the TOTAL commit count, not first-parent
+
+**Topic:** The 2026-08-05 entry above says the build number is a "first-parent
+Git depth" and records that plain commit-count was *rejected* because "merging a
+10-commit PR would jump the number by 11 instead of 1." That is not what ships,
+and has not been since the same day it was written. This entry corrects the
+record; per the append-only convention the original entry stays as written.
+
+**What is actually true.** `lightweaver/scripts/studio-release-identity.mjs:20`
+runs `git rev-list --count <revision>` with **no** `--first-parent`, and its own
+comment says so explicitly and forbids changing it. The correction landed in
+`4be600c0` — "Make the build number the one GitHub shows" (#73), 2026-08-05 —
+after the THINKING entry was appended. Neither `CLAUDE.md` nor the entry was
+updated to follow, so the documentation described a design that had already been
+replaced.
+
+**Why the code is right and the doc was wrong.** The number exists to answer one
+question: is the screen running what GitHub shows? GitHub's "N Commits" is the
+total reachable commit count, not first-parent depth. Verified 2026-08-20 against
+the live site and the API on the same revision:
+
+- `/studio-release.json` at `led.mandalacodes.com` → `buildNumber 1367`,
+  `sourceRevision a94f0fa4`
+- `GET /repos/.../commits?sha=main&per_page=1` → `rel="last"` page **1367**
+- `git rev-list --count HEAD` → **1367**; `--first-parent` → **536**
+
+So first-parent would have put 536 on screen against GitHub's 1367 — the exact
+failure the number was introduced to eliminate. The 2026-08-05 rejection reasoning
+optimized for a pretty +1 increment, which `CLAUDE.md` itself already warns against
+in the sentence immediately following: "neat increments are worthless if they match
+nothing he can see."
+
+**What changed here:** `CLAUDE.md:59` and the 2026-08-11 card-lifecycle plan doc
+now say "total commit count". No code moved. Future Claude: if you find these two
+disagreeing again, GitHub's number is the arbiter — check
+`gh api "repos/<owner>/<repo>/commits?sha=main&per_page=1" -i` and read the
+`rel="last"` page number. Do not "fix" the generator to first-parent; the
+increment is supposed to be lumpy, because GitHub's is.
