@@ -32,3 +32,7 @@ led-art-mapper/reference-repos/pixelblaze/
 .env.*
 **/.env
 **/.env.*
+
+# Workspace AI-tool state directories (machine-local, never repo content)
+.codex/
+.loopx/
