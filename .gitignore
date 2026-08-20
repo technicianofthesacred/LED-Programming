@@ -2,6 +2,8 @@ node_modules
 dist/
 lightweaver/.card-dist-raw/
 lightweaver/card-dist/
+lightweaver/.card-dist-raw-canonical/
+lightweaver/.card-dist-canonical/
 lightweaver/public/fonts/*.woff2
 .pages/
 .pio/
