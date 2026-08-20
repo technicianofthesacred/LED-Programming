@@ -105,6 +105,12 @@ jobs:
             && [ "$(git log -1 --format=%ce "$CI_HEAD_SHA")" = "$expected_signer_email" ]; then
             export CI_GENERATED_RELEASE=true
           fi
+          # Studio-only changes whose card-embedded bundle provably did not
+          # change deploy directly instead of deferring to the signer. The
+          # check is fail-closed: anything short of a byte-level match prints
+          # "false" and classification behaves exactly as before.
+          CI_CARD_BUNDLE_UNCHANGED="$(node scripts/ci-card-bundle-check.mjs --print)"
+          export CI_CARD_BUNDLE_UNCHANGED
           node scripts/ci-changed-lanes.mjs
       - name: Authorize direct deployment or defer to signer
         id: resolve

@@ -184,20 +184,44 @@ export async function packageCardStudio({ rawDir, outputDir, headerPath, identit
   return { release, headerPath: resolve(headerPath) };
 }
 
+// The canonical build exists so "did this change the card-embedded Studio?"
+// has a byte-level answer. Pinning the release identity removes the only
+// revision-dependent input, so two revisions produce the same bundleSha256
+// exactly when the embedded Studio they would ship is the same. The pinned
+// values are impossible for a real release (a zero revision, build 1).
+export const CANONICAL_CARD_BUNDLE_IDENTITY = Object.freeze({
+  sourceRevision: '0'.repeat(40),
+  buildNumber: 1,
+});
+
 async function main() {
-  const identity = resolveStudioReleaseIdentity({ cwd: projectDirectory });
-  const rawDir = resolve(projectDirectory, '.card-dist-raw');
+  const canonical = process.argv.includes('--canonical');
+  const identityEnv = canonical
+    ? {
+      ...process.env,
+      LIGHTWEAVER_SOURCE_REVISION: CANONICAL_CARD_BUNDLE_IDENTITY.sourceRevision,
+      LIGHTWEAVER_BUILD_NUMBER: String(CANONICAL_CARD_BUNDLE_IDENTITY.buildNumber),
+    }
+    : process.env;
+  const identity = resolveStudioReleaseIdentity({ cwd: projectDirectory, env: identityEnv });
+  const rawDir = resolve(projectDirectory, canonical ? '.card-dist-raw-canonical' : '.card-dist-raw');
   execFileSync(resolve(projectDirectory, 'node_modules', '.bin', 'vite'), ['build', '--mode', 'card'], {
-    cwd: projectDirectory, stdio: 'inherit', env: { ...process.env, LW_CARD_STUDIO_BUILD: '1' },
+    cwd: projectDirectory,
+    stdio: canonical ? 'ignore' : 'inherit',
+    env: { ...identityEnv, LW_CARD_STUDIO_BUILD: '1', LW_CARD_STUDIO_RAW_DIR: rawDir },
   });
   const result = await packageCardStudio({
     rawDir,
-    outputDir: resolve(projectDirectory, 'card-dist'),
-    headerPath: resolve(repositoryRoot, 'firmware', 'lightweaver-controller', 'src', 'LightweaverCardStudioBundle.h'),
-    identity: resolveCardStudioReleaseIdentity(identity),
+    outputDir: resolve(projectDirectory, canonical ? '.card-dist-canonical' : 'card-dist'),
+    headerPath: canonical
+      ? resolve(projectDirectory, '.card-dist-canonical', 'LightweaverCardStudioBundle.h')
+      : resolve(repositoryRoot, 'firmware', 'lightweaver-controller', 'src', 'LightweaverCardStudioBundle.h'),
+    identity: resolveCardStudioReleaseIdentity(identity, identityEnv),
     maximumBytes: Number(process.env.LW_CARD_STUDIO_MAX_BYTES || DEFAULT_CARD_STUDIO_MAXIMUM_BYTES),
   });
-  process.stdout.write(`${JSON.stringify(result.release)}\n`);
+  process.stdout.write(`${JSON.stringify(canonical
+    ? { canonical: true, bundleSha256: result.release.bundleSha256, totalSize: result.release.totalSize }
+    : result.release)}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();

@@ -102,7 +102,10 @@ export default defineConfig(({ mode }) => {
     },
     server: { port: 9998, strictPort: true, watch: { usePolling: true, interval: 500 } },
     build: {
-      outDir: cardTarget ? '.card-dist-raw' : 'dist',
+      // LW_CARD_STUDIO_RAW_DIR lets the canonical comparison build (see
+      // build-card-studio.mjs --canonical) run without clobbering a real
+      // card build's output.
+      outDir: cardTarget ? (process.env.LW_CARD_STUDIO_RAW_DIR || '.card-dist-raw') : 'dist',
       emptyOutDir: true,
       manifest: true,
       sourcemap: false,

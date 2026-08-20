@@ -206,3 +206,34 @@ test('unknown release-surface paths conservatively run source validation', () =>
     artifact: false,
   });
 });
+
+test('a proven-unchanged card bundle drops the firmware lane for Studio paths only', () => {
+  const studioPaths = [
+    ['lightweaver/src/v3/lw-setup.jsx'],
+    ['lightweaver/src/lib/cardLifecycle.js'],
+    ['lightweaver/scripts/build-card-studio.mjs'],
+    ['lightweaver/vite.config.js'],
+    ['lightweaver/card.html'],
+  ];
+  for (const paths of studioPaths) {
+    assert.equal(classifyChangedPaths(paths).firmware, true, `${paths[0]} stays firmware-sensitive without the fact`);
+    assert.equal(classifyChangedPaths(paths, { cardBundleUnchanged: true }).firmware, false, `${paths[0]} drops firmware with the fact`);
+    assert.equal(classifyChangedPaths(paths, { cardBundleUnchanged: true }).source, true, `${paths[0]} still runs source`);
+  }
+  // Hard firmware paths are never dropped by the bundle fact.
+  for (const paths of [
+    ['firmware/lightweaver-controller/src/main.cpp'],
+    ['firmware/lightweaver-controller/VERSION'],
+    ['packages/installer-core/src/constants.js'],
+    ['scripts/sign-release-artifacts.mjs'],
+  ]) {
+    assert.equal(classifyChangedPaths(paths, { cardBundleUnchanged: true }).firmware, true, `${paths[0]} ignores the bundle fact`);
+  }
+  // Mixed diffs keep the firmware lane through the hard path.
+  assert.equal(classifyChangedPaths(
+    ['lightweaver/src/v3/lw-setup.jsx', 'firmware/lightweaver-controller/src/main.cpp'],
+    { cardBundleUnchanged: true },
+  ).firmware, true);
+  // The conservative everything-runs answer is never weakened.
+  assert.equal(classifyChangedPaths([], { conservative: true, cardBundleUnchanged: true }).firmware, true);
+});

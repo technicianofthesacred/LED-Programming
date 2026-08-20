@@ -65,6 +65,12 @@ jobs:
             && [ "$(git log -1 --format=%s "$CI_HEAD_SHA")" = "CI: publish signed Lightweaver firmware release" ]; then
             export CI_GENERATED_RELEASE=true
           fi
+          # Studio-only changes whose card-embedded bundle provably did not
+          # change skip the firmware lane (and its VERSION-bump demand). The
+          # check is fail-closed: anything short of a byte-level match prints
+          # "false" and classification behaves exactly as before.
+          CI_CARD_BUNDLE_UNCHANGED="$(node scripts/ci-card-bundle-check.mjs --print)"
+          export CI_CARD_BUNDLE_UNCHANGED
           node scripts/ci-changed-lanes.mjs
 
   source:

@@ -85,6 +85,18 @@ Two paths, chosen by one question: **is the card on a USB cable?**
 Iterating never needs the release path. A bench card can live on dev builds
 indefinitely and jump to a signed release any time (USB flash or Wi-Fi update).
 
+**"Ship it" defaults to quick.** CI proves whether a merge actually changes the
+card-embedded Studio bundle (`scripts/ci-card-bundle-check.mjs`, byte-level
+against the last signed release). Studio-only merges whose bundle is unchanged
+skip the firmware signer entirely — no VERSION bump, site live in ~10 minutes.
+Merges that DO change firmware or the embedded bundle take the full signed
+path automatically (~30 min, VERSION bump required); call that one
+**"finalize firmware"** when asking for it explicitly. The proof is
+fail-closed: when it cannot prove "unchanged", the signer runs, exactly as
+before. Predict which path a diff gets before pushing:
+`node scripts/ci-preflight.mjs` (add `--bundle-check` for the byte-level
+answer).
+
 ## Agent ownership boundaries
 - `led-art-mapper/app/src/` — owned by led-art-mapper agent; do not edit
 - `lightweaver/src/` — owned by lightweaver-app agent; do not edit
