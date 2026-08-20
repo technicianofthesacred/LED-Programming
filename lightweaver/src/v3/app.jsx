@@ -1002,6 +1002,7 @@ function Shell({ offlineUpdateController = null }) {
     projectLifecycle.generation,
     projectLifecycle.installation?.projectFingerprint,
     projectLifecycle.installation?.projectRevision,
+    projectLifecycle.installation?.studioFingerprint,
     projectLifecycle.installation?.verified,
     projectLifecycle.installedRevision,
     serializeProject,

@@ -131,6 +131,7 @@ test('lifecycle record captures dirty/persisted/installed truthfully', () => {
       cardId: 'lw-aabbccddeeff',
       projectRevision: 7,
       projectFingerprint: 'a1b2c3d4e5f60708',
+      studioFingerprint: 'a1b2c3d4e5f60708',
     },
   });
 
@@ -195,11 +196,17 @@ test('a card-adopted installation binds by the structure it was recorded against
   );
   // …but not after a rewire, which changes the structural fingerprint.
   assert.equal(structurallyInstalledRecord(adopted, 'c1b2c3d4e5f60708'), null);
-  // A Studio install records no structural fingerprint and never stands in.
+  // A Studio install records its own fingerprint as the structural stand-in
+  // (the two hashes are the same value there), so it stands in exactly while
+  // the current structure still hashes to what was installed — and never
+  // against a different or missing structure.
+  const studioInstalled = markInstalled(createProjectLifecycle(), exactInstallation(0));
   assert.equal(
-    structurallyInstalledRecord(markInstalled(createProjectLifecycle(), exactInstallation(0)), ''),
-    null,
+    structurallyInstalledRecord(studioInstalled, 'a1b2c3d4e5f60708')?.cardId,
+    'lw-aabbccddeeff',
   );
+  assert.equal(structurallyInstalledRecord(studioInstalled, ''), null);
+  assert.equal(structurallyInstalledRecord(studioInstalled, 'c1b2c3d4e5f60708'), null);
 
   const record = lifecycleRecordFromState(adopted);
   assert.equal(record.installation.studioFingerprint, studioFingerprint);
@@ -298,6 +305,7 @@ test('installed lifecycle records bind exact card and project identity but reloa
       cardId: installation.cardId,
       projectRevision: installation.projectRevision,
       projectFingerprint: installation.projectFingerprint,
+      studioFingerprint: installation.projectFingerprint,
     },
   });
 
@@ -307,7 +315,7 @@ test('installed lifecycle records bind exact card and project identity but reloa
     cardId: installation.cardId,
     projectRevision: installation.projectRevision,
     projectFingerprint: installation.projectFingerprint,
-    studioFingerprint: '',
+    studioFingerprint: installation.projectFingerprint,
     verified: false,
   });
 
@@ -366,6 +374,7 @@ test('dirty installed lifecycle records retain unverified install history and th
     cardId: 'lw-aabbccddeeff',
     projectRevision: 7,
     projectFingerprint: 'a1b2c3d4e5f60708',
+    studioFingerprint: 'a1b2c3d4e5f60708',
   });
 
   const restored = lifecycleForRestoredProject(record);
@@ -434,6 +443,104 @@ test('unsaved cancel preserves state and successful replace applies only after v
   assert.deepEqual(calls, ['validate', 'confirm', 'apply:Next']);
 });
 
+test('a look tap keeps the persisted installation record; a structural edit drops it', () => {
+  const structural = 'a1b2c3d4e5f60708';
+  const installed = markInstalled(createProjectLifecycle(), exactInstallation(0));
+  const tapped = markEdited(installed);
+
+  // Callers that cannot say what the current structure hashes to get the old
+  // behaviour: a record that survived edits cannot be proven, so it drops.
+  assert.equal(lifecycleRecordFromState(tapped).installation, null);
+
+  // With the current structural fingerprint still matching the one the record
+  // was bound to, the record survives serialization across the look tap.
+  const record = lifecycleRecordFromState(tapped, structural);
+  assert.equal(record.dirty, true);
+  assert.deepEqual(record.installation, {
+    cardId: 'lw-aabbccddeeff',
+    projectRevision: 7,
+    projectFingerprint: structural,
+    studioFingerprint: structural,
+  });
+  // A lazy fingerprint provider is accepted (so callers only pay for the
+  // structural hash when a survived record actually needs proving).
+  assert.deepEqual(lifecycleRecordFromState(tapped, () => structural).installation, record.installation);
+
+  // A structural edit changes the hash, so the record stops speaking for the
+  // project and is dropped from the persisted record.
+  assert.equal(lifecycleRecordFromState(tapped, 'c1b2c3d4e5f60708').installation, null);
+
+  // An unverified record never survives an edit, whatever the structure says.
+  const restoredUnverified = lifecycleForRestoredProject(lifecycleRecordFromState(installed));
+  assert.equal(restoredUnverified.installation.verified, false);
+  assert.equal(lifecycleRecordFromState(markEdited(restoredUnverified), structural).installation, null);
+});
+
+test('look tap → reload → live card evidence re-verifies the binding without re-adoption', () => {
+  const structural = 'a1b2c3d4e5f60708';
+  const tapped = markEdited(markInstalled(createProjectLifecycle(), exactInstallation(0)));
+  const restored = lifecycleForRestoredProject(lifecycleRecordFromState(tapped, structural));
+  assert.equal(lifecycleLabel(restored), 'Previously installed');
+  assert.equal(restored.installation.verified, false);
+
+  const evidence = {
+    cardId: 'lw-aabbccddeeff',
+    projectId: 'installed-piece-01',
+    studioProjectId: 'installed-piece-01',
+    projectRevision: 7,
+    projectFingerprint: structural,
+    studioProjectFingerprint: structural,
+  };
+  assert.equal(reverifyInstallation(restored, evidence).installation.verified, true);
+  // Another look tap before the evidence arrives does not cost the binding…
+  const tappedAgain = markEdited(restored);
+  const reverified = reverifyInstallation(tappedAgain, evidence);
+  assert.equal(reverified.installation.verified, true);
+  assert.equal(structurallyInstalledRecord(reverified, structural)?.cardId, 'lw-aabbccddeeff');
+  // …but the wrong card, a changed card revision, or a changed structure does.
+  assert.equal(
+    reverifyInstallation(tappedAgain, { ...evidence, cardId: 'lw-000000000000' }).installation.verified,
+    false,
+  );
+  assert.equal(
+    reverifyInstallation(tappedAgain, { ...evidence, projectRevision: 8 }).installation.verified,
+    false,
+  );
+  assert.equal(
+    reverifyInstallation(tappedAgain, { ...evidence, studioProjectFingerprint: 'c1b2c3d4e5f60708' }).installation.verified,
+    false,
+  );
+});
+
+test('v2 records written before the structural stand-in still parse and heal', () => {
+  const structural = 'a1b2c3d4e5f60708';
+  const legacyV2 = {
+    version: 2,
+    dirty: false,
+    persistedDestination: null,
+    installation: {
+      cardId: 'lw-aabbccddeeff',
+      projectRevision: 7,
+      projectFingerprint: structural,
+    },
+  };
+  const restored = lifecycleForRestoredProject(legacyV2);
+  assert.equal(lifecycleLabel(restored), 'Previously installed');
+  assert.equal(restored.installation.verified, false);
+  // The restore records the exact fingerprint it verified as the structural
+  // stand-in, so matching evidence re-verifies even after a look tap.
+  assert.equal(restored.installation.studioFingerprint, structural);
+  const evidence = {
+    cardId: 'lw-aabbccddeeff',
+    projectId: 'installed-piece-01',
+    studioProjectId: 'installed-piece-01',
+    projectRevision: 7,
+    projectFingerprint: structural,
+    studioProjectFingerprint: structural,
+  };
+  assert.equal(reverifyInstallation(markEdited(restored), evidence).installation.verified, true);
+});
+
 test('a restored installation re-verifies only on an exact three-way match with fresh card evidence', () => {
   const installation = {
     revision: 0,
@@ -453,6 +560,9 @@ test('a restored installation re-verifies only on an exact three-way match with 
     projectRevision: 7,
     projectFingerprint: 'A1B2C3D4E5F60708',
     studioProjectId: 'Lotus Gate',
+    // The record now names the structure it was bound to (the install
+    // fingerprint), so the open project must still hash to it.
+    studioProjectFingerprint: 'a1b2c3d4e5f60708',
   };
 
   // The card sanitizes ids, so the Studio id has to cross the same boundary.
@@ -477,8 +587,18 @@ test('a restored installation re-verifies only on an exact three-way match with 
     );
   }
 
-  // An edit since the restore means the card no longer holds this project.
-  assert.equal(reverifyInstallation(markEdited(restored), evidence).installation.verified, false);
+  // An edit since the restore no longer blocks re-verification by itself: the
+  // record carries the structure it was bound to, and the matching
+  // studioProjectFingerprint proves a look tap changed nothing structural.
+  assert.equal(reverifyInstallation(markEdited(restored), evidence).installation.verified, true);
+  // A structural change since the restore still refuses.
+  assert.equal(
+    reverifyInstallation(
+      markEdited(restored),
+      { ...evidence, studioProjectFingerprint: 'ffffffffffffffff' },
+    ).installation.verified,
+    false,
+  );
   // Nothing installed ⇒ nothing to re-verify.
   assert.equal(reverifyInstallation(createProjectLifecycle(), evidence).installation, null);
 });
