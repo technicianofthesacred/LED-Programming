@@ -65,6 +65,26 @@ Say "Shipped — Studio build 412, firmware build 411", not just a commit SHA. T
 
 "Ship it to main" is standing authorization to complete that entire sequence, including the integration PR, merge, production workflow, and final live proof. A commit, push, PR, merge, or green CI result alone never satisfies it. If any boundary cannot be crossed, report **not shipped** and name the exact last verified state and blocker. Do not claim completion before the final live proof against the terminal `origin/main` revision, including any protected firmware signer commit triggered by the merge.
 
+## Firmware development loop — bench vs release
+
+Two paths, chosen by one question: **is the card on a USB cable?**
+
+- **Bench (USB, ~90 seconds)** — `bash scripts/firmware-dev.sh` compiles locally
+  (~50s clean, ~20s incremental) and flashes over USB (~22s). The card reboots
+  itself keeping Wi-Fi, project, patterns, and settings. This is THE loop for
+  all firmware iteration. Dev builds report `buildId "dev"` / `buildNumber 0`
+  so they can never be mistaken for a signed release; Studio will show an
+  "update available" chip against the official release — expected, ignore it
+  while iterating.
+- **Release (merge to main, ~30 min, unattended)** — only when work is done and
+  should become the official signed update: for cards with no USB cable (a
+  customer's wall, Wi-Fi-only updates from the browser) and for the public
+  download. "Ship it to main" runs it. Requires a `VERSION` bump; run
+  `node scripts/ci-preflight.mjs` first — it answers in ~2s what CI will demand.
+
+Iterating never needs the release path. A bench card can live on dev builds
+indefinitely and jump to a signed release any time (USB flash or Wi-Fi update).
+
 ## Agent ownership boundaries
 - `led-art-mapper/app/src/` — owned by led-art-mapper agent; do not edit
 - `lightweaver/src/` — owned by lightweaver-app agent; do not edit
