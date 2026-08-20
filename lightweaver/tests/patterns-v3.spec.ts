@@ -328,14 +328,22 @@ test('Shift colors applies one exact-authorized correction then requires project
   await trigger.click();
 
   const popover = page.getByRole('dialog', { name: 'Shift colors' });
-  await expect.poll(() => controlRequests.some(request => request.colorOrder === 'GRB')).toBe(true);
   await expect.poll(() => recoveryRequests.some(request => request.patternId === 'test-red')).toBe(true);
+  // Two answers determine the order: a strip that shows green for logical red
+  // and red for logical green is wired GRB.
+  await popover.getByRole('button', { name: 'Green', exact: true }).click();
+  await popover.getByRole('button', { name: 'Red', exact: true }).click();
+  await expect.poll(() => controlRequests.some(request => request.colorOrder === 'GRB')).toBe(true);
   await expect(popover).toHaveCount(0);
   await expect(page.getByRole('alert')).toContainText('verify that this exact Studio project is still installed');
+  // The order is confirmed, because the owner answered both questions and the
+  // strip proved it. The project install is what needs revalidating, not the
+  // colors — under the old cycle-through-six flow the applied order was never
+  // actually tested, which is why this used to expire the confirmation.
   await expect.poll(() => page.evaluate(() => {
     const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || '{}');
-    return saved.devices?.standaloneController?.led?.colorOrderConfirmed;
-  })).toBe(false);
+    return saved.devices?.standaloneController?.led;
+  })).toMatchObject({ colorOrder: 'GRB', colorOrderConfirmed: true, confirmedColorOrder: 'GRB' });
 });
 
 test('a failed quick color shift keeps the last card-confirmed order', async ({ page }) => {

@@ -137,8 +137,7 @@
 
 .lwb-btn:focus-visible,
 .lwb-btn-compact:focus-visible,
-.lwb-quiz-answer:focus-visible,
-.lwb-quiz-mini:focus-visible {
+.lwb-quiz-answer:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -251,6 +250,15 @@
   padding-top: 12px;
 }
 
+.lwb-quiz-step {
+  margin: 0 0 2px;
+  text-align: center;
+  font: 600 11px var(--font-mono);
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  text-transform: uppercase;
+}
+
 .lwb-quiz-q {
   margin: 0 0 4px;
   text-align: center;
@@ -291,37 +299,52 @@
 .lwb-quiz-answers {
   display: grid;
   gap: 8px;
+  /* Held to a readable centre column: stretched edge-to-edge these read as
+     banners rather than choices. */
+  max-width: 336px;
+  margin: 0 auto;
 }
 
+/* The channel colour is carried by one small dot, not by the border and the
+   label together — the swatch above is already the loud colour on screen. */
 .lwb-quiz-answer {
-  min-height: 48px;
-  border-radius: 10px;
-  background: transparent;
+  --answer-color: var(--text-mid);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 9px;
+  background: var(--bg-elev);
   border: 1px solid var(--border);
   color: var(--text-hi);
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 600;
+  letter-spacing: 0.01em;
   cursor: pointer;
 }
 
+.lwb-quiz-answer::before {
+  content: '';
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--answer-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--answer-color) 18%, transparent);
+}
+
 .lwb-quiz-answer.is-r {
-  border-color: var(--danger);
-  color: var(--danger);
+  --answer-color: var(--danger);
 }
 
 .lwb-quiz-answer.is-g {
-  border-color: var(--ok);
-  color: var(--ok);
+  --answer-color: var(--ok);
 }
 
 .lwb-quiz-answer.is-b {
-  border-color: var(--physical-start-marker);
-  color: var(--physical-start-marker);
-}
-
-.lwb-quiz-answer.is-w {
-  border-color: var(--text-mid);
-  color: var(--text-hi);
+  --answer-color: var(--physical-start-marker);
 }
 
 .lwb-quiz-answer:disabled {
@@ -330,46 +353,8 @@
 }
 
 .lwb-quiz-answer:hover:not(:disabled) {
-  background: var(--bg-elev);
-}
-
-.lwb-quiz-more {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 12px;
-}
-
-.lwb-quiz-minis {
-  display: flex;
-  gap: 5px;
-}
-
-.lwb-quiz-mini {
-  width: 44px;
-  height: 44px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--bg-elev);
-  color: var(--text-mid);
-  font: 600 11px var(--font-mono);
-  cursor: pointer;
-}
-
-.lwb-quiz-mini:hover:not(:disabled) {
-  color: var(--text-hi);
-  border-color: var(--text-faint);
-}
-
-.lwb-quiz-mini.is-active {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.lwb-quiz-cycle {
-  min-height: 44px;
+  border-color: color-mix(in srgb, var(--answer-color) 55%, var(--border));
+  background: var(--bg-elev-2);
 }
 
 .lwb-quiz-status {
@@ -408,8 +393,7 @@
   .lwb-swatch {
     transition: background-color 0.2s ease, box-shadow 0.2s ease;
   }
-  .lwb-quiz-answer,
-  .lwb-quiz-mini {
+  .lwb-quiz-answer {
     transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease;
   }
 }

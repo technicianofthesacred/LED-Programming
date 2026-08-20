@@ -1,179 +1,219 @@
 import { useEffect, useRef, useState } from 'react';
 import { pushLiveHardwareToCard, recoverCardLights, stopCardLights } from '../../../lib/cardLiveControl.js';
-import { COLOR_ORDERS, normalizeUsbLedColorOrder } from '../../../lib/usbLedColorOrder.js';
+import {
+  colorOrderAnswers,
+  normalizeUsbLedColorOrder,
+  solveColorOrder,
+} from '../../../lib/usbLedColorOrder.js';
 import '../../../styles/lw-bench.css';
 
+// Two questions solve the color order exactly (see the solver comment in
+// usbLedColorOrder.js), so this screen is always red -> green -> done. There is
+// no cycling through the six orders and no manual test-color picker.
 const COLOR_TESTS = [
-  { id: 'r', label: 'Red', short: 'R', patternId: 'test-red', brightness: 0.35 },
-  { id: 'g', label: 'Green', short: 'G', patternId: 'test-green', brightness: 0.35 },
-  { id: 'b', label: 'Blue', short: 'B', patternId: 'test-blue', brightness: 0.35 },
-  { id: 'w', label: 'White', short: 'W', patternId: 'test-white', brightness: 0.2 },
+  { id: 'r', channel: 'R', label: 'Red', patternId: 'test-red', brightness: 0.35 },
+  { id: 'g', channel: 'G', label: 'Green', patternId: 'test-green', brightness: 0.35 },
+  { id: 'b', channel: 'B', label: 'Blue', patternId: 'test-blue', brightness: 0.35 },
 ];
+
+const testForChannel = channel => COLOR_TESTS.find(test => test.channel === channel) || COLOR_TESTS[0];
 
 export function StripColorOrderCheck({ cardHost, controller, setController, autoStart = false, quick = false }) {
   const [open, setOpen] = useState(autoStart || quick);
-  const [activeTestId, setActiveTestId] = useState('r');
-  const [status, setStatus] = useState('');
-  const [statusKind, setStatusKind] = useState('');
+  // '' before the first question, 'R' during the red question, 'G' during the
+  // green one, 'done' once the order is solved.
+  const [asking, setAsking] = useState('');
+  const [seenForRed, setSeenForRed] = useState('');
+  const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [liveTestedOrder, setLiveTestedOrder] = useState('');
-  const [quickStage, setQuickStage] = useState('red');
-  const testRequestRef = useRef(0);
+  const requestRef = useRef(0);
+  const startedRef = useRef(false);
   const colorOrder = normalizeUsbLedColorOrder(controller?.led?.colorOrder || 'RGB');
+  // The order the two questions were asked under. Both questions must run under
+  // one order or their answers describe different worlds.
+  const askedUnderRef = useRef(colorOrder);
   const confirmed = Boolean(
     controller?.led?.colorOrderConfirmed
-    && normalizeUsbLedColorOrder(controller?.led?.confirmedColorOrder || '') === colorOrder
+    && normalizeUsbLedColorOrder(controller?.led?.confirmedColorOrder || '') === colorOrder,
   );
-  const liveTestReady = liveTestedOrder === colorOrder;
 
-  const saveOrder = order => {
-    setLiveTestedOrder('');
-    return setController(previous => ({
-      ...previous,
-      led: {
-        ...(previous?.led || {}),
-        colorOrder: order,
-        colorOrderConfirmed: false,
-        confirmedColorOrder: '',
-      },
-    }));
+  const saveOrder = (order, isConfirmed) => setController(previous => ({
+    ...previous,
+    led: {
+      ...(previous?.led || {}),
+      colorOrder: order,
+      colorOrderConfirmed: isConfirmed,
+      confirmedColorOrder: isConfirmed ? order : '',
+    },
+  }));
+
+  const lightChannel = async channel => {
+    const test = testForChannel(channel);
+    await recoverCardLights(
+      { patternId: test.patternId, brightness: test.brightness, syncZones: true },
+      { host: cardHost, timeoutMs: 3200 },
+    );
   };
 
-  const confirmOrder = () => {
-    if (!liveTestReady) return;
-    setController(previous => ({
-      ...previous,
-      led: {
-        ...(previous?.led || {}),
-        colorOrder,
-        colorOrderConfirmed: true,
-        confirmedColorOrder: colorOrder,
-      },
-    }));
-    setStatus(`${colorOrder} color order confirmed.`);
-    setStatusKind('ok');
+  // Applying the saved order first is what makes the questions answerable: the
+  // card and Studio have to agree on the order before the answers mean anything.
+  const applyOrder = async order => {
+    const response = await pushLiveHardwareToCard({ colorOrder: order }, { host: cardHost, timeoutMs: 2200 });
+    return normalizeUsbLedColorOrder(response?.colorOrder || order, order);
   };
 
-  const playTest = async (testId, order = colorOrder) => {
-    const test = COLOR_TESTS.find(item => item.id === testId) || COLOR_TESTS[0];
-    const testedOrder = normalizeUsbLedColorOrder(order || colorOrder);
-    const requestId = ++testRequestRef.current;
-    setActiveTestId(test.id);
-    setLiveTestedOrder('');
-    setBusy(true);
-    setStatus('');
-    setStatusKind('');
-    try {
-      await recoverCardLights(
-        { patternId: test.patternId, brightness: test.brightness, syncZones: true },
-        { host: cardHost, timeoutMs: 3200 },
-      );
-      if (testRequestRef.current !== requestId) return;
-      setLiveTestedOrder(testedOrder);
-      setStatus(`${test.label} test is live.`);
-      setStatusKind('ok');
-    } catch (error) {
-      if (testRequestRef.current !== requestId) return;
-      setStatus(error?.message || `${test.label} test could not reach the card.`);
-      setStatusKind('err');
-    } finally {
-      if (testRequestRef.current === requestId) setBusy(false);
-    }
-  };
-
-  const startCheck = () => {
+  const startCheck = async () => {
+    const requestId = ++requestRef.current;
+    startedRef.current = true;
     setOpen(true);
-    void playTest(activeTestId);
-  };
-
-  const tryOrder = async (nextOrder, testId = activeTestId) => {
-    const requestId = ++testRequestRef.current;
     setBusy(true);
-    setStatus('');
-    setStatusKind('');
+    setError('');
+    setSeenForRed('');
+    setAsking('');
     try {
-      const response = await pushLiveHardwareToCard({ colorOrder: nextOrder }, { host: cardHost, timeoutMs: 2200 });
-      const appliedOrder = normalizeUsbLedColorOrder(response?.colorOrder || nextOrder, nextOrder);
-      saveOrder(appliedOrder);
-      await playTest(testId, appliedOrder);
-    } catch (error) {
-      if (testRequestRef.current !== requestId) return;
-      setStatus(error?.message || `${nextOrder} order could not reach the card.`);
-      setStatusKind('err');
-      setBusy(false);
+      const applied = await applyOrder(colorOrder);
+      if (requestRef.current !== requestId) return;
+      askedUnderRef.current = applied;
+      if (applied !== colorOrder) saveOrder(applied, false);
+      await lightChannel('R');
+      if (requestRef.current !== requestId) return;
+      setAsking('R');
+    } catch (cause) {
+      if (requestRef.current !== requestId) return;
+      setError(cause?.message || 'The color test could not reach the card.');
+    } finally {
+      if (requestRef.current === requestId) setBusy(false);
     }
   };
 
-  const tryNextOrder = () => {
-    const currentIndex = COLOR_ORDERS.indexOf(colorOrder);
-    const nextOrder = COLOR_ORDERS[((currentIndex >= 0 ? currentIndex : 0) + 1) % COLOR_ORDERS.length];
-    return tryOrder(nextOrder);
+  const answerRed = async channel => {
+    const requestId = ++requestRef.current;
+    setBusy(true);
+    setError('');
+    try {
+      await lightChannel('G');
+      if (requestRef.current !== requestId) return;
+      setSeenForRed(channel);
+      setAsking('G');
+    } catch (cause) {
+      if (requestRef.current !== requestId) return;
+      setError(cause?.message || 'The color test could not reach the card.');
+    } finally {
+      if (requestRef.current === requestId) setBusy(false);
+    }
   };
 
-  const acceptQuickRed = () => {
-    if (busy || quickStage !== 'red' || activeTestId !== 'r' || !liveTestReady) return;
-    setQuickStage('green');
-    void playTest('g');
+  const answerGreen = async channel => {
+    const solved = solveColorOrder(askedUnderRef.current, { R: seenForRed, G: channel });
+    if (!solved) return;
+    const requestId = ++requestRef.current;
+    setBusy(true);
+    setError('');
+    try {
+      const applied = await applyOrder(solved);
+      if (requestRef.current !== requestId) return;
+      // Relight green under the solved order first: the strip turning green is
+      // the proof, and confirming can retire this panel on the spot.
+      await lightChannel('G');
+      if (requestRef.current !== requestId) return;
+      setAsking('done');
+      saveOrder(applied, applied === solved);
+    } catch (cause) {
+      if (requestRef.current !== requestId) return;
+      setError(cause?.message || 'The corrected color order could not reach the card.');
+    } finally {
+      if (requestRef.current === requestId) setBusy(false);
+    }
   };
 
-  const tryOtherQuickMatch = () => {
-    if (busy || quickStage !== 'green' || activeTestId !== 'g') return;
-    const redIndex = colorOrder.indexOf('R');
-    const pairedOrder = COLOR_ORDERS.find(order => order !== colorOrder && order.indexOf('R') === redIndex);
-    if (pairedOrder) void tryOrder(pairedOrder, 'g');
-  };
-
-  const confirmQuickOrder = () => {
-    if (busy || quickStage !== 'green' || activeTestId !== 'g' || !liveTestReady) return;
-    confirmOrder();
-  };
-
-  // Chained entry from the bench check presents the first color question.
-  // Quick correction skips the question entirely and immediately advances the
-  // hardware to the next candidate order because opening it is already a clear
-  // signal that the current colors are wrong.
   useEffect(() => {
-    if (quick) void tryNextOrder();
-    else if (autoStart) void playTest(activeTestId);
+    if (autoStart || quick) void startCheck();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only entry
   }, []);
 
-  // Quiz answer: seeing the color the card was told to show means the saved
-  // order matches (confirm it); seeing a different color means the order is
-  // wrong, so cycle to the next candidate — both via the existing handlers.
-  const answerColor = answerId => {
-    if (busy) return;
-    if (answerId === activeTestId) {
-      if (liveTestReady) confirmOrder();
-      else void playTest(activeTestId);
-    } else {
-      void tryNextOrder();
-    }
-  };
-  const stopLights = async () => {
-    const requestId = ++testRequestRef.current;
-    setBusy(true);
-    try {
-      await stopCardLights({ host: cardHost, timeoutMs: 3200 });
-      if (testRequestRef.current === requestId) {
-        setLiveTestedOrder('');
-        setStatus('Lights stopped. Start a color again when you are ready.');
-        setStatusKind('ok');
-      }
-    } catch (error) {
-      if (testRequestRef.current === requestId) {
-        setStatus(error?.message || 'The card did not confirm that the lights stopped.');
-        setStatusKind('err');
-      }
-    } finally {
-      if (testRequestRef.current === requestId) setBusy(false);
-    }
-  };
+  // No "Stop lights" button: the test turns itself off when this leaves.
+  useEffect(() => () => {
+    if (!startedRef.current) return;
+    requestRef.current += 1;
+    void stopCardLights({ host: cardHost, timeoutMs: 3200 }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- unmount cleanup
+  }, []);
 
-  const activeTest = COLOR_TESTS.find(item => item.id === activeTestId) || COLOR_TESTS[0];
-  const answers = activeTestId === 'w'
-    ? COLOR_TESTS
-    : COLOR_TESTS.filter(test => test.id !== 'w');
+  const started = asking === 'R' || asking === 'G';
+  const answers = asking === 'R'
+    ? colorOrderAnswers(askedUnderRef.current, {}, 'R')
+    : colorOrderAnswers(askedUnderRef.current, { R: seenForRed }, 'G');
+  const activeTest = testForChannel(asking === 'R' ? 'R' : 'G');
+  const step = asking === 'R' ? 1 : 2;
+
+  const unreached = (
+    <>
+      <p className="lwb-quiz-hint">
+        {busy ? 'Lighting the strip…' : 'The strip was never lit, so there is nothing to answer yet.'}
+      </p>
+      {!busy && (
+        <button
+          type="button"
+          className="btn"
+          title="Send the first test color to the strip again."
+          data-tooltip="Send the first test color to the strip again."
+          onClick={() => void startCheck()}
+        >Try again</button>
+      )}
+    </>
+  );
+
+  const question = (
+    <>
+      <p className="lwb-quiz-step">Step {step} of 2</p>
+      <p className="lwb-quiz-q">What color do you see?</p>
+      <div
+        className={`lwb-swatch is-${activeTest.id}`}
+        role="img"
+        aria-label={`The strip should now be lit ${activeTest.label.toLowerCase()}`}
+      />
+      <p className="lwb-quiz-hint">Tap the color the strip actually shows. Brightness is reduced for the test.</p>
+      <div
+        className="lwb-quiz-answers"
+        role="group"
+        aria-label="What color do you see?"
+        style={{ gridTemplateColumns: `repeat(${answers.length}, 1fr)` }}
+      >
+        {answers.map(channel => {
+          const test = testForChannel(channel);
+          return (
+            <button
+              key={test.id}
+              type="button"
+              className={`lwb-quiz-answer is-${test.id}`}
+              title={`Record that the LEDs appear ${test.label.toLowerCase()}.`}
+              data-tooltip={`Record that the LEDs appear ${test.label.toLowerCase()}.`}
+              disabled={busy}
+              onClick={() => void (asking === 'R' ? answerRed(channel) : answerGreen(channel))}
+            >{test.label}</button>
+          );
+        })}
+      </div>
+    </>
+  );
+
+  const done = (
+    <>
+      <div className="lwb-swatch is-g" role="img" aria-label="The strip should now be lit green" />
+      <p className="lwb-quiz-hint">The strip should now look green. Colors are set.</p>
+    </>
+  );
+
+  const body = (
+    <div className="lwb-quiz-body">
+      {asking === 'done' ? done : (started ? question : unreached)}
+      {busy && started && <p className="lwb-quiz-status" role="status">Lighting the strip…</p>}
+      {!busy && error && <p className="lwb-quiz-status is-err" role="alert">{error}</p>}
+      <p className="lwb-detail lwb-quiz-order">
+        Wire color order: <b data-testid="strip-color-order">{colorOrder}</b>{confirmed ? ' · confirmed' : ''}
+      </p>
+    </div>
+  );
 
   if (quick) {
     return (
@@ -181,40 +221,10 @@ export function StripColorOrderCheck({ cardHost, controller, setController, auto
         <div className="lwb-quiz-head">
           <div className="lwb-quiz-head-text">
             <strong>Shift colors</strong>
-            <span className="lwb-detail">{quickStage === 'red' ? 'Check red first' : 'Now check green'}</span>
+            <span className="lwb-detail">{asking === 'done' ? 'Colors confirmed' : 'Two taps and the colors are right'}</span>
           </div>
         </div>
-        <div className="lwb-quiz-body">
-          <div
-            className={`lwb-swatch is-${activeTest.id}`}
-            role="img"
-            aria-label={`The strip should now be lit ${activeTest.label.toLowerCase()}`}
-          />
-          <p className="lwb-quiz-hint">
-            {quickStage === 'red'
-              ? 'Keep shifting until the strip shows red.'
-              : 'Choose the matching green position, then confirm it.'}
-          </p>
-          <p className="lwb-detail" role="note">Colors change at a reduced, power-limited brightness.</p>
-          <div className="lwb-quick-actions">
-            {quickStage === 'red' ? (
-              <>
-                <button type="button" className="btn" title="Apply the next color-order option and retest red on the real LEDs." data-tooltip="Apply the next color-order option and retest red on the real LEDs." disabled={busy} onClick={() => void tryNextOrder()}>Try next order</button>
-                <button type="button" className="btn primary" title="Accept the visible red position and continue by testing green." data-tooltip="Accept the visible red position and continue by testing green." disabled={busy || activeTestId !== 'r' || !liveTestReady} onClick={acceptQuickRed}>Red is correct</button>
-              </>
-            ) : (
-              <>
-                <button type="button" className="btn" title="Try the other color order with this red position and retest green." data-tooltip="Try the other color order with this red position and retest green." disabled={busy} onClick={tryOtherQuickMatch}>Try other match</button>
-                <button type="button" className="btn primary" title="Confirm the current color order after the green check." data-tooltip="Confirm the current color order after the green check." disabled={busy || activeTestId !== 'g' || !liveTestReady} onClick={confirmQuickOrder}>Green is correct</button>
-              </>
-            )}
-          </div>
-          {busy && <p className="lwb-quiz-status" role="status">Trying {colorOrder}…</p>}
-          {!busy && status && <p className={`lwb-quiz-status${statusKind ? ` is-${statusKind}` : ''}`} role={statusKind === 'err' ? 'alert' : 'status'}>{status}</p>}
-          <p className="lwb-detail lwb-quiz-order">
-            Wire color order: <b data-testid="strip-color-order">{colorOrder}</b>{confirmed ? ' · confirmed' : ''}
-          </p>
-        </div>
+        {body}
       </section>
     );
   }
@@ -229,60 +239,18 @@ export function StripColorOrderCheck({ cardHost, controller, setController, auto
               in primary copy). */}
           <span className="lwb-detail">{confirmed ? 'Colors confirmed' : 'Colors not checked yet'}</span>
         </div>
-        {!open && <button type="button" className="btn lwb-quiz-open" title="Light the strip with test colors so you can confirm its real color order." data-tooltip="Light the strip with test colors so you can confirm its real color order." disabled={busy} onClick={startCheck}>Check colors</button>}
+        {!open && (
+          <button
+            type="button"
+            className="btn lwb-quiz-open"
+            title="Light the strip with test colors so you can confirm its real color order."
+            data-tooltip="Light the strip with test colors so you can confirm its real color order."
+            disabled={busy}
+            onClick={() => void startCheck()}
+          >Check colors</button>
+        )}
       </div>
-      {open && (
-        <div className="lwb-quiz-body">
-          <p className="lwb-quiz-q">What color do you see?</p>
-          <div
-            className={`lwb-swatch is-${activeTest.id}`}
-            role="img"
-            aria-label={`The strip should now be lit ${activeTest.label.toLowerCase()}`}
-          />
-          <p className="lwb-quiz-hint">
-            {confirmed
-              ? 'The saved order already matches the real LEDs. Tap the color you see to double-check.'
-              : 'The whole strip just lit up. Tap the color you actually see.'}
-          </p>
-          <p className="lwb-detail" role="note">Light test warning: colors will change at a reduced, power-limited brightness.</p>
-          <button type="button" className="btn" title="Turn off the color test on the real LEDs." data-tooltip="Turn off the color test on the real LEDs." disabled={busy} onClick={stopLights}>Stop lights</button>
-          <div className="lwb-quiz-answers" role="group" aria-label="What color do you see?" style={{ gridTemplateColumns: `repeat(${answers.length}, 1fr)` }}>
-            {answers.map(test => (
-              <button
-                key={test.id}
-                type="button"
-                className={`lwb-quiz-answer is-${test.id}`}
-                title={`Record that the LEDs appear ${test.label.toLowerCase()}; Lightweaver confirms or changes the saved color order.`}
-                data-tooltip={`Record that the LEDs appear ${test.label.toLowerCase()}; Lightweaver confirms or changes the saved color order.`}
-                disabled={busy}
-                onClick={() => answerColor(test.id)}
-              >{test.label}</button>
-            ))}
-          </div>
-          <div className="lwb-quiz-more">
-            <div className="lwb-quiz-minis" role="group" aria-label="Send a different test color">
-              {COLOR_TESTS.map(test => (
-                <button
-                  key={test.id}
-                  type="button"
-                  className={`lwb-quiz-mini${activeTestId === test.id ? ' is-active' : ''}`}
-                  aria-label={`Send ${test.label} test`}
-                  title={`Light the strip ${test.label.toLowerCase()} to compare the real LEDs with the test.`}
-                  data-tooltip={`Light the strip ${test.label.toLowerCase()} to compare the real LEDs with the test.`}
-                  aria-pressed={activeTestId === test.id}
-                  disabled={busy}
-                  onClick={() => void playTest(test.id)}
-                >{test.short}</button>
-              ))}
-            </div>
-            <button type="button" className="btn btn-ghost lwb-quiz-cycle" title="Apply the next color-order option and retest the active color on the real LEDs." data-tooltip="Apply the next color-order option and retest the active color on the real LEDs." disabled={busy} onClick={() => void tryNextOrder()}>Try next order</button>
-          </div>
-          {status && <p className={`lwb-quiz-status${statusKind ? ` is-${statusKind}` : ''}`} role={statusKind === 'err' ? 'alert' : 'status'}>{status}</p>}
-          <p className="lwb-detail lwb-quiz-order">
-            Wire color order: <b data-testid="strip-color-order">{colorOrder}</b>{confirmed ? ' · confirmed' : ''}
-          </p>
-        </div>
-      )}
+      {open && body}
     </section>
   );
 }

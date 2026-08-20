@@ -460,27 +460,38 @@ test('the color quiz chains in as the final part of the LED check and sends real
   // The color question presents itself — no separate start button, and the
   // first test frame is already on its way to the card.
   const check = page.getByRole('region', { name: 'LED color order' });
-  await expect(check.getByText('The whole strip just lit up. Tap the color you actually see.')).toBeVisible();
+  await expect(check.getByText('Step 1 of 2')).toBeVisible();
   await expect(check.getByRole('button', { name: 'Check colors' })).toHaveCount(0);
   await expect(page.getByTestId('wiring-bench-test')).toHaveCount(0);
   await expect(check.getByTestId('strip-color-order')).toHaveText('RGB');
   await expect.poll(() => testRequests.some(request => request.patternId === 'test-red')).toBe(true);
 
-  await check.getByRole('button', { name: 'Send Green test' }).click();
+  // A GRB strip lit with logical red under an RGB order looks green. That one
+  // answer narrows six orders to two, so the green question offers exactly the
+  // two colors those orders could produce — no cycling.
+  await check.getByRole('button', { name: 'Green', exact: true }).click();
+  await expect(check.getByText('Step 2 of 2')).toBeVisible();
   await expect.poll(() => testRequests.some(request => request.patternId === 'test-green')).toBe(true);
-  await check.getByRole('button', { name: 'Try next order' }).click();
-  await expect(check.getByTestId('strip-color-order')).toHaveText('GRB');
+  const answers = check.getByRole('group', { name: 'What color do you see?' }).getByRole('button');
+  await expect(answers).toHaveCount(2);
+  await expect(answers).toHaveText(['Red', 'Blue']);
+
+  await check.getByRole('button', { name: 'Red', exact: true }).click();
   await expect.poll(() => controlRequests.some(request => request.colorOrder === 'GRB')).toBe(true);
+  // The strip is relit green under the solved order, so the fix is visible.
   await expect.poll(() => testRequests.filter(request => request.patternId === 'test-green').length).toBeGreaterThan(1);
   const saved = await saveProject(page);
   expect(saved.devices.standaloneController.led.colorOrder).toBe('GRB');
-  // Changing the order always expires any confirmation.
-  expect(saved.devices.standaloneController.led.colorOrderConfirmed).toBe(false);
-  expect(saved.devices.standaloneController.led.confirmedColorOrder).toBe('');
+  // Two answers fully determine the order, so solving it confirms it.
+  expect(saved.devices.standaloneController.led.colorOrderConfirmed).toBe(true);
+  expect(saved.devices.standaloneController.led.confirmedColorOrder).toBe('GRB');
 
-  // The ghost escape hatch returns to the single CTA.
-  await page.getByTestId('commissioning-step').getByRole('button', { name: 'Do this later' }).click();
-  await expect(page.getByTestId('start-led-check')).toBeVisible();
+  // Solving the order finishes the LED check outright: the quiz retires itself
+  // and install becomes the one CTA, with no "Do this later" left to press.
+  await expect(check).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Do this later' })).toHaveCount(0);
+  await expect(page.getByText('Checked \u2713 \u2014 install it on the card.')).toBeVisible();
+  await expect(page.getByTestId('layout-send-to-card')).toBeEnabled();
 });
 
 test('Stop lights confirms the blackout command and fresh zero-output readback', async ({ page }) => {
@@ -535,11 +546,15 @@ test('Stop lights confirms the blackout command and fresh zero-output readback',
   await seedBenchVerified(page);
   await page.getByTestId('start-led-check').click();
   const check = page.getByRole('region', { name: 'LED color order' });
-  await expect(check.getByText('Red test is live.')).toBeVisible();
-  await check.getByRole('button', { name: 'Stop lights' }).click();
+  await expect(check.getByText('Step 1 of 2')).toBeVisible();
 
-  await expect(check.getByText('Lights stopped. Start a color again when you are ready.')).toBeVisible();
-  expect(controlPatterns).toContain('blackout');
+  // There is no Stop lights button: leaving the check turns the test off by
+  // itself, and the blackout still travels as a control command.
+  await expect(check.getByRole('button', { name: 'Stop lights' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Do this later' }).click();
+
+  await expect(check).toHaveCount(0);
+  await expect.poll(() => controlPatterns).toContain('blackout');
   expect(recoveryPatterns).not.toContain('blackout');
 });
 
@@ -559,8 +574,9 @@ test('confirming the color auto-locks verified wiring and a Draw GPIO edit reope
 
   await page.getByTestId('start-led-check').click();
   const check = page.getByRole('region', { name: 'LED color order' });
-  await expect(check.getByText('Red test is live.')).toBeVisible();
+  await expect(check.getByText('Step 1 of 2')).toBeVisible();
   await check.getByRole('button', { name: 'Red', exact: true }).click();
+  await check.getByRole('button', { name: 'Green', exact: true }).click();
 
   // Verified: no manual lock button anywhere — the wiring locks itself and
   // install becomes the one CTA.
@@ -650,8 +666,10 @@ test('color confirmation requires a successful live test for the current order',
   // The chained auto-test failed (card unreachable). Answering the matching
   // color must NOT confirm the order — it replays the test instead.
   await expect(check.locator('.lwb-quiz-status.is-err')).toBeVisible();
+  // Nothing was lit, so there is no question to answer — only a retry.
+  await expect(check.getByRole('group', { name: 'What color do you see?' })).toHaveCount(0);
   const attemptsBeforeReplay = recoverAttempts;
-  await check.getByRole('button', { name: 'Red', exact: true }).click();
+  await check.getByRole('button', { name: 'Try again' }).click();
   // Let the replayed test fully settle as a failure before restoring the
   // card — recoverCardLights keeps retrying for a while after a 503, and an
   // in-flight replay succeeding mid-test would confirm early.
@@ -660,9 +678,10 @@ test('color confirmation requires a successful live test for the current order',
   expect((await saveProject(page)).devices.standaloneController.led.colorOrderConfirmed).not.toBe(true);
 
   cardReachable = true;
+  await check.getByRole('button', { name: 'Try again' }).click();
+  await expect(check.getByText('Step 1 of 2')).toBeVisible();
   await check.getByRole('button', { name: 'Red', exact: true }).click();
-  await expect(check.getByText('Red test is live.')).toBeVisible();
-  await check.getByRole('button', { name: 'Red', exact: true }).click();
+  await check.getByRole('button', { name: 'Green', exact: true }).click();
   // Confirmation completes the whole check: the panel flips to install.
   await expect(page.getByText('Checked ✓ — install it on the card.')).toBeVisible();
   expect((await saveProject(page)).devices.standaloneController.led).toMatchObject({
@@ -1082,8 +1101,11 @@ test('guided chase verifies every fact, chains into the color quiz, and auto-loc
   await expect(page.getByTestId('wiring-bench-test')).toHaveCount(0);
   const colorCheck = page.getByRole('region', { name: 'LED color order' });
   await expect(colorCheck.getByRole('button', { name: 'Check colors' })).toHaveCount(0);
-  await expect(colorCheck.getByText('Red test is live.')).toBeVisible();
+  await expect(colorCheck.getByText('Step 1 of 2')).toBeVisible();
+  // A strip that already looks right answers with the color it was sent, twice.
   await colorCheck.getByRole('button', { name: 'Red', exact: true }).click();
+  await expect(colorCheck.getByText('Step 2 of 2')).toBeVisible();
+  await colorCheck.getByRole('button', { name: 'Green', exact: true }).click();
 
   // Fully verified: the wiring auto-locks and install is the one CTA.
   await expect(page.getByText('Checked ✓ — install it on the card.')).toBeVisible();
