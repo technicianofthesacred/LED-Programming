@@ -96,11 +96,11 @@ const ShowScreen = lazy(() => import('./lw-show.jsx').then(module => ({ default:
 const CardScreen = lazy(() => import('./lw-card.jsx').then(module => ({ default: module.CardScreen })));
 const CardSetupOverlay = lazy(() => import('../components/card/CardSetupOverlay.jsx'));
 
-// Setup is no longer a rail destination of its own. It is the first section of
-// the card workspace, which is where every other answer about the card already
-// lived — see SECTION_LABELS in lw-card.jsx.
+// One rail entry owns the card. It lands on Card Home — the merged guided
+// setup + card status page (see SECTION_LABELS in lw-card.jsx); the rail
+// label names the thing (the card), not one of the jobs done to it.
 const STUDIO_SCREENS = [
-  { id: 'card', label: 'Setup', Component: CardScreen },
+  { id: 'card', label: 'Card', Component: CardScreen },
   { id: 'layout', label: 'Layout', Component: LayoutScreen },
   { id: 'pattern', label: 'Patterns', Component: PatternScreen },
   { id: 'pattern-lab', label: 'Pattern Lab', Component: PatternLabScreen },

@@ -7,10 +7,6 @@ import { SettingsScreen } from './lw-settings.jsx';
 import { SetupScreen } from './lw-setup.jsx';
 import { consumeCardSectionNavigation, DEFAULT_CARD_SECTION } from './cardWorkspaceRoute.js';
 import { cardLinkReasonText, getCardLinkState, isCardLinkConnected } from '../lib/cardLink.js';
-import {
-  CARD_COMMISSIONING_CHANGED_EVENT,
-  inspectCardCommissioning,
-} from '../lib/cardCommissioningFlow.js';
 import { loadProductionJobFromIndexEntry, loadProductionJobIndex } from '../lib/productionJobPackage.js';
 import { prepareCardDeployment } from '../lib/cardDeployment.js';
 import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
@@ -22,9 +18,7 @@ import { describeResolvedCardProject } from '../lib/cardProjectResolver.js';
 import { normalizeCardHost } from '../lib/cardConnection.js';
 import { BENCH_PROJECT_ID } from '../lib/benchConfig.js';
 import { STRIP_DISCOVERY_LABEL } from '../lib/cardAction.js';
-import { deriveSetupJourney } from '../lib/setupJourney.js';
 import { deriveCardLifecycle } from '../lib/cardLifecycle.js';
-import { cardTaskCopy } from '../lib/cardTaskCopy.js';
 
 // navigateStudio (the `go` prop) takes a bare screen key, not the `screen=…`
 // hash fragment that STRIP_DISCOVERY_ROUTE holds — passing the fragment fell
@@ -41,28 +35,49 @@ import {
   issueSignedProductionCardEditAuthorization,
 } from '../lib/cardEditAuthorization.js';
 
-// Section bar labels. `workshop` is deliberately absent: Batch production is a
-// manufacturing surface reached from the overview link, the support tile, or a
-// deep link (#screen=production / #screen=card&section=workshop) — never a tab.
-// Setup leads: it is the guided ladder every owner meets, and it is the answer
-// to "which port, which colour order, how many LEDs, install it". The tabs
-// after it are the same hardware, unguided, for anyone who already knows what
-// they want to change. `overview` is deliberately no longer called "Hardware" —
-// with Setup beside it, two tabs named for the same box read as two setups.
+// Section bar labels — three tabs. Home is the merged card page: the old
+// "Setup" ladder and the "Card status" overview were two tabs named for the
+// same box and read as two setups; both section routes now render one Card
+// Home (status header, journey action area, 4-phase ladder, evidence panels).
+// The tabs after it are the same hardware, unguided, for anyone who already
+// knows what they want to change. `install`, `preferences` and `workshop`
+// stay fully routable (#screen=card&section=…) but render as full-body views
+// without a tab: Install takes the whole body during an active install,
+// Preferences opens from the top bar, and Batch production is a manufacturing
+// surface reached from the Home link, the support tile, or a deep link
+// (#screen=production / #screen=card&section=workshop) — never a tab.
 const SECTION_LABELS = Object.freeze({
-  setup: 'Setup',
-  overview: 'Card status',
+  setup: 'Home',
+  settings: 'Hardware settings',
+  support: 'Advanced & Support',
+});
+// Both section routes that render Card Home. `overview` is the legacy
+// "Card status" section: every hash naming it still resolves, stays in the
+// URL as written (studioRoute keeps the whole section vocabulary), and lands
+// on the same Home.
+const HOME_SECTIONS = Object.freeze(['setup', 'overview']);
+const SECTION_HEADINGS = Object.freeze({
+  setup: 'Set up your Lightweaver',
+  overview: 'Set up your Lightweaver',
   install: 'Install or update',
   settings: 'Hardware settings',
   support: 'Advanced & Support',
   preferences: 'Preferences',
+  workshop: 'Batch production',
 });
 
 function cardEditIntent() {
   return readCardEditIntent(window.location.search);
 }
 
-function CardOverview({
+// Card Home's evidence panels — formerly the whole "Card status" overview.
+// The status verdict and the next-action verdict now live in the Setup
+// journey rendered above these panels (SetupScreen: identity row + 4-phase
+// ladder), so what remains here is the connected-state evidence the overview
+// always carried: the lifecycle-keyed presentation of a card that is actually
+// answering, the matching-card-project offer with its guarded adoption
+// machine, checks & recovery, and the batch-production link.
+function CardHomePanels({
   connected,
   cardHost,
   cardLink,
@@ -70,7 +85,6 @@ function CardOverview({
   onConnectCard,
   onOpenConnectionCenter,
   onOpenSection,
-  onOpenSetupTask,
   go,
   replaceProject,
   currentProject,
@@ -86,7 +100,6 @@ function CardOverview({
   onMatchedProjectVerified,
   onStartNewProject,
 }) {
-  const [commissioningFlow, setCommissioningFlow] = useState(() => inspectCardCommissioning().flow);
   const [matchingProjectState, setMatchingProjectState] = useState({ status: 'idle', message: '' });
   const [hardwareActionState, setHardwareActionState] = useState({ status: 'idle', message: '' });
   const resolutionContextRef = useRef(null);
@@ -101,15 +114,6 @@ function CardOverview({
     projectGeneration,
     ready: cardLink ? isCardLinkConnected(cardLink) : connected,
   };
-  useEffect(() => {
-    const syncCommissioning = () => setCommissioningFlow(inspectCardCommissioning().flow);
-    window.addEventListener('storage', syncCommissioning);
-    window.addEventListener(CARD_COMMISSIONING_CHANGED_EVENT, syncCommissioning);
-    return () => {
-      window.removeEventListener('storage', syncCommissioning);
-      window.removeEventListener(CARD_COMMISSIONING_CHANGED_EVENT, syncCommissioning);
-    };
-  }, []);
 
   const identity = cardLink?.identity?.name
     || cardLink?.identity?.id
@@ -140,14 +144,6 @@ function CardOverview({
   } catch {
     currentProjectInstallable = false;
   }
-  const setupJourney = deriveSetupJourney({
-    cardLink,
-    cardLifecycle,
-    commissioningFlow,
-    project: currentProject,
-    resolution: benchProject ? { provisionalSetup: true } : null,
-  });
-  const setupTaskCopy = cardTaskCopy(setupJourney.taskId);
 
   // Detected-state presentation, keyed off the ONE diagnosis authority
   // (deriveCardLifecycle) instead of a private raw-link ladder. Each row
@@ -475,6 +471,11 @@ function CardOverview({
         .sort()
         .join(','),
     ].join('::');
+    // An intent Patterns already failed to claim must not be handed over
+    // again on our own initiative — that is the loop. It stays in the URL, so
+    // the offer below still opens the right thing when the owner asks for it.
+    const requestedIntent = cardEditIntent();
+    const autoIntent = isCardEditIntentAbandoned(requestedIntent) ? '' : requestedIntent;
     const signature = [
       normalizeCardHost(cardLink?.host || cardHost),
       cardLink?.card?.id,
@@ -489,32 +490,40 @@ function CardOverview({
       cardLink?.readiness?.productionJobDigest,
       projectGeneration,
       candidateSourceSignature,
+      // Card Home stays mounted across the setup↔overview section change, so
+      // an edit intent arriving on an already-probed card (the drawer's
+      // "Advanced editing" handoff) must change the signature or the ref
+      // would swallow the hand-over that used to ride on a remount. An
+      // abandoned intent folds back to '' here, so the ping-pong breaker in
+      // cardEditIntent.js still holds.
+      autoIntent,
     ].join('|');
     if (cardProjectProbeRef.current === signature) return;
-    // An intent Patterns already failed to claim must not be handed over
-    // again on our own initiative — that is the loop. It stays in the URL, so
-    // the offer below still opens the right thing when the owner asks for it.
-    const requestedIntent = cardEditIntent();
-    const autoIntent = isCardEditIntentAbandoned(requestedIntent) ? '' : requestedIntent;
     void loadMatchingCardProject({ probeOnly: !autoIntent, autoIntent, probeSignature: signature });
   }, [activeCloudProjects, browserProjects, cardHost, cardLink, cardProjectProbeRevision, loadMatchingCardProject, projectGeneration, ready]);
+  // The presentation is Home's connected-state view: it renders only when a
+  // card is actually answering — a verified transport (ready, blank, bench,
+  // or still confirming its evidence), an identified card mid-revalidation
+  // (Studio is talking to it and double-checking), or a found card awaiting
+  // pairing — the states whose evidence exists nowhere else on this page.
+  // For a card that is not answering, the Setup journey above (identity row
+  // + connect task) is the one verdict — repeating "connect the card" here
+  // was the double verdict the merge removes.
+  const answering = verifiedTransport
+    || (cardLink?.state === 'revalidating' && Boolean(cardLink?.card?.id));
+  const showPresentation = answering || ready || lifecycleState === 'found-unpaired';
+
   return (
     <div className="card-overview">
-      <div className="card-overview-state">
-        <span className={`card-overview-signal ${presentation.tone}`} aria-hidden="true" />
-        <div>
-          <span className="card-workspace-kicker">Detected state</span>
-          <p data-testid="card-detected-state">{presentation.message}</p>
+      {showPresentation && (
+        <div className="card-overview-state">
+          <span className={`card-overview-signal ${presentation.tone}`} aria-hidden="true" />
+          <div>
+            <span className="card-workspace-kicker">Detected state</span>
+            <p data-testid="card-detected-state">{presentation.message}</p>
+          </div>
         </div>
-      </div>
-
-      <div className="card-support-panel" data-testid="card-setup-diagnosis">
-        <h2>Next setup task</h2>
-        <p>{setupTaskCopy}</p>
-        <button type="button" className="btn primary" onClick={() => onOpenSetupTask?.(setupJourney.taskId)}>
-          Continue setup
-        </button>
-      </div>
+      )}
 
       {ready && (
         <section className="card-support-panel" aria-label="Matching card project">
@@ -661,17 +670,47 @@ export function CardScreen({ connected, cardHost, cardLink, cardLifecycle, onCon
   }, [route.section]);
 
   const cardProps = { connected, cardHost, cardLink, cardLifecycle, onConnectCard };
+  // Home is the landing default too: any section this dispatch does not name
+  // renders it, exactly as the old overview fallback did.
+  const home = HOME_SECTIONS.includes(route.section)
+    || !['install', 'settings', 'workshop', 'preferences', 'support'].includes(route.section);
   let content;
-  if (route.section === 'setup') content = (
-    <SetupScreen
-      {...cardProps}
-      onOpenConnectionCenter={onOpenConnectionCenter}
-      currentProject={currentProject}
-      activeCloudProjects={activeCloudProjects}
-      browserProjects={browserProjects}
-      replaceProject={replaceProject}
-      onSaveProject={onSaveProject}
-    />
+  // Card Home: the guided journey (status header, action area, 4-phase
+  // ladder, resolution banners) followed by the evidence panels the old
+  // "Card status" overview carried. `section=setup` and `section=overview`
+  // are the same page.
+  if (home) content = (
+    <>
+      <SetupScreen
+        {...cardProps}
+        onOpenConnectionCenter={onOpenConnectionCenter}
+        currentProject={currentProject}
+        activeCloudProjects={activeCloudProjects}
+        browserProjects={browserProjects}
+        replaceProject={replaceProject}
+        onSaveProject={onSaveProject}
+      />
+      <CardHomePanels
+        {...cardProps}
+        onOpenConnectionCenter={onOpenConnectionCenter}
+        onOpenSection={onOpenSection}
+        go={go}
+        replaceProject={replaceProject}
+        currentProject={currentProject}
+        projectGeneration={projectGeneration}
+        activeCloudProjects={activeCloudProjects}
+        browserProjects={browserProjects}
+        readBrowserProjects={readBrowserProjects}
+        readCloudProject={readCloudProject}
+        openMatchingCardProject={openMatchingCardProject}
+        confirmProjectReplacement={confirmProjectReplacement}
+        saveBeforeCardProjectSwitch={saveBeforeCardProjectSwitch}
+        isProjectSwitchSnapshotCurrent={isProjectSwitchSnapshotCurrent}
+        onMatchedProjectLoaded={onMatchedProjectLoaded}
+        onMatchedProjectVerified={onMatchedProjectVerified}
+        onStartNewProject={onStartNewProject}
+      />
+    </>
   );
   else if (route.section === 'install') content = (
     <AutomaticInstallScreen
@@ -687,18 +726,16 @@ export function CardScreen({ connected, cardHost, cardLink, cardLifecycle, onCon
   else if (route.section === 'settings') content = <SettingsScreen embedded mode="card" {...cardProps} />;
   else if (route.section === 'workshop') content = <ProductionScreen embedded cardHost={cardHost} cardLink={cardLink} onConnectCard={onConnectCard} />;
   else if (route.section === 'preferences') content = <SettingsScreen embedded mode="preferences" {...cardProps} />;
-  else if (route.section === 'support') content = <CardSupport initialTool={route.supportTool} cardProps={cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} />;
-  else content = <CardOverview {...cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} onOpenSetupTask={onOpenSetupTask} go={go} replaceProject={replaceProject} currentProject={currentProject} projectGeneration={projectGeneration} activeCloudProjects={activeCloudProjects} browserProjects={browserProjects} readBrowserProjects={readBrowserProjects} readCloudProject={readCloudProject} openMatchingCardProject={openMatchingCardProject} confirmProjectReplacement={confirmProjectReplacement} saveBeforeCardProjectSwitch={saveBeforeCardProjectSwitch} isProjectSwitchSnapshotCurrent={isProjectSwitchSnapshotCurrent} onMatchedProjectLoaded={onMatchedProjectLoaded} onMatchedProjectVerified={onMatchedProjectVerified} onStartNewProject={onStartNewProject} />;
+  else content = <CardSupport initialTool={route.supportTool} cardProps={cardProps} onOpenConnectionCenter={onOpenConnectionCenter} onOpenSection={onOpenSection} />;
 
   // Batch production (route.section === 'workshop') renders outside the tab
   // set: its own heading and kicker, no section tab highlighted.
   const workshop = route.section === 'workshop';
-  const setup = route.section === 'setup';
-  const heading = setup
-    ? 'Set up your Lightweaver'
-    : route.section === 'overview'
-      ? 'Your Lightweaver hardware'
-      : workshop ? 'Batch production' : SECTION_LABELS[route.section];
+  const heading = SECTION_HEADINGS[route.section] || SECTION_HEADINGS.setup;
+  // The tab (and the mobile option) that speaks for the current section:
+  // `overview` highlights Home; the tab-less full-body sections (install,
+  // preferences, workshop) highlight nothing.
+  const activeTabKey = home ? 'setup' : SECTION_LABELS[route.section] ? route.section : '';
   return (
     <div className="screen card-workspace-screen">
       <div className="card-workspace">
@@ -708,7 +745,7 @@ export function CardScreen({ connected, cardHost, cardLink, cardLifecycle, onCon
             <label className="card-section-select-wrap">
               <select
                 aria-label="Hardware section"
-                value={SECTION_LABELS[route.section] ? route.section : ''}
+                value={activeTabKey}
                 onChange={event => event.target.value && onOpenSection(event.target.value)}
               >
                 <option value="" disabled>Choose a section</option>
@@ -726,7 +763,7 @@ export function CardScreen({ connected, cardHost, cardLink, cardLifecycle, onCon
               <button
                 key={key}
                 type="button"
-                aria-current={route.section === key ? 'page' : undefined}
+                aria-current={activeTabKey === key ? 'page' : undefined}
                 onClick={() => onOpenSection(key)}
               >
                 {label}
@@ -734,7 +771,7 @@ export function CardScreen({ connected, cardHost, cardLink, cardLifecycle, onCon
             ))}
           </div>
         </nav>
-        <main className={`card-workspace-body${setup ? ' lw-setup-body' : ''}`}>
+        <main className={`card-workspace-body${home ? ' lw-setup-body' : ''}`}>
           <header className="card-workspace-header">
             <span className="card-workspace-kicker">{workshop ? 'Manufacturing mode' : 'Lightweaver hardware'}</span>
             <h1 ref={headingRef} tabIndex={-1}>{heading}</h1>

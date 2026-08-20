@@ -449,7 +449,10 @@ test('preview toolbar is one compact desktop row and the redundant card panel is
     expect(box.height).toBeGreaterThanOrEqual(44);
   }
   expect(controlsBox!.height).toBeLessThanOrEqual(44);
-  await expect(page.getByText('Card', { exact: true })).toHaveCount(0);
+  // The redundant "Card" panel must stay gone from the Patterns screen itself
+  // (the rail's Card destination is not this panel, so the check scopes to
+  // the screen body).
+  await expect(page.locator('.screen').getByText('Card', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('textbox', { name: 'Card local page host' })).toHaveCount(0);
 });
 

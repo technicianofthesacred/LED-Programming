@@ -5,9 +5,9 @@ import { createDefaultProject } from '../src/lib/projectModel.js';
 import { cardProjectFingerprint } from '../src/lib/cardProjectResolver.js';
 
 // Every primary Studio destination must retain the shared shell controls.
-// 'Setup' is the single card destination — the old 'Setup' and 'Hardware' rail
-// items merged into it, so it stands in for both here.
-const SCREENS = ['Patterns', 'Pattern Lab', 'Playlist', 'Layout', 'Show', 'Setup'];
+// 'Card' is the single card destination — the old 'Setup' and 'Hardware' rail
+// items merged into it (Card Home), so it stands in for both here.
+const SCREENS = ['Patterns', 'Pattern Lab', 'Playlist', 'Layout', 'Show', 'Card'];
 const STUDIO_SOURCE_REVISION = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 const STUDIO_BUILD_NUMBER = Number(
   execFileSync('git', ['rev-list', '--count', 'HEAD'], { encoding: 'utf8' }).trim(),
