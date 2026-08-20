@@ -15,6 +15,14 @@ import { normalizeUsbLedColorOrder } from './usbLedColorOrder.js';
 // card refuses a layout change unless the caller passes allowLayoutChange)
 // only need the ordinary preconditions.
 
+// The one refusal for a config push the card answered with `state: 'staged'`:
+// the card is protecting its wiring behind the bench-test flow, so the change
+// exists but is NOT installed until it is confirmed on the real LEDs. Three
+// screens used to carry near-identical inline copies of this sentence (the
+// zone-split variant said "The split is staged but not installed" — same
+// meaning, unasserted by any test, so it converged on the fuller wording).
+export const STAGED_WIRING_CONFLICT_MESSAGE = 'The card kept this hardware change staged. Open Test & Install and confirm it on the real LEDs before it can be installed.';
+
 export const CARD_INSTALL_BLOCK_MESSAGES = Object.freeze({
   'hardware-issue': 'Fix the hardware setup before installing on the card.',
   busy: 'An install is already running on this card.',

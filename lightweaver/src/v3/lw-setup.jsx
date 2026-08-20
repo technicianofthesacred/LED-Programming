@@ -10,59 +10,14 @@ import { readCardPatternsFromCard, readCardZonesFromCard } from '../lib/cardLive
 import { cardConnectionStatus } from '../components/card/CardStatusControl.jsx';
 import { useProject } from '../state/ProjectContext.jsx';
 import { currentInstallation, structurallyInstalledRecord } from '../lib/projectLifecycle.js';
+import { guardedResolutionRun, resolvedMatchKey } from '../lib/cardProjectAdoption.js';
+import { importProjectFromFile } from '../lib/projectImportFile.js';
+import { useCardActions } from './CardActionsProvider.jsx';
 
-function visualLookFromZone(zone = {}, fallbackPatternId = 'aurora') {
-  return {
-    patternId: zone.patternId || fallbackPatternId,
-    ...(Number.isFinite(Number(zone.brightness)) ? { brightness: Number(zone.brightness) } : {}),
-    ...(Number.isFinite(Number(zone.speed)) ? { speed: Number(zone.speed) } : {}),
-    ...(Number.isFinite(Number(zone.hueShift)) ? { hueShift: Number(zone.hueShift) } : {}),
-    ...(Number.isFinite(Number(zone.customHue)) ? { customHue: Number(zone.customHue) } : {}),
-    ...(Number.isFinite(Number(zone.customSaturation)) ? { customSaturation: Number(zone.customSaturation) } : {}),
-    ...(typeof zone.customBreathe === 'boolean' ? { customBreathe: zone.customBreathe } : {}),
-    ...(Number.isFinite(Number(zone.breatheLowerPct)) ? { breatheLowerPct: Number(zone.breatheLowerPct) } : {}),
-    ...(Number.isFinite(Number(zone.breatheUpperPct)) ? { breatheUpperPct: Number(zone.breatheUpperPct) } : {}),
-    ...(Number.isFinite(Number(zone.breatheCycleSeconds)) ? { breatheCycleSeconds: Number(zone.breatheCycleSeconds) } : {}),
-    ...(typeof zone.customDrift === 'boolean' ? { customDrift: zone.customDrift } : {}),
-  };
-}
-
-export function reconstructInstalledCardState({ skeleton = {}, patterns = null, zones = null } = {}) {
-  const installedPatterns = Array.isArray(patterns?.patterns) ? patterns.patterns : [];
-  const installedZones = Array.isArray(zones?.zones) ? zones.zones : [];
-  const startupPatternId = String(zones?.startupPatternId || installedZones[0]?.patternId || installedPatterns[0]?.id || 'aurora');
-  const startupZone = installedZones.find(zone => zone?.patternId === startupPatternId) || installedZones[0] || {};
-  const looks = installedPatterns.map(pattern => ({
-      id: pattern.id,
-      type: 'compound',
-      label: pattern.label || pattern.id,
-      defaultLook: visualLookFromZone(pattern.zones?.[0], pattern.runtimePatternId || pattern.id || startupPatternId),
-      sectionLooks: Object.fromEntries((pattern.zones || [])
-        .filter(zone => zone?.id)
-        .map(zone => [zone.id, visualLookFromZone(zone, pattern.runtimePatternId || pattern.id || startupPatternId)])),
-      updatedAt: 0,
-    }));
-  const playlist = installedPatterns.map((pattern, index) => ({
-    id: pattern.id,
-    type: 'combo',
-    lookId: pattern.id,
-    label: pattern.label || pattern.id,
-    enabled: true,
-    createdAt: index,
-  }));
-  return {
-    ...skeleton,
-    devices: {
-      standaloneController: {
-        defaultLook: visualLookFromZone(startupZone, startupPatternId),
-        activeLookId: String(patterns?.currentId || startupPatternId),
-        looks,
-        playlist,
-        controls: { encoder: { patternCycleIds: looks.map(look => look.defaultLook.patternId) } },
-      },
-    },
-  };
-}
+// The reconstruction itself moved to lib/cardProjectAdoption.js (the
+// 'reconstruct' strategy); tests/setup-card-reconstruction.spec.ts imports it
+// from this screen, so the export stays.
+export { reconstructInstalledCardState } from '../lib/cardProjectAdoption.js';
 
 function exactCardName(cardLink, cardHost) {
   return cardLink?.card?.name
@@ -136,6 +91,7 @@ export function SetupScreen({
     setProjectId, setPortRoles, setStandaloneController, replaceLayoutGeometry,
     markProjectInstalled, readProjectLifecycle, projectLifecycle,
   } = useProject();
+  const cardActions = useCardActions();
   const [commissioningFlow, setCommissioningFlow] = useState(() => inspectCardCommissioning().flow);
   const [cardState, setCardState] = useState({ evidence: null, status: null, read: false });
   const [resolution, setResolution] = useState({ kind: 'unknown' });
@@ -418,58 +374,53 @@ export function SetupScreen({
 
   const startFromCard = async () => {
     setAdoptionError('');
-    const readHost = cardLink?.host || cardHost || '';
-    let status = cardState.status;
-    let patterns = null;
-    let zones = null;
-    try {
-      status = await readCardStatusEnvelope({ host: readHost, transport: cardLink?.transport });
-      if ((!Array.isArray(status?.outputs) || !status.outputs.length)
-        && typeof window !== 'undefined'
-        && window.location.protocol === 'http:') {
-        status = await readCardStatusEnvelope({ host: readHost, transport: 'direct' });
-      }
-      setCardState(previous => ({ ...previous, status, read: true }));
-    } catch {
-      // A recently completed background read is still authoritative. The
-      // readiness summary is intentionally last because it may omit geometry.
-      status = status || cardLink?.readiness || null;
-    }
-    const installedState = await Promise.allSettled([
-      readCardPatternsFromCard({ host: readHost }),
-      readCardZonesFromCard({ host: readHost }),
-    ]);
-    patterns = installedState[0].status === 'fulfilled' ? installedState[0].value : null;
-    zones = installedState[1].status === 'fulfilled' ? installedState[1].value : null;
-    const skeleton = projectSkeletonFromCardStatus(status || {});
-    if (!skeleton.strips.length) {
-      reportAdoptionFailure('no-geometry');
-      return;
-    }
+    // The reconstruction orchestration is the shared 'reconstruct' strategy in
+    // lib/cardProjectAdoption.js; this screen keeps ownership of applying the
+    // parts and of the failure copy.
     // Adoption used to fail in silence: a rejected replacement and a thrown one
     // looked exactly like a successful one from this screen, so the owner
     // pressed the button, watched nothing change, and had nothing to act on.
-    try {
-      const applied = await applyCardParts(reconstructInstalledCardState({ skeleton, patterns, zones }), status);
-      if (!applied?.ok) reportAdoptionFailure(applied?.reason);
-    } catch (error) {
-      reportAdoptionFailure('', error);
-    }
+    const result = await guardedResolutionRun({
+      context: { cardLink, cardHost },
+      io: { readCardStatusEnvelope, readCardPatternsFromCard, readCardZonesFromCard },
+      actions: { applyCardParts },
+    }, {
+      strategy: 'reconstruct',
+      initialStatus: cardState.status,
+      allowDirectRetry: typeof window !== 'undefined' && window.location.protocol === 'http:',
+      onStatus: status => setCardState(previous => ({ ...previous, status, read: true })),
+    });
+    if (!result.ok) reportAdoptionFailure(result.reason, result.error || null);
   };
 
+  const setupAdoptionFlightRef = useRef({
+    inFlight: { current: false },
+    pendingProbe: { current: null },
+    probeSignature: { current: '' },
+  });
   const loadResolvedProject = async () => {
     if (!resolution?.resolved?.project) return;
     setAdoptionError('');
-    try {
-      const replacement = await replaceProject?.(resolution.resolved.project, { confirmDiscard: () => true });
-      // The resolver matched this project against the card's own evidence, so
-      // the adopted copy is installed on that card by definition. Record it —
-      // but only once the replacement itself reported success.
-      if (replacement?.ok) recordCardInstallation(cardState.status, replacement.marker, replacement.project);
-      else reportAdoptionFailure(replacement?.reason);
-    } catch (error) {
-      reportAdoptionFailure('', error);
+    if (!cardActions?.adoptCardProject) {
+      reportAdoptionFailure('');
+      return;
     }
+    // Deliberate behavior change (card-interaction consolidation, phase 2):
+    // Setup's load now runs the SAME guarded machine as the card overview, so
+    // it gains the project-switch save barrier and the exact-card drift guards
+    // it previously lacked. The current project is saved before the resolved
+    // match replaces it, and the machine's verification callback records the
+    // installation — this screen keeps only its error surface, and stays on
+    // Setup (the re-resolved "already set up" banner offers Open Patterns).
+    await cardActions.adoptCardProject({
+      strategy: 'resolved',
+      selectionKey: resolvedMatchKey(resolution.resolved),
+      flight: setupAdoptionFlightRef.current,
+      report: state => {
+        if (state.status === 'error') setAdoptionError(state.message);
+      },
+      openPatterns: () => {},
+    });
   };
 
   // A real "try again" for a blocked or uncertain card operation: re-read the
@@ -480,17 +431,14 @@ export function SetupScreen({
   const onImportFile = event => {
     const file = event.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
     setAdoptionError('');
-    reader.onload = async loadEvent => {
-      try {
-        const replacement = await replaceProject?.(JSON.parse(String(loadEvent.target.result)));
+    // Shared file mechanics only; this screen deliberately clears no
+    // library/cloud associations (cleanup unification is a later phase).
+    importProjectFromFile(file, data => replaceProject?.(data))
+      .then(replacement => {
         if (!replacement?.ok) reportAdoptionFailure(replacement?.reason);
-      } catch (error) {
-        reportAdoptionFailure('invalid', error);
-      }
-    };
-    reader.readAsText(file);
+      })
+      .catch(error => reportAdoptionFailure('invalid', error));
     event.target.value = '';
   };
 

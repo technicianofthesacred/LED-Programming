@@ -52,9 +52,9 @@ import {
   decideLiveControlProjectAuthority,
   pushLivePreviewToCard,
   pushSectionPreviewToCard,
-  recoverCardLights,
   resetLiveOutputOnCard,
 } from '../lib/cardLiveControl.js';
+import { recoverCardLightsVerified } from '../lib/cardRecoverLights.js';
 import {
   makePlaylistPushErrorState,
   makePlaylistPushPendingState,
@@ -440,7 +440,7 @@ function realPatternShape(patternId) {
       recoveryPendingRef.current = true;
       setRecoveryPending(true);
       try {
-        await recoverCardLights(
+        await recoverCardLightsVerified(
           { patternId: 'warm-white', brightness: 1, syncZones: true },
           { host, timeoutMs: 3200, restartCard: true },
         );

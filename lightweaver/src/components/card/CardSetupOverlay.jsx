@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { recoverCardLights, stopCardLights } from '../../lib/cardLiveControl.js';
+import { stopCardLights } from '../../lib/cardLiveControl.js';
+import { recoverCardLightsVerified } from '../../lib/cardRecoverLights.js';
 import { StripDiscoveryPanel } from './StripDiscoveryPanel.jsx';
 
 const SAFE_LIFECYCLE = Object.freeze({ phase: 'idle', busy: false, lighting: false });
@@ -93,7 +94,7 @@ export function CardSetupOverlay({
     if (lightAction.status === 'recovering' || !cardHost) return;
     setLightAction({ status: 'recovering', message: 'Recovering the last working setup…' });
     try {
-      await recoverCardLights({}, { host: cardHost, timeoutMs: 3200 });
+      await recoverCardLightsVerified({}, { host: cardHost, timeoutMs: 3200 });
       setLightAction({ status: 'recovered', message: 'The card restored its last working light setup.' });
     } catch (error) {
       setLightAction({ status: 'failed', message: error?.message || 'The card could not recover the lights.' });

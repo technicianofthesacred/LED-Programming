@@ -43,6 +43,8 @@ import {
   writeActiveProjectLibraryRecordId,
 } from '../lib/projectStorage.js';
 import { runProjectSwitchSaveBarrier } from '../lib/projectSwitchSaveBarrier.js';
+import { importProjectFromFile } from '../lib/projectImportFile.js';
+import { CardActionsProvider } from './CardActionsProvider.jsx';
 import { formatBrowserProjectSaveLabel } from '../lib/studioActionStatus.js';
 import {
   CARD_COMMISSIONING_CHANGED_EVENT,
@@ -1295,11 +1297,11 @@ function Shell({ offlineUpdateController = null }) {
   const onFile = useCallback((e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      try {
-        const data = JSON.parse(ev.target.result);
-        const result = await replaceProject(data);
+    // Shared file mechanics (lib/projectImportFile.js); the top-bar import's
+    // FULL cleanup — browser association, cloud detach, save-block reset —
+    // is this site's own policy and stays here byte-for-byte.
+    importProjectFromFile(file, replaceProject)
+      .then(result => {
         if (result.ok) {
           browserAssociationRef.current = null;
           writeActiveProjectLibraryRecordId('');
@@ -1308,9 +1310,8 @@ function Shell({ offlineUpdateController = null }) {
           setLoadDialogOpen(false);
         }
         if (result.reason === 'invalid') alert('Invalid project file (version mismatch).');
-      } catch { alert('Could not parse project file.'); }
-    };
-    reader.readAsText(file);
+      })
+      .catch(() => { alert('Could not parse project file.'); });
     e.target.value = '';
   }, [cloudLibrary, replaceProject]);
 
@@ -1355,6 +1356,30 @@ function Shell({ offlineUpdateController = null }) {
   const visibleWorkspaceNotice = visiblePersistentNotice || workspaceEvent;
 
   return (
+    // Mounted ONCE, unconditionally, above the screen switch: the provider's
+    // component identity must never change across renders (remount-reset-guard
+    // history — THINKING.md 2026-08-07). Its `deps` object is rebuilt per
+    // render, but the provider reads it through a ref, so the context VALUE
+    // identity stays stable too.
+    <CardActionsProvider
+      deps={{
+        cardLink,
+        cardHost: cardLink.host || cardStatus.host,
+        serializeProject,
+        projectGeneration: projectLifecycle.generation,
+        activeCloudProjects: cloudLibrary.activeProjects,
+        browserProjects: cloudLibrary.browserProjects,
+        readBrowserProjects: listProjectLibraryRecords,
+        readCloudProject: cloudLibrary.readCardProjectCandidate,
+        replaceProject,
+        saveBeforeCardProjectSwitch,
+        isProjectSwitchSnapshotCurrent,
+        openMatchingCardProject: cloudLibrary.openMatchingCardProject,
+        onMatchedProjectLoaded: onMatchedCardProjectLoaded,
+        onMatchedProjectVerified: onMatchedCardProjectVerified,
+        openCardControl,
+      }}
+    >
     <div className="app">
       <TopBar
         projectName={projectName || 'Untitled'}
@@ -1501,6 +1526,7 @@ function Shell({ offlineUpdateController = null }) {
       )}
       <input ref={fileInputRef} type="file" accept={PROJECT_IMPORT_ACCEPT} style={{ display: 'none' }} onChange={onFile} />
     </div>
+    </CardActionsProvider>
   );
 }
 

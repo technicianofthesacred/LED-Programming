@@ -38,6 +38,8 @@ import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard, readCardP
 import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
 import { pushLiveHardwareToCard } from '../lib/cardLiveControl.js';
 import { downloadJsonFile } from '../lib/downloadFile.js';
+import { STAGED_WIRING_CONFLICT_MESSAGE } from '../lib/cardInstallGate.js';
+import { importProjectFromFile } from '../lib/projectImportFile.js';
 import { writeActiveProjectLibraryRecordId } from '../lib/projectStorage.js';
 import { cardActionReducer, createCardActionState } from '../lib/cardAction.js';
 import { canonicalProjectFileName, PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
@@ -333,7 +335,7 @@ const SettingsFieldContext = createContext(null);
           factoryBlank: cardLink.cardBlank === true,
         });
         if (response?.state === 'staged') {
-          throw new Error('The card kept this hardware change staged. Open Test & Install and confirm it on the real LEDs before it can be installed.');
+          throw new Error(STAGED_WIRING_CONFLICT_MESSAGE);
         }
         setStatus('Verifying the exact project on the card…');
         const exactPrepared = { ...preparedDeployment, cardId: before.cardId };
@@ -402,11 +404,10 @@ const SettingsFieldContext = createContext(null);
     const importProjectFile = (event) => {
       const file = event.target.files?.[0];
       if (!file) return;
-      const reader = new FileReader();
-      reader.onload = async (ev) => {
-        try {
-          const data = JSON.parse(ev.target.result);
-          const result = await replaceProject(data);
+      // Shared file mechanics; this screen's cleanup (browser + cloud
+      // detach, no save-block reset) is deliberate and stays byte-for-byte.
+      importProjectFromFile(file, replaceProject)
+        .then(result => {
           if (result.reason === 'invalid') {
             setStatusKind('err');
             setStatus('That project file does not look like a Lightweaver Studio project.');
@@ -417,12 +418,11 @@ const SettingsFieldContext = createContext(null);
           cloudLibrary.detachProject();
           setStatusKind('ok');
           setStatus('Project opened in Studio.');
-        } catch {
+        })
+        .catch(() => {
           setStatusKind('err');
           setStatus('Could not read that project file.');
-        }
-      };
-      reader.readAsText(file);
+        });
       event.target.value = '';
     };
 

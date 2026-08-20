@@ -55,7 +55,7 @@ import { classifyCardReadiness, installedProjectIdFromCardStatus } from '../lib/
 import { markCardEditIntentAbandoned } from '../lib/cardEditIntent.js';
 import { openCardFlow } from '../lib/cardFlowEntry.js';
 import { isCardLinkPlaybackReady } from '../lib/cardConnectionFlow.js';
-import { evaluateCardInstallGate, readCardAccessLevel } from '../lib/cardInstallGate.js';
+import { evaluateCardInstallGate, readCardAccessLevel, STAGED_WIRING_CONFLICT_MESSAGE } from '../lib/cardInstallGate.js';
 import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
 import { currentInstallation, structurallyInstalledRecord } from '../lib/projectLifecycle.js';
 import {
@@ -68,7 +68,8 @@ import { buildCardConfigHandoffUrl, cardStorageJson, pushConfigToCard, readCardP
 import { prepareCardStoragePayload } from '../lib/cardStoragePayload.js';
 import { prepareCardDeployment, waitForCardDeploymentVerification } from '../lib/cardDeployment.js';
 import { runtimePackageForCardOperation } from '../lib/testStrip.js';
-import { decideLiveControlProjectAuthority, previewResponseUsedZoneFallback, pushLivePreviewToCard, recoverCardLights } from '../lib/cardLiveControl.js';
+import { decideLiveControlProjectAuthority, previewResponseUsedZoneFallback, pushLivePreviewToCard } from '../lib/cardLiveControl.js';
+import { recoverCardLightsVerified } from '../lib/cardRecoverLights.js';
 import {
   cardActionReducer,
   cardActionStatusLabel,
@@ -1510,7 +1511,7 @@ import { PatternPreview } from './PatternPreview.jsx';
           allowProjectChange: undefined,
         });
         if (response?.state === 'staged') {
-          throw new Error('The card kept this hardware change staged. Open Test & Install and confirm it on the real LEDs before it can be installed.');
+          throw new Error(STAGED_WIRING_CONFLICT_MESSAGE);
         }
         const verification = await waitForCardDeploymentVerification(exactPrepared, {
           readEvidence: () => readCardProjectEvidence({ host: safety.host || cardHost }),
@@ -1730,7 +1731,7 @@ import { PatternPreview } from './PatternPreview.jsx';
           blockPatternCardEffect('project');
           return;
         }
-        await recoverCardLights(
+        await recoverCardLightsVerified(
           { patternId: 'warm-white', brightness: 1, syncZones: true },
           { host: cardHost, timeoutMs: 3200, restartCard: true },
         );
@@ -1791,7 +1792,9 @@ import { PatternPreview } from './PatternPreview.jsx';
         }
         const response = await pushConfigToCard(nextPackage, { host: safety.host || cardHost, timeoutMs: 6000, reboot: 'if-needed', allowLayoutChange: true });
         if (response?.state === 'staged') {
-          throw new Error('The split is staged but not installed. Open Test & Install and confirm it on the real LEDs.');
+          // Converged on the shared refusal (was: "The split is staged but not
+          // installed. …" — same meaning, unasserted by any test).
+          throw new Error(STAGED_WIRING_CONFLICT_MESSAGE);
         }
         await waitForCardDeploymentVerification({ ...prepared, cardId: before.cardId }, {
           readEvidence: () => readCardProjectEvidence({ host: safety.host || cardHost }),

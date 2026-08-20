@@ -6,6 +6,7 @@ import {
 import { normalizePatchBoard } from '../../../lib/patchBoard.js';
 import { download } from '../../../lib/export.js';
 import { canonicalProjectFileName, PROJECT_IMPORT_ACCEPT } from '../../../lib/projectFiles.js';
+import { importProjectFromFile } from '../../../lib/projectImportFile.js';
 import { writeActiveProjectLibraryRecordId } from '../../../lib/projectStorage.js';
 import { useProject } from '../../../state/ProjectContext.jsx';
 
@@ -137,11 +138,10 @@ export function useLayoutImport(ctx, deps) {
     if (!file) return;
     e.target.value = '';
     try {
-      const text = await file.text();
-      const data = JSON.parse(text);
-      const result = await replaceProject(data);
+      const result = await importProjectFromFile(file, replaceProject);
       // Loading a file detaches the workspace from any browser-library record
-      // (mirrors the top-bar import in src/v3/app.jsx).
+      // ONLY (mirrors nothing else — this site's narrower cleanup is
+      // deliberate until the cleanup unification phase).
       if (result.ok) writeActiveProjectLibraryRecordId('');
       if (result.reason === 'invalid') alert('Unrecognised file format.');
     } catch (err) {
