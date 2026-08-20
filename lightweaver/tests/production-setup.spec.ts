@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { test, expect } from './studioTest';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { buildProductionJob, canonicalProductionJobBytes } from '../src/lib/productionJobPackage.js';

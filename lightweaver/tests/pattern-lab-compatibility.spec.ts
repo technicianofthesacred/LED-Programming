@@ -1,4 +1,5 @@
-import { test, expect, type Route } from '@playwright/test';
+import { type Route } from '@playwright/test';
+import { test, expect } from './studioTest';
 
 const AUTOSAVE_KEY = 'lw_autosave_v3';
 let cardMutationRequests: string[];

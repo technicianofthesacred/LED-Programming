@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './studioTest';
 import { createDefaultProject, migrateProject } from '../src/lib/projectModel.js';
 import { prepareCardDeployment } from '../src/lib/cardDeployment.js';
 import { prepareCardStoragePayload } from '../src/lib/cardStoragePayload.js';

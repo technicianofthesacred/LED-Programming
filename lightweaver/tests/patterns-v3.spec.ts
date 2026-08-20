@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './studioTest';
 import { REAL_PATTERNS } from '../src/v3/v3-data.js';
 import { createDefaultProject } from '../src/lib/projectModel.js';
 import { buildCardRuntimePackageFromProject } from '../src/lib/cardRuntimeProject.js';
