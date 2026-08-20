@@ -13,6 +13,8 @@ import {
 import { scaleStripGeometry } from '../../../lib/stripScale.js';
 import { moveStripRowsInChain } from '../../../lib/patchBoard.js';
 import { reprojectStripKaleidoscope, reverseKaleidoscope } from '../../../lib/kaleidoscope.js';
+import { nextSplitName, planStripSplitCounts, splitStripPaths } from '../../../lib/stripSplit.js';
+import { useProject } from '../../../state/ProjectContext.jsx';
 
 // scaleStrip clamps: never shrink a strip's path below this length (px)…
 const MIN_STRIP_SVG_LENGTH = 20;
@@ -27,7 +29,7 @@ export function useLayoutStrips(ctx) {
     editCounts, setEditCounts,
     hidden, setHidden,
     layers, svgText, viewBox, density, pxPerMm,
-    stripCountOverrides,
+    stripCountOverrides, setStripCountOverrides,
     // Per-strip density map (id → LEDs/m) being introduced in a parallel
     // change; read defensively — absent entries fall back to the global density.
     stripDensities, setStripDensities,
@@ -40,6 +42,9 @@ export function useLayoutStrips(ctx) {
     rebuildStrip,
     setKaleidoscopeResetNotices,
   } = ctx;
+  // Splitting rewrites the physical chain as well as the strip list, so this
+  // one action reaches wiring directly (same route useLayoutWire takes).
+  const { wiring, updateWiring } = useProject();
 
   // Density is a physical fact of the purchased strip — count and length are
   // locked together through it: count = length(m) × density(LEDs/m).
@@ -242,6 +247,86 @@ export function useLayoutStrips(ctx) {
     }));
   }, [strips, viewBox, stripCountOverrides, physicalCountForLength, pushLayoutHistory, setStrips, setKaleidoscopeResetNotices]);
 
+  // Divide one strip into two named strips that stay adjacent on the same
+  // output — the inverse of "Combine into one strip", for a reel that runs
+  // across two layers of the artwork and should be addressed as two.
+  const splitStripInTwo = useCallback((id) => {
+    if (wiring.locked) return null;
+    const source = strips.find(st => st.id === id);
+    if (!source) return null;
+    const counts = planStripSplitCounts(source.pixelCount);
+    if (!counts) return null;
+    const paths = splitStripPaths(source.pathData, counts, source.reversed);
+    if (!paths) return null;
+    // A strip already cut into several runs in Advanced wiring has no single
+    // run to divide; those boundaries are edited there instead.
+    const sourceRuns = wiring.runs.filter(run => run.type === 'strip' && run.source?.stripId === id);
+    if (sourceRuns.length > 1) return null;
+
+    const tailId = nextStripId(strips);
+    const x = source.x || 0;
+    const y = source.y || 0;
+    const halfOf = (pathData, pixelCount) => ({
+      ...source,
+      pathData,
+      pixelCount,
+      svgLength: svgPathLength(pathData),
+      pixels: sampleStripPixels(pathData, pixelCount, source.reversed, x, y),
+      // Reflection points are placed against a whole run; a cut invalidates them.
+      kaleidoscope: undefined,
+      mergedFrom: undefined,
+      // Neither half covers the artwork layer on its own any more, so neither
+      // one claims it (same rule "Combine into one strip" applies).
+      sourceLayerId: null,
+      sourcePathId: null,
+    });
+    const head = halfOf(paths.head, counts.head);
+    const tail = {
+      ...halfOf(paths.tail, counts.tail),
+      id: tailId,
+      name: nextSplitName(source.name, strips.map(st => st.name)),
+      color: nextColor(),
+    };
+
+    pushLayoutHistory();
+    setStrips(prev => prev.flatMap(st => (st.id === id ? [head, tail] : [st])));
+    setStripDensities(prev => ({ ...prev, [tailId]: densityFor(id) }));
+    // A hand-pinned count on the original means both halves are hand-set too,
+    // so a later resize does not silently recount them.
+    if (stripCountOverrides?.[id]) {
+      setStripCountOverrides(prev => ({ ...prev, [id]: true, [tailId]: true }));
+    }
+    updateWiring(draft => {
+      const existing = draft.runs.find(run => run.type === 'strip' && run.source?.stripId === id);
+      const run = {
+        id: `run-${tailId}`,
+        type: 'strip',
+        source: { stripId: tailId, from: 0, to: Math.max(0, counts.tail - 1) },
+        directionPolicy: existing?.directionPolicy || 'flexible',
+        physicalDirection: existing?.physicalDirection || 'source-forward',
+        seamLed: null,
+        verified: false,
+      };
+      let suffix = 2;
+      while (draft.runs.some(item => item.id === run.id)) run.id = `run-${tailId}-${suffix++}`;
+      if (existing) {
+        existing.source = { ...existing.source, from: 0, to: Math.max(0, counts.head - 1) };
+        existing.seamLed = null;
+        existing.verified = false;
+      }
+      draft.runs.push(run);
+      // Land the new half immediately after the original on its own output, so
+      // the list keeps reading in the order the data actually travels.
+      const host = draft.outputs.find(output => existing && output.runIds.includes(existing.id));
+      if (host) host.runIds.splice(host.runIds.indexOf(existing.id) + 1, 0, run.id);
+      else (draft.outputs[0] || {}).runIds?.push(run.id);
+    }, { changeKind: 'route' });
+    selectStrip(tailId);
+    scrollToStrip(tailId);
+    return tailId;
+  }, [strips, wiring, updateWiring, nextColor, densityFor, stripCountOverrides,
+      setStripCountOverrides, setStripDensities, pushLayoutHistory, setStrips, selectStrip, scrollToStrip]);
+
   const createStripGroupFromIds = useCallback((stripIds, nameOverride = '') => {
     const uniqueIds = [...new Set(stripIds)].filter(Boolean);
     const picked = strips.filter(s => uniqueIds.includes(s.id));
@@ -399,6 +484,7 @@ export function useLayoutStrips(ctx) {
     reverseStrip,
     renameStrip,
     duplicateStrip,
+    splitStripInTwo,
     addPrimitiveStrip,
     scaleStrip,
     createStripGroupFromIds,

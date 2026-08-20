@@ -395,10 +395,15 @@ test('size controls recalculate LEDs while manual LED entry preserves size', asy
     return strip ? [strip.pixelCount, strip.svgLength] : null;
   }).toEqual([linked.pixelCount + 1, linked.svgLength]);
 
-  // The rule is only obvious if it is written next to the control. Without
-  // this, editing LEDs and seeing Size hold reads as a bug.
-  await expect(page.locator('.la-strip-detail .la-physical-rule-hint'))
-    .toHaveText('Size sets the count. Editing LEDs keeps the size.');
+  // The rule is only obvious if it is said next to the control. It now shares
+  // one line with every other label, so it appears while the field is touched
+  // and the line describes the strip the rest of the time.
+  const caption = page.locator('.la-strip-caption').first();
+  // The count edits above left the pointer on the field, so step off it first.
+  await page.locator('.panel-head').first().hover();
+  await expect(caption).toHaveText(/Data in at LED/);
+  await page.getByLabel('Strip LED count', { exact: true }).hover();
+  await expect(caption).toHaveText('Size sets the count. Editing LEDs keeps the size.');
   await expect(page.getByLabel('Strip LED count', { exact: true }))
     .toHaveAttribute('title', /keeps the size/);
   await expect(page.getByLabel('Strip length in metres', { exact: true }))

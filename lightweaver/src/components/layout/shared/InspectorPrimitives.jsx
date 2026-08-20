@@ -48,6 +48,16 @@ export const GroupIcon = () => (
   </svg>
 );
 
+// A run of lights with a cut through the middle — the strip becomes two.
+export const SplitIcon = () => (
+  <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" style={{ width: 11, height: 11, flexShrink: 0 }}>
+    <path d="M0.8 6h3.4M7.8 6h3.4"/>
+    <circle cx="4.2" cy="6" r="0.9" fill="currentColor" stroke="none"/>
+    <circle cx="7.8" cy="6" r="0.9" fill="currentColor" stroke="none"/>
+    <path d="M6 1v10" strokeDasharray="1.5 1.3"/>
+  </svg>
+);
+
 // ── Mockup (v3) stroked icon set — warm toolbar / inspector glyphs ─────────
 export const TbIcon = {
   import: <svg viewBox="0 0 24 24"><path d="M12 4v12M8 12l4 4 4-4"/><path d="M5 20h14"/></svg>,

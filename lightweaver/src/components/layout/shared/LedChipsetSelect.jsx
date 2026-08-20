@@ -12,18 +12,24 @@ export function LedChipsetSelect({ value, onChange, fallback, groupLabel = 'LED 
   return (
     <div className="la-led-chipset" data-testid="led-chipset-control">
       <span className="k">Chipset</span>
-      <div className="la-strip-density" role="group" aria-label={groupLabel}>
-        {CARD_LED_TYPES.map(type => (
-          <button key={type} type="button"
-                  className={`btn${selected === type ? ' is-selected' : ''}`}
-                  aria-label={`${type} — ${CARD_LED_TYPE_HINTS[type]}`}
-                  aria-pressed={selected === type}
-                  title={CARD_LED_TYPE_HINTS[type]}
-                  data-testid={`led-chipset-${type}`}
-                  onClick={() => { if (type !== selected) onChange(type); }}>
-            {type}
-          </button>
-        ))}
+      {/* A dropdown rather than a segmented pair: the option row carries the
+          reel-facing voltage hint, which is what an owner actually matches
+          against the print on their strip. */}
+      <div className="la-gpio-wrap">
+        <select className="la-gpio-select la-chipset-select"
+                aria-label={groupLabel}
+                data-testid="led-chipset-select"
+                value={selected}
+                onChange={event => {
+                  const next = normalizeCardLedType(event.target.value, selected);
+                  if (next !== selected) onChange(next);
+                }}>
+          {CARD_LED_TYPES.map(type => (
+            <option key={type} value={type} data-testid={`led-chipset-${type}`}>
+              {type} — {CARD_LED_TYPE_HINTS[type]}
+            </option>
+          ))}
+        </select>
       </div>
     </div>
   );
