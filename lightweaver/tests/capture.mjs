@@ -49,7 +49,7 @@ await page.goto(`http://localhost:${testPort}/`, { waitUntil: 'domcontentloaded'
 await page.waitForTimeout(1500);
 
 // Click Pattern in the left navigation rail
-await page.locator('.lw-rail-btn', { hasText: 'Pattern' }).click();
+await page.getByRole('button', { name: 'Patterns', exact: true }).click();
 
 // Wait for canvas to appear
 const canvasHandle = await page.waitForSelector('canvas', { timeout: 10000 }).catch(() => null);
