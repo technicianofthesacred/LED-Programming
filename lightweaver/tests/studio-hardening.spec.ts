@@ -122,8 +122,8 @@ async function importSeededProjectFileThroughTopBar(page: any, recordId: string)
     const records = JSON.parse(localStorage.getItem('lw_project_library_v1') || '{}').records || [];
     return records.find((record: any) => record.id === id)?.project;
   }, recordId);
-  await page.getByRole('button', { name: 'Load project' }).click();
-  const loadDialog = page.getByRole('dialog', { name: 'Load project' });
+  await page.getByRole('button', { name: 'Projects', exact: true }).click();
+  const loadDialog = page.getByRole('dialog', { name: 'Projects' });
   const chooserPromise = page.waitForEvent('filechooser');
   await loadDialog.getByRole('button', { name: 'Import from computer' }).click();
   const chooser = await chooserPromise;
@@ -660,7 +660,7 @@ test('replacement guard names both projects and keeps editing until explicitly r
     buffer: Buffer.from(JSON.stringify(incoming)),
   };
 
-  const fileInput = page.locator('.set-file-input');
+  const fileInput = page.getByTestId('project-file-input');
   await fileInput.setInputFiles(projectFile);
   const dialog = page.getByRole('dialog', { name: 'Replace current project?' });
   await expect(dialog).toContainText('Current Mandala');

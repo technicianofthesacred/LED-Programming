@@ -10,7 +10,8 @@ import { CardControlDrawer } from '../components/card/CardControlDrawer.jsx';
 import { cardEditIntentForPattern } from '../lib/cardCustomerControlContract.js';
 import { CardStatusControl } from '../components/card/CardStatusControl.jsx';
 import { useFirmwareReleaseIdentity } from '../hooks/useFirmwareReleaseIdentity.js';
-import { ProjectLoadDialog, ProjectSaveDialog } from '../components/projects/TopBarProjectDialogs.jsx';
+import { ProjectSaveDialog } from '../components/projects/TopBarProjectDialogs.jsx';
+import { OPEN_PROJECTS_PANEL_EVENT, ProjectsPanel } from '../components/projects/ProjectsPanel.jsx';
 import { WorkspaceNotice } from '../components/projects/WorkspaceNotice.jsx';
 import { releaseCardBridge } from '../lib/cardBridge.js';
 import { bootstrapCardHostFromLocation, canPushDirectlyToCard, readStoredCardHost } from '../lib/cardConnection.js';
@@ -42,6 +43,14 @@ import {
   setProjectLibrarySaveBlocked,
   writeActiveProjectLibraryRecordId,
 } from '../lib/projectStorage.js';
+import {
+  adoptBrowserRecordAssociation,
+  adoptCloudProjectAssociation,
+  adoptUnassociatedWorkspace,
+  clearAllProjectAssociations,
+  createImportAssociationCleanup,
+  retryAssociationHandoff,
+} from '../lib/projectAssociation.js';
 import { runProjectSwitchSaveBarrier } from '../lib/projectSwitchSaveBarrier.js';
 import { CardActionsProvider } from './CardActionsProvider.jsx';
 import { formatBrowserProjectSaveLabel } from '../lib/studioActionStatus.js';
@@ -335,7 +344,7 @@ function TopBar({ projectName, lifecycleLabel, hasUnsavedChanges, onRenameProjec
     nameSettledRef.current = true;
     setNameDraft(null);
   };
-  const action = ({ label, title, icon, primary = false, tooltipAlign, onClick }) => (
+  const action = ({ label, title, icon, primary = false, tooltipAlign, testId, onClick }) => (
     <button
       type="button"
       className={`${primary ? 'btn primary' : 'link-btn'} top-action`}
@@ -343,6 +352,7 @@ function TopBar({ projectName, lifecycleLabel, hasUnsavedChanges, onRenameProjec
       title={title}
       data-tooltip={label}
       data-tooltip-align={tooltipAlign}
+      data-testid={testId}
       onClick={onClick}
     >
       <span className="top-action-icon" aria-hidden="true">{icon}</span>
@@ -387,7 +397,7 @@ function TopBar({ projectName, lifecycleLabel, hasUnsavedChanges, onRenameProjec
       </nav>
       <div className="top-right">
         {action({ label: 'New project', title: 'Start a new empty project', icon: I.newProject, onClick: onNew })}
-        {action({ label: 'Load project', title: 'Open an online project or import from your computer', icon: I.importProject, onClick: onLoad })}
+        {action({ label: 'Projects', title: 'Your saved projects — this browser, the online library, import and export', icon: I.importProject, testId: 'topbar-projects', onClick: onLoad })}
         {action({ label: 'Preferences', title: 'Open Studio preferences', icon: I.preferences, onClick: onPreferences })}
         <span className="top-div" />
         {action({ label: 'Export project', title: 'Download a portable project file to your computer (import it anytime)', icon: I.exportProject, onClick: onDownload })}
@@ -647,13 +657,27 @@ function Shell({ offlineUpdateController = null }) {
     },
     remoteId: cloudLibrary.activeRemoteProject?.id || '',
   };
-  const [loadDialogOpen, setLoadDialogOpen] = useState(false);
+  const [projectsPanelOpen, setProjectsPanelOpen] = useState(false);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [projectAssociationSaveBlocked, setProjectAssociationSaveBlockedState] = useState(isProjectLibrarySaveBlocked);
   const setProjectAssociationSaveBlocked = useCallback(blocked => {
     setProjectLibrarySaveBlocked(blocked);
     setProjectAssociationSaveBlockedState(blocked === true);
   }, []);
+  const cloudLibraryRef = useRef(cloudLibrary);
+  cloudLibraryRef.current = cloudLibrary;
+  // The io bundle every association transition runs through — see
+  // lib/projectAssociation.js for the transition set and its fail-closed
+  // contract. Stable identity: every handle reads fresh state through refs.
+  const associationIo = useMemo(() => ({
+    writeActiveRecordId: writeActiveProjectLibraryRecordId,
+    readActiveRecordId: readActiveProjectLibraryRecordId,
+    associateRecordGuarded: associateProjectLibraryRecordGuarded,
+    clearRecordAssociationGuarded: clearProjectLibraryAssociationGuarded,
+    detachCloudProject: () => cloudLibraryRef.current.detachProject(),
+    setBrowserAssociationSnapshot: snapshot => { browserAssociationRef.current = snapshot; },
+    setSaveBlocked: blocked => setProjectAssociationSaveBlocked(blocked),
+  }), [setProjectAssociationSaveBlocked]);
   const currentProjectId = latestProjectSaveStateRef.current.project.id;
   useEffect(() => {
     if (browserAssociationRef.current || cloudLibrary.activeRemoteProject?.id) return;
@@ -667,15 +691,21 @@ function Shell({ offlineUpdateController = null }) {
   }, [cloudLibrary.activeRemoteProject?.id, currentProjectId, projectLifecycle.generation]);
   useEffect(() => {
     if (!cloudLibrary.activeRemoteProject?.id) return;
-    browserAssociationRef.current = null;
+    adoptCloudProjectAssociation(associationIo);
+  }, [associationIo, cloudLibrary.activeRemoteProject?.id]);
+  // A library row mutation (rename/duplicate/delete in the Projects panel) may
+  // have changed or removed the record the in-memory association snapshot
+  // describes; refresh it so the next guarded save compares against reality.
+  const refreshBrowserAssociationSnapshot = useCallback(() => {
+    const current = browserAssociationRef.current;
+    if (!current?.recordId) return;
     try {
-      writeActiveProjectLibraryRecordId('');
-      if (readActiveProjectLibraryRecordId() !== '') throw new Error('browser association clear failed');
-      setProjectAssociationSaveBlocked(false);
+      const snapshot = readProjectLibraryRecordSnapshot(current.recordId);
+      browserAssociationRef.current = snapshot.record ? snapshot : null;
     } catch {
-      setProjectAssociationSaveBlocked(true);
+      // Keep the stale snapshot; the guarded save fails closed against it.
     }
-  }, [cloudLibrary.activeRemoteProject?.id, setProjectAssociationSaveBlocked]);
+  }, []);
   const [workspaceEvent, setWorkspaceEvent] = useState(null);
   const [dismissedPersistentKey, setDismissedPersistentKey] = useState('');
   const workspaceEventIdRef = useRef(0);
@@ -1211,7 +1241,7 @@ function Shell({ offlineUpdateController = null }) {
       else if (result.reason === 'queued' || Number(result.error?.status) >= 500) {
         showWorkspaceEvent('Save queued — waiting to retry online.', { kind: 'offline', persistent: true, review: true, source: 'cloud-save-waiting' });
       } else if (result.reason === 'stale-session' || [401, 403].includes(Number(result.error?.status))) {
-        showWorkspaceEvent('Your session changed. Sign in again from Preferences.', { kind: 'error', persistent: true, review: true, source: 'cloud-save-session' });
+        showWorkspaceEvent('Your session changed. Sign in again from Projects.', { kind: 'error', persistent: true, review: true, source: 'cloud-save-session' });
       }
       return;
     }
@@ -1271,7 +1301,23 @@ function Shell({ offlineUpdateController = null }) {
     });
     if (!ok) showWorkspaceEvent('Download failed', { kind: 'error', persistent: true, review: true });
   }, [markProjectPersisted, projectName, serializeProject, showWorkspaceEvent]);
-  const onLoad = useCallback(() => setLoadDialogOpen(true), []);
+  const onLoad = useCallback(() => setProjectsPanelOpen(true), []);
+  // Preferences' "Manage projects" button (and any other surface) opens the
+  // panel through this event, the same pattern as the Connect panel.
+  useEffect(() => {
+    const openPanel = () => setProjectsPanelOpen(true);
+    window.addEventListener(OPEN_PROJECTS_PANEL_EVENT, openPanel);
+    return () => window.removeEventListener(OPEN_PROJECTS_PANEL_EVENT, openPanel);
+  }, []);
+  // Retry for the association save block: re-run the exact handoff the current
+  // workspace needs; success lifts the block (the banner disappears).
+  const retryAssociationSaveBlock = useCallback(async () => {
+    const result = await retryAssociationHandoff({
+      hasActiveCloudProject: Boolean(cloudLibraryRef.current.activeRemoteProject?.id),
+      io: associationIo,
+    });
+    if (result.ok) showWorkspaceEvent('Saving works again. Save the project to keep this work.');
+  }, [associationIo, showWorkspaceEvent]);
   const onMatchedCardProjectLoaded = useCallback(async ({ source, recordId, recordSnapshot, expectedMarker }) => {
     const markerPresent = Number.isSafeInteger(expectedMarker?.generation)
       && Number.isSafeInteger(expectedMarker?.revision);
@@ -1279,64 +1325,28 @@ function Shell({ offlineUpdateController = null }) {
       return { ok: false, reason: 'lifecycle-marker-required' };
     }
     const associationIsCurrent = () => !markerPresent || isProjectLifecycleMarkerCurrent(expectedMarker);
+    // Every destination change runs through lib/projectAssociation.js — the
+    // one audited set of mutual-exclusion transitions (cloud clears the
+    // browser pointer, browser detaches cloud, failures block saving).
     if (source === 'cloud') {
       if (!associationIsCurrent()) return { ok: false, reason: 'superseded' };
-      try {
-        writeActiveProjectLibraryRecordId('');
-        if (readActiveProjectLibraryRecordId() !== '') {
-          throw new Error('browser project association was not cleared');
-        }
-        browserAssociationRef.current = null;
-        setProjectAssociationSaveBlocked(false);
-        return { ok: true };
-      } catch {
-        browserAssociationRef.current = null;
-        setProjectAssociationSaveBlocked(true);
-        return { ok: false, reason: 'association-handoff-failed' };
-      }
+      return adoptCloudProjectAssociation(associationIo);
     }
     if (!['browser', 'production', 'unassociated'].includes(source)) return { ok: true };
-    // Detach cloud first and clear the old browser association before selecting
-    // the new destination. If browser storage fails at either step, manual and
-    // card-switch saves remain blocked so the previous project cannot be overwritten.
-    cloudLibrary.detachProject();
-    try {
-      if (source === 'browser') {
-        if (!recordId || !recordSnapshot || recordSnapshot.recordId !== recordId) {
-          throw new Error('missing browser project record snapshot');
-        }
-        const association = await associateProjectLibraryRecordGuarded(recordSnapshot);
-        if (!associationIsCurrent()) {
-          if (association?.ok) {
-            await clearProjectLibraryAssociationGuarded({
-              recordId,
-              ownershipToken: association.associationOwnershipToken,
-            });
-          }
-          return { ok: false, reason: 'superseded' };
-        }
-        if (!association?.ok) throw new Error(association?.reason || 'browser project association failed');
-        browserAssociationRef.current = association.associationSnapshot;
-        markProjectPersisted('browser', expectedMarker);
-      } else {
-        if (!associationIsCurrent()) return { ok: false, reason: 'superseded' };
-        writeActiveProjectLibraryRecordId('');
-        if (readActiveProjectLibraryRecordId() !== '') {
-          throw new Error('browser project association was not cleared');
-        }
-        browserAssociationRef.current = null;
-      }
-      setProjectAssociationSaveBlocked(false);
-      return { ok: true };
-    } catch {
-      if (!associationIsCurrent()) return { ok: false, reason: 'superseded' };
-      cloudLibrary.detachProject();
-      browserAssociationRef.current = null;
-      if (source === 'browser') markProjectEdited();
-      setProjectAssociationSaveBlocked(true);
-      return { ok: false, reason: 'association-handoff-failed' };
+    if (source === 'browser') {
+      return adoptBrowserRecordAssociation({
+        recordId,
+        recordSnapshot,
+        isMarkerCurrent: associationIsCurrent,
+        io: {
+          ...associationIo,
+          markProjectPersisted: () => markProjectPersisted('browser', expectedMarker),
+          markProjectEdited,
+        },
+      });
     }
-  }, [cloudLibrary, isProjectLifecycleMarkerCurrent, markProjectEdited, markProjectPersisted]);
+    return adoptUnassociatedWorkspace({ isMarkerCurrent: associationIsCurrent, io: associationIo });
+  }, [associationIo, isProjectLifecycleMarkerCurrent, markProjectEdited, markProjectPersisted]);
   const onMatchedCardProjectVerified = useCallback(({ evidence, expectedMarker }) => {
     if (!Number.isSafeInteger(expectedMarker?.generation)
       || !Number.isSafeInteger(expectedMarker?.revision)
@@ -1378,14 +1388,9 @@ function Shell({ offlineUpdateController = null }) {
   const onImport = useCallback(() => fileInputRef.current?.click(), []);
   const onNew = useCallback(async () => {
     const result = await replaceWithNewProject();
-    if (result.ok) {
-      browserAssociationRef.current = null;
-      writeActiveProjectLibraryRecordId('');
-      cloudLibrary.detachProject();
-      setProjectAssociationSaveBlocked(false);
-    }
+    if (result.ok) clearAllProjectAssociations(associationIo);
     return result;
-  }, [cloudLibrary, replaceWithNewProject]);
+  }, [associationIo, replaceWithNewProject]);
   const onStartNewProject = useCallback(async () => {
     const result = await onNew();
     if (result?.ok) navigateStudio('layout');
@@ -1396,20 +1401,16 @@ function Shell({ offlineUpdateController = null }) {
   // handles on the three association stores. Shared with every import surface
   // through the CardActionsProvider (importProjectFile), so Setup, Layout, and
   // Preferences imports run exactly this sequence too.
-  const projectImportCleanup = useMemo(() => ({
-    clearBrowserAssociation: () => {
-      browserAssociationRef.current = null;
-      writeActiveProjectLibraryRecordId('');
-    },
-    detachCloudProject: () => cloudLibrary.detachProject(),
-    clearSaveBlock: () => setProjectAssociationSaveBlocked(false),
-  }), [cloudLibrary, setProjectAssociationSaveBlocked]);
+  const projectImportCleanup = useMemo(
+    () => createImportAssociationCleanup(associationIo),
+    [associationIo],
+  );
   const onFile = useCallback((e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     importProjectFromPickedFile(file, { replaceProject, ...projectImportCleanup })
       .then(result => {
-        if (result.ok) setLoadDialogOpen(false);
+        if (result.ok) setProjectsPanelOpen(false);
         if (result.reason === 'invalid') alert('Invalid project file (version mismatch).');
       })
       .catch(() => { alert('Could not parse project file.'); });
@@ -1552,6 +1553,21 @@ function Shell({ offlineUpdateController = null }) {
         onReview={() => openCardSection('preferences')}
       />
 
+      {projectAssociationSaveBlocked && (
+        <aside
+          className="workspace-notice workspace-notice-error association-save-banner"
+          data-testid="association-save-blocked"
+          role="alert"
+          aria-live="assertive"
+          aria-label="Saving blocked"
+        >
+          <span>Saving is paused — Studio could not establish a safe place to keep this project.</span>
+          <div className="workspace-notice-actions">
+            <button type="button" onClick={() => void retryAssociationSaveBlock()}>Retry</button>
+          </div>
+        </aside>
+      )}
+
       <StatusBar
         link={cardLink}
         lifecycle={cardLifecycle}
@@ -1606,21 +1622,20 @@ function Shell({ offlineUpdateController = null }) {
         onAdvanced={openAdvancedPattern}
         onReconnect={reconnectFromCardControl}
       />
-      {loadDialogOpen && (
-        <ProjectLoadDialog
-          browserProjects={listProjectLibraryRecords()}
-          onClose={() => setLoadDialogOpen(false)}
-          onImport={onImport}
-          onOpenBrowserProject={openBrowserProject}
-          onOpenFailure={result => showWorkspaceEvent(
-            result?.error?.message || (result?.reason === 'stale-session'
-              ? 'Your session changed. Sign in again from Preferences.'
-              : 'The online project could not be opened.'),
-            { kind: 'error', persistent: true, review: true },
-          )}
-          onOpenPreferences={() => openCardSection('preferences')}
-        />
-      )}
+      <ProjectsPanel
+        open={projectsPanelOpen}
+        onClose={() => setProjectsPanelOpen(false)}
+        onImport={onImport}
+        onExport={onDownload}
+        onOpenBrowserProject={openBrowserProject}
+        onOpenFailure={result => showWorkspaceEvent(
+          result?.error?.message || (result?.reason === 'stale-session'
+            ? 'Your session changed. Sign in again from Projects.'
+            : 'The project could not be opened.'),
+          { kind: 'error', persistent: true, review: true },
+        )}
+        onLibraryMutated={refreshBrowserAssociationSnapshot}
+      />
       {saveDialogOpen && (
         <ProjectSaveDialog
           projectName={projectName}
@@ -1630,7 +1645,7 @@ function Shell({ offlineUpdateController = null }) {
           }}
         />
       )}
-      <input ref={fileInputRef} type="file" accept={PROJECT_IMPORT_ACCEPT} style={{ display: 'none' }} onChange={onFile} />
+      <input ref={fileInputRef} data-testid="project-file-input" type="file" accept={PROJECT_IMPORT_ACCEPT} style={{ display: 'none' }} onChange={onFile} />
     </div>
     </CardActionsProvider>
   );
