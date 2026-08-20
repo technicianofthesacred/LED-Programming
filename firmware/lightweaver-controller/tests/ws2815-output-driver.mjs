@@ -57,8 +57,13 @@ assert.doesNotMatch(
 );
 assert.match(
   storage,
-  /loadNvsConfigKeyStrict\(\s*NVS_KNOWN_GOOD_CONFIG_KEY,\s*config,\s*knownGoodValid,\s*message,\s*true\)/,
-  'only the committed known-good slot opts into legacy digest migration',
+  /loadNvsConfigKeyStrict\(\s*NVS_KNOWN_GOOD_CONFIG_KEY,\s*config,\s*knownGoodValid,\s*message,\s*!readOnlyProbation\)/,
+  'only the committed known-good slot opts into legacy digest migration, and only on a boot allowed to write',
+);
+assert.match(
+  storage,
+  /loadNvsConfigKeyStrict\(\s*NVS_LEGACY_CONFIG_KEY,[\s\S]{0,120}?,\s*false\)/,
+  'the pre-migration legacy slot is read as-is; a read-only probation boot must not rewrite storage',
 );
 assert.doesNotMatch(
   storage,
