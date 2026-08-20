@@ -103,7 +103,30 @@
 .la-strip-detail input[type=number]:focus { outline: none; border-color: var(--accent); }
 .la-strip-detail input[type=range].lw { flex: 1; min-width: 0; }
 .la-strip-detail .actions { display: flex; align-items: center; justify-content: space-between; }
-.la-strip-actions-left, .la-strip-actions-right { display: flex; align-items: center; gap: 5px; }
+.la-strip-actions-left, .la-strip-actions-mid, .la-strip-actions-right { display: flex; align-items: center; gap: 5px; }
+
+/* Visibility sits on the strip's own row. Quiet until the row is hovered or
+   the strip is hidden, so a list of strips stays a list of names. */
+.la-strip-row-eye {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; flex-shrink: 0; padding: 0;
+  background: none; border: 0; border-radius: 4px; cursor: pointer;
+  color: var(--text-faint); opacity: 0;
+}
+.la-strip-row:hover .la-strip-row-eye,
+.la-strip-row.sel .la-strip-row-eye,
+.la-strip-row-eye:focus-visible,
+.la-strip-row-eye.is-hidden { opacity: 1; }
+.la-strip-row-eye:hover { color: var(--text-hi); background: var(--bg-elev); }
+.la-strip-row-eye.is-hidden { color: var(--accent); }
+
+/* The one label surface: a strip's own facts at rest, the name of whatever is
+   under the pointer otherwise. Height is pinned to a single line so naming a
+   control never nudges the panel. */
+.la-strip-caption {
+  min-height: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .la-strip-detail .actions .btn {
   width: 34px; min-width: 34px; height: 28px; padding: 0; justify-content: center;
   color: var(--text-mid);
@@ -520,7 +543,10 @@
    physical setup rather than a per-strip field. */
 .la-led-chipset { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .la-led-chipset > .k { color: var(--text-mid); font-size: 11px; flex-shrink: 0; }
-.la-led-chipset .la-strip-density .btn { min-width: 62px; }
+/* The chipset dropdown carries the reel hint in its option text, so it takes
+   the remaining row width instead of the fixed GPIO-select size. */
+.la-led-chipset .la-gpio-wrap { flex: 1 1 auto; min-width: 0; }
+.la-led-chipset .la-chipset-select { width: 100%; min-width: 0; text-overflow: ellipsis; }
 .la-led-chipset-row { padding: 6px 6px 2px; }
 
 /* Draw strip controls form one instrument panel, not a stack of loose black

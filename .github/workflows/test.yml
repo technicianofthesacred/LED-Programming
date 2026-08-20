@@ -46,6 +46,7 @@ jobs:
       cloud: ${{ steps.lanes.outputs.cloud }}
       production: ${{ steps.lanes.outputs.production }}
       firmware: ${{ steps.lanes.outputs.firmware }}
+      firmware_bundle_only: ${{ steps.lanes.outputs.firmware_bundle_only }}
       artifact: ${{ steps.lanes.outputs.artifact }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -219,7 +220,15 @@ jobs:
       # The predecessor is read from the committed manifest, not the live site:
       # the signer commits it in the same job that publishes, so the two always
       # agree, and a PR gate must not depend on the network being up.
+      #
+      # Only when a release will actually be built. build-firmware.yml skips the
+      # signer outright when the firmware lane fired solely because Studio source
+      # is embedded in the card bundle, so demanding a bump on those revisions
+      # asks for a version no signer will ever consume — and #156 paid it,
+      # bumping to 1.1.26 "for the signed release CI requires" on a Studio-only
+      # change. Same condition as the signer, so the two can never disagree.
       - name: Require a firmware version the signer will be able to publish
+        if: needs.classify.outputs.firmware_bundle_only != 'true'
         run: |
           previous="$(node -p 'require("./lightweaver/public/firmware/release-manifest.json").firmwareVersion')"
           current="$(tr -d '\r\n' < firmware/lightweaver-controller/VERSION)"

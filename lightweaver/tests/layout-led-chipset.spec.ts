@@ -22,7 +22,8 @@ test('the layout starter offers both card chipsets and nothing else', async ({ p
   await expect(picker).toBeVisible();
   const chipset = picker.getByTestId('led-chipset-control');
   await expect(chipset).toBeVisible();
-  await expect(chipset.getByRole('button')).toHaveText(['WS2812B', 'WS2815']);
+  await expect(chipset.getByTestId('led-chipset-select').locator('option'))
+    .toHaveText([/^WS2812B — /, /^WS2815 — /]);
   await expect(picker.getByTestId('led-chipset-hint')).toContainText('stages it and asks you to confirm');
 });
 
@@ -30,11 +31,11 @@ test('a chipset picked in the starter persists into the project and reaches the 
   await gotoFreshLayout(page);
 
   const picker = page.getByTestId('layout-primitive-picker');
-  await expect(picker.getByTestId('led-chipset-WS2815')).toHaveAttribute('aria-pressed', 'true');
+  const starterSelect = picker.getByTestId('led-chipset-select');
+  await expect(starterSelect).toHaveValue('WS2815');
 
-  await picker.getByTestId('led-chipset-WS2812B').click();
-  await expect(picker.getByTestId('led-chipset-WS2812B')).toHaveAttribute('aria-pressed', 'true');
-  await expect(picker.getByTestId('led-chipset-WS2815')).toHaveAttribute('aria-pressed', 'false');
+  await starterSelect.selectOption('WS2812B');
+  await expect(starterSelect).toHaveValue('WS2812B');
 
   await picker.getByRole('button', { name: 'Create line' }).click();
 
@@ -42,7 +43,7 @@ test('a chipset picked in the starter persists into the project and reaches the 
   await expect(page.getByTestId('layout-primitive-picker')).toHaveCount(0);
   const projectChipset = page.getByTestId('project-led-chipset');
   await expect(projectChipset).toBeVisible();
-  await expect(projectChipset.getByTestId('led-chipset-WS2812B')).toHaveAttribute('aria-pressed', 'true');
+  await expect(projectChipset.getByTestId('led-chipset-select')).toHaveValue('WS2812B');
 
   await expect.poll(() => savedLedType(page)).toBe('WS2812B');
 });
@@ -52,13 +53,13 @@ test('changing the chipset after the layout exists survives a reload', async ({ 
   await page.getByTestId('layout-primitive-picker').getByRole('button', { name: 'Create line' }).click();
 
   const projectChipset = page.getByTestId('project-led-chipset');
-  await expect(projectChipset.getByTestId('led-chipset-WS2815')).toHaveAttribute('aria-pressed', 'true');
-  await projectChipset.getByTestId('led-chipset-WS2812B').click();
+  await expect(projectChipset.getByTestId('led-chipset-select')).toHaveValue('WS2815');
+  await projectChipset.getByTestId('led-chipset-select').selectOption('WS2812B');
   await expect.poll(() => savedLedType(page)).toBe('WS2812B');
 
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByTestId('project-led-chipset').getByTestId('led-chipset-WS2812B'))
-    .toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('project-led-chipset').getByTestId('led-chipset-select'))
+    .toHaveValue('WS2812B');
 });
 
 test('a project saved with no chipset loads on a supported one instead of failing', async ({ page }) => {
@@ -94,6 +95,6 @@ test('a project saved with no chipset loads on a supported one instead of failin
 
   const projectChipset = page.getByTestId('project-led-chipset');
   await expect(projectChipset).toBeVisible();
-  await expect(projectChipset.getByRole('button', { name: /WS2815/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(projectChipset.getByTestId('led-chipset-select')).toHaveValue('WS2815');
   await expect.poll(() => savedLedType(page)).toBe('WS2815');
 });

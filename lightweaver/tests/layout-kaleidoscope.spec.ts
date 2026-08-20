@@ -20,6 +20,8 @@ async function createTwelveLedLine(page: any) {
 test('Kaleidoscope editor exposes bounded count and per-point inline steppers', async ({ page }) => {
   await createTwelveLedLine(page);
   const actions = page.getByRole('group', { name: 'Strip actions' });
+  // Three families separated by space: the direction trio, Kaleidoscope, then
+  // Split / Duplicate / Remove. Hide moved onto the strip row itself.
   await expect(actions.getByRole('button')).toHaveCount(7);
   await expect(actions.getByRole('button').allTextContents()).resolves.toEqual(['↔', '⇄', '◎', '✦', '', '', '×']);
 
