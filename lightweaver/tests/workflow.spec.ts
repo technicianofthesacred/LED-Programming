@@ -1,19 +1,12 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './studioTest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createDefaultProject } from '../src/lib/projectModel.js';
 import { cardProjectFingerprint } from '../src/lib/cardProjectResolver.js';
 
-// Project export now runs through the ONE download implementation
-// (src/lib/downloadFile.js via src/lib/projectTransfer.js), which prefers the
-// File System Access save picker. Headless Chromium exposes
-// showSaveFilePicker but can never show the dialog, so stub it out — exactly
-// as tests/show-screen.spec.ts does — and the export falls back to the anchor
-// download that `page.waitForEvent('download')` observes.
-test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => { (window as any).showSaveFilePicker = undefined; });
-});
+// The save-picker stub this file used to carry inline now arrives with the
+// shared `test` from ./studioTest, which explains the whole trap in one place.
 
 async function mockLocalCard(page: any, options: any = {}) {
   const cardId = options.cardId || 'lw-workflow-card';

@@ -1,4 +1,5 @@
-import { test, expect, type Route } from '@playwright/test';
+import { type Route } from '@playwright/test';
+import { test, expect } from './studioTest';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 

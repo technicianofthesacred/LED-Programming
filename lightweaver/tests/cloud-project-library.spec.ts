@@ -1,4 +1,5 @@
-import { expect, test, type Browser, type Page, type Route } from '@playwright/test';
+import { type Browser, type Page, type Route } from '@playwright/test';
+import { test, expect, stubSaveFilePicker } from './studioTest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -941,6 +942,9 @@ async function saveWorkspaceFixture(page: Page, suffix = '') {
 async function freshWorkspacePage(browser: Browser, fixture: LibraryFixture, hash = '#screen=pattern-lab') {
   const context = await browser.newContext();
   const page = await context.newPage();
+  // Hand-built pages bypass the shared fixture, so they need the stub applied
+  // directly or any export from this page would never emit a download.
+  await stubSaveFilePicker(page);
   await fixture.install(page);
   await page.goto(`/${hash}`, { waitUntil: 'domcontentloaded' });
   return { context, page };

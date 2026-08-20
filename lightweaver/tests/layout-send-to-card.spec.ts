@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './studioTest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,14 +7,8 @@ import { testPort as port } from './testPort.mjs';
 const TEST_CARD_ID = 'lw-layout-tests';
 const TEST_BUILD_ID = 'a'.repeat(40);
 
-// Project export runs through the ONE download implementation
-// (src/lib/projectTransfer.js), which prefers the File System Access save
-// picker. Headless Chromium can never show that dialog, so stub it out (as
-// tests/show-screen.spec.ts does) so the export falls back to the anchor
-// download that `page.waitForEvent('download')` observes.
-test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => { (window as any).showSaveFilePicker = undefined; });
-});
+// The save-picker stub this file used to carry inline now arrives with the
+// shared `test` from ./studioTest, which explains the whole trap in one place.
 
 // Test & Install finish line: one card installation path. Reuses the
 // `mockLocalCard` route pattern
