@@ -108,7 +108,7 @@ test('exposes card compatibility and clock-linked diagnostics without mutating t
   await expect(tools).toHaveAttribute('data-source-recipe-id', 'section-source');
   await expect(tools).toHaveAttribute('data-source-recipe-snapshot', sourceSnapshot || '');
   await expect(tools).toHaveAttribute('data-draft-recipe-id', 'section-source-simplified');
-  await expect(page.getByTestId('pattern-lab-draft-name')).toHaveText('Section source — Card variant');
+  await expect(page.getByTestId('pattern-lab-draft-name')).toHaveValue('Section source — Card variant');
   await expect.poll(() => page.evaluate(key => localStorage.getItem(key), AUTOSAVE_KEY)).toBe(projectBefore);
   expect(cardMutationRequests).toEqual([]);
 });

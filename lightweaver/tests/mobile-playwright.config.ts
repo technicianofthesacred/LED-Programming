@@ -17,7 +17,7 @@ import { testPort as port, testBaseURL } from './testPort.mjs';
 // Run it: npx playwright test --config tests/mobile-playwright.config.ts
 //
 // Converted and green on this profile: pattern-lab-isolation, -stateful, -handoff,
-// -live-preview. NOT yet converted: pattern-lab-authoring, -worker, -compatibility,
+// -live-preview, -naming. NOT yet converted: pattern-lab-authoring, -worker, -compatibility,
 // and the rest of the suite — they assume the desktop two-pane layout and never open
 // the mobile controls sheet, so their locators sit behind an inert boundary.
 export default defineConfig({
@@ -27,7 +27,7 @@ export default defineConfig({
   // failing for a known reason (desktop-era locators behind the mobile sheet),
   // which makes a deliberate run worthless. ADD A FILE HERE as you convert it —
   // a green run should mean "the converted set genuinely works on a phone".
-  testMatch: /pattern-lab-(isolation|stateful|handoff|live-preview)\.spec\.ts/,
+  testMatch: /pattern-lab-(isolation|stateful|handoff|live-preview|naming)\.spec\.ts/,
   timeout: 60_000,
   expect: { timeout: 15_000 },
   use: {

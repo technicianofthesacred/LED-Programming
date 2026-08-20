@@ -165,7 +165,7 @@ test('offers one accessible Import recipe control and imports through its file c
     buffer: Buffer.from(JSON.stringify(recipe)),
   });
 
-  await expect(page.getByTestId('pattern-lab-draft-name')).toHaveText('Accessible import');
+  await expect(page.getByTestId('pattern-lab-draft-name')).toHaveValue('Accessible import');
   await expect(page.getByTestId('pattern-lab-save-status')).toContainText('Imported Accessible import.');
 });
 
@@ -448,7 +448,7 @@ test('selected recipe owns strips that entered the Lab with inherited pattern ov
 test('exports canonical recipes and rejects invalid imports without mutating the draft', async ({ page }) => {
   await choosePattern(page, 'aurora');
   await page.getByRole('slider', { name: 'Color', exact: true }).fill('64');
-  const nameBefore = await page.getByTestId('pattern-lab-draft-name').textContent();
+  const nameBefore = await page.getByTestId('pattern-lab-draft-name').inputValue();
 
   const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Export recipe' }).click();
@@ -470,7 +470,7 @@ test('exports canonical recipes and rejects invalid imports without mutating the
   await expect(alert).toContainText('Could not import recipe');
   expect(await alert.locator('li').count()).toBeLessThanOrEqual(4);
   await expect(alert).toContainText('$.version');
-  await expect(page.getByTestId('pattern-lab-draft-name')).toHaveText(nameBefore || 'Aurora');
+  await expect(page.getByTestId('pattern-lab-draft-name')).toHaveValue(nameBefore || 'Aurora');
   await expect(page.getByRole('slider', { name: 'Color', exact: true })).toHaveValue('64');
 
   await page.getByLabel('Import recipe').setInputFiles({
@@ -498,7 +498,7 @@ test('exports canonical recipes and rejects invalid imports without mutating the
   });
   await expect(alert.locator('li')).toHaveCount(1);
   await expect(alert).toContainText('$.layers[0]');
-  await expect(page.getByTestId('pattern-lab-draft-name')).toHaveText(nameBefore || 'Aurora');
+  await expect(page.getByTestId('pattern-lab-draft-name')).toHaveValue(nameBefore || 'Aurora');
   await expect(page.getByRole('slider', { name: 'Color', exact: true })).toHaveValue('64');
 
   await page.getByLabel('Import recipe').setInputFiles({
@@ -514,7 +514,7 @@ test('exports canonical recipes and rejects invalid imports without mutating the
   await expect(alert).toContainText('$.layers[0].name');
   await expect(alert).toContainText('$.layers[0].blendMode');
   await expect(alert).toContainText('$.layers[0].opacity');
-  await expect(page.getByTestId('pattern-lab-draft-name')).toHaveText(nameBefore || 'Aurora');
+  await expect(page.getByTestId('pattern-lab-draft-name')).toHaveValue(nameBefore || 'Aurora');
   await expect(page.getByRole('slider', { name: 'Color', exact: true })).toHaveValue('64');
 
   await page.getByLabel('Import recipe').setInputFiles({
