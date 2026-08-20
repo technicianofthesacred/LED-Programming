@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "lightweaver-studio",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "lightweaver", "--", "--port", "9999", "--host"],
+      "port": 9999
+    }
+  ]
+}
