@@ -18,12 +18,14 @@ test('glow has no dark lines — pixel score < 5%', async ({ page }) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-glow-'));
   const fixture = writeGlowFixture(tmp);
 
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  // The SVG file input belongs to Layout, so the import has to start there.
+  // A bare '/' lands on Setup, where the input is not mounted at all.
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.setInputFiles('input[accept=".svg"]', fixture);
   await page.getByRole('button', { name: /\+ All \(1\)/ }).click();
-  await page.locator('.lw-rail-btn', { hasText: 'Pattern' }).click();
+  await page.getByRole('button', { name: 'Patterns', exact: true }).click();
   await page.waitForSelector('canvas', { timeout: 10000 });
   await page.waitForTimeout(3000);
 

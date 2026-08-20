@@ -10,7 +10,7 @@ test('v3 Patterns does not expose the retired inline AI assistant', async ({ pag
   await gotoFresh(page);
 
   await expect(page.locator('.pm')).toBeVisible();
-  await expect(page.getByTestId('card-live-preview-label')).toBeVisible();
+  await expect(page.getByTestId('pattern-project-preview')).toBeVisible();
   await expect(page.locator('.lw-ai-assistant')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /generate/i })).toHaveCount(0);
 });
