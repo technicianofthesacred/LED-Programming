@@ -98,6 +98,23 @@ bool frameSourceIsStreaming() { return false; }
 
 WiringSafetyStatus getRuntimeWiringSafetyStatus() { return WiringSafetyStatus(); }
 
+// The output paths report their own readiness so Studio can tell "the card
+// answered" from "the strip is actually lit". Record it instead of discarding
+// it: a beacon that registers controllers but reports a failure would leave the
+// owner staring at a card Studio calls broken while it is visibly sweeping.
+const char* lastOutputInitFailureCode = nullptr;
+const char* lastOutputInitReadyMessage = nullptr;
+
+void setOutputInitializationFailure(const char* code, const char*) {
+  lastOutputInitFailureCode = code;
+  lastOutputInitReadyMessage = nullptr;
+}
+
+void setOutputInitializationReady(const char* message) {
+  lastOutputInitReadyMessage = message;
+  lastOutputInitFailureCode = nullptr;
+}
+
 #include "extracted-factory-beacon.inc"
 
 namespace {
@@ -145,6 +162,10 @@ int main(int argc, char** argv) {
   assert(setupFactoryBeaconOutputs());
   assert(ledOutputsReady);
   assert(!hostRegistered.empty());
+  assert(lastOutputInitFailureCode == nullptr &&
+         "a beacon that registered its outputs must not report an init failure");
+  assert(lastOutputInitReadyMessage != nullptr &&
+         "the beacon must report its output driver ready, or Studio calls the card broken");
 
   std::set<uint8_t> registeredPins;
   for (const HostController& controller : hostRegistered) {
