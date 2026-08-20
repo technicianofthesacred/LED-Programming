@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import './lw-setup.css';
-import { CONNECTED_CARD_LINK_STATES, deriveSetupJourney } from '../lib/setupJourney.js';
+import { CONNECTED_CARD_LINK_STATES, SETUP_SKIP_STORAGE_KEY, deriveSetupJourney } from '../lib/setupJourney.js';
 import { CARD_COMMISSIONING_CHANGED_EVENT, inspectCardCommissioning } from '../lib/cardCommissioningFlow.js';
 import { readCardProjectEvidence, readCardStatusEnvelope } from '../lib/cardPushClient.js';
 import { cardProjectFingerprint, resolveCardProject, describeResolvedCardProject } from '../lib/cardProjectResolver.js';
@@ -376,6 +376,22 @@ export function SetupScreen({
     project: currentProject,
     resolution: journeyResolution,
   }), [cardLifecycle, cardLink, commissioningFlow, currentProject, installationMatch, resolution.kind]);
+
+  // The app shell reads SETUP_SKIP_STORAGE_KEY before React mounts to decide
+  // whether a bare URL still lands on the Setup front door. The key was read
+  // forever but written nowhere, so the front door never moved. Record
+  // completion the first time the derived journey reports it; the write is
+  // idempotent, so the ref only spares repeated storage calls.
+  const setupSkipWrittenRef = useRef(false);
+  useEffect(() => {
+    if (!journey.setupComplete || setupSkipWrittenRef.current) return;
+    setupSkipWrittenRef.current = true;
+    try {
+      window.localStorage.setItem(SETUP_SKIP_STORAGE_KEY, '1');
+    } catch {
+      // Without storage the bare-URL fallback simply keeps offering Setup.
+    }
+  }, [journey.setupComplete]);
 
   useEffect(() => {
     const previous = previousPhaseRef.current;

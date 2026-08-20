@@ -75,7 +75,8 @@ import { createStudioFreshnessMonitor } from '../lib/studioFreshness.js';
 import { STUDIO_HARDWARE_OPERATION_EVENT } from '../lib/studioHardwareOperation.js';
 import { getRunningStudioRelease } from '../lib/studioRelease.js';
 import { bootstrapStudioCardConnection } from '../lib/studioCardBootstrap.js';
-import { CONNECTED_CARD_LINK_STATES, deriveSetupJourney } from '../lib/setupJourney.js';
+import { CONNECTED_CARD_LINK_STATES, SETUP_SKIP_STORAGE_KEY, deriveSetupJourney } from '../lib/setupJourney.js';
+import { OPEN_CONNECT_PANEL_EVENT } from '../lib/cardFlowEntry.js';
 import { deriveCardLifecycle } from '../lib/cardLifecycle.js';
 import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
 import { currentInstallation, structurallyInstalledRecord } from '../lib/projectLifecycle.js';
@@ -104,9 +105,10 @@ const STUDIO_SCREENS = [
   { id: 'show', label: 'Show', Component: ShowScreen },
 ];
 // Routable, but deliberately not in the rail: strip discovery is where a blank
-// card is SENT, not a place the owner browses to. Its two entrances are the
-// connection center and Test & Install — the exact two moments the question
-// "which strips does this card even have?" comes up.
+// card is SENT, not a place the owner browses to. Its entrances are the
+// connection center, Layout/Wire, the card overview, and the Setup lights
+// phase — the moments the question "which strips does this card even have?"
+// comes up.
 const SCREEN_KEYS = [...STUDIO_SCREENS.map(screen => screen.id), 'discovery'];
 const SCREEN_BY_ID = Object.fromEntries(STUDIO_SCREENS.map(screen => [screen.id, screen.Component]));
 const PROTECTED_COMMISSIONING_STAGES = new Set(['install-safely', 'set-up-card', 'check-lights']);
@@ -257,7 +259,7 @@ class ScreenErrorBoundary extends Component {
 // placeholder circle and no route to their card. Once the owner has said they
 // are done with it, the fallback returns to Layout. Deep links are untouched:
 // only the FALLBACK moves, so #screen=layout still opens Layout for everyone.
-const SETUP_SKIP_KEY = 'lw_setup_skip_v1';
+const SETUP_SKIP_KEY = SETUP_SKIP_STORAGE_KEY;
 function defaultView() {
   try {
     return window.localStorage.getItem(SETUP_SKIP_KEY) === '1' ? 'layout' : 'card';
@@ -968,6 +970,19 @@ function Shell({ offlineUpdateController = null }) {
   }, [cardLifecycle, cardLink, flushProjectAutosave, routeStore, serializeProject]);
   const openConnectionCenter = useCallback(() => setConnectionCenterOpen(true), []);
   const closeConnectionCenter = useCallback(() => setConnectionCenterOpen(false), []);
+  // Screens ask for the Connection Center by dispatching the connect-panel
+  // event (via openCardFlow in lib/cardFlowEntry.js) instead of DOM-clicking
+  // the footer chip's test id. This takes the same path openCardControl takes
+  // for a not-ready card: the control drawer closes so the panel is the one
+  // card surface showing.
+  useEffect(() => {
+    const openPanel = () => {
+      setCardControlOpen(false);
+      setConnectionCenterOpen(true);
+    };
+    window.addEventListener(OPEN_CONNECT_PANEL_EVENT, openPanel);
+    return () => window.removeEventListener(OPEN_CONNECT_PANEL_EVENT, openPanel);
+  }, []);
   const openCardControl = useCallback(() => {
     const status = cardConnectionStatus(cardLink, cardLifecycle);
     if (status === 'Connected') setCardControlOpen(true);

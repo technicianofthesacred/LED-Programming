@@ -6,6 +6,7 @@
 import React, { useCallback, useMemo, useReducer, useRef, useState } from 'react';
 import { I, JourneyHint } from './lw-shared.jsx';
 import { openLocalCardPage } from '../lib/cardBridge.js';
+import { openCardFlow } from '../lib/cardFlowEntry.js';
 import { useProject } from '../state/ProjectContext.jsx';
 import { REAL_PATTERN_BY_ID, adaptPattern, adaptSavedLook } from './v3-data.js';
 import { getCardPatternById } from '../lib/cardPatternBank.js';
@@ -379,7 +380,10 @@ function realPatternShape(patternId) {
     };
 
     const openConnectionCenter = useCallback(() => {
-      document.querySelector('[data-testid="card-link-status"]')?.click();
+      // Reached only from reconnect failure paths, where the card is not
+      // ready — the connect intent opens the Connection Center via the
+      // shell's connect-panel event instead of DOM-clicking the footer chip.
+      openCardFlow('connect');
     }, []);
 
     const fallbackLiveLook = () => {

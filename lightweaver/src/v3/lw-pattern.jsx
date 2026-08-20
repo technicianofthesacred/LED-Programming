@@ -53,6 +53,7 @@ import {
 import { buildCardRuntimePackageFromProject } from '../lib/cardRuntimeProject.js';
 import { classifyCardReadiness, installedProjectIdFromCardStatus } from '../lib/cardReadiness.js';
 import { markCardEditIntentAbandoned } from '../lib/cardEditIntent.js';
+import { openCardFlow } from '../lib/cardFlowEntry.js';
 import { isCardLinkPlaybackReady } from '../lib/cardConnectionFlow.js';
 import { evaluateCardInstallGate, readCardAccessLevel } from '../lib/cardInstallGate.js';
 import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
@@ -1052,7 +1053,10 @@ import { PatternPreview } from './PatternPreview.jsx';
     }, [scheduleLivePreview]);
 
     const openConnectionCenter = useCallback(() => {
-      document.querySelector('[data-testid="card-link-status"]')?.click();
+      // Reached only from reconnect/pairing failure paths, where the card is
+      // not ready — the connect intent opens the Connection Center via the
+      // shell's connect-panel event instead of DOM-clicking the footer chip.
+      openCardFlow('connect');
     }, []);
 
     useEffect(() => () => {

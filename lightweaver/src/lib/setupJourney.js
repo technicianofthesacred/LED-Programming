@@ -4,9 +4,11 @@ import { PORT_ROLE_STRIP } from './portRoles.js';
 // blockers inside connection, never durable numbered work of their own.
 export const SETUP_PHASE_IDS = Object.freeze(['connect', 'lights', 'layout', 'verify']);
 
-// Retained while the Setup screen migrates from its old step vocabulary. New
-// consumers should use SETUP_PHASE_IDS and `journey.phases`.
-export const SETUP_STEP_IDS = SETUP_PHASE_IDS;
+// Once setup has completed, a bare URL should land on Layout instead of the
+// Setup front door. The app shell reads this localStorage key before React
+// mounts (defaultView / bootstrapFirstRunSetupRoute in v3/app.jsx); the Setup
+// screen writes it the first time the derived journey reports completion.
+export const SETUP_SKIP_STORAGE_KEY = 'lw_setup_skip_v1';
 
 export const CONNECTED_CARD_LINK_STATES = Object.freeze(['connected-direct', 'connected-bridge']);
 

@@ -8,6 +8,7 @@ import {
   detectRuntimeMode,
   handBackToOnlineStudio,
   installCardSecureToolHandback,
+  onlineStudioToolUrl,
 } from './runtimeMode.js';
 
 test('runtime mode follows origin capability, never browser name', () => {
@@ -41,7 +42,9 @@ test('card-local secure routes and later navigation hand back in the same tab', 
   assert.equal(cardLocalSecureToolForHash('#screen=flash&mode=install'), 'flash');
   assert.equal(cardLocalSecureToolForHash('#screen=card&section=install'), 'flash');
   assert.equal(cardLocalSecureToolForHash('#screen=show&tool=microphone'), 'microphone');
-  assert.equal(cardLocalSecureToolForHash('#screen=card&section=firmware'), 'provenance');
+  // `section=firmware` was never a real card section; provenance now points
+  // at the install section, so the old dead hash matches nothing.
+  assert.equal(cardLocalSecureToolForHash('#screen=card&section=firmware'), '');
   assert.equal(cardLocalSecureToolForHash('#screen=pattern'), '');
 
   let listener;
@@ -52,10 +55,17 @@ test('card-local secure routes and later navigation hand back in the same tab', 
     removeEventListener() {},
   };
   const stop = installCardSecureToolHandback({ locationRef, eventTarget });
-  locationRef.hash = '#screen=card&section=firmware';
+  locationRef.hash = '#screen=card&section=install';
   listener();
-  assert.equal(assigned, 'https://led.mandalacodes.com/#screen=card&section=firmware');
+  assert.equal(assigned, 'https://led.mandalacodes.com/#screen=flash');
   stop();
+});
+
+test('the provenance tool routes to the card install section, a real card section', () => {
+  assert.equal(
+    onlineStudioToolUrl('provenance'),
+    'https://led.mandalacodes.com/#screen=card&section=install',
+  );
 });
 
 test('the microphone control uses the secure same-tab handback in card-local mode', async () => {
