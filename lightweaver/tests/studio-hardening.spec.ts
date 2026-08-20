@@ -18,6 +18,17 @@ const CURRENT_TEST_OUTPUTS = [{
   segments: [{ id: 'out1-full', count: 44, direction: 'forward' }],
 }];
 
+// The card's own identity, published by both status envelopes. Studio reads
+// the installed-project identity off `/api/status` (see
+// installedProjectIdFromCardStatus) and the readiness contract off the same
+// payload, so a fixture that answers only `{ ok, cardId }` describes a card
+// that can never classify as ready — every install-shaped control stays
+// disabled and every acknowledgement assertion below times out on a button
+// that was never enabled. Keep this envelope canonical: contract version,
+// identity, boot id, the three readiness booleans, and the installed project.
+const HARDENING_FIRMWARE_VERSION = '1.0.0';
+const HARDENING_BUILD_ID = 'studio-hardening-build';
+
 async function mockConnectedCard(page: any, cardId = 'lw-studio-hardening', options: any = {}) {
   let installedConfig: any = {
     ...structuredClone(DEFAULT_RUNTIME),
@@ -26,19 +37,53 @@ async function mockConnectedCard(page: any, cardId = 'lw-studio-hardening', opti
   let candidateConfig: any = null;
   let wiringState = 'known-good';
   const activationId = 'studio-hardening-activation';
+  const bootId = `${cardId}-boot`;
+  // Filled in after the first reload, once the app has created the project
+  // this card is meant to be holding. Read live by both status routes so the
+  // second reload sees a card whose installed project is the open one.
+  const cardProject: { id: string; fingerprint: string } = { id: '', fingerprint: '' };
   await page.route('**/api/firmware-info', route => route.fulfill({
     json: {
       app: 'Lightweaver',
       cardId,
-      firmwareVersion: '1.0.0',
-      buildId: 'studio-hardening-build',
-      projectRevision: installedConfig.projectRevision,
-      projectFingerprint: installedConfig.projectFingerprint,
+      firmwareVersion: HARDENING_FIRMWARE_VERSION,
+      buildId: HARDENING_BUILD_ID,
+      bootId,
+      projectId: cardProject.id,
+      // A card that reports a fingerprint must report a revision integer with
+      // it (normalizeCardProjectEvidence rejects the half-identity), and the
+      // default runtime package carries neither until Studio writes one.
+      projectRevision: installedConfig.projectRevision ?? 0,
+      // Before the first write the card holds the project it was seeded with;
+      // after one it must read back the EXACT identity Studio just sent, which
+      // is what waitForCardDeploymentVerification checks.
+      projectFingerprint: installedConfig.projectFingerprint || cardProject.fingerprint,
       outputs: installedConfig.led.outputs,
     },
   }));
   await page.route('**/api/status', route => route.fulfill({
-    json: { ok: true, cardId, firmwareVersion: '1.0.0', led: { pixels: DEFAULT_RUNTIME.led.pixels } },
+    json: {
+      ok: true,
+      app: 'Lightweaver',
+      provisioningContractVersion: 1,
+      cardId,
+      firmwareVersion: HARDENING_FIRMWARE_VERSION,
+      buildId: HARDENING_BUILD_ID,
+      bootId,
+      runtimePhase: 'ready',
+      knownGoodProject: true,
+      commandReady: true,
+      outputReady: true,
+      playbackReady: true,
+      projectId: cardProject.id,
+      piece: { id: cardProject.id },
+      projectRevision: installedConfig.projectRevision ?? 0,
+      // Before the first write the card holds the project it was seeded with;
+      // after one it must read back the EXACT identity Studio just sent, which
+      // is what waitForCardDeploymentVerification checks.
+      projectFingerprint: installedConfig.projectFingerprint || cardProject.fingerprint,
+      led: { pixels: DEFAULT_RUNTIME.led.pixels },
+    },
   }));
   await page.route('**/api/zones', route => route.fulfill({
     json: { ok: true, zones: DEFAULT_RUNTIME.zones },
@@ -89,10 +134,41 @@ async function mockConnectedCard(page: any, cardId = 'lw-studio-hardening', opti
     const body = JSON.parse(route.request().postData() || '{}');
     await route.fulfill({ json: { ok: true, cardId, patternId: body.patternId, revision: body.revision } });
   });
-  await page.evaluate((id) => {
-    localStorage.setItem('lw_card_identity_v1', JSON.stringify({ version: 1, id }));
-  }, cardId);
+  await page.evaluate(({ id, firmwareVersion, buildId }) => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1, id, firmwareVersion, buildId,
+    }));
+  }, { id: cardId, firmwareVersion: HARDENING_FIRMWARE_VERSION, buildId: HARDENING_BUILD_ID });
   await page.reload({ waitUntil: 'domcontentloaded' });
+  // The project this card holds is the one the app just created, so learn it
+  // from the app rather than inventing an id the open project can never match.
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('lw_autosave_v3'))).not.toBeNull();
+  const installedProject = await page.evaluate(async () => {
+    const { cardProjectFingerprint } = await import('/src/lib/cardProjectResolver.js');
+    const project = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+    return { id: project?.id || '', fingerprint: cardProjectFingerprint(project) };
+  });
+  cardProject.id = installedProject.id;
+  cardProject.fingerprint = installedProject.fingerprint;
+  // Reload so the card now answers as holding that exact project, then issue
+  // the edit authorization the install controls require. The grant lives in
+  // module memory, so it has to be issued after the last reload.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  const authorized = await page.evaluate(async binding => {
+    const { issueCardEditAuthorization } = await import('/src/lib/cardEditAuthorization.js');
+    return issueCardEditAuthorization(binding);
+  }, {
+    cardId,
+    firmwareVersion: HARDENING_FIRMWARE_VERSION,
+    buildId: HARDENING_BUILD_ID,
+    bootId,
+    installedProjectId: installedProject.id,
+    installedProjectFingerprint: installedProject.fingerprint,
+    studioProjectId: installedProject.id,
+    studioProjectFingerprint: installedProject.fingerprint,
+    projectGeneration: 0,
+  });
+  expect(authorized).toBe(true);
 }
 
 async function seedBrowserProjectLibrary(page: any) {
@@ -424,6 +500,10 @@ test('Show reports live only after the first frame acknowledgement', async ({ pa
 });
 
 test('Show delivery failure is visible and leaves playback retryable', async ({ page }) => {
+  // Same paired card as the acknowledgement test above: Show refuses to open a
+  // stream at all without one ("Connect this Lightweaver card before sending
+  // live control"), so without this the delivery-failure path is unreachable.
+  await mockConnectedCard(page, 'lw-show-failure-hardening');
   await page.addInitScript(() => {
     class FailedWebSocket {
       static OPEN = 1; readyState = 0; bufferedAmount = 0; onopen = null; onclose = null; onerror = null;
@@ -739,3 +819,4 @@ test('flash erase requires a final confirmation before starting', async ({ page 
   await page.getByRole('checkbox', { name: /Wipes the chip first/i }).check();
   await expect(page.getByText(/final confirmation/i)).toBeVisible();
 });
+
