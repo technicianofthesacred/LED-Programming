@@ -28,13 +28,24 @@ export async function bootstrapStudioCardConnection({
   }
   if (!authority?.connected) return bridgeState;
 
+  // Restoring a pairing refreshes where the card is and which boot answered.
+  // It must NOT re-learn the card's FIRMWARE identity. A remembered build that
+  // no longer matches the live one is the signal that the owner reflashed this
+  // card (ui-repair B1), and the connection center exists to offer "keep the
+  // new firmware" rather than silently adopt it — which is only possible while
+  // Studio still remembers what it paired with. The previous
+  // `buildId: authority.buildId` read a field a transport authority has never
+  // published (createTransportAuthority exposes host/cardId/bootId, no build),
+  // so every reload persisted an empty build and permanently disarmed that
+  // detection.
   persistIdentity({
     ...expectedCard,
     ...authority.card,
     id: authority.cardId,
     address: authority.host,
     bootId: authority.bootId,
-    buildId: authority.buildId,
+    firmwareVersion: expectedCard.firmwareVersion || authority.card?.firmwareVersion || '',
+    buildId: expectedCard.buildId || authority.card?.buildId || '',
   }, { acknowledgedAt: new Date().toISOString() });
   return authority;
 }

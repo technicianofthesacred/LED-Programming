@@ -11,7 +11,8 @@ test('Studio reload restores its persisted exact card through direct transport',
     host: '192.168.18.70',
     cardId: 'lw-card-a',
     bootId: 'boot-new',
-    buildId: 'b'.repeat(40),
+    // A real transport authority publishes host/cardId/bootId and the observed
+    // card — never a top-level buildId. Keep the fake honest about that.
     card: { id: 'lw-card-a', name: 'Lightweaver' },
   };
   const result = await bootstrapStudioCardConnection({
@@ -72,4 +73,31 @@ test('Studio does not probe an unpaired card on reload', async () => {
     connectTransport: async () => { directCalls += 1; },
   });
   assert.equal(directCalls, 0);
+});
+
+test('Studio reload keeps the firmware build it paired with, so a reflash stays visible', async () => {
+  let persisted = null;
+  await bootstrapStudioCardConnection({
+    bootstrapLink: async () => ({ state: 'disconnected' }),
+    isConnected: () => false,
+    readIdentity: () => ({
+      id: 'lw-card-a', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
+    }),
+    readHost: () => 'lightweaver.local',
+    candidateHosts: () => ['lightweaver.local'],
+    connectTransport: async () => ({
+      connected: true,
+      host: 'lightweaver.local',
+      cardId: 'lw-card-a',
+      bootId: 'boot-new',
+      // The card now answers with a DIFFERENT build: the owner reflashed it.
+      card: { id: 'lw-card-a', firmwareVersion: '1.0.0', buildId: 'b'.repeat(40) },
+    }),
+    persistIdentity: value => { persisted = value; return true; },
+  });
+  // Restoring the pairing must not re-learn the new firmware behind the
+  // owner's back — the remembered build is what makes the change detectable,
+  // and only the explicit "keep the new firmware" action may replace it.
+  assert.equal(persisted.buildId, 'a'.repeat(40));
+  assert.equal(persisted.bootId, 'boot-new');
 });

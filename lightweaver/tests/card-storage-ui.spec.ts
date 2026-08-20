@@ -67,18 +67,76 @@ test('Settings renders an oversized project and reports exact capacity on save',
   expect(requests.filter(url => url.includes('/api/config') || url.includes('/api/firmware-info'))).toHaveLength(0);
 });
 
+// Patterns gates its Install button on a card that classifies as ready and on
+// a current edit authorization (src/lib/cardInstallGate.js). A status envelope
+// of `{ ok, led }` describes no card at all, so the button stays disabled and
+// the capacity guarantee below is unreachable. Publish the canonical readiness
+// contract, then bind the authorization to the project the page actually holds.
+async function pairReadyCard(page, cardId: string) {
+  const firmwareVersion = '1.0.0';
+  const buildId = `${cardId}-build`;
+  const bootId = `${cardId}-boot`;
+  const held: { id: string; fingerprint: string } = { id: '', fingerprint: '' };
+  const envelope = () => ({
+    ok: true,
+    app: 'Lightweaver',
+    provisioningContractVersion: 1,
+    cardId,
+    firmwareVersion,
+    buildId,
+    bootId,
+    runtimePhase: 'ready',
+    knownGoodProject: true,
+    commandReady: true,
+    outputReady: true,
+    playbackReady: true,
+    projectId: held.id,
+    piece: { id: held.id },
+    projectRevision: 0,
+    projectFingerprint: held.fingerprint,
+    led: { pixels: 44 },
+  });
+  await page.route('**/api/status', route => route.fulfill({ json: envelope() }));
+  await page.route('**/api/firmware-info', route => route.fulfill({ json: envelope() }));
+  await page.addInitScript(({ id, version, build }) => {
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1, id, firmwareVersion: version, buildId: build,
+    }));
+  }, { id: cardId, version: firmwareVersion, build: buildId });
+  return async () => {
+    const project = await page.evaluate(async () => {
+      const { cardProjectFingerprint } = await import('/src/lib/cardProjectResolver.js');
+      const saved = JSON.parse(localStorage.getItem('lw_autosave_v3') || 'null');
+      return { id: saved?.id || '', fingerprint: cardProjectFingerprint(saved) };
+    });
+    held.id = project.id;
+    held.fingerprint = project.fingerprint;
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const authorized = await page.evaluate(async binding => {
+      const { issueCardEditAuthorization } = await import('/src/lib/cardEditAuthorization.js');
+      return issueCardEditAuthorization(binding);
+    }, {
+      cardId,
+      firmwareVersion,
+      buildId,
+      bootId,
+      installedProjectId: project.id,
+      installedProjectFingerprint: project.fingerprint,
+      studioProjectId: project.id,
+      studioProjectFingerprint: project.fingerprint,
+      projectGeneration: 0,
+    });
+    expect(authorized).toBe(true);
+  };
+}
+
 test('Patterns Install on card preserves exact capacity feedback', async ({ page }) => {
   const project = makeOversizedProject();
   capacityErrorForProject(project);
-  await page.route('**/api/status', async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ ok: true, led: { pixels: 44 } }),
-    });
-  });
+  const bindCardToOpenProject = await pairReadyCard(page, 'lw-card-storage-ui');
 
   await gotoSavedProject(page, project, 'patterns');
+  await bindCardToOpenProject();
 
   await page.getByRole('button', { name: 'Install on card', exact: true }).click();
   await expect(page.getByText(

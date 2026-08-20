@@ -300,7 +300,7 @@ test('existing Studio routes remain available beside Pattern Lab', async ({ page
   await expect(page.getByTestId('pattern-lab-screen')).toBeVisible();
 
   // Each route is proved mounted by a CSS selector rather than a test id: the
-  // Setup screen has no test id that renders in every card state, so its root
+  // Card workspace has no test id that renders in every card state, so its root
   // class is the only always-present anchor. Keeping one form for all five
   // keeps the loop honest about what it is asserting.
   const routes = [
@@ -308,7 +308,8 @@ test('existing Studio routes remain available beside Pattern Lab', async ({ page
     { label: 'Patterns', mounted: '[data-testid="pattern-project-preview"]' },
     { label: 'Playlist', mounted: '[data-testid="playlist-physical-preview-status"]' },
     { label: 'Show', mounted: '[data-testid="show-stage"]' },
-    { label: 'Setup', mounted: '.card-workspace-screen' },
+    // The Setup rail item became the consolidated Card workspace (PR #156).
+    { label: 'Card', mounted: '.card-workspace-screen' },
   ];
 
   for (const route of routes) {
