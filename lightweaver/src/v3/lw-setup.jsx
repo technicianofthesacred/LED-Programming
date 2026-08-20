@@ -7,7 +7,7 @@ import { cardProjectFingerprint, resolveCardProject, describeResolvedCardProject
 import { isBenchProjectEvidence } from '../lib/benchConfig.js';
 import { projectSkeletonFromCardStatus } from '../lib/discoveryCommit.js';
 import { readCardPatternsFromCard, readCardZonesFromCard } from '../lib/cardLiveControl.js';
-import { cardConnectionStatus } from '../components/card/CardStatusControl.jsx';
+import { deriveCardLifecycle } from '../lib/cardLifecycle.js';
 import { useProject } from '../state/ProjectContext.jsx';
 import { currentInstallation, structurallyInstalledRecord } from '../lib/projectLifecycle.js';
 import { guardedResolutionRun, resolvedMatchKey } from '../lib/cardProjectAdoption.js';
@@ -443,7 +443,9 @@ export function SetupScreen({
   };
 
   const evidence = discoveryEvidence(currentProject);
-  const identityStatus = cardConnectionStatus(cardLink || {}, cardLifecycle);
+  // One status authority: the lifecycle label (derived locally only when a
+  // bare render did not pass the shell's lifecycle down).
+  const identityStatus = (cardLifecycle || deriveCardLifecycle({ link: cardLink || {} })).label;
   const renderActiveTask = phase => {
     if (phase.id === 'connect') {
       const blocker = journey.blockers[0]?.id;

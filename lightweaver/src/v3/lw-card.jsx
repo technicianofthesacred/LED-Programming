@@ -23,6 +23,8 @@ import { normalizeCardHost } from '../lib/cardConnection.js';
 import { BENCH_PROJECT_ID } from '../lib/benchConfig.js';
 import { STRIP_DISCOVERY_LABEL } from '../lib/cardAction.js';
 import { deriveSetupJourney } from '../lib/setupJourney.js';
+import { deriveCardLifecycle } from '../lib/cardLifecycle.js';
+import { cardTaskCopy } from '../lib/cardTaskCopy.js';
 
 // navigateStudio (the `go` prop) takes a bare screen key, not the `screen=…`
 // hash fragment that STRIP_DISCOVERY_ROUTE holds — passing the fragment fell
@@ -119,7 +121,6 @@ function CardOverview({
     || cardHost;
   const ready = cardLink ? isCardLinkConnected(cardLink) : connected;
   const state = cardLink?.state || (ready ? 'connected-direct' : 'disconnected');
-  const reason = cardLink?.reason || '';
   const activity = cardLink?.activity || 'idle';
   const verifiedTransport = Boolean(cardLink?.card?.id && (
     state === 'connected-direct' || state === 'connected-bridge'
@@ -146,127 +147,189 @@ function CardOverview({
     project: currentProject,
     resolution: benchProject ? { provisionalSetup: true } : null,
   });
-  const setupTaskCopy = {
-    'connect-card': 'Connect the exact Lightweaver card.',
-    'pair-card': 'Pair the card Studio found.',
-    'reconnect-card': 'Reconnect the expected Lightweaver card.',
-    'recover-operation': 'Recover the unfinished card operation safely.',
-    'update-firmware': 'Update this card before setup continues.',
-    'configure-wifi': 'Finish connecting this card to Wi-Fi.',
-    'install-project': 'Install the current project on this exact card.',
-    'discover-lights': 'Find and count the connected lights.',
-    'place-lights': 'Place the discovered lights on the artwork.',
-    'verify-direction': 'Verify the physical direction of each strip.',
-    'test-and-save': 'Test and save the project to the card.',
-    'confirm-visible-lights': 'Confirm what the installed lights show.',
-    'load-matching-project': 'Load the saved project that matches this card.',
-    'open-patterns': 'Setup is complete. Continue to your patterns.',
-  }[setupJourney.taskId] || 'Continue the exact next Setup task.';
+  const setupTaskCopy = cardTaskCopy(setupJourney.taskId);
 
-  let presentation;
-  if (activity === 'failed') {
-    presentation = {
+  // Detected-state presentation, keyed off the ONE diagnosis authority
+  // (deriveCardLifecycle) instead of a private raw-link ladder. Each row
+  // reproduces the copy the old ladder showed for the links that produce that
+  // lifecycle state; the only extra inputs are the bench/blank/identity
+  // evidence this component already probes. The shell passes its lifecycle
+  // (computed with the open project and firmware-update evidence); a bare
+  // render derives the same diagnosis from the link alone — the rows below
+  // treat `ready` and `project-mismatch` identically, so the missing project
+  // input cannot change what renders.
+  const lifecycle = cardLifecycle || deriveCardLifecycle({ link: cardLink || {} });
+  // Legacy shape: a caller with no cardLink object at all only says
+  // `connected` — honor it as the ready presentation, as the old ladder did.
+  const lifecycleState = !cardLink && connected ? 'ready' : lifecycle.state;
+  const lifecycleReason = cardLink ? lifecycle.reason : '';
+
+  const openSupport = { label: 'Open support', section: 'support' };
+  const presentations = {
+    operationFailed: () => ({
       tone: 'failure',
       message: 'The last card operation failed. Reconnect and inspect the card before retrying it.',
       primary: { label: 'Reconnect card', action: 'connect' },
-      secondary: { label: 'Open support', section: 'support' },
-    };
-  } else if (state === 'revalidating' && reason === 'card-restarted') {
-    presentation = {
+      secondary: openSupport,
+    }),
+    cardRestarted: () => ({
       tone: 'connecting',
       message: 'Card restarted — verifying the exact card, firmware, and project before commands resume.',
       primary: { label: 'Card restarted — verifying', disabled: true },
-      secondary: { label: 'Open support', section: 'support' },
-    };
-  } else if (state === 'revalidating') {
-    presentation = {
+      secondary: openSupport,
+    }),
+    checkingStability: () => ({
       tone: 'connecting',
       message: 'Checking card. Studio is waiting for two stable exact status checks before commands resume.',
       primary: { label: 'Checking card', disabled: true },
-      secondary: { label: 'Open support', section: 'support' },
-    };
-  } else if (state === 'reconnecting-bridge' || state === 'reconnecting') {
-    presentation = {
+      secondary: openSupport,
+    }),
+    stoppedResponding: () => ({
       tone: 'connecting',
       message: 'Card stopped responding. Studio is reconnecting and will require fresh status before commands resume.',
       primary: { label: 'Card stopped responding', disabled: true },
-      secondary: { label: 'Open support', section: 'support' },
-    };
-  } else if (activity === 'recovering') {
-    presentation = {
+      secondary: openSupport,
+    }),
+    recoveringOperation: () => ({
       tone: 'connecting',
       message: 'Studio is recovering the last card operation. Keep this page open until the result is confirmed.',
       primary: { label: 'Recovery in progress…', disabled: true },
-      secondary: { label: 'Open support', section: 'support' },
-    };
-  } else if (state === 'connecting' || activity === 'pending') {
-    presentation = {
+      secondary: openSupport,
+    }),
+    pendingOperation: () => ({
       tone: 'connecting',
-      message: activity === 'pending'
-        ? 'A card operation is in progress. Keep this page open until Studio confirms the result.'
-        : 'Studio is looking for the card. Keep the card page open while its identity is verified.',
-      primary: { label: activity === 'pending' ? 'Card operation in progress…' : 'Connecting…', disabled: true },
-      secondary: { label: 'Open support', section: 'support' },
-    };
-  } else if (blankCard) {
-    presentation = {
+      message: 'A card operation is in progress. Keep this page open until Studio confirms the result.',
+      primary: { label: 'Card operation in progress…', disabled: true },
+      secondary: openSupport,
+    }),
+    connecting: () => ({
+      tone: 'connecting',
+      message: 'Studio is looking for the card. Keep the card page open while its identity is verified.',
+      primary: { label: 'Connecting…', disabled: true },
+      secondary: openSupport,
+    }),
+    blank: () => ({
       tone: 'failure',
       message: 'Blank — load a project, or find this card’s strips first.',
       primary: { label: STRIP_DISCOVERY_LABEL, action: 'discovery' },
       secondary: { label: 'Install current project', section: 'settings', disabled: !currentProjectInstallable },
       tertiary: { label: 'Start a new project', action: 'new-project' },
-    };
-  } else if (ready && benchProject) {
-    presentation = {
+    }),
+    bench: () => ({
       tone: 'connecting',
       message: `${identity || 'A Lightweaver card'} is connected, but it is running the temporary Find-my-strips setup — not one of your projects. Install your project to replace it, run Find my strips again, or use Clear temporary setup under Checks & recovery below.`,
       primary: { label: 'Install on card', section: 'settings' },
       secondary: { label: STRIP_DISCOVERY_LABEL, action: 'discovery' },
-    };
-  } else if (ready) {
-    presentation = {
+    }),
+    readyForLightCheck: () => ({
       tone: 'connected',
       message: `${identity || 'A Lightweaver card'} is connected and ready for light check.`,
       primary: { label: 'Install on card', section: 'settings' },
-    };
-  } else if (verifiedTransport) {
-    presentation = {
+    }),
+    checkingEvidence: () => ({
       tone: 'connecting',
       message: 'Checking card. Studio is waiting for complete identity, project, and command readiness evidence.',
       primary: { label: 'Checking card', disabled: true },
-      secondary: { label: 'Open support', section: 'support' },
-    };
-  } else if (reason === 'found-unpaired') {
-    const foundProjectId = cardLink?.discoveredCard?.projectId || '';
-    presentation = {
-      tone: 'disconnected',
-      message: foundProjectId === BENCH_PROJECT_ID
-        ? 'Lightweaver found — it is holding an unfinished Find my strips setup, not one of your projects. Tap Connect to pair, then finish setup or install your project.'
-        : foundProjectId
-          ? `Lightweaver found running “${foundProjectId}” — tap Connect to pair.`
-          : 'Lightweaver found — tap Connect to pair.',
-      primary: { label: 'Connect card', action: 'connect' },
-      secondary: { label: 'Open support', section: 'support' },
-    };
-  } else if (reason && reason !== 'never-connected') {
-    const updateNeeded = reason === 'firmware-too-old' || reason === 'identity-missing';
-    presentation = {
+      secondary: openSupport,
+    }),
+    foundUnpaired: () => {
+      const foundProjectId = cardLink?.discoveredCard?.projectId || '';
+      return {
+        tone: 'disconnected',
+        message: foundProjectId === BENCH_PROJECT_ID
+          ? 'Lightweaver found — it is holding an unfinished Find my strips setup, not one of your projects. Tap Connect to pair, then finish setup or install your project.'
+          : foundProjectId
+            ? `Lightweaver found running “${foundProjectId}” — tap Connect to pair.`
+            : 'Lightweaver found — tap Connect to pair.',
+        primary: { label: 'Connect card', action: 'connect' },
+        secondary: openSupport,
+      };
+    },
+    updateNeeded: failureReason => ({
       tone: 'failure',
-      message: updateNeeded
-        ? `${cardLinkReasonText(reason)} Update it before loading changes.`
-        : `${cardLinkReasonText(reason)} Reconnect and inspect the card before loading changes.`,
-      primary: updateNeeded
-        ? { label: 'Update card', section: 'install' }
-        : { label: reason === 'wrong-card' ? 'Connect expected card' : 'Reconnect card', action: 'connect' },
-      secondary: { label: 'Open support', section: 'support' },
-    };
-  } else {
-    presentation = {
+      message: `${cardLinkReasonText(failureReason)} Update it before loading changes.`,
+      primary: { label: 'Update card', section: 'install' },
+      secondary: openSupport,
+    }),
+    reasonFailure: failureReason => ({
+      tone: 'failure',
+      message: `${cardLinkReasonText(failureReason)} Reconnect and inspect the card before loading changes.`,
+      primary: { label: failureReason === 'wrong-card' ? 'Connect expected card' : 'Reconnect card', action: 'connect' },
+      secondary: openSupport,
+    }),
+    notConnected: () => ({
       tone: 'disconnected',
       message: 'A Lightweaver card is not connected. Connect one to inspect it before installing or loading a project.',
       primary: { label: 'Connect card', action: 'connect' },
       secondary: { label: 'Install Lightweaver', section: 'install' },
-    };
+    }),
+  };
+
+  let presentation;
+  switch (lifecycleState) {
+    case 'verifying':
+      presentation = lifecycleReason === 'card-restarted'
+        ? presentations.cardRestarted()
+        : presentations.checkingStability();
+      break;
+    case 'reconnecting':
+      presentation = presentations.stoppedResponding();
+      break;
+    case 'recovering':
+      presentation = presentations.recoveringOperation();
+      break;
+    case 'connecting':
+      presentation = activity === 'pending'
+        ? presentations.pendingOperation()
+        : presentations.connecting();
+      break;
+    case 'updating':
+    case 'update-recovering':
+      // A firmware update in flight is an operation in progress on this
+      // surface (the old ladder read the link's pending activity here).
+      presentation = presentations.pendingOperation();
+      break;
+    case 'update-rolled-back':
+    case 'target-mismatch':
+    case 'project-changed':
+      // A blocked or rolled-back update is a failed operation to recover
+      // from; the guided detail lives in Setup and the install section.
+      presentation = presentations.operationFailed();
+      break;
+    case 'setup-required':
+      presentation = presentations.blank();
+      break;
+    case 'confirming':
+      presentation = presentations.checkingEvidence();
+      break;
+    case 'ready':
+    case 'project-mismatch':
+      // Both are a command-ready card; which project it holds is the Setup
+      // ladder's question, not this surface's — exactly as before.
+      presentation = benchProject ? presentations.bench() : presentations.readyForLightCheck();
+      break;
+    case 'found-unpaired':
+      presentation = presentations.foundUnpaired();
+      break;
+    case 'wrong-card':
+      presentation = presentations.reasonFailure('wrong-card');
+      break;
+    case 'update-required':
+      presentation = presentations.updateNeeded(lifecycleReason || 'firmware-too-old');
+      break;
+    case 'attention-required':
+      if (activity === 'failed') presentation = presentations.operationFailed();
+      else if (ready) presentation = benchProject ? presentations.bench() : presentations.readyForLightCheck();
+      else if (verifiedTransport) presentation = presentations.checkingEvidence();
+      else if (lifecycleReason && lifecycleReason !== 'never-connected') presentation = presentations.reasonFailure(lifecycleReason);
+      else presentation = presentations.notConnected();
+      break;
+    case 'disconnected':
+    default:
+      presentation = lifecycleReason && lifecycleReason !== 'never-connected'
+        ? presentations.reasonFailure(lifecycleReason)
+        : presentations.notConnected();
+      break;
   }
 
   // Connect actions must be visible: prefer the connection center when the

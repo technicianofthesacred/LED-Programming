@@ -15,7 +15,7 @@ import {
   readStoredCardHost,
   writeStoredCardHost,
 } from '../../lib/cardConnection.js';
-import { nextCardConnectionAction } from '../../lib/cardConnectionFlow.js';
+import { deriveCardAction } from '../../lib/cardActionAuthority.js';
 import { cardBuildLabel, readPersistedCardIdentity, setupNetworkLabelForCardId } from '../../lib/cardIdentity.js';
 import { adoptDiscoveredDirectCard, connectCardLink } from '../../lib/cardLink.js';
 import { connectCardTransport, getActiveCardTransportAuthority } from '../../lib/cardTransport.js';
@@ -53,27 +53,6 @@ function goToStripDiscovery() {
 
 const SETUP_HOST = '192.168.4.1';
 const NEUTRAL_FIRST_RUN_REASONS = new Set(['never-connected', 'card-unreachable']);
-const LIFECYCLE_OWNED_ACTIONS = new Set([
-  'recovering',
-  'updating',
-  'update-recovering',
-  'update-rolled-back',
-  'target-mismatch',
-  'project-changed',
-  'project-mismatch',
-  'attention-required',
-]);
-
-function lifecycleConnectionAction(lifecycle, flowAction) {
-  if (!lifecycle || lifecycle.state === 'ready') return flowAction;
-  if (lifecycle.state === 'wrong-card' && flowAction.id === 'wrong-card') return flowAction;
-  if (!LIFECYCLE_OWNED_ACTIONS.has(lifecycle.state) && flowAction.id !== 'ready-local-card') return flowAction;
-  return {
-    id: 'lifecycle-attention',
-    title: lifecycle.label,
-    explanation: 'Studio is using the exact card, firmware-update, and installed-project evidence shown in Setup. Finish that recovery step before card controls are available.',
-  };
-}
 
 export function CardConnectionCenter({
   open,
@@ -123,19 +102,20 @@ export function CardConnectionCenter({
     setupNetwork: hasSetupHost ? { available: true } : setupEvidence.setupNetwork,
     setupMode: setupEvidence.mode,
   };
-  const actionLink = intent === 'blank-card' && link.reason !== 'wrong-card'
-    ? { state: 'disconnected', reason: link.reason }
-    : link;
-  const flowIntent = intent || (hasKnownCard ? 'working-card' : '');
-  const flowAction = nextCardConnectionAction({
-    link: actionLink,
-    intent: flowIntent,
+  // The one action verdict: lifecycle diagnosis + transport routing +
+  // lifecycle-owned collapse all live in cardActionAuthority now.
+  const verdict = deriveCardAction({
+    lifecycle,
+    link,
     capabilities,
-    rememberedCard,
-    discoveredCard: link.discoveredCard,
-    ...flowEvidence,
+    intent,
+    evidence: {
+      rememberedCard,
+      discoveredCard: link.discoveredCard,
+      ...flowEvidence,
+    },
   });
-  const action = lifecycleConnectionAction(lifecycle, flowAction);
+  const action = { ...verdict, id: verdict.actionId };
   const showFirmwareUpdate = action.id === 'ready-local-card'
     && firmwareStatus?.state === 'update-available';
   const incompatibleFirmware = directAttempt?.reason === 'firmware-incompatible'
@@ -288,12 +268,14 @@ export function CardConnectionCenter({
 
   const chooseWorkingCard = () => {
     setIntent('working-card');
-    const next = nextCardConnectionAction({
+    // Raw flow probe (lifecycle deliberately absent): the question here is
+    // only whether the setup network owns the next step, not the diagnosis.
+    const next = deriveCardAction({
+      lifecycle: null,
       link,
-      intent: 'working-card',
       capabilities,
-      rememberedCard,
-      ...flowEvidence,
+      intent: 'working-card',
+      evidence: { rememberedCard, ...flowEvidence },
     });
     if (next.route !== 'setup-network') connect();
   };

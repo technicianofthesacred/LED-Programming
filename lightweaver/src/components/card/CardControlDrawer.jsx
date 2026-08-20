@@ -6,7 +6,7 @@ import {
   createCardCustomerControls,
   normalizeCardCustomerControls,
 } from '../../lib/cardCustomerControls.js';
-import { cardConnectionStatus } from './CardStatusControl.jsx';
+import { deriveCardLifecycle } from '../../lib/cardLifecycle.js';
 
 function percent(value) {
   return Math.round(Number(value || 0) * 100);
@@ -67,7 +67,9 @@ export function CardControlDrawer({ open, link, lifecycle = null, host, onClose,
 
   if (!open) return null;
   const view = controls?.view;
-  const connectionStatus = cardConnectionStatus(link, lifecycle);
+  // The lifecycle is the one status authority; the app shell always passes
+  // it, and a bare render derives the same diagnosis from the link.
+  const connectionStatus = (lifecycle || deriveCardLifecycle({ link: link || {} })).label;
   const connected = connectionStatus === 'Connected';
   const safeControlsReady = lifecycle?.safeControlAccess === 'ready';
   const mutationDisabled = !safeControlsReady || Boolean(controls?.pending);

@@ -8,7 +8,7 @@ import { useCardStatus } from '../hooks/useCardStatus.js';
 import { CardConnectionCenter } from '../components/card/CardConnectionCenter.jsx';
 import { CardControlDrawer } from '../components/card/CardControlDrawer.jsx';
 import { cardEditIntentForPattern } from '../lib/cardCustomerControlContract.js';
-import { CardStatusControl, cardConnectionStatus } from '../components/card/CardStatusControl.jsx';
+import { CardStatusControl } from '../components/card/CardStatusControl.jsx';
 import { useFirmwareReleaseIdentity } from '../hooks/useFirmwareReleaseIdentity.js';
 import { ProjectLoadDialog, ProjectSaveDialog } from '../components/projects/TopBarProjectDialogs.jsx';
 import { WorkspaceNotice } from '../components/projects/WorkspaceNotice.jsx';
@@ -80,6 +80,7 @@ import { bootstrapStudioCardConnection } from '../lib/studioCardBootstrap.js';
 import { CONNECTED_CARD_LINK_STATES, SETUP_SKIP_STORAGE_KEY, deriveSetupJourney } from '../lib/setupJourney.js';
 import { OPEN_CONNECT_PANEL_EVENT } from '../lib/cardFlowEntry.js';
 import { deriveCardLifecycle } from '../lib/cardLifecycle.js';
+import { cardSurfaceForLifecycle } from '../lib/cardActionAuthority.js';
 import { cardProjectFingerprint } from '../lib/cardProjectResolver.js';
 import { currentInstallation, structurallyInstalledRecord } from '../lib/projectLifecycle.js';
 import {
@@ -444,7 +445,7 @@ function StatusBar({ link, lifecycle, connectionCenterOpen, cardControlOpen, onO
           lifecycle={lifecycle}
           onOpen={onOpenCardControl}
           open={connectionCenterOpen || cardControlOpen}
-          dialogId={cardConnectionStatus(link, lifecycle) === 'Connected' ? 'card-control-drawer' : 'card-connection-center'}
+          dialogId={cardSurfaceForLifecycle(lifecycle) === 'card-control' ? 'card-control-drawer' : 'card-connection-center'}
         />
       </div>
 
@@ -986,9 +987,13 @@ function Shell({ offlineUpdateController = null }) {
     return () => window.removeEventListener(OPEN_CONNECT_PANEL_EVENT, openPanel);
   }, []);
   const openCardControl = useCallback(() => {
-    const status = cardConnectionStatus(cardLink, cardLifecycle);
-    if (status === 'Connected') setCardControlOpen(true);
-    else if (status === 'Needs attention' || status === 'Needs project') {
+    // The action authority's surface routing: ready → direct card controls,
+    // "Needs attention"/"Needs project" diagnoses → guided Setup, everything
+    // else (including a confirming card still being checked) → Connection
+    // Center.
+    const surface = cardSurfaceForLifecycle(cardLifecycle);
+    if (surface === 'card-control') setCardControlOpen(true);
+    else if (surface === 'setup') {
       setCardControlOpen(false);
       setConnectionCenterOpen(false);
       openSetupTask();
@@ -996,7 +1001,7 @@ function Shell({ offlineUpdateController = null }) {
       setCardControlOpen(false);
       setConnectionCenterOpen(true);
     }
-  }, [cardLifecycle, cardLink, openSetupTask]);
+  }, [cardLifecycle, openSetupTask]);
   const closeCardControl = useCallback(() => setCardControlOpen(false), []);
   const reconnectFromCardControl = useCallback(() => {
     setCardControlOpen(false);
