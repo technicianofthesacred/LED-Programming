@@ -1358,6 +1358,62 @@ test('Hardware offers an exact current project without intent and auto-opens onl
   await expect(page).toHaveURL(/#screen=pattern$/, { timeout: 25_000 });
 });
 
+test('a saved match on a connected card offers exactly one Load — the Setup banner wins', async ({ page }) => {
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.evaluate(async () => {
+    const { createDefaultProject } = await import('/src/lib/projectModel.js');
+    const { saveCurrentProjectToLibrary, writeActiveProjectLibraryRecordId } = await import('/src/lib/projectStorage.js');
+    const saved = createDefaultProject();
+    saved.id = 'gallery-saved-piece';
+    saved.name = 'Gallery saved piece';
+    saved.layout.starterPending = false;
+    saveCurrentProjectToLibrary(saved);
+    writeActiveProjectLibraryRecordId('');
+    const current = createDefaultProject();
+    current.id = 'open-work-in-progress';
+    current.name = 'Open work in progress';
+    current.layout.starterPending = false;
+    localStorage.setItem('lw_autosave_v3', JSON.stringify(current));
+    localStorage.setItem('lw_autosave_v3_backup', JSON.stringify(current));
+    localStorage.setItem('lw_card_identity_v1', JSON.stringify({
+      version: 1, id: 'lw-saved-match-card', firmwareVersion: '1.0.0', buildId: 'a'.repeat(40),
+    }));
+  });
+  const fingerprint = await page.evaluate(async () => {
+    const resolver = await import('/src/lib/cardProjectResolver.js');
+    const { listProjectLibraryRecords } = await import('/src/lib/projectStorage.js');
+    const record = listProjectLibraryRecords().find(entry => entry.project?.id === 'gallery-saved-piece');
+    return resolver.cardProjectFingerprint(record.project);
+  });
+  const cardStatus = readyStatus('lw-saved-match-card', {
+    projectId: 'gallery-saved-piece',
+    projectRevision: 3,
+    projectFingerprint: fingerprint,
+  });
+  await page.route('http://lightweaver.local/api/status', route => route.fulfill({ json: cardStatus }));
+  await page.route('http://lightweaver.local/api/firmware-info', route => route.fulfill({ json: {
+    ...cardStatus,
+    piece: { id: 'gallery-saved-piece', name: 'Gallery saved piece' },
+  } }));
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => { window.location.hash = '#screen=card&section=overview'; });
+  await dispatchCardLink(page, [{
+    type: 'direct-status', connected: true, host: 'lightweaver.local',
+    card: { id: cardStatus.cardId, firmwareVersion: cardStatus.firmwareVersion, buildId: cardStatus.buildId },
+    expectedCard: { id: cardStatus.cardId, firmwareVersion: cardStatus.firmwareVersion, buildId: cardStatus.buildId },
+    readiness: cardStatus,
+  }]);
+
+  const banner = page.getByTestId('setup-load-matched');
+  await expect(banner).toBeVisible({ timeout: 15_000 });
+  await expect(banner).toContainText(/^Load /);
+  // One project, one Load button: while the Setup journey's saved-match banner
+  // offers the Load, the Matching-card-project panel stands down instead of
+  // offering a second copy of the same guarded adoption.
+  await expect(page.getByRole('region', { name: 'Matching card project' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Load / })).toHaveCount(1);
+});
+
 test('Card section navigation becomes one compact switcher on a 390px viewport', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/#screen=card&section=overview', { waitUntil: 'domcontentloaded' });

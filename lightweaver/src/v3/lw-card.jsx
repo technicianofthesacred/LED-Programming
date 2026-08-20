@@ -99,6 +99,7 @@ function CardHomePanels({
   onMatchedProjectLoaded,
   onMatchedProjectVerified,
   onStartNewProject,
+  suppressMatchingProject = false,
 }) {
   const [matchingProjectState, setMatchingProjectState] = useState({ status: 'idle', message: '' });
   const [hardwareActionState, setHardwareActionState] = useState({ status: 'idle', message: '' });
@@ -525,7 +526,12 @@ function CardHomePanels({
         </div>
       )}
 
-      {ready && (
+      {/* One project, one Load button: when the Setup journey's saved-match
+          banner above is already offering the Load for this card's project,
+          this panel stands down instead of offering a second copy of the same
+          adoption (both run the identical guarded machine). The probe effect
+          keeps running either way, so edit-intent auto-open is unaffected. */}
+      {ready && !suppressMatchingProject && (
         <section className="card-support-panel" aria-label="Matching card project">
           <h2>Matching card project</h2>
           <p>Open the exact active Studio project installed on this card before changing patterns, so its LED count, wiring, protocol, and power limit stay aligned.</p>
@@ -655,6 +661,10 @@ function CardSupport({ initialTool, cardProps, onOpenConnectionCenter, onOpenSec
 export function CardScreen({ connected, cardHost, cardLink, cardLifecycle, onConnectCard, onOpenConnectionCenter, onOpenSection, onOpenSetupTask, onFirmwareRecoveryState, go, replaceProject, currentProject, projectGeneration, activeCloudProjects, browserProjects, readBrowserProjects, readCloudProject, openMatchingCardProject, confirmProjectReplacement, saveBeforeCardProjectSwitch, saveProjectToBrowserGuarded, isProjectSwitchSnapshotCurrent, onMatchedProjectLoaded, onMatchedProjectVerified, onStartNewProject, onSaveProject, route = { section: DEFAULT_CARD_SECTION, supportTool: '' } }) {
   const headingRef = useRef(null);
   const mountedRef = useRef(false);
+  // Whether the Setup journey's saved-match banner is currently offering a
+  // Load for this card's project — the Matching-card-project panel below
+  // suppresses its duplicate offer while it is (one project, one Load).
+  const [setupLoadOffer, setSetupLoadOffer] = useState(false);
 
   useEffect(() => {
     // Focus the section heading after in-app section navigation (required
@@ -689,9 +699,11 @@ export function CardScreen({ connected, cardHost, cardLink, cardLifecycle, onCon
         browserProjects={browserProjects}
         replaceProject={replaceProject}
         onSaveProject={onSaveProject}
+        onLoadOfferChange={setSetupLoadOffer}
       />
       <CardHomePanels
         {...cardProps}
+        suppressMatchingProject={setupLoadOffer}
         onOpenConnectionCenter={onOpenConnectionCenter}
         onOpenSection={onOpenSection}
         go={go}

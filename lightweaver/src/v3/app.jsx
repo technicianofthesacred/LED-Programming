@@ -973,6 +973,16 @@ function Shell({ offlineUpdateController = null }) {
   }, [cardLifecycle, cardLink, flushProjectAutosave, routeStore, serializeProject]);
   const openConnectionCenter = useCallback(() => setConnectionCenterOpen(true), []);
   const closeConnectionCenter = useCallback(() => setConnectionCenterOpen(false), []);
+  // Intent-completion close (phase 5). "Established" for this purpose is a
+  // verified command-ready link OR a lifecycle already past the connection
+  // question (ready, or confirming — a verified transport whose remaining
+  // evidence is not the Connect panel's job).
+  const cardLinkEstablished = connected
+    || cardLifecycle?.state === 'ready'
+    || cardLifecycle?.state === 'confirming';
+  const cardLinkEstablishedRef = useRef(cardLinkEstablished);
+  cardLinkEstablishedRef.current = cardLinkEstablished;
+  const connectCloseArmedRef = useRef(false);
   // Screens ask for the Connection Center by dispatching the connect-panel
   // event (via openCardFlow in lib/cardFlowEntry.js) instead of DOM-clicking
   // the footer chip's test id. This takes the same path openCardControl takes
@@ -982,10 +992,29 @@ function Shell({ offlineUpdateController = null }) {
     const openPanel = () => {
       setCardControlOpen(false);
       setConnectionCenterOpen(true);
+      // A panel opened FOR connecting (the event always carries a connect
+      // intent) closes itself when the link becomes established while open,
+      // so the owner lands back where they asked from instead of on a "Done"
+      // resting state. Opened while already established, it stays a normal
+      // inspectable panel — nothing to complete, nothing to auto-close.
+      connectCloseArmedRef.current = !cardLinkEstablishedRef.current;
     };
     window.addEventListener(OPEN_CONNECT_PANEL_EVENT, openPanel);
     return () => window.removeEventListener(OPEN_CONNECT_PANEL_EVENT, openPanel);
   }, []);
+  useEffect(() => {
+    if (!connectionCenterOpen) {
+      connectCloseArmedRef.current = false;
+      return;
+    }
+    // Only a transition observed while open completes the intent. A pair or
+    // take-over mid-flight has not established the link yet, so nothing
+    // closes under it; the close fires when its verification lands.
+    if (connectCloseArmedRef.current && cardLinkEstablished) {
+      connectCloseArmedRef.current = false;
+      setConnectionCenterOpen(false);
+    }
+  }, [connectionCenterOpen, cardLinkEstablished]);
   const openCardControl = useCallback(() => {
     // The action authority's surface routing: ready → direct card controls,
     // "Needs attention"/"Needs project" diagnoses → guided Setup, everything

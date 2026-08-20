@@ -198,7 +198,60 @@ test('renders verified card behavior through the new orchestrator state', async 
   await expect(dialog).toContainText('440');
 });
 
-test('connected outdated firmware offers the safe installer without starting hardware work', async ({ page }) => {
+test('a connect-intent panel closes itself when the link becomes established while open', async ({ page }) => {
+  const installedProject = await currentProjectEvidence(page);
+  // Screens open the panel through the connect-panel event (openCardFlow),
+  // never the footer chip. That opening carries the connect intent.
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('lw-open-connect-panel', { detail: { connectIntent: 'connect-card' } }));
+  });
+  const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
+  await expect(dialog).toBeVisible();
+
+  await dispatchCardLinkEvent(page, {
+    type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
+    card: { id: 'lw-quality', name: 'Gallery card', pixelCount: 440, firmwareVersion: '1.4.0', buildId: 'a'.repeat(40) },
+    readiness: readyStatus('lw-quality', installedProject),
+  });
+  // Connecting completed the intent: the panel closes and the owner lands
+  // where they were — no "Done" resting state to dismiss.
+  await expect(dialog).toHaveCount(0);
+  await expect(page).toHaveURL(/#screen=layout$/);
+  await expect(page.getByTestId('card-link-status')).toContainText('Connected');
+
+  // Opened again while already connected, there is nothing to complete: the
+  // panel shows the connected state and stays until the owner closes it.
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('lw-open-connect-panel', { detail: { connectIntent: 'connect-card' } }));
+  });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Done', exact: true })).toBeVisible();
+});
+
+test('a blank connected card renders one route-out line to Card Home, not a strips remedy', async ({ page }) => {
+  await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
+  await dispatchCardLinkEvent(page, {
+    type: 'card-verified', via: 'bridge', host: 'lightweaver.local',
+    card: { id: 'lw-blank-card', firmwareVersion: '1.4.0', buildId: 'a'.repeat(40) },
+    readiness: {
+      app: 'Lightweaver', provisioningContractVersion: 1,
+      cardId: 'lw-blank-card', firmwareVersion: '1.4.0', buildId: 'a'.repeat(40),
+      bootId: 'boot-blank-1', runtimePhase: 'factory', knownGoodProject: false,
+      commandReady: false, outputReady: true, mode: 'factory-flash', source: 'defaults',
+    },
+  });
+
+  await expect(actionRegion(page)).toHaveAttribute('data-action-id', 'card-needs-project');
+  await expect(actionRegion(page)).toContainText('Connected — this card has no project. Set one up from Card Home.');
+  // The strip-discovery and layout remedies live on Card Home now.
+  await expect(page.getByTestId('connection-find-strips')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Start layout' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Continue on Card Home' }).click();
+  await expect(page).toHaveURL(/#screen=card&section=setup&task=/);
+  await expect(page.getByRole('dialog', { name: 'Connect Lightweaver' })).toHaveCount(0);
+});
+
+test('connected outdated firmware routes the update out to the install section without starting hardware work', async ({ page }) => {
   await page.evaluate(() => {
     (window as any).__hardwareOperations = 0;
     window.addEventListener('lw-hardware-operation-active', () => { (window as any).__hardwareOperations += 1; });
@@ -215,8 +268,11 @@ test('connected outdated firmware offers the safe installer without starting har
   });
 
   const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
-  await expect(dialog.getByText('Your card firmware is out of date.')).toBeVisible();
-  await expect(dialog).toContainText(`Installed build ${signedRelease.buildNumber - 1}; latest build ${signedRelease.buildNumber}.`);
+  // The panel renders no update remedy of its own (no build comparison, no
+  // deferral offer) — one route-out line and one button to the install section.
+  await expect(dialog.getByText('Update this card before setup continues.')).toBeVisible();
+  await expect(dialog.getByText('Your card firmware is out of date.')).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Not now' })).toHaveCount(0);
   await dialog.getByRole('button', { name: 'Update firmware' }).click();
   await expect(page).toHaveURL(/#screen=card&section=install$/);
   expect(await page.evaluate(() => (window as any).__hardwareOperations)).toBe(0);
@@ -235,7 +291,9 @@ test('connected outdated firmware can be deferred without losing the verified ca
   });
 
   const dialog = page.getByRole('dialog', { name: 'Connect Lightweaver' });
-  await dialog.getByRole('button', { name: 'Not now' }).click();
+  // Deferring is closing the panel — there is no separate "Not now" remedy.
+  await expect(dialog.getByText('Update this card before setup continues.')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Close connection center' }).click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByTestId('card-link-status')).toContainText('Connected');
 });
@@ -263,7 +321,7 @@ test('connected current firmware does not show an update prompt', async ({ page 
   await expect(dialog.getByRole('button', { name: 'Done', exact: true })).toBeVisible();
 });
 
-test('direct older firmware puts a quiet update action beneath the right-aligned build values', async ({ page }) => {
+test('direct older firmware routes the update out beneath the right-aligned build values', async ({ page }) => {
   await page.route('http://lightweaver.local/api/status', route => route.fulfill({ json: {
     app: 'Lightweaver', provisioningContractVersion: 1,
     cardId: 'lw-b0fe81f61b44', firmwareVersion: '1.1.3',
@@ -280,16 +338,18 @@ test('direct older firmware puts a quiet update action beneath the right-aligned
   await expect(identity.locator('.card-firmware-version')).toHaveCount(2);
   await expect(identity.locator('.card-firmware-version').first()).toHaveCSS('text-align', 'right');
   await expect(identity.locator('.card-firmware-version').last()).toHaveCSS('text-align', 'right');
-  const update = identity.getByRole('button', { name: 'Update firmware' });
+  // The update is no longer an inline remedy inside the identity facts — it
+  // is the same one-line route-out to the install section the bridge case
+  // renders, below the facts.
+  await expect(identity.getByRole('button', { name: 'Update firmware' })).toHaveCount(0);
+  await expect(dialog.getByText('Update this card before setup continues.')).toBeVisible();
+  const update = dialog.getByRole('button', { name: 'Update firmware' });
   await expect(update).toBeVisible();
-  await expect(update).not.toHaveClass(/primary/);
-  await expect(update).toHaveCSS('justify-self', 'end');
-  const currentBox = await identity.locator('.card-firmware-version').last().boundingBox();
+  const identityBox = await identity.boundingBox();
   const updateBox = await update.boundingBox();
-  expect(currentBox).not.toBeNull();
+  expect(identityBox).not.toBeNull();
   expect(updateBox).not.toBeNull();
-  expect(updateBox!.y).toBeGreaterThan(currentBox!.y + currentBox!.height);
-  expect(Math.abs((updateBox!.x + updateBox!.width) - (currentBox!.x + currentBox!.width))).toBeLessThanOrEqual(1);
+  expect(updateBox!.y).toBeGreaterThan(identityBox!.y + identityBox!.height - 1);
   await update.click();
   await expect(page).toHaveURL(/#screen=card&section=install$/);
 });
@@ -842,7 +902,7 @@ test('setup-network instructions stay in one full-width vertical column', async 
   }
 });
 
-test('card update and safe recovery use install only when browser USB is usable', async ({ page }) => {
+test('card update uses install when browser USB is usable; safe recovery routes out to Card Home', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: {} });
   });
@@ -862,11 +922,17 @@ test('card update and safe recovery use install only when browser USB is usable'
   await page.getByRole('button', { name: 'Connect Lightweaver' }).click();
   await dispatchCardLinkEvent(page, { type: 'bridge-lost', reason: 'recovery-unconfirmed' });
   await expect(actionRegion(page)).toHaveAttribute('data-action-id', 'needs-safe-recovery');
-  await page.getByRole('button', { name: 'Start safe recovery' }).click();
-  await expect(page).toHaveURL(/#screen=flash&mode=install$/);
+  // An uncertain operation is a lifecycle question: the panel renders one
+  // route-out line and one button to Card Home's recover task — never its own
+  // recovery body, browser USB or not.
+  await expect(actionRegion(page)).toContainText('Recover the unfinished card operation safely.');
+  await expect(page.getByRole('button', { name: 'Start safe recovery' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Continue on Card Home' }).click();
+  await expect(page).toHaveURL(/#screen=card&section=setup&task=recover-operation$/);
+  await expect(page.getByRole('dialog', { name: 'Connect Lightweaver' })).toHaveCount(0);
 });
 
-test('safe recovery without browser USB offers the real Bridge recovery path', async ({ page }) => {
+test('safe recovery without browser USB is the same route-out, never a Bridge remedy', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'serial', { configurable: true, value: undefined });
   });
@@ -875,8 +941,12 @@ test('safe recovery without browser USB offers the real Bridge recovery path', a
   await dispatchCardLinkEvent(page, { type: 'bridge-lost', reason: 'recovery-unconfirmed' });
 
   await expect(actionRegion(page)).toHaveAttribute('data-action-id', 'needs-safe-recovery');
-  await expect(page.getByRole('button', { name: 'Open Lightweaver Bridge' })).toBeVisible();
-  await expect(actionRegion(page)).toContainText(/keep the card powered/i);
+  await expect(actionRegion(page)).toContainText('Recover the unfinished card operation safely.');
+  await expect(page.getByRole('button', { name: 'Open Lightweaver Bridge' })).toHaveCount(0);
+  await expect(actionRegion(page)).not.toContainText(/keep the card powered/i);
+  await expect(page.getByLabel('Return code from Bridge')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Continue on Card Home' }).click();
+  await expect(page).toHaveURL(/#screen=card&section=setup&task=recover-operation$/);
 });
 
 test('old firmware without browser USB offers the real Bridge update path', async ({ page }) => {

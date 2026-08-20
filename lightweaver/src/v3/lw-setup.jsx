@@ -86,6 +86,7 @@ export function SetupScreen({
   activeCloudProjects = [],
   browserProjects = [],
   replaceProject,
+  onLoadOfferChange,
 }) {
   const {
     setProjectId, setPortRoles, setStandaloneController, replaceLayoutGeometry,
@@ -317,6 +318,15 @@ export function SetupScreen({
     return Boolean(installedProjectId) && installedProjectId === String(currentProject?.id || '').trim();
   }, [cardLink?.card, cardLink?.readiness, cardState.status, currentProject, projectLifecycle]);
   const matchesOpenProject = resolution.kind === 'matches-current' || installationMatch;
+  // The saved-match banner below is showing its Load. Report it up so Card
+  // Home's Matching-card-project panel suppresses the duplicate offer — one
+  // project, one Load button (they call the same guarded adoption machine).
+  const savedMatchLoadOffer = resolution.kind === 'saved-match' && !installationMatch;
+  useEffect(() => {
+    if (!onLoadOfferChange) return undefined;
+    onLoadOfferChange(savedMatchLoadOffer);
+    return () => onLoadOfferChange(false);
+  }, [onLoadOfferChange, savedMatchLoadOffer]);
 
   const journeyResolution = matchesOpenProject
     ? { matchesCurrentProject: true, playbackAccess: 'ready', provisionalSetup: false }
