@@ -17,6 +17,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { classifyChangedPaths, LANE_NAMES } from './ci-changed-lanes.mjs';
+import { cardBundleCheckRelevant } from './ci-card-bundle-check.mjs';
 
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 // NOT trimmed: an unstaged porcelain line begins with a space (" M path"), and
@@ -44,7 +45,27 @@ function versionNumbers(value) {
   return match ? match.slice(1).map(Number) : null;
 }
 
-if (lanes.firmware) {
+let bundleVerdict = '';
+if (lanes.firmware && cardBundleCheckRelevant(paths, false)) {
+  // The firmware lane here comes only from Studio paths. CI drops it (no
+  // signer, no VERSION bump, site deploys directly) when the canonical card
+  // bundle provably matches the last signed release.
+  if (process.argv.includes('--bundle-check')) {
+    const printed = execFileSync('node', ['scripts/ci-card-bundle-check.mjs', '--print'], {
+      encoding: 'utf8',
+      env: { ...process.env, CI_BASE_SHA: mergeBase, CI_HEAD_SHA: 'HEAD' },
+    }).trim();
+    bundleVerdict = printed === 'true' ? 'unchanged' : 'changed';
+    console.log(`Card bundle: ${bundleVerdict === 'unchanged'
+      ? 'UNCHANGED — CI will skip the firmware signer; no VERSION bump needed (uncommitted changes not included in this proof)'
+      : 'changed (or unprovable) — the firmware signer will run'}`);
+  } else {
+    console.log('Studio-only diff: CI skips the firmware signer when the card bundle is unchanged.');
+    console.log('Prove it locally (~90s): node scripts/ci-preflight.mjs --bundle-check');
+  }
+}
+
+if (lanes.firmware && bundleVerdict !== 'unchanged') {
   const previous = JSON.parse(
     readFileSync('lightweaver/public/firmware/release-manifest.json', 'utf8'),
   ).firmwareVersion;

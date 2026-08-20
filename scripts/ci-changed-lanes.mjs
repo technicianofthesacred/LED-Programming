@@ -31,12 +31,26 @@ function emptyLanes() {
   return Object.fromEntries(LANE_NAMES.map(name => [name, false]));
 }
 
-export function classifyChangedPaths(paths, { conservative = false, generatedRelease = false } = {}) {
+// cardBundleUnchanged: a verified byte-level fact, never a guess — the
+// canonical card-Studio bundle built from this revision hashed identical to
+// the one recorded by the last protected signer run (scripts/
+// ci-card-bundle-check.mjs). Studio source is embedded in the card firmware,
+// so Studio paths normally select the firmware lane; when the embedded bundle
+// provably did not change, that selection is dropped and the change ships as
+// a site-only deploy. Hard firmware paths (firmware/, release machinery,
+// installer-core) are never dropped, and the conservative everything-runs
+// answer is never weakened.
+export function classifyChangedPaths(paths, {
+  conservative = false,
+  generatedRelease = false,
+  cardBundleUnchanged = false,
+} = {}) {
   if (conservative) return { ...ALL_LANES };
   if (generatedRelease && isGeneratedReleaseChange(paths)) {
     return { ...emptyLanes(), artifact: true };
   }
   const lanes = emptyLanes();
+  const studioFirmware = !cardBundleUnchanged;
 
   for (const rawPath of paths || []) {
     const path = String(rawPath || '').trim().replace(/^\.\//, '');
@@ -97,14 +111,14 @@ export function classifyChangedPaths(paths, { conservative = false, generatedRel
     if (isPath(path, 'lightweaver/src/lib')) {
       lanes.source = true;
       lanes.browser = true;
-      lanes.firmware = true;
+      if (studioFirmware) lanes.firmware = true;
       continue;
     }
 
     if (isPath(path, 'lightweaver/src')) {
       lanes.source = true;
       lanes.browser = true;
-      lanes.firmware = true;
+      if (studioFirmware) lanes.firmware = true;
       continue;
     }
 
@@ -140,7 +154,8 @@ export function classifyChangedPaths(paths, { conservative = false, generatedRel
       'lightweaver/wrangler.local.toml',
     ])) {
       lanes.source = true;
-      if (isPath(path, 'lightweaver/scripts') || path === 'lightweaver/vite.config.js' || path === 'lightweaver/card.html') {
+      if ((isPath(path, 'lightweaver/scripts') || path === 'lightweaver/vite.config.js' || path === 'lightweaver/card.html')
+        && studioFirmware) {
         lanes.firmware = true;
       }
       continue;
@@ -209,6 +224,10 @@ function main() {
   const lanes = classifyChangedPaths(resolved.paths, {
     conservative: resolved.conservative,
     generatedRelease: signedRelease,
+    // Set only by scripts/ci-card-bundle-check.mjs after a byte-level match of
+    // the canonical card bundle against the last signed release; anything
+    // short of that leaves it unset and classification stays fail-closed.
+    cardBundleUnchanged: process.env.CI_CARD_BUNDLE_UNCHANGED === 'true',
   });
   writeOutputs(lanes, resolved.paths, process.env.GITHUB_OUTPUT || '', signedRelease);
   process.stdout.write(`${JSON.stringify({ ...lanes, signedRelease, paths: resolved.paths, conservative: resolved.conservative })}\n`);

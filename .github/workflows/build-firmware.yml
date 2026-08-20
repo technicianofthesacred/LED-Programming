@@ -43,6 +43,12 @@ jobs:
             && [ "$(git log -1 --format=%s "$CI_HEAD_SHA")" = "CI: publish signed Lightweaver firmware release" ]; then
             export CI_GENERATED_RELEASE=true
           fi
+          # Studio-only changes whose card-embedded bundle provably did not
+          # change do not need a signed firmware release. Fail-closed: anything
+          # short of a byte-level match prints "false" and the signer runs
+          # exactly as before.
+          CI_CARD_BUNDLE_UNCHANGED="$(node scripts/ci-card-bundle-check.mjs --print)"
+          export CI_CARD_BUNDLE_UNCHANGED
           node scripts/ci-changed-lanes.mjs
       - name: Resolve the canonical firmware version
         id: firmwaremeta
@@ -159,6 +165,24 @@ jobs:
           LW_FIRMWARE_API_MIN: 2
           LW_FIRMWARE_API_MAX: 2
         run: npm run build:card --prefix lightweaver
+      # The identity-pinned canonical hash of the exact bundle this release
+      # embeds. Future revisions whose canonical build matches this value have
+      # provably not changed the card-embedded Studio, so lane classification
+      # can let them deploy the site without a new signed firmware release.
+      - name: Record the canonical card bundle hash for lane classification
+        run: |
+          node lightweaver/scripts/build-card-studio.mjs --canonical > /tmp/card-bundle-canonical-build.json
+          node -e '
+            const { readFileSync, writeFileSync } = require("node:fs");
+            const built = JSON.parse(readFileSync("/tmp/card-bundle-canonical-build.json", "utf8"));
+            if (!/^[a-f0-9]{64}$/.test(built.bundleSha256 || "")) throw new Error("canonical bundle hash missing");
+            writeFileSync("lightweaver/public/firmware/card-bundle-canonical.json", JSON.stringify({
+              schemaVersion: 1,
+              bundleSha256: built.bundleSha256,
+              totalSize: built.totalSize,
+              sourceRevision: process.env.SOURCE_REVISION || "",
+            }, null, 2) + "\n");
+          '
       - name: Rebuild tested factory binary with the generated card-local Studio
         env:
           LW_BUILD_ID: ${{ env.SOURCE_REVISION }}
@@ -218,6 +242,7 @@ jobs:
             lightweaver/public/firmware/release-manifest.json
             lightweaver/public/firmware/release-manifest.sig
             lightweaver/public/firmware/release-provenance.json
+            lightweaver/public/firmware/card-bundle-canonical.json
             lightweaver/public/firmware/releases
             lightweaver/public/production/jobs
             release/job-sources
