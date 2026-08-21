@@ -287,11 +287,28 @@ export function measureLayers(doc) {
   const srcSvg = doc.querySelector('svg');
   const SHAPES = 'path, rect, circle, ellipse, line, polyline, polygon';
 
-  let groups = Array.from(srcSvg.children).filter(el => el.tagName === 'g' && el.hasAttribute('data-name'));
-  if (!groups.length) groups = Array.from(srcSvg.children).filter(el => el.tagName === 'g');
+  // A `<g>` the artist drew, as opposed to a copy that `<use>` expansion
+  // produced (svgFlatten.js marks those `data-lw-instance`). The
+  // distinction matters twice below: an instanced copy is never a "layer"
+  // in its own right when named layers exist, and it is never evidence
+  // that a wrapper group contains sub-layers. Both mistakes lose artwork.
+  const isGroup = el => el.tagName === 'g';
+  const isInstance = el => el.hasAttribute('data-lw-instance');
+
+  const topGroups = Array.from(srcSvg.children).filter(isGroup);
+  // Named layers win when the file has any — but an instanced copy sitting
+  // beside them still carries geometry and must come along, or a mandala
+  // whose repeats live next to a named layer imports incomplete.
+  let groups = topGroups.some(el => el.hasAttribute('data-name'))
+    ? topGroups.filter(el => el.hasAttribute('data-name') || isInstance(el))
+    : topGroups;
   if (groups.length === 1) {
-    const inner = Array.from(groups[0].children).filter(el => el.tagName === 'g');
-    if (inner.length > 1) groups = inner;
+    // "One wrapper group holding several sub-layers" gets unwrapped, so an
+    // export that nests everything under a single container still shows its
+    // real layers. Only groups the artist drew count as sub-layers; six
+    // instanced copies of one motif are one layer repeated, not six layers.
+    const inner = Array.from(groups[0].children).filter(isGroup);
+    if (inner.filter(el => !isInstance(el)).length > 1) groups = inner;
   }
 
   if (!groups.length) {

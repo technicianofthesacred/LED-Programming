@@ -4,6 +4,7 @@ import {
   measureLayers,
 } from '../../../lib/layoutGeometry.js';
 import { normalizePatchBoard } from '../../../lib/patchBoard.js';
+import { prepareSvgDocumentForImport } from '../../../lib/svgImportGeometry.js';
 import { PROJECT_IMPORT_ACCEPT } from '../../../lib/projectFiles.js';
 import { exportProjectToFile, importProjectFromPickedFile } from '../../../lib/projectTransfer.js';
 import { useProject } from '../../../state/ProjectContext.jsx';
@@ -65,6 +66,22 @@ export function useLayoutImport(ctx, deps) {
     const vb = srcSvg.getAttribute('viewBox') || '0 0 640 400';
     const newPxPerMm = getPxPerMm(srcSvg);
     colorIdxRef.current = 0;
+    // Bake `<g transform>` and expand `<use>` instancing into plain absolute
+    // path geometry BEFORE measuring. `measureLayers`/`shapeToD` read raw
+    // geometry attributes and match no `<use>`, so without this a mandala
+    // drawn as one wedge plus rotated copies — the normal way a vector editor
+    // builds one — imports as a fraction of itself, and any transformed group
+    // lands at the wrong coordinates. Mutates `doc` in place; a failure here
+    // is non-fatal and simply measures the document exactly as before.
+    const prepared = prepareSvgDocumentForImport(doc);
+    if (!prepared.ok && prepared.reason) {
+      console.warn('[layout import] falling back to unflattened SVG geometry:', prepared.reason);
+    }
+    if (prepared.warnings?.length) {
+      console.warn('[layout import] SVG notes:', prepared.warnings.join(' '));
+    }
+    // `vb`/`newPxPerMm` were read off the root above and are unaffected by
+    // flattening (it never touches viewBox/width/height).
     const parsed = measureLayers(doc);
     if (!parsed.length) {
       setError('No layers found. In Illustrator use File → Export As → SVG (not Save As).');
