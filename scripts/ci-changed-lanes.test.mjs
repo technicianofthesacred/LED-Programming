@@ -198,6 +198,34 @@ test('workflow and classifier configuration changes conservatively select every 
   assert.deepEqual(classifyChangedPaths(['scripts/ci-changed-lanes.mjs']), allLanes);
 });
 
+test('lightweaver/package.json defers the firmware lane to the byte-level bundle proof, unlike workflow/classifier files', () => {
+  // Unproven (default): stays conservative, same as today.
+  assert.equal(classifyChangedPaths(['lightweaver/package.json']).firmware, true);
+  assert.equal(classifyChangedPaths(['lightweaver/package-lock.json']).firmware, true);
+
+  // Proven unchanged (e.g. a scripts-only alias — build-card-studio.mjs never
+  // reads package.json "scripts", so it cannot affect the built bundle):
+  // firmware drops, everything else still runs.
+  assert.deepEqual(classifyChangedPaths(['lightweaver/package.json'], { cardBundleUnchanged: true }), {
+    source: true,
+    browser: true,
+    cloud: true,
+    production: true,
+    firmware: false,
+    artifact: false,
+  });
+
+  // A dependency/version bump that DID change the built bundle fails the
+  // byte-level proof, so firmware stays selected — fail closed.
+  assert.equal(classifyChangedPaths(['lightweaver/package.json'], { cardBundleUnchanged: false }).firmware, true);
+
+  // Unlike lightweaver/package.json, workflow files and the classifier's own
+  // source NEVER defer to the byte check — they stay maximally conservative
+  // even when the bundle is proven unchanged.
+  assert.equal(classifyChangedPaths(['.github/workflows/test.yml'], { cardBundleUnchanged: true }).firmware, true);
+  assert.equal(classifyChangedPaths(['scripts/ci-changed-lanes.mjs'], { cardBundleUnchanged: true }).firmware, true);
+});
+
 test('an unavailable push base selects every lane instead of silently skipping checks', () => {
   assert.deepEqual(resolveChangedPaths({
     explicitPaths: [],
