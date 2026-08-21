@@ -290,9 +290,19 @@ test('a Studio-only revision skips the signer and deploys without waiting for on
   const deployWorkflow = await readFile(resolve(repoRoot, '.github/workflows/deploy-site.yml'), 'utf8');
   assert.match(
     signerWorkflow,
-    /if: needs\.classify\.outputs\.firmware == 'true' && needs\.classify\.outputs\.firmware_bundle_only != 'true'/,
+    /\(needs\.classify\.outputs\.firmware == 'true' && needs\.classify\.outputs\.firmware_bundle_only != 'true'\)/,
   );
   assert.match(signerWorkflow, /firmware_bundle_only: \$\{\{ steps\.changes\.outputs\.firmware_bundle_only \}\}/);
+  // The bundle-only arm alone still bars the signer. The only other way in is
+  // an owed release — a VERSION the signer has never published, which is how a
+  // release lost to a cancelled run gets picked back up instead of vanishing.
+  // Any THIRD arm would be a new tax on ordinary visual changes.
+  const gate = signerWorkflow.slice(
+    signerWorkflow.indexOf('  verify:'),
+    signerWorkflow.indexOf('    runs-on', signerWorkflow.indexOf('  verify:')),
+  );
+  assert.match(gate, /\|\| needs\.classify\.outputs\.release_owed == 'true'/);
+  assert.equal(gate.match(/needs\.classify\.outputs\./g).length, 3);
   const resolveStep = deployWorkflow.slice(deployWorkflow.indexOf('- name: Authorize direct deployment or defer to signer'));
   const bundleGate = resolveStep.indexOf('[ "$FIRMWARE_BUNDLE_ONLY" = "true" ]');
   const signerGate = resolveStep.indexOf('[ "$SIGNED_RELEASE_COMMIT" != "true" ]');
