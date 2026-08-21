@@ -15,6 +15,8 @@ cd "/Users/adrianrasmussen/Documents/Files/2 Areas/Coding/led" && npm run firmwa
 
 ## Follow-ups
 
+- [ ] Say what to do when an abandoned card update blocks the next one _(band: agent-runnable)_ _(effort: quick)_
+  A card update that is started and then abandoned leaves its branch on the shared copy of the project, and every later attempt at that same version number is refused with a raw git message about fast-forwards. It happened on 21 August 2026: a closed, unmerged attempt at 1.1.29 blocked the next one, and the only clue was the git error. The waiting list was untouched and nothing was lost, but there is no way to tell that from what it printed. It should name the abandoned attempt, say the work is safe, and give the one command that clears it.
 - [ ] Give the card a version stamp Studio can find in one read _(band: agent-runnable)_ _(effort: deep)_ → Plan: [card-version-stamp.md](todo/plans/card-version-stamp.md)
 
 ## Top priority — make the card boringly reliable
