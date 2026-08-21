@@ -121,18 +121,19 @@ test('Fit all frames artwork geometry outside the imported viewBox', async ({ pa
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   const preImportViewBox = await page.locator('.lw-viewport svg').getAttribute('viewBox');
   await page.setInputFiles('input[accept=".svg"]', fixture);
-  // Wait for the view to have actually re-fitted to the imported artwork before
-  // fitting again. Reading the file is async, so on a slower host the import
-  // lands AFTER this click: "Fit all" frames an empty canvas, the fitted
-  // viewBox captured below is the empty-canvas one, and the later reset (which
-  // fits the real artwork) can never match it. That is exactly how this spec
-  // failed in CI while passing locally — the expected string in the CI log is
-  // the pre-import view.
+  // Wait for the view to have actually re-fitted to the imported artwork
+  // before fitting again, and for the artwork to be in the document. Both
+  // waits guard real behaviour, not just timing: the import commits the
+  // artwork and re-fits the view, and "Fit all" below must frame the artwork
+  // rather than whatever was on the canvas before.
   //
-  // Waiting for the path to be ATTACHED is not enough: it is in the document
-  // before the app has re-measured and re-fitted, so the click can still land
-  // on a stale fit. The honest signal is the view itself changing away from the
-  // pre-import framing, which is what the app does on import.
+  // This wait is also the regression guard for the import fit race. The fit
+  // used to run in a bare requestAnimationFrame reading `stripsRef`, a ref
+  // synced by a passive effect, so an animation frame that beat React's
+  // passive flush framed the PREVIOUS drawing's strips and reproduced the
+  // pre-import framing byte for byte. Nothing re-fitted afterwards, so the
+  // imported artwork stayed off screen forever. If that regresses, this poll
+  // times out against the pre-import viewBox.
   await expect(page.locator('[data-artwork-path-id]').first()).toBeAttached();
   await expect.poll(() => page.locator('.lw-viewport svg').getAttribute('viewBox'))
     .not.toBe(preImportViewBox);
@@ -160,18 +161,19 @@ test('Cmd/Ctrl+0 prevents browser zoom and fits all content', async ({ page }) =
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   const preImportViewBox = await page.locator('.lw-viewport svg').getAttribute('viewBox');
   await page.setInputFiles('input[accept=".svg"]', fixture);
-  // Wait for the view to have actually re-fitted to the imported artwork before
-  // fitting again. Reading the file is async, so on a slower host the import
-  // lands AFTER this click: "Fit all" frames an empty canvas, the fitted
-  // viewBox captured below is the empty-canvas one, and the later reset (which
-  // fits the real artwork) can never match it. That is exactly how this spec
-  // failed in CI while passing locally — the expected string in the CI log is
-  // the pre-import view.
+  // Wait for the view to have actually re-fitted to the imported artwork
+  // before fitting again, and for the artwork to be in the document. Both
+  // waits guard real behaviour, not just timing: the import commits the
+  // artwork and re-fits the view, and "Fit all" below must frame the artwork
+  // rather than whatever was on the canvas before.
   //
-  // Waiting for the path to be ATTACHED is not enough: it is in the document
-  // before the app has re-measured and re-fitted, so the click can still land
-  // on a stale fit. The honest signal is the view itself changing away from the
-  // pre-import framing, which is what the app does on import.
+  // This wait is also the regression guard for the import fit race. The fit
+  // used to run in a bare requestAnimationFrame reading `stripsRef`, a ref
+  // synced by a passive effect, so an animation frame that beat React's
+  // passive flush framed the PREVIOUS drawing's strips and reproduced the
+  // pre-import framing byte for byte. Nothing re-fitted afterwards, so the
+  // imported artwork stayed off screen forever. If that regresses, this poll
+  // times out against the pre-import viewBox.
   await expect(page.locator('[data-artwork-path-id]').first()).toBeAttached();
   await expect.poll(() => page.locator('.lw-viewport svg').getAttribute('viewBox'))
     .not.toBe(preImportViewBox);
