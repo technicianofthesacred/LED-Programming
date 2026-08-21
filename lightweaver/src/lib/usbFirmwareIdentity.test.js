@@ -6,6 +6,7 @@ import {
   LIGHTWEAVER_APP_PARTITION_OFFSET,
   LIGHTWEAVER_APP_PARTITION_SIZE,
   USB_FIRMWARE_READ_CHUNK_SIZE,
+  espCanReportFirmwareIdentity,
   parseLightweaverFirmwareIdentity,
   readLightweaverFirmwareIdentity,
 } from './usbFirmwareIdentity.js';
@@ -99,4 +100,55 @@ test('read failure and erased app flash return null without leaving the app part
     },
   }), null);
   assert.equal(erasedCalls, 1, 'an erased app stops without reading the full partition');
+});
+
+// The scan walks megabytes of card flash. Both of these bounds exist so a card
+// whose stored version cannot be read can never present as a stuck button.
+test('gives up at the deadline instead of scanning the whole partition', async () => {
+  let chunks = 0;
+  let clock = 0;
+  const identity = await readLightweaverFirmwareIdentity({
+    async readFlash(_address, size) {
+      chunks += 1;
+      clock += 4_000;
+      return new Uint8Array(size).fill(0x41);
+    },
+  }, { timeoutMs: 10_000, now: () => clock });
+  assert.equal(identity, null);
+  assert.equal(chunks, 3, 'stops once the deadline has passed, not at the end of the partition');
+});
+
+test('stops between chunks when the caller takes the connection back', async () => {
+  let chunks = 0;
+  let stop = false;
+  const identity = await readLightweaverFirmwareIdentity({
+    async readFlash(_address, size) {
+      chunks += 1;
+      if (chunks === 2) stop = true;
+      return new Uint8Array(size).fill(0x41);
+    },
+  }, { shouldStop: () => stop });
+  assert.equal(identity, null);
+  assert.equal(chunks, 2, 'no further read is issued once the caller asks it to stop');
+});
+
+test('reports how far through the card it has read', async () => {
+  const seen = [];
+  await readLightweaverFirmwareIdentity({
+    async readFlash(_address, size) { return new Uint8Array(size).fill(0x41); },
+  }, {
+    timeoutMs: Infinity,
+    shouldStop: () => seen.length >= 3,
+    onProgress: report => seen.push(report),
+  });
+  assert.equal(seen.length, 3);
+  assert.deepEqual(seen[0], { bytesRead: USB_FIRMWARE_READ_CHUNK_SIZE, totalBytes: LIGHTWEAVER_APP_PARTITION_SIZE });
+  assert.equal(seen[2].bytesRead, USB_FIRMWARE_READ_CHUNK_SIZE * 3);
+});
+
+test('only the 16 MB ESP32-S3 card is put through the scan', () => {
+  assert.equal(espCanReportFirmwareIdentity({ chipName: 'ESP32-S3', flashSize: '16MB' }), true);
+  assert.equal(espCanReportFirmwareIdentity({ chipName: 'ESP32-S3', flashSize: '4MB' }), false);
+  assert.equal(espCanReportFirmwareIdentity({ chipName: 'ESP32-C3', flashSize: '16MB' }), false);
+  assert.equal(espCanReportFirmwareIdentity(null), false);
 });

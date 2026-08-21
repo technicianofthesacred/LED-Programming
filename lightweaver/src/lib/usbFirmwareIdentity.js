@@ -1,6 +1,10 @@
 export const LIGHTWEAVER_APP_PARTITION_OFFSET = 0x10000;
 export const LIGHTWEAVER_APP_PARTITION_SIZE = 0x640000;
 export const USB_FIRMWARE_READ_CHUNK_SIZE = 0x10000;
+// A whole-partition scan at USB serial speed is tens of seconds. Nothing about
+// connecting or installing depends on its answer, so it is capped rather than
+// allowed to run to the end of the flash.
+export const USB_FIRMWARE_READ_TIMEOUT_MS = 25_000;
 
 const ENVELOPE_OVERLAP = 1024;
 const CONTRACT_MARKER_BEFORE = 'lw-%012llx';
@@ -29,6 +33,12 @@ function isErased(bytes) {
   return true;
 }
 
+// Only the 16 MB ESP32-S3 card carries a Lightweaver image, so no other
+// hardware is ever put through the scan.
+export function espCanReportFirmwareIdentity(hardware) {
+  return String(hardware?.chipName || '') === 'ESP32-S3' && String(hardware?.flashSize || '') === '16MB';
+}
+
 export function parseLightweaverFirmwareIdentity(value) {
   const bytes = bytesOf(value);
   if (!bytes?.length) return null;
@@ -52,12 +62,21 @@ export function parseLightweaverFirmwareIdentity(value) {
   return null;
 }
 
-export async function readLightweaverFirmwareIdentity(loader, { onProgress } = {}) {
+export async function readLightweaverFirmwareIdentity(
+  loader,
+  { onProgress, timeoutMs = USB_FIRMWARE_READ_TIMEOUT_MS, shouldStop, now = () => Date.now() } = {},
+) {
   if (typeof loader?.readFlash !== 'function') return null;
   const partitionEnd = LIGHTWEAVER_APP_PARTITION_OFFSET + LIGHTWEAVER_APP_PARTITION_SIZE;
+  // The scan walks megabytes of card flash one chunk at a time. It is bounded on
+  // both ends so it can never become an unexplained wait: a caller can stop it
+  // between chunks, and it gives up on its own once the deadline passes.
+  const deadline = Number.isFinite(timeoutMs) && timeoutMs > 0 ? now() + timeoutMs : Infinity;
   let carry = new Uint8Array(0);
   try {
     for (let address = LIGHTWEAVER_APP_PARTITION_OFFSET; address < partitionEnd; address += USB_FIRMWARE_READ_CHUNK_SIZE) {
+      if (shouldStop?.() === true) return null;
+      if (now() >= deadline) return null;
       const size = Math.min(USB_FIRMWARE_READ_CHUNK_SIZE, partitionEnd - address);
       const result = bytesOf(await loader.readFlash(address, size));
       if (!result || result.length < size) return null;
