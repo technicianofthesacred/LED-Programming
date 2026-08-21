@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, useEffect, useCallback } from 'react';
+import { useState, useRef, useMemo, useEffect, useLayoutEffect, useCallback } from 'react';
 import { samplePath as libSamplePath } from '../../../lib/mapper.js';
 import {
   buildGammaLut,
@@ -201,38 +201,58 @@ export function useLayoutCanvasInteraction(ctx, deps) {
     return `${visible.x} ${visible.y} ${visible.width} ${visible.height}`;
   }, [viewBox, zoom, panX, panY]);
 
-  const resetView = useCallback(() => {
-    // Let an import/load commit its new SVG tree before measuring. Manual Fit all
-    // uses the same path, and no edit operation calls this automatically.
-    requestAnimationFrame(() => {
-      // No artwork: the 640x400 artboard is just empty space, so frame the
-      // strips themselves. Bounds come from the strips' pixel coordinates,
-      // not getBBox() — the SVG subtree also carries arrows/markers/empty-
-      // state chrome that would inflate a measured fit. With artwork, keep
-      // the artboard in frame since LED positions are relative to the art.
-      if (!svgText) {
-        const contentBounds = stripContentBounds(stripsRef.current);
-        if (contentBounds) {
-          const fit = fitViewToContent(viewBoxRef.current, contentBounds);
-          setZoom(fit.zoom);
-          setPanX(fit.panX);
-          setPanY(fit.panY);
-          return;
-        }
+  // Fit all is a REQUEST, not a measurement. Measuring has to happen after
+  // React has committed whatever the caller just changed — an SVG import sets
+  // the artwork, the strips and the artboard in one batch, and a fit that runs
+  // before that commit measures the previous drawing.
+  //
+  // This used to be a bare requestAnimationFrame, and that raced in a way that
+  // never recovered. `svgText` was read from the callback's closure, which on
+  // import is ALWAYS the pre-import value (empty), so the fit took the
+  // "no artwork" branch and framed `stripsRef.current` instead of the artwork
+  // just imported. That ref is synced by a PASSIVE effect, which React flushes
+  // after paint, so whether it held the cleared strips or the previous
+  // drawing's strips came down to whether the animation frame beat the passive
+  // flush. When it did, the fit reproduced the pre-import framing exactly and
+  // the newly imported artwork — which can be metres wide — was left off
+  // screen with nothing to trigger another fit. See tests/layout-zoom.spec.ts.
+  //
+  // Bumping a request counter and measuring in a layout effect removes the
+  // race outright: the effect runs after the commit that carries the new
+  // artwork, reading `svgText`, `strips` and `viewBox` as rendered rather than
+  // through refs that lag a commit behind.
+  const [fitRequest, setFitRequest] = useState(0);
+  const resetView = useCallback(() => setFitRequest(request => request + 1), []);
+
+  useLayoutEffect(() => {
+    if (!fitRequest) return;
+    // No artwork: the 640x400 artboard is just empty space, so frame the
+    // strips themselves. Bounds come from the strips' pixel coordinates,
+    // not getBBox() — the SVG subtree also carries arrows/markers/empty-
+    // state chrome that would inflate a measured fit. With artwork, keep
+    // the artboard in frame since LED positions are relative to the art.
+    if (!svgText) {
+      const contentBounds = stripContentBounds(strips);
+      if (contentBounds) {
+        const fit = fitViewToContent(viewBox, contentBounds);
+        setZoom(fit.zoom);
+        setPanX(fit.panX);
+        setPanY(fit.panY);
+        return;
       }
-      // Artwork present, or nothing measurable: original artboard-union fit.
-      let bounds = null;
-      try {
-        bounds = svgRef.current?.getBBox?.() || null;
-      } catch {
-        bounds = null;
-      }
-      const fit = fitViewToBounds(viewBoxRef.current, bounds);
-      setZoom(fit.zoom);
-      setPanX(fit.panX);
-      setPanY(fit.panY);
-    });
-  }, [svgRef, svgText, stripsRef]);
+    }
+    // Artwork present, or nothing measurable: original artboard-union fit.
+    let bounds = null;
+    try {
+      bounds = svgRef.current?.getBBox?.() || null;
+    } catch {
+      bounds = null;
+    }
+    const fit = fitViewToBounds(viewBox, bounds);
+    setZoom(fit.zoom);
+    setPanX(fit.panX);
+    setPanY(fit.panY);
+  }, [fitRequest]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const zoomByFactor = useCallback((factor, anchorClientPoint = null) => {
     const nextZoom = zoomBy(zoom, factor);
