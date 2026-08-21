@@ -1,4 +1,15 @@
 {
   "note": "Changes that are finished but are waiting for the next card update, because sending one costs a signed update to every card in a customer's home. Run \"npm run firmware:waiting\" to read this, and \"npm run firmware:release\" to carry it all at once.",
-  "waiting": []
+  "waiting": [
+    {
+      "id": "browser-smoke-remaining-six",
+      "what": "Turn on six more automatic checks that run before anything ships.",
+      "why": "Switching them on means editing one settings file, and editing that file is treated as a change to what the cards do — so six extra checks would otherwise cost a signed update to every card in a customer's home for an unchanged card. Held back from the 1.1.29 update on 21 August 2026: with these six added, one of the existing checks (the zoom one) failed on the build server every time while passing on this machine, and it was the only thing stopping the update going out. Find out why before adding them again.",
+      "added": "2026-08-21",
+      "source": {
+        "kind": "patch",
+        "patch": "firmware-queue/patches/browser-smoke-remaining-six.patch"
+      }
+    }
+  ]
 }
