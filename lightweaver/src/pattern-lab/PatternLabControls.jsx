@@ -82,6 +82,7 @@ export default function PatternLabControls({
   patterns,
   recipe,
   selectedPatternId,
+  pendingPatternId = null,
   onPatternChange,
   onMacroChange,
   onPlaybackChange,
@@ -128,6 +129,7 @@ export default function PatternLabControls({
           <PatternTileBrowser
             patterns={patterns}
             selectedPatternId={selectedPatternId}
+            pendingPatternId={pendingPatternId}
             onSelect={onPatternChange}
           />
         </div>

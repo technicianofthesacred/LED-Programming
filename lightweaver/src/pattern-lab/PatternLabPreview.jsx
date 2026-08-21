@@ -51,13 +51,19 @@ const PREVIEW_FAILURES = {
   },
 };
 
+// The two failures that mean the pattern has STOPPED, not that it is merely slow.
+// Everything else on this screen recovers by itself; these two do not, and while
+// the owner is streaming to his piece they are the only states where the wall
+// stops changing. They are what the rollback below is keyed on.
+const TERMINAL_WORKER_FAILURES = new Set(['pattern-too-heavy', 'pattern-unrenderable']);
+
 // The headline "put this on your lights" action needs one honest sentence for
 // every state an owner can land in — never a silently-disabled button. Each
 // entry here is plain language: no "physical pixels", "frames", "socket", or
 // "endpoint". `disabled` says whether the button itself should be pressable
 // in that state (streaming is always stoppable, everything else needs the
 // pattern actually ready to send).
-function describeLivePreviewState({ physicalPreview, cardConnected, cardChecking, hasRenderedFrame, noLightsMapped, hasPixels }) {
+function describeLivePreviewState({ physicalPreview, cardConnected, cardChecking, hasRenderedFrame, noLightsMapped, hasPixels, patternGaveUp = false }) {
   if (physicalPreview.active) {
     return {
       key: 'streaming',
@@ -80,6 +86,29 @@ function describeLivePreviewState({ physicalPreview, cardConnected, cardChecking
       label: 'Stopping…',
       caption: 'Stopping · restoring what your lights were doing before.',
       disabled: true,
+    };
+  }
+  // The pattern stopped drawing while it was live on the piece. Silence is the one
+  // thing that is not allowed here: the card holds the last frame it was sent (its
+  // 2 s watchdog never fires, because the streamer keeps re-sending that frame), so
+  // a frozen piece looks exactly like a working one that happens to be still. The
+  // session is therefore rolled back to the look the piece had before the preview
+  // started — a look the card plays on its own, so the artwork keeps living — and
+  // the screen says which of the two actually happened.
+  if (patternGaveUp && physicalPreview.state === 'restored') {
+    return {
+      key: 'pattern-stopped-restored',
+      label: 'Preview on Lights',
+      caption: 'This pattern stopped drawing, so your lights went back to what they were showing before. Pick another pattern to put it on them again.',
+      disabled: !hasPixels || !cardConnected,
+    };
+  }
+  if (patternGaveUp) {
+    return {
+      key: 'pattern-stopped-frozen',
+      label: 'Preview on Lights',
+      caption: 'This pattern stopped drawing and your lights may still be holding its last frame — check the piece. Pick another pattern to start it moving again.',
+      disabled: !hasPixels || !cardConnected,
     };
   }
   if (physicalPreview.state === 'restored') {
@@ -229,9 +258,13 @@ export default function PatternLabPreview({
   thumbnail = false,
   seedPreview = false,
   fallbackLook = {},
+  onRenderStatus = null,
 }) {
   const physicalSessionRef = useRef(null);
+  const onRenderStatusRef = useRef(onRenderStatus);
+  onRenderStatusRef.current = onRenderStatus;
   const [physicalPreview, setPhysicalPreview] = useState({ state: 'idle', active: false, error: null });
+  const [patternGaveUpLive, setPatternGaveUpLive] = useState(false);
   // Card presence is only relevant to the headline "put this on your lights"
   // action, so thumbnails (which never render that control) skip the network
   // polling entirely.
@@ -303,6 +336,28 @@ export default function PatternLabPreview({
     if (physicalPreview.active && physicalPixels) physicalSessionRef.current?.push(physicalPixels);
   }, [physicalPixels, physicalPreview.active]);
 
+  // Tell the screen the moment this pattern has actually drawn something (or has
+  // failed), so the tile the owner tapped can stop showing itself as working.
+  // Reported through a ref so a caller passing an inline arrow does not re-fire it.
+  const hasRenderedFrame = Boolean(workerFunction);
+  useEffect(() => {
+    onRenderStatusRef.current?.({ hasFrame: hasRenderedFrame, failure: worker.failure ?? null });
+  }, [hasRenderedFrame, worker.failure]);
+
+  // The pattern gave up while it was live on the piece. Stop the stream and let the
+  // session's existing rollback put the card back on the look it had before — see
+  // describeLivePreviewState above for why holding the frozen frame in silence is
+  // the one option that is not honest.
+  useEffect(() => {
+    if (!worker.failure || !TERMINAL_WORKER_FAILURES.has(worker.failure)) return;
+    if (!physicalPreview.active) return;
+    const session = physicalSessionRef.current;
+    if (!session) return;
+    physicalSessionRef.current = null;
+    setPatternGaveUpLive(true);
+    void session.stop('pattern-gave-up').catch(() => {});
+  }, [physicalPreview.active, worker.failure]);
+
   useEffect(() => () => {
     const session = physicalSessionRef.current;
     physicalSessionRef.current = null;
@@ -316,6 +371,7 @@ export default function PatternLabPreview({
       return;
     }
     if (!physicalPixels) return;
+    setPatternGaveUpLive(false);
     const session = createPatternLabPreviewSession({
       fallbackLook,
       onStateChange: setPhysicalPreview,
@@ -424,9 +480,10 @@ export default function PatternLabPreview({
           physicalPreview,
           cardConnected: cardStatus.connected,
           cardChecking: cardStatus.checking,
-          hasRenderedFrame: Boolean(workerFunction),
+          hasRenderedFrame,
           noLightsMapped: failure?.key === 'no-lights',
           hasPixels: Boolean(physicalPixels),
+          patternGaveUp: patternGaveUpLive,
         });
         // Test fixture note: this component's own copy for the "restored"
         // state must keep the literal substring "Previous card look

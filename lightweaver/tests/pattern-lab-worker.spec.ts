@@ -700,15 +700,15 @@ test('terminates a genuine synchronous export render and replaces the worker cle
   expect(result.replacementReplies.some(reply => reply.type === 'ready' && reply.requestId === 3)).toBe(true);
 });
 
-// SKIPPED 2026-08-20 — not a bad assertion, a product constant. This test exercises the
-// unresponsive-worker path, which is governed by SLOW_FRAME_MS = 400 in
-// usePatternLabWorker.js with a 3-strike replacement, i.e. a worker is declared
-// unresponsive after 1.2s. Any host slow enough to push a healthy 1024-sample render past
-// 400ms trips it, so across 9 solo runs on an IDLE machine three different tests in this
-// file failed, a different one each time. Softening these assertions further would gut
-// what they check. UN-SKIP ONLY AFTER SLOW_FRAME_MS / the 1.2s window is revisited — the
-// open question is whether 400ms is right for a phone, which is the target device.
-test.skip('terminates a timed-out worker while retaining the last valid frame and responsive controls', async ({ page }) => {
+// UN-SKIPPED 2026-08-21. The skip above was correct while ONE 400 ms deadline drove both
+// the reversible degrade and the destructive replacement: a host slow enough to push a
+// healthy 1024-sample render past 400 ms destroyed its worker, so three different tests
+// in this file failed across nine solo runs on an idle machine. The two clocks are now
+// separate (src/lib/patternLabRenderDeadline.js): 400 ms still degrades — cheap and
+// self-healing — while destroying anything needs three missed 1500 ms deadlines, ~105x
+// the worst measured healthy frame (14.3 ms). A merely slow host now degrades instead of
+// escalating, which is what these tests were losing to.
+test('terminates a timed-out worker while retaining the last valid frame and responsive controls', async ({ page }) => {
   await choosePattern(page, 'aurora');
   const preview = page.getByTestId('pattern-lab-mapped-preview');
   // Pattern Lab opens already playing (patternlab-rebuild.md Phase 1). Pause
@@ -716,6 +716,14 @@ test.skip('terminates a timed-out worker while retaining the last valid frame an
   // clock would keep posting fresh render requests into the hung worker and
   // the "frame id never changes while hung" assertion would be racing them.
   await page.getByRole('button', { name: 'Pause', exact: true }).click();
+  await expect(preview).toHaveAttribute('data-worker-state', 'frame');
+  // Pausing settles (180ms later) into one more render, this time at the FINAL
+  // sample budget. Reading the frame id before that render lands makes "the last
+  // good frame stayed on screen" assert against a frame the preview legitimately
+  // replaced a moment afterwards — which is a race, not a defect. The served
+  // sample limit flipping to 1024 is the deterministic signal that the settle
+  // render has arrived, so wait for that rather than for a quiet interval.
+  await expect(preview).toHaveAttribute('data-worker-sample-limit', '1024');
   await expect(preview).toHaveAttribute('data-worker-state', 'frame');
   const frameId = await preview.getAttribute('data-worker-frame-id');
 
@@ -742,15 +750,15 @@ test.skip('terminates a timed-out worker while retaining the last valid frame an
   expect(retainedCanvas.length).toBeGreaterThan(100);
 });
 
-// SKIPPED 2026-08-20 — not a bad assertion, a product constant. This test exercises the
-// unresponsive-worker path, which is governed by SLOW_FRAME_MS = 400 in
-// usePatternLabWorker.js with a 3-strike replacement, i.e. a worker is declared
-// unresponsive after 1.2s. Any host slow enough to push a healthy 1024-sample render past
-// 400ms trips it, so across 9 solo runs on an IDLE machine three different tests in this
-// file failed, a different one each time. Softening these assertions further would gut
-// what they check. UN-SKIP ONLY AFTER SLOW_FRAME_MS / the 1.2s window is revisited — the
-// open question is whether 400ms is right for a phone, which is the target device.
-test.skip('rejects malformed worker frames and retains the last valid mapped frame', async ({ page }) => {
+// UN-SKIPPED 2026-08-21. The skip above was correct while ONE 400 ms deadline drove both
+// the reversible degrade and the destructive replacement: a host slow enough to push a
+// healthy 1024-sample render past 400 ms destroyed its worker, so three different tests
+// in this file failed across nine solo runs on an idle machine. The two clocks are now
+// separate (src/lib/patternLabRenderDeadline.js): 400 ms still degrades — cheap and
+// self-healing — while destroying anything needs three missed 1500 ms deadlines, ~105x
+// the worst measured healthy frame (14.3 ms). A merely slow host now degrades instead of
+// escalating, which is what these tests were losing to.
+test('rejects malformed worker frames and retains the last valid mapped frame', async ({ page }) => {
   await page.addInitScript(() => {
     const NativeWorker = window.Worker;
     const control = { corruptFrames: false };
@@ -776,6 +784,14 @@ test.skip('rejects malformed worker frames and retains the last valid mapped fra
   await page.reload({ waitUntil: 'domcontentloaded' });
   await choosePattern(page, 'aurora');
   const preview = page.getByTestId('pattern-lab-mapped-preview');
+  await expect(preview).toHaveAttribute('data-worker-state', 'frame');
+  // Pattern Lab opens already playing, so frames keep arriving. Reading the frame id
+  // off a moving preview and only THEN corrupting the stream leaves a window in which
+  // a perfectly legitimate later frame lands, and the "retained the last valid frame"
+  // assertion then fails against a frame that was never corrupt. Pause, then wait for
+  // the settle-to-final render (sample limit 1024) before taking the id.
+  await page.getByRole('button', { name: 'Pause', exact: true }).click();
+  await expect(preview).toHaveAttribute('data-worker-sample-limit', '1024');
   await expect(preview).toHaveAttribute('data-worker-state', 'frame');
   const validFrameId = await preview.getAttribute('data-worker-frame-id');
   await page.evaluate(() => {
@@ -1100,15 +1116,19 @@ test('keeps at most one render in flight while playback runs and keeps deliverin
 // user authors that does the same) therefore cycled spawn -> pegged core -> terminate
 // -> spawn forever, re-transferring the geometry every time, and "Start preview again"
 // walked straight back into it.
-// SKIPPED 2026-08-20 — not a bad assertion, a product constant. This test exercises the
-// unresponsive-worker path, which is governed by SLOW_FRAME_MS = 400 in
-// usePatternLabWorker.js with a 3-strike replacement, i.e. a worker is declared
-// unresponsive after 1.2s. Any host slow enough to push a healthy 1024-sample render past
-// 400ms trips it, so across 9 solo runs on an IDLE machine three different tests in this
-// file failed, a different one each time. Softening these assertions further would gut
-// what they check. UN-SKIP ONLY AFTER SLOW_FRAME_MS / the 1.2s window is revisited — the
-// open question is whether 400ms is right for a phone, which is the target device.
-test.skip('gives up on a pattern that never finishes a frame instead of respawning forever', async ({ page }) => {
+// UN-SKIPPED 2026-08-21. The skip above was correct while ONE 400 ms deadline drove both
+// the reversible degrade and the destructive replacement: a host slow enough to push a
+// healthy 1024-sample render past 400 ms destroyed its worker, so three different tests
+// in this file failed across nine solo runs on an idle machine. The two clocks are now
+// separate (src/lib/patternLabRenderDeadline.js): 400 ms still degrades — cheap and
+// self-healing — while destroying anything needs three missed 1500 ms deadlines, ~105x
+// the worst measured healthy frame (14.3 ms). A merely slow host now degrades instead of
+// escalating, which is what these tests were losing to.
+test('gives up on a pattern that never finishes a frame instead of respawning forever', async ({ page }) => {
+  // Two full give-up cycles plus their settle windows. The destructive deadline is
+  // deliberately 1500 ms x 3 now, so reaching the cap honestly takes ~9.4 s of awake
+  // time per cycle — the price of never destroying a merely slow phone's worker.
+  test.setTimeout(180_000);
   await page.addInitScript(() => {
     const lifecycle = { created: 0 };
     const NativeWorker = window.Worker;
@@ -1129,6 +1149,14 @@ test.skip('gives up on a pattern that never finishes a frame instead of respawni
   // clock would keep spawning render requests into the hung worker and
   // confuse the "give up, don't keep respawning" assertion below.
   await page.getByRole('button', { name: 'Pause', exact: true }).click();
+  await expect(preview).toHaveAttribute('data-worker-state', 'frame');
+  // Pausing settles (180ms later) into one more render, this time at the FINAL
+  // sample budget. Reading the frame id before that render lands makes "the last
+  // good frame stayed on screen" assert against a frame the preview legitimately
+  // replaced a moment afterwards — which is a race, not a defect. The served
+  // sample limit flipping to 1024 is the deterministic signal that the settle
+  // render has arrived, so wait for that rather than for a quiet interval.
+  await expect(preview).toHaveAttribute('data-worker-sample-limit', '1024');
   await expect(preview).toHaveAttribute('data-worker-state', 'frame');
   const frameId = await preview.getAttribute('data-worker-frame-id');
 

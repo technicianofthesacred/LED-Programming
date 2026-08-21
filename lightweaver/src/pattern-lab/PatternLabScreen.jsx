@@ -487,6 +487,16 @@ export default function PatternLabScreen() {
     step: 0,
     patternSequence: 0,
   });
+  // Which tile the owner just tapped and has not seen a frame from yet.
+  //
+  // Choosing a pattern used to acknowledge nothing at all until the first frame
+  // landed, so a tap on a phone read as "the screen ignored me" and the natural
+  // response was to tap again, and again — which is what made a healthy renderer
+  // look like a crashing one. This is feedback ONLY: the tiles stay pressable, no
+  // overlay, no disabled state, because the renderer is latest-wins by design and
+  // switching fast is safe. A blocking spinner would fight the design and feel
+  // slower than the thing it is reporting on.
+  const [pendingPatternId, setPendingPatternId] = useState(null);
   const [previewFrameSignals, setPreviewFrameSignals] = useState({
     recipeId: null,
     frameObserved: false,
@@ -824,8 +834,15 @@ export default function PatternLabScreen() {
       : current));
   }
 
+  // A frame drew, or the render failed for a reason the owner can see. Either way
+  // the tap has been answered and the tile stops saying it is working.
+  function handlePreviewRenderStatus(status) {
+    if (status?.hasFrame || status?.failure) setPendingPatternId(null);
+  }
+
   function choosePattern(patternId) {
     if (!patternId) {
+      setPendingPatternId(null);
       setSourceRecipe(null);
       setDraft(null);
       setActiveWorkflowStep(0);
@@ -852,6 +869,7 @@ export default function PatternLabScreen() {
         : '',
       previous,
     );
+    setPendingPatternId(patternId);
     setSourceRecipe(source);
     setDraft(cloneRecipe(source));
     setPreviewTime(0);
@@ -1393,7 +1411,7 @@ export default function PatternLabScreen() {
 
         <section className="plab-workspace" aria-label="Pattern authoring workspace" ref={workspaceRef}>
           <div className="plab-preview" inert={sheetModal ? '' : undefined}>
-            <div className="plab-preview-bar">
+            <div className="plab-preview-bar" data-working={pendingPatternId ? 'true' : undefined}>
               {/* The design's name lives ON the design, in the bar directly
                   above the artwork, and is editable at any moment. It is
                   deliberately NOT a prompt attached to the save button:
@@ -1417,7 +1435,25 @@ export default function PatternLabScreen() {
                 />
               ) : <span>Artwork preview</span>}
               <div className="plab-preview-meta">
-                <span>{previewRecipe ? 'Mapped to current artwork' : 'No source selected'}</span>
+                {/* The tile the owner tapped carries its own working state, but on a
+                    phone the controls sheet settles onto Sculpt the moment a pattern
+                    is chosen and takes that tile off screen. This bar is the one line
+                    visible at EVERY sheet detent, so the acknowledgement is said here
+                    too — where he is already looking, right above the artwork. */}
+                <span
+                  className={`plab-preview-status${pendingPatternId ? ' is-working' : ''}`}
+                  data-testid="pattern-lab-preview-status"
+                  data-working={pendingPatternId ? 'true' : undefined}
+                  role="status"
+                  aria-live="polite"
+                >
+                  {pendingPatternId && <span className="plab-tile-working-dot" aria-hidden="true" />}
+                  <span className="plab-preview-status-label">
+                    {pendingPatternId
+                      ? 'Preparing this pattern…'
+                      : (previewRecipe ? 'Mapped to current artwork' : 'No source selected')}
+                  </span>
+                </span>
                 <button type="button" className="plab-play" disabled={!previewRecipe} aria-pressed={playing} onClick={() => setPlaying(value => !value)}>{playing ? 'Pause' : 'Play'}</button>
                 <button
                   ref={drawerTriggerRef}
@@ -1444,6 +1480,7 @@ export default function PatternLabScreen() {
                     playing={playing}
                     geometry={geometry}
                     fallbackLook={project.standaloneController?.defaultLook}
+                    onRenderStatus={handlePreviewRenderStatus}
                   />
                 </div>
               ) : (
@@ -1529,6 +1566,7 @@ export default function PatternLabScreen() {
                   ? `generator:${draft.base.kind}`
                   : draft?.base?.patternId || ''}
                 onPatternChange={choosePattern}
+                pendingPatternId={pendingPatternId}
                 onMacroChange={changeMacro}
                 onPlaybackChange={changePlayback}
                 onPieceColorChange={changePieceColor}
