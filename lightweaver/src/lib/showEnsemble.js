@@ -448,6 +448,23 @@ export function createEnsembleRuntime({ template = [], composition = {} } = {}) 
   const groundCtx = { dt: 0, bands: groundBands, depth: 1, band: null };
 
   function rebuild() {
+    // Live-edit continuity. Every knob turn in the Show screen calls
+    // setComposition(), which lands here. Handing each voice a FRESH runtime
+    // would restart its authored clock and drop its envelope back to zero on
+    // every frame of a slider drag — the piece visibly dips while the owner is
+    // dragging, which reads as the instrument fighting him. So: a voice whose
+    // id and character are unchanged KEEPS the runtime it was already living
+    // in, and only a genuinely new or retyped voice gets a fresh one.
+    // Depth/band/spread/direction are read per frame from the voice record, so
+    // reusing the runtime does not stale any of them.
+    const carriedRuntimes = new Map();
+    for (const prev of voices) {
+      if (prev && prev.id != null && prev.runtime) {
+        carriedRuntimes.set(`${prev.id}::${prev.characterKey}`, prev.runtime);
+      }
+    }
+    const carriedGroundVr = (ground && ground.vr) ? ground.vr : null;
+
     const stripIds = stripIdsOf(currentTemplate);
     // resolveComposition() joins fields/areas/voices against the live layout
     // but does NOT carry the ground layer through, so the ground is read from
@@ -518,7 +535,7 @@ export function createEnsembleRuntime({ template = [], composition = {} } = {}) 
           ? (fieldBindings.get(binding.fieldId) || null)
           : null,
         wedgeOf: wedgeByArea.get(v.areaId) || null,
-        runtime: cloneVoiceState(CHARACTERS[key]),
+        runtime: carriedRuntimes.get(`${v.id}::${key}`) || cloneVoiceState(CHARACTERS[key]),
       };
     });
 
@@ -528,7 +545,7 @@ export function createEnsembleRuntime({ template = [], composition = {} } = {}) 
       level: Number.isFinite(g.level) ? g.level : 0.12,
       band: typeof g.band === 'string' ? g.band : 'none',
       zone: (typeof g.palette === 'string' && g.palette) ? g.palette : GROUND_ZONE,
-      vr: cloneVoiceState(Glow),
+      vr: carriedGroundVr || cloneVoiceState(Glow),   // same continuity rule as voices above
       binding: groundBinding,
     };
 

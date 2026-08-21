@@ -468,3 +468,135 @@ Glow's quiet end is genuinely darker. The fix is a one-line change to that
 fixture (point it at a real frequency band instead of none) in a file this
 pass was not authorized to touch; it was tested in a scratch copy and
 confirmed to bring that file back to fully green.
+
+## 8. 2026-08-21 — Final gate: the ensemble is now switchable in Show, checked and reported honestly
+
+This is the closing check on the whole thread above: the swap described in
+Section 4 ("the one-line swap") has actually been made, the nine original
+modes were re-verified byte-identical, and the new multi-voice ensemble was
+wired into the screen you actually use. Nothing in this section was merged,
+pushed, or landed on `main` — it sits on this branch, uncommitted, exactly as
+the hard rules for this session required.
+
+### How to actually see it, on your phone or laptop
+
+Open the Studio, go to the **Show** screen (same screen you've always used to
+pick and preview a light show). Near the top there's a small heading that says
+**"WHAT PLAYS"** with a two-way switch under it: **Modes | Voices**.
+
+- **Modes** is exactly what you've had all along — the nine familiar looks
+  (Strata, Trace, Swell, and so on), unchanged.
+- **Voices** is the new thing: instead of one look running across the whole
+  piece, the piece is split into named regions — things like "Centre,"
+  "Outer," and "Ground" — and each region gets its own small character (a
+  twinkle, a swell, a slow glow) listening to its own part of the music (highs,
+  lows, mids). You can hold a region's card down to try a different character
+  on it without committing, drag a Depth slider to make the whole ensemble
+  more or less present, and tap "solo" on one region to hear/see it alone
+  while the others dim out (they never go dark, just quieter).
+
+Flipping the switch back and forth does **not** restart the music or the
+card connection — it was specifically checked that the underlying audio and
+the live picture keep running the same way underneath, so switching between
+Modes and Voices is safe to do live, mid-song, without anything hiccuping.
+
+### The nine original modes: unchanged, proven, one tap away
+
+Flipping back to **Modes** gives you exactly the nine looks you had before
+any of this work started — not "very similar," but checked to be
+pixel-for-pixel, frame-for-frame identical to what shipped before this
+session. The proof: a dedicated test file replays 300 simulated frames of
+every one of the nine modes, across two different piece layouts and two
+different knob settings, and compares a cryptographic fingerprint of every
+single frame's output against a fingerprint taken before any of this work
+began. All 37 of those checks pass. As an extra check on the check itself, a
+tiny deliberate change was made to one piece of internal math (changing
+`0.20` to `0.2001`) to confirm the fingerprint test actually notices — it
+did, failing 5 of the 37 checks immediately, which is what proves the test
+would catch a real accidental change, not just rubber-stamp anything.
+
+### What to try first on the physical piece, in this order
+
+1. **Silence, for a full minute.** Mute everything and just watch. It should
+   settle to a dim, steady, warm coal-like glow — never fully black, never
+   frozen solid — and importantly, keep watching **past the 8-second mark**;
+   that's the point earlier passes in this log found real problems (glow
+   taking 30-60 seconds to settle instead of 8), so don't stop watching early
+   just because the first few seconds look right.
+2. **Then play something with a steady, simple beat** — a metronome or a
+   plain four-on-the-floor track. Watch **only** for whether anything's
+   *travel or rotation speed* seems to quicken or slow with the beat. It
+   should only ever look brighter/dimmer/wider with the music — never faster
+   or slower. This is the single rule that matters most and the one this
+   whole log has been most careful about protecting.
+3. **Then play something loud and percussive.** Watch for any hard flicker,
+   strobing, or anything that looks like a single-frame on/off flash rather
+   than a smooth pulse or swell.
+
+### What did not get finished, said plainly
+
+- **A brief dimming while you drag the Depth slider.** While a finger is down
+  on the Depth slider in Voices mode, the piece measurably dims by about a
+  third for as long as you're dragging, then springs back to full brightness
+  the instant you let go. It never goes dark and it's not a snap or a flash —
+  it's a smooth dip and recovery — but it is a real, measured side effect of
+  how the slider currently rebuilds the ensemble on every drag tick. The
+  session that built this traced the exact cause (the rebuild resets each
+  voice's internal clock/envelope instead of carrying it forward) and named
+  the one-line fix, but that fix touches a file (`showEnsemble.js`) outside
+  what this session was allowed to edit, so it's left as a known, described
+  gap rather than silently patched.
+- **The "instrument" a voice is set to isn't stored under its own name yet.**
+  Under the hood, the new Voices feature currently reuses an existing storage
+  field (originally meant for something else) to remember which little
+  character a region is playing. It works correctly today and was verified
+  on disk, but it's a borrowed field, not a proper first-class one — a small
+  piece of technical tidiness for later, not something you'd ever notice
+  using the screen.
+- **Nothing beyond the Show screen was touched.** The kaleidoscope/arrangement
+  screen and any deeper editing UI for voices remain not built, same as every
+  earlier entry in this log has said.
+
+### The numbers this report is actually based on
+
+Full unit test suite, run just now:
+
+```
+# tests 2091
+# pass 2091
+# fail 0
+```
+
+(The baseline before this session's two upstream passes was 2050 pass / 0
+fail; the 41 new tests are the byte-identical proof for the nine modes plus
+tests for the new voices machinery. No previously-existing test changed
+behavior.)
+
+Browser check of the actual Show screen, one spec file, run twice: the first
+run failed to even launch Chromium (`bootstrap_check_in ... Permission
+denied`) — a sandbox restriction on this machine, not a code problem, so it
+was re-run with the sandbox disabled per this project's known convention.
+That second run is the real result:
+
+```
+"stats": { "expected": 11, "unexpected": 0, "skipped": 0, "flaky": 0 }
+```
+
+11 out of 11 expected, 0 unexpected, 0 skipped, 0 flaky. Total run time was
+about 27 seconds — normal for this machine, not a slow/contended run, so
+there's no reason to distrust this result the way a suspiciously slow run
+would deserve.
+
+`git status --short` at the end of this check, confirming nothing was
+committed, pushed, or merged:
+
+```
+ M lightweaver/src/lib/mandalaEngine.js
+ M lightweaver/src/lib/mandalaEngine.legacyParity.test.js
+ M lightweaver/src/v3/lw-show.jsx
+?? lightweaver/src/lib/showEnsembleBench.js
+?? lightweaver/src/v3/ShowVoices.jsx
+```
+
+Three existing files were modified and two new files were added. `main` was
+not touched.

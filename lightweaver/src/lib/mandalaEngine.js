@@ -37,14 +37,31 @@
 //
 // and touches ONLY the pixels `out[area.pixelIndex[j]]` for `j` in `[from,to)`.
 // `area` is an AreaBinding: geometry already flattened into typed arrays so the
-// paint loop never dereferences a per-pixel object. Today `tick()` always hands
-// them the WHOLE-PIECE binding (`pixelIndex[j] === j`, one instance, every
-// pixel, template order) and the single range `[0, count)`, so the output is
-// byte-for-byte what it was when each effect owned the loop itself — that
-// equivalence is pinned by `mandalaEngine.legacyParity.test.js`, which replays
-// 300 scripted ticks of all nine modes on two templates under two knob sets
-// against digests captured from the pre-refactor code. Do not change an
-// effect's arithmetic without re-reading that file first.
+// paint loop never dereferences a per-pixel object. On the nine-mode path
+// `tick()` hands them the WHOLE-PIECE binding (`pixelIndex[j] === j`, one
+// instance, every pixel, template order) and the single range `[0, count)`, so
+// the output is byte-for-byte what it was when each effect owned the loop
+// itself — that equivalence is pinned by `mandalaEngine.legacyParity.test.js`,
+// which replays 300 scripted ticks of all nine modes on two templates under two
+// knob sets against digests captured from the pre-ensemble code. Do not change
+// an effect's arithmetic without re-reading that file first.
+//
+// ---- THE TWO PAINT PATHS (2026-08-21) --------------------------------------
+// `tick()` branches once, on whether a composition is set:
+//
+//   no composition -> the nine modes, exactly as above. THIS IS THE LIVE
+//                     DEFAULT and the owner's instant fallback; it is pinned
+//                     byte-for-byte and must never move.
+//   a composition  -> `showEnsemble`'s `tickVoices(target, fxCtx)`, which
+//                     paints many areas with many voices into the same flat
+//                     accumulator. `setComposition()` / `clearComposition()`
+//                     flip between them at runtime, no reload.
+//
+// Only the PAINT step branches. Fill lift, coal floor, beat substrate, hit
+// blooms, silence decay and the per-pixel envelope are whole-piece passes that
+// run once per tick BELOW the branch, on both paths. Do not move any of them
+// into a per-voice or per-range loop: applied once per area they read as a
+// piece that is too bright and stops decaying.
 //
 // The AreaBinding shape (see `buildWholePieceBinding`) is deliberately a subset
 // of the one `showAreaBinding.js` produces for symmetric motifs, sharing its
@@ -82,15 +99,18 @@
 // which the aesthetic contract forbids.
 //
 // ---- WIRING NOTE for `src/v3/lw-show.jsx` (owned by another session) --------
-// Nothing in lw-show.jsx needs to change for this refactor — `tick()` still
-// takes `dt` and still returns the same status line. When the ensemble lands,
-// the call it will want is: build the AreaBindings once per layout change (see
-// `showAreaBinding.js`), then per frame call the mode kernel once per area
-// range with `ctx.first`/`ctx.last` set on the first/last call, and read
-// `plan.phases[i]` (from `symmetryFields.js`) as a phase OFFSET added to the
-// authored clock — never as a multiplier on it.
+// Nothing in lw-show.jsx needs to change to keep working — `tick()` still takes
+// `dt` and still returns a status line, and an engine with no composition is
+// the nine modes it has always been. To drive an ensemble instead, call
+// `engine.setComposition(program)` (a showComposition Program, any shape
+// `normalizeComposition` accepts) and `engine.clearComposition()` to go back.
+// The engine owns the runtime: it rebinds on `setTemplate`, feeds each voice
+// its own band from the live audio, and copies the runtime's hysteresis-damped
+// palette ownership into the renderer. `getEnsembleResolved()` /
+// `getVoiceDebug(id)` are the read-backs for a Show-screen voice list.
 
 import { createMandalaSpatialTemplate } from './showSpatialTemplate.js';
+import { createEnsembleRuntime } from './showEnsemble.js';
 import { lerp, clamp01, clamp, smoothstep, hash01, arcGate, smoothAR, onePole, createDensityHelpers } from './mandalaMath.js';
 
 // ============================================================
@@ -261,6 +281,17 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
   let zoneOf;
   let crestOf;
   let wholePiece;   // the AreaBinding every effect paints through — see header
+  // ---------- the ensemble switch (2026-08-21) ----------
+  // `composition === null` is THE LIVE DEFAULT and must stay byte-for-byte the
+  // pre-ensemble engine: the nine built-in modes, one whole-piece range, one
+  // fx* call per tick. Setting a composition swaps the paint step for
+  // showEnsemble's `tickVoices`; clearing it hands the piece straight back to
+  // the nine modes with no reload and no re-install. Nothing downstream of the
+  // paint step branches on this — see the post-effect note in tick().
+  let templateSource = [];   // the raw template array the ensemble binds against
+  let composition = null;
+  let ensemble = null;
+  let ensembleZoneMap = null;   // zone-name index -> Z_*, rebuilt with the composition
   const colorScratchA = new Float32Array(3);
   const colorScratchB = new Float32Array(3);
 
@@ -280,6 +311,7 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
 
   function installTemplate(next) {
     const source = Array.isArray(next) ? next : [];
+    templateSource = source;
     let minRadius = Infinity;
     let maxRadius = -Infinity;
     samples = source.map((sample, outputIndex) => {
@@ -336,6 +368,10 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     zoneOf = new Uint8Array(total);
     crestOf = new Float32Array(total);
     wholePiece = buildWholePieceBinding();
+    // The ensemble binds motifs to pixels, so a layout change invalidates every
+    // binding it holds. Rebinding is only done when a composition is actually
+    // running — the nine-mode path never builds a runtime at all.
+    if (ensemble) { ensemble.setTemplate(templateSource); ensembleZoneMap = null; }
   }
 
   // The identity AreaBinding: one instance holding every pixel of the piece in
@@ -547,7 +583,63 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
   let bloomR = 0.15;
   // The per-tick context handed to whichever effect is running. Reused rather
   // than reallocated — this object is touched once per frame, not per pixel.
-  const fxCtx = { t: 0, dt: 0, first: true, last: true, zone: null, crest: null };
+  const fxCtx = { t: 0, dt: 0, first: true, last: true, zone: null, crest: null, bands: null };
+  // The band view showCharacters reads (`readBand`/`readVoiceBand`). These are
+  // `F.*` — the engine's audio front end AFTER sensitivity shaping but BEFORE
+  // the modes' authored attack/release envelopes (CLK.*), because every
+  // character runs its own smoothAR with its own attack tau. Feeding CLK here
+  // would smooth an already-smoothed value twice and blunt exactly the
+  // transient response the ensemble exists to deliver. Reused, never
+  // reallocated: it is stamped once per tick, not once per voice.
+  const fxBands = { bass: 0, mid: 0, high: 0, energy: 0, beat: 0 };
+
+  // The ensemble names palettes with strings (a voice's authored `palette`, or
+  // its character key); this renderer knows three numeric zones. Unrecognised
+  // names land on Hearth, the warm bed the aesthetic contract makes the
+  // default — never on a cooler palette by accident.
+  function zoneIdForName(name) {
+    if (name === 'patina') return Z_PATINA;
+    if (name === 'candle') return Z_CANDLE;
+    return Z_HEARTH;
+  }
+
+  // Copy the ensemble's per-pixel palette ownership (already hysteresis-damped
+  // inside the runtime) into the renderer's `zoneOf`. `crestOf` is zeroed: the
+  // candle crest blend is geometry owned by the nine modes, and a value left
+  // over from the last mode step would tint the ensemble.
+  // Flip the paint step to an ensemble composition, live. The runtime is built
+  // on first use and kept afterwards, so switching compositions rebinds rather
+  // than reallocates. A falsy argument means "back to the nine modes".
+  function setComposition(next) {
+    if (!next) { clearComposition(); return; }
+    composition = next;
+    ensembleZoneMap = null;
+    if (ensemble) ensemble.setComposition(composition);
+    else ensemble = createEnsembleRuntime({ template: templateSource, composition });
+  }
+
+  // The instant fallback. Dropping the runtime is enough: every piece of mode
+  // state (clocks, knobs, preset, per-pixel vals) lived on the engine the whole
+  // time and was never touched by the ensemble path, so the next tick paints
+  // exactly what it would have painted had no composition ever been set.
+  function clearComposition() {
+    composition = null;
+    ensemble = null;
+    ensembleZoneMap = null;
+  }
+
+  function applyEnsembleZones() {
+    const zones = ensemble.getVoiceZones();
+    const names = zones.zoneNames;
+    if (!ensembleZoneMap || ensembleZoneMap.length !== names.length) {
+      ensembleZoneMap = new Uint8Array(names.length);
+      for (let k = 0; k < names.length; k++) ensembleZoneMap[k] = zoneIdForName(names[k]);
+    }
+    const src = zones.zoneOf;
+    const n = Math.min(total, src.length);
+    for (let i = 0; i < n; i++) zoneOf[i] = ensembleZoneMap[src[i]];
+    crestOf.fill(0);
+  }
   // ---- 1. Strata (EQ flagship) — the spectrum, real dark-to-bright swing ----
   const strataBand = [0, 0, 0, 0, 0];
   function fxStrata(ctx, area, from, to, out) {
@@ -990,25 +1082,68 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     // fxHearth is exempt (its fireplace bed is the mode's identity); the
     // check is on the MODE, not the Hearth palette other modes borrow.
     gateEnv = smoothAR(gateEnv, Ptarget, 0.5, 0.25, dt);
-    darkGate = (presetName === 'Active' && listening && mode !== 'hearth') ? gateEnv : 0;
+    // The gate is a NINE-MODE amendment and stays off under a composition:
+    // showEnsemble applies LIVING_COAL_FLOOR to every pixel, every frame, as a
+    // law no authored setting may defeat. Letting the gate crush that floor to
+    // black at render time would defeat it from outside — two modules holding
+    // opposite positions on the same never-black rule.
+    darkGate = (!ensemble && presetName === 'Active' && listening && mode !== 'hearth') ? gateEnv : 0;
 
     updateOnsets(t, dt);
     evt = onsetEnv * (presetName === 'Active' ? 1.0 : 0.4);   // preset-gated geometry pulse
     updateClocks(t, dt);
-    // One voice, one range: the whole-piece binding covers every pixel in
-    // template order, and this is both the first and the last paint of the
-    // tick, so the mode's clocks advance exactly once. See the RANGE-PAINTING
-    // block in the module header before handing these kernels more than one
-    // range.
     fxCtx.t = t; fxCtx.dt = dt;
     fxCtx.first = true; fxCtx.last = true;
     fxCtx.zone = zoneOf; fxCtx.crest = crestOf;
-    const lead = (STEPS[mode] || fxStrata)(fxCtx, wholePiece, 0, wholePiece.count, target);
+    let lead;
+    if (ensemble) {
+      // ---- ENSEMBLE PATH: many areas, many voices, one accumulator ----------
+      // `tickVoices` owns the range walk the RANGE-PAINTING block describes: it
+      // ticks each voice's character ONCE per frame, then calls that
+      // character's kernel once per instance range of its area binding
+      // (`instanceStart[k] .. instanceStart[k+1]`), so a voice's authored clock
+      // advances exactly once however many wedges it paints. That is the same
+      // exactly-once contract `ctx.first`/`ctx.last` give the nine fx* kernels,
+      // enforced inside the runtime instead of by this caller. The two flags
+      // stay true because this single delegated call IS both the first and the
+      // last paint of the tick; no fx* runs here, so not one of the
+      // engine-scoped mode clocks (strataScallop, spiralTheta, latticePhase, …)
+      // advances at all and none can be double-advanced.
+      fxBands.bass = F.bass; fxBands.mid = F.mid; fxBands.high = F.high;
+      fxBands.energy = F.energy; fxBands.beat = F.beat;
+      fxCtx.bands = fxBands;
+      const status = ensemble.tickVoices(target, fxCtx);
+      applyEnsembleZones();
+      lead = `${status.label} ${status.painted}/${status.voices}`;
+    } else {
+      // ---- NINE-MODE PATH: unchanged, and it must stay unchanged ------------
+      // One voice, one range: the whole-piece binding covers every pixel in
+      // template order, and this is both the first and the last paint of the
+      // tick, so the mode's clocks advance exactly once. See the RANGE-PAINTING
+      // block in the module header before handing these kernels more than one
+      // range. `mandalaEngine.legacyParity.test.js` pins this branch to
+      // byte-identical wire frames across all nine modes.
+      fxCtx.bands = null;
+      lead = (STEPS[mode] || fxStrata)(fxCtx, wholePiece, 0, wholePiece.count, target);
+    }
+
+    // ---- EVERYTHING BELOW RUNS EXACTLY ONCE PER TICK, ON BOTH PATHS ---------
+    // Fill lift, coal floor, beat substrate, hit blooms, silence decay and the
+    // per-pixel envelope sit OUTSIDE the branch on purpose. They are
+    // whole-piece passes over `target`, not per-range ones: moving any of them
+    // inside a per-voice or per-range loop would apply it once per area, which
+    // reads as a piece that is too bright and stops decaying.
+
+    // The Embers exemption below belongs to the Embers MODE, whose authored
+    // canvas IS the darkness. Under a composition no mode is running, so a
+    // stale `mode === 'embers'` must not silently strip the ensemble of its
+    // fill lift and its coal floor.
+    const emberCanvas = !ensemble && mode === 'embers';
 
     // Fill knob: raise how much of the piece is lit at once, lifting the dark
     // toward mid without over-brightening what's already lit. Scaled by presence
     // so silence still hands off to the coal idle; Embers keeps its dark canvas.
-    if (fillLift > 0 && mode !== 'embers') {
+    if (fillLift > 0 && !emberCanvas) {
       const lift = fillLift * 0.35 * presence;
       for (let i = 0; i < total; i++) target[i] += lift * (1 - clamp01(target[i]));
     }
@@ -1021,7 +1156,7 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     // Embers is exempt: its authored canvas IS the darkness. Applied BEFORE
     // the substrate so beats ripple through the glow field, not under it.
     const glow = 0.15 * presence * (1 - darkGate);
-    if (glow > 0.001 && mode !== 'embers') {
+    if (glow > 0.001 && !emberCanvas) {
       for (let i = 0; i < total; i++) {
         if (target[i] < glow) target[i] = glow;
       }
@@ -1246,6 +1381,17 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     setTemplate(next) {
       installTemplate(next);
     },
+    // ---- the ensemble switch: nine modes <-> a composition, live ----------
+    // The Show screen flips between the two with no reload and no re-install.
+    // `clearComposition()` is the instant fallback to what ships today.
+    setComposition,
+    clearComposition,
+    getComposition() { return composition; },
+    hasComposition() { return ensemble !== null; },
+    // The runtime's own view of what it resolved (voices, areas, warnings) —
+    // null while the nine modes are running.
+    getEnsembleResolved() { return ensemble ? ensemble.getResolved() : null; },
+    getVoiceDebug(voiceId) { return ensemble ? ensemble.getVoiceDebug(voiceId) : null; },
     // introspection (meters, status line, preview render)
     getLevels() { return { ...F }; },
     getTransients() {

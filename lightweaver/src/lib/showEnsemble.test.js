@@ -1009,3 +1009,62 @@ test('F8: the floor never dims a pixel that is already brighter', () => {
     'a lit voice is far above the floor and untouched by it');
   assert.ok(target.every((v) => v <= 1), 'and the floor never pushes anything past full');
 });
+
+// --- Live-edit continuity -------------------------------------------------
+// Dragging a slider in the Show screen calls setComposition() on every frame.
+// If that handed each voice a fresh runtime, its authored clock would restart
+// and its envelope drop to zero mid-drag, so the piece would visibly dip while
+// the owner was still dragging. These assert it does not.
+test('editing a voice mid-drag preserves its clock and envelope', () => {
+  const rt = makeRuntime(OVERLAP_VOICES, OVERLAP_GROUND);
+  drive(rt, 60, LOUD);
+
+  const before = OVERLAP_VOICES.map((v) => {
+    const d = rt.getVoiceDebug(v.id);
+    return { id: v.id, clock: d.clock, level: d.env };
+  });
+  assert.ok(before.some((b) => b.clock > 0), 'the clocks really did advance first');
+
+  // Exactly the call a depth drag makes: same voices, same instruments, new depth.
+  rt.setComposition(makeComposition(
+    OVERLAP_VOICES.map((v) => ({ ...v, depth: 0.42 })),
+    OVERLAP_GROUND,
+  ));
+
+  for (const prev of before) {
+    const now = rt.getVoiceDebug(prev.id);
+    assert.ok(now, `voice ${prev.id} survived the edit`);
+    assert.equal(now.clock, prev.clock, `voice ${prev.id} kept its authored clock`);
+    assert.equal(now.env, prev.level, `voice ${prev.id} kept its smoothed level`);
+    assert.equal(now.depth, 0.42, `voice ${prev.id} did take the new depth`);
+  }
+});
+
+test('the piece does not dip on the frame a live edit lands', () => {
+  const rt = makeRuntime(OVERLAP_VOICES, OVERLAP_GROUND);
+  drive(rt, 60, LOUD);
+  const settled = drive(rt, 1, LOUD).target.reduce((a, b) => a + b, 0);
+
+  rt.setComposition(makeComposition(OVERLAP_VOICES, OVERLAP_GROUND));
+  const afterEdit = drive(rt, 1, LOUD).target.reduce((a, b) => a + b, 0);
+
+  // The same composition re-applied: the very next frame must look the same.
+  assert.ok(Math.abs(afterEdit - settled) < settled * 0.02,
+    `re-applying an identical composition dipped the piece: ${settled.toFixed(2)} -> ${afterEdit.toFixed(2)}`);
+});
+
+test('changing a voice instrument does start that voice fresh', () => {
+  const rt = makeRuntime(OVERLAP_VOICES, OVERLAP_GROUND);
+  drive(rt, 60, LOUD);
+
+  const first = OVERLAP_VOICES[0];
+  const swapped = first.character === 'glow' ? 'trace' : 'glow';
+  rt.setComposition(makeComposition(
+    OVERLAP_VOICES.map((v) => (v.id === first.id ? { ...v, character: swapped } : v)),
+    OVERLAP_GROUND,
+  ));
+
+  const now = rt.getVoiceDebug(first.id);
+  assert.ok(now, 'the retyped voice still exists');
+  assert.equal(now.clock, 0, 'a genuinely different instrument starts from zero');
+});
