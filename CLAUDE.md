@@ -112,6 +112,15 @@ bumped** — the bump IS the on-demand trigger, so "finalize firmware" means
 bump `firmware/lightweaver-controller/VERSION` plus its pinned literal in
 `tests/firmware-version-policy.mjs` and merge (~30 min, signed, published).
 
+A release cannot be lost by timing. Lane classification can only answer "did
+THIS merge touch the card", so a release run that is cancelled — or overtaken by
+an unrelated merge landing seconds later — used to leave the bump stranded on
+`main` with nothing left to trigger it. `scripts/ci-release-owed.mjs` asks a
+question that stays true instead: does `VERSION` name a release the signer has
+never published? If so the signer runs on the next green `main` build whatever
+that build changed, and stops the moment the release is published. Nothing to
+queue, and no coordination between parallel sessions.
+
 The firmware TEST lane is unchanged: Studio changes still compile against the
 card, so a bundle that no longer fits fails on the PR rather than twenty
 minutes into a release. Predict what a diff gets before pushing:

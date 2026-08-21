@@ -23,6 +23,7 @@ jobs:
     outputs:
       firmware: ${{ steps.changes.outputs.firmware }}
       firmware_bundle_only: ${{ steps.changes.outputs.firmware_bundle_only }}
+      release_owed: ${{ steps.owed.outputs.value }}
       build_number: ${{ steps.buildnumber.outputs.value }}
       firmware_version: ${{ steps.firmwaremeta.outputs.version }}
     steps:
@@ -57,6 +58,15 @@ jobs:
           version="$(tr -d '\r\n' < firmware/lightweaver-controller/VERSION)"
           node -e 'if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(process.argv[1])) process.exit(1)' "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      # Independent of this revision's diff: does VERSION name a release the
+      # signer has never published? Lane classification can only ever answer
+      # "did THIS merge touch the card", so a release interrupted by a
+      # cancellation or overtaken by a later merge used to vanish with nothing
+      # left to remember it. This question stays true until the signer answers
+      # it, so any later run picks the release back up.
+      - name: Ask whether a signed release is owed at all
+        id: owed
+        run: echo "value=$(node scripts/ci-release-owed.mjs)" >> "$GITHUB_OUTPUT"
       # Commit count of the tested revision — the same number GitHub prints as
       # "N Commits". The compiled binary and the signed manifest both take THIS
       # number, so a card and the published release can never disagree about
@@ -76,9 +86,16 @@ jobs:
   # on. When the firmware lane fired ONLY because of that embedded copy, the
   # release is skipped and the drift ships with the next one. Bumping VERSION
   # is a hard firmware path, so it is also the on-demand trigger.
+  #
+  # The second arm is the recovery path: an owed release runs even when this
+  # revision's own diff touched nothing firmware-sensitive. Without it, a
+  # release lost to a cancelled run stays lost, because the next merge is
+  # classified only on itself.
   verify:
     needs: classify
-    if: needs.classify.outputs.firmware == 'true' && needs.classify.outputs.firmware_bundle_only != 'true'
+    if: >-
+      (needs.classify.outputs.firmware == 'true' && needs.classify.outputs.firmware_bundle_only != 'true')
+      || needs.classify.outputs.release_owed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -266,6 +283,7 @@ jobs:
             'scripts/build-production-job.mjs'
             'scripts/rebuild-production-jobs.mjs'
             'scripts/sign-release-artifacts.mjs'
+            'scripts/ci-release-owed.mjs'
             'scripts/firmware-update-release.test.mjs'
             'scripts/verify-production-artifacts.mjs'
             'lightweaver/src/**'
