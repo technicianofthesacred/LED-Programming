@@ -27,8 +27,91 @@
 // only computes per-pixel intensity + palette selection and converts that to
 // RGB frames. `createMandalaEngine()` returns an isolated instance (all state
 // per-instance so tests and preview never share clocks).
+//
+// ============================================================================
+// RANGE-PAINTING (2026-08-20) — the nine effects paint a RANGE, not "the piece"
+// ============================================================================
+// Every `fx*` below has the signature
+//
+//     fx(ctx, area, from, to, out) -> statusLine
+//
+// and touches ONLY the pixels `out[area.pixelIndex[j]]` for `j` in `[from,to)`.
+// `area` is an AreaBinding: geometry already flattened into typed arrays so the
+// paint loop never dereferences a per-pixel object. On the nine-mode path
+// `tick()` hands them the WHOLE-PIECE binding (`pixelIndex[j] === j`, one
+// instance, every pixel, template order) and the single range `[0, count)`, so
+// the output is byte-for-byte what it was when each effect owned the loop
+// itself — that equivalence is pinned by `mandalaEngine.legacyParity.test.js`,
+// which replays 300 scripted ticks of all nine modes on two templates under two
+// knob sets against digests captured from the pre-ensemble code. Do not change
+// an effect's arithmetic without re-reading that file first.
+//
+// ---- THE TWO PAINT PATHS (2026-08-21) --------------------------------------
+// `tick()` branches once, on whether a composition is set:
+//
+//   no composition -> the nine modes, exactly as above. THIS IS THE LIVE
+//                     DEFAULT and the owner's instant fallback; it is pinned
+//                     byte-for-byte and must never move.
+//   a composition  -> `showEnsemble`'s `tickVoices(target, fxCtx)`, which
+//                     paints many areas with many voices into the same flat
+//                     accumulator. `setComposition()` / `clearComposition()`
+//                     flip between them at runtime, no reload.
+//
+// Only the PAINT step branches. Fill lift, coal floor, beat substrate, hit
+// blooms, silence decay and the per-pixel envelope are whole-piece passes that
+// run once per tick BELOW the branch, on both paths. Do not move any of them
+// into a per-voice or per-range loop: applied once per area they read as a
+// piece that is too bright and stops decaying.
+//
+// The AreaBinding shape (see `buildWholePieceBinding`) is deliberately a subset
+// of the one `showAreaBinding.js` produces for symmetric motifs, sharing its
+// field names (`pixelIndex`, `instanceStart`, `fold`, `count`, `ang`, `u`, `x`,
+// `y`, `seed`), so an ensemble can hand a real per-instance binding to these
+// same kernels and paint one wedge at a time.
+//
+// ---- RESTRICTION: ONE 'MODE' VOICE PER COMPOSITION -------------------------
+// The nine effects own MUTABLE ROTATION/ENVELOPE STATE that lives on the ENGINE
+// INSTANCE, not on the range being painted: `strataScallop`, `strataBand[5]`,
+// `meridianRing/Target/Mix/Phase`, `processTheta`, `spiralTheta`,
+// `latticePhase`, `latticeC`, `tideR`, `tideVal`, `bloomR`, `bloomWob`,
+// `driftPhase`, `emberSparks`. That state is intentionally NOT per-voice —
+// making it per-voice would mean nine parallel authored clocks and a rewrite of
+// every tuned constant below. Consequence: an ensemble may run AT MOST ONE
+// 'mode' voice per composition. Two voices sharing an engine would share (and
+// double-advance) one set of clocks.
+//
+// Because that state must advance exactly ONCE per tick no matter how many
+// ranges are painted, `ctx` carries `first`/`last` flags. Every mutation of the
+// state named above sits inside `if (ctx.first)`; Meridian's deferred
+// `meridianRing` commit — which the original code ran AFTER its pixel loop —
+// sits inside `if (ctx.last)`. Everything else in a paint loop is a pure
+// function of that state, the audio clocks and the binding, so it may safely be
+// recomputed per range. A future multi-range caller must set `first` true on
+// its first call of a tick and `last` true on its final one.
+//
+// ---- AUDIO MAY NEVER REACH AN AUTHORED CLOCK -------------------------------
+// The `ctx.first` blocks are the only place the authored clocks advance, and
+// every increment there is `dt * speedMul * <constant>` — `speedMul` is the
+// user's Motion-speed KNOB, never a band value. Audio enters only through
+// amplitude, breadth, contrast, radius and palette terms in the paint loop.
+// Keep it that way: if you find yourself wanting `CLK.bass` inside a
+// `ctx.first` block, you are about to make the piece speed up with the music,
+// which the aesthetic contract forbids.
+//
+// ---- WIRING NOTE for `src/v3/lw-show.jsx` (owned by another session) --------
+// Nothing in lw-show.jsx needs to change to keep working — `tick()` still takes
+// `dt` and still returns a status line, and an engine with no composition is
+// the nine modes it has always been. To drive an ensemble instead, call
+// `engine.setComposition(program)` (a showComposition Program, any shape
+// `normalizeComposition` accepts) and `engine.clearComposition()` to go back.
+// The engine owns the runtime: it rebinds on `setTemplate`, feeds each voice
+// its own band from the live audio, and copies the runtime's hysteresis-damped
+// palette ownership into the renderer. `getEnsembleResolved()` /
+// `getVoiceDebug(id)` are the read-backs for a Show-screen voice list.
 
 import { createMandalaSpatialTemplate } from './showSpatialTemplate.js';
+import { createEnsembleRuntime } from './showEnsemble.js';
+import { lerp, clamp01, clamp, smoothstep, hash01, arcGate, smoothAR, onePole, createDensityHelpers } from './mandalaMath.js';
 
 // ============================================================
 //  HARDWARE RING MAP — the real 675-pixel / 5-ring strip.
@@ -57,15 +140,7 @@ for (let r = 0; r < R; r++) {
 }
 
 // ---------- helpers ----------
-function lerp(a, b, t) { return a + (b - a) * t; }
-function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
-function clamp(x, lo, hi) { return x < lo ? lo : x > hi ? hi : x; }
-function smoothstep(x) { x = clamp01(x); return x * x * (3 - 2 * x); }
-function hash01(i, bucket) {
-  let h = (Math.imul(i, 0x9E3779B1) ^ Math.imul(bucket, 0x85EBCA77)) | 0;
-  h ^= h >>> 15; h = Math.imul(h, 0x2C1B3C6D); h ^= h >>> 12;
-  return (h >>> 0 & 0xFFFF) / 65536;
-}
+// lerp, clamp01, clamp, smoothstep, hash01 now live in ./mandalaMath.js
 function spatialKey(sample) {
   const values = [
     Math.round(sample.x * 4096),
@@ -82,19 +157,7 @@ function spatialKey(sample) {
   }
   return (h ^ (h >>> 12)) | 0;
 }
-// per-pixel localized gate: lights only PART of a ring, chosen by angle, so you
-// SEE a specific region answer the audio instead of the whole row at once.
-function arcGate(ang, nLobes, width, spin) {
-  const u = (ang * nLobes / (Math.PI * 2) + spin); const f = u - Math.floor(u);
-  const d = Math.min(f, 1 - f) * 2;                 // 0 at arc center, 1 at edge
-  return clamp01(1 - d / width);
-}
-// asymmetric: fast attack, eased release.
-function smoothAR(env, x, tauA, tauR, dt) {
-  const tau = (x > env) ? tauA : tauR;
-  return env + (x - env) * Math.min(1, dt / tau);
-}
-function onePole(env, x, tau, dt) { return env + (x - env) * Math.min(1, dt / tau); }
+// arcGate, smoothAR, onePole now live in ./mandalaMath.js
 
 // Wire gamma 2.2 — the card streams frame bytes straight into FastLED with NO
 // gamma of its own, so frameRGB applies it here (post master/overdrive) via a
@@ -186,6 +249,51 @@ const OVERDRIVE = 0.7;        // wire scale = min(1, master·(1 + OVERDRIVE·evt
 const GATE_KNEE = 0.015;      // dark gate: true black below this intensity…
 const GATE_RAMP = 1 / 0.165;  // …ramping smoothly to unmodified by ≈ knee + 0.165
 
+// ---- onset presence gate (2026-08-21) --------------------------------------
+// An ADDITIVE onset term must ride the light the mode already painted, never
+// paint over the dark. docs/mandala-effects-direction-v2.md §4 rule 2 scopes
+// the discrete onset layer to each mode's GEOMETRY (radius, breadth, contrast,
+// spark rate); rule 6 says the beat layer "lifts existing light and travels
+// through space instead of replacing a frame with a flash".
+//
+// A responsiveness pass gave Strata, Tide and Bloom additive onset terms that
+// landed on every pixel equally. Because `onsetEnv`'s 0.28 s tau never falls
+// below ~0.13 between 120 bpm kicks, a flat pedestal is not a transient at
+// all — it is a permanent DC lift. Measured under the pulseStream in
+// tests/mandala-engine.mjs it raised the DARKEST pixel of the whole piece
+// from 0.0152 → 0.0445 (Strata), 0.0000 → 0.0604 (Tide) and 0.0140 → 0.0607
+// (Bloom): clear of the 0.0396 coal floor, clear of the dark gate's knee, and
+// the three modes stopped reaching true dark ANYWHERE (28.72% / 33.33% /
+// 31.41% of wire pixel-samples → 0.01% / 0.00% / 0.00%).
+//
+// The two laws are not actually in conflict. "Never black" governs SILENCE —
+// the piece settling to a living coal field — and is carried by the coal floor
+// and the ~0.03 idle, both scaled by `presence`. Under music an individual
+// pixel MUST be able to reach true dark, or the spectrum cannot be read and
+// localized partial-ring lighting is impossible; that is exactly what the dark
+// gate exists to allow. So the fix is not to delete these onset terms (a hit
+// in a band that is loud but already clipped genuinely needs somewhere to go)
+// but to weight each by the pixel's OWN structural presence: the value the
+// mode painted there before the onset. Zero where the mode painted dark, full
+// where the mode painted light — the same "lifts existing light" rule the beat
+// substrate's 4·b·(1−b) weighting already obeys, expressed for an additive
+// layer. The knee sits above the coal floor (0.0396 at full presence) so a
+// pixel resting on the floor is never mistaken for structure.
+//
+// The second half of the same fix is the ENVELOPE SHAPE. Strata and Tide ride
+// `evt * evt` rather than `evt`, which halves the additive pulse's effective
+// tau (0.28 s → ~0.14 s): the hit reads as an impact that lands and clears,
+// not a level the field sits at between kicks. That matters for BOTH laws at
+// once. It restores the dark the amendment lock asks for, and it is also what
+// finally moved `responsiveness.test.js`'s onsetVisibility — that metric is a
+// RELATIVE rise (peak within 200 ms over the mean of the 300 ms before), and
+// the probe clamps intensity to 1, so simply raising a coefficient lifts the
+// pre-hit baseline and saturates the peak. Measured on Strata: 0.4·evt gave
+// 0.133 and 0.75·evt still gave 0.133, while 0.65·evt² gives 0.170. Reach for
+// a sharper envelope before a bigger number.
+const ONSET_PRESENCE_KNEE = 0.16;
+function onsetPresence(structure) { return smoothstep(structure / ONSET_PRESENCE_KNEE); }
+
 // 2026-07-13 density amendment: the pattern shapes itself to the pixel COUNT so
 // a 60-light piece reads as finished as a 600-light one — coarser geometry,
 // wider features (more lights on at once), bigger sparks/hit-blooms. At/above
@@ -217,6 +325,18 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
   let target;
   let zoneOf;
   let crestOf;
+  let wholePiece;   // the AreaBinding every effect paints through — see header
+  // ---------- the ensemble switch (2026-08-21) ----------
+  // `composition === null` is THE LIVE DEFAULT and must stay byte-for-byte the
+  // pre-ensemble engine: the nine built-in modes, one whole-piece range, one
+  // fx* call per tick. Setting a composition swaps the paint step for
+  // showEnsemble's `tickVoices`; clearing it hands the piece straight back to
+  // the nine modes with no reload and no re-install. Nothing downstream of the
+  // paint step branches on this — see the post-effect note in tick().
+  let templateSource = [];   // the raw template array the ensemble binds against
+  let composition = null;
+  let ensemble = null;
+  let ensembleZoneMap = null;   // zone-name index -> Z_*, rebuilt with the composition
   const colorScratchA = new Float32Array(3);
   const colorScratchB = new Float32Array(3);
 
@@ -230,15 +350,13 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
   let ringCount = 5;
   // integer spatial frequency (petals, arms, teeth) scaled to density: authored
   // at full detail, floored so a sparse piece gets fewer-but-legible features.
-  function dLobes(authored, floor) {
-    return Math.max(floor, Math.round(authored * (0.4 + 0.6 * detail)));
-  }
   // feature width / fill: eased from a wider `sparse` value toward the authored
   // one as density rises, so a thin piece lights more of itself at once.
-  function dWide(authored, sparse) { return sparse + (authored - sparse) * detail; }
+  const { dLobes, dWide } = createDensityHelpers(() => detail);
 
   function installTemplate(next) {
     const source = Array.isArray(next) ? next : [];
+    templateSource = source;
     let minRadius = Infinity;
     let maxRadius = -Infinity;
     samples = source.map((sample, outputIndex) => {
@@ -294,6 +412,58 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     target = new Float32Array(total);
     zoneOf = new Uint8Array(total);
     crestOf = new Float32Array(total);
+    wholePiece = buildWholePieceBinding();
+    // The ensemble binds motifs to pixels, so a layout change invalidates every
+    // binding it holds. Rebinding is only done when a composition is actually
+    // running — the nine-mode path never builds a runtime at all.
+    if (ensemble) { ensemble.setTemplate(templateSource); ensembleZoneMap = null; }
+  }
+
+  // The identity AreaBinding: one instance holding every pixel of the piece in
+  // template order, so `pixelIndex[j] === j` and a full-range paint reproduces
+  // the pre-refactor "loop over all pixels" behaviour exactly.
+  //
+  // Geometry is flattened into Float64Array (not Float32Array as
+  // showAreaBinding.js uses) ON PURPOSE: these are the same doubles the
+  // effects previously read straight off the sample objects, and rounding them
+  // to single precision would move the last bits of every intensity and could
+  // flip a rounded output byte. Parity is the whole point of this binding.
+  //
+  // Field names match showAreaBinding.js where the meaning matches: `u` is
+  // `stripProgress` (the unmirrored case of its `u`), `ang` the artwork angle,
+  // `seed` a stable per-pixel hash. `rf` is this engine's own
+  // `radialProgress` — the span-normalized radius installTemplate computes,
+  // which showAreaBinding.js has no equivalent of.
+  //
+  // Chain-inactive pixels (`stripId === null`) ARE included: the effects have
+  // always written them and `colorFrame`/`frameRGB` blank them at output time.
+  // A binding that skipped them would change nothing visible but would break
+  // byte-parity of the intermediate `target`/`vals` arrays.
+  function buildWholePieceBinding() {
+    const n = total;
+    const pixelIndex = new Int32Array(n);
+    const rf = new Float64Array(n);
+    const ang = new Float64Array(n);
+    const u = new Float64Array(n);
+    const x = new Float64Array(n);
+    const y = new Float64Array(n);
+    const seed = new Int32Array(n);
+    for (let i = 0; i < n; i++) {
+      const s = samples[i];
+      pixelIndex[i] = i;
+      rf[i] = s.radialProgress;
+      ang[i] = s.angle;
+      u[i] = s.stripProgress;
+      x[i] = s.x;
+      y[i] = s.y;
+      seed[i] = s.spatialKey;
+    }
+    const instanceStart = new Int32Array(2);
+    instanceStart[0] = 0; instanceStart[1] = n;
+    return {
+      areaId: null, fieldId: null, fold: 1, count: n,
+      pixelIndex, instanceStart, rf, ang, u, x, y, seed,
+    };
   }
 
   installTemplate(template);
@@ -412,95 +582,226 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
   function updateClocks(t, dt) {
     const rel = 0.9 * P.relScale;                     // release ~0.9s — legible, still eased
     const aA = 1 / attackMul;                         // Attack knob: >1 shortens the attack tau
-    CLK.bass = smoothAR(CLK.bass, F.bass, 0.06 * aA, rel, dt);   // LIVE band response
+    // Frequency focus tilts the RAW per-frame band before it is smoothed into
+    // CLK, never the persistent CLK state itself. CLK.bass/CLK.high are
+    // smoothed envelopes carried frame to frame; multiplying them in place
+    // (the pre-2026-08-21 code) re-applies the gain every tick and compounds
+    // exponentially — a positive tilt eventually saturated CLK.high past 1e30
+    // (see mandalaEngine.legacyParity.test.js header). Gating the SOURCE value
+    // fed into smoothAR keeps every CLK.* bounded exactly as it was at freq=0.
+    let fBass = F.bass, fHigh = F.high, fEnergy = F.energy;
+    if (freqTilt !== 0) {                             // Frequency focus: tilt what the modes hear
+      const bassGain = Math.max(0, 1 - 0.7 * freqTilt);
+      const highGain = Math.max(0, 1 + 0.7 * freqTilt);
+      fBass = F.bass * bassGain;
+      fHigh = F.high * highGain;
+      fEnergy = F.energy * (1 + 0.3 * freqTilt * (F.high - F.bass));
+    }
+    CLK.bass = smoothAR(CLK.bass, fBass, 0.06 * aA, rel, dt);   // LIVE band response
     CLK.mid = smoothAR(CLK.mid, F.mid, 0.07 * aA, rel, dt);
-    CLK.high = smoothAR(CLK.high, F.high, 0.05 * aA, rel * 0.8, dt);
-    CLK.energy = smoothAR(CLK.energy, F.energy, 0.08 * aA, rel, dt);
+    CLK.high = smoothAR(CLK.high, fHigh, 0.05 * aA, rel * 0.8, dt);
+    CLK.energy = smoothAR(CLK.energy, fEnergy, 0.08 * aA, rel, dt);
     CLK.centroid = smoothAR(CLK.centroid, F.centroid, 0.4, 1.2, dt); // a bit slower — picks the "color" of the sound
     CLK.energyTrend = onePole(CLK.energyTrend, F.energy, 20.0, dt);  // Hearth's slow mood (20s)
     CLK.highAvg = onePole(CLK.highAvg, F.high, 0.6, dt);
     CLK.highTex = clamp01(2.2 * (F.high - CLK.highAvg));             // texture (Embers births)
-    if (freqTilt !== 0) {                             // Frequency focus: tilt what the modes hear
-      const bassGain = Math.max(0, 1 - 0.7 * freqTilt);
-      const highGain = Math.max(0, 1 + 0.7 * freqTilt);
-      CLK.bass *= bassGain; CLK.high *= highGain;
-      CLK.energy *= 1 + 0.3 * freqTilt * (F.high - F.bass);
-    }
   }
 
   // ============================================================
   //  THE NINE MODES (verbatim from the simulator).
-  //  Each fills target[] (intensity), zoneOf[] (palette), crestOf[]
+  //  Each paints a RANGE of an AreaBinding — see the RANGE-PAINTING block in
+  //  the module header for the contract, the one-voice restriction, and why
+  //  every clock advance is wrapped in `if (ctx.first)`.
+  //
+  //    fx(ctx, area, from, to, out) -> statusLine
+  //      ctx   { t, dt, first, last, zone, crest }
+  //      area  AreaBinding — pixelIndex/rf/ang/u/x/y/seed, all typed arrays
+  //      out   intensity target, indexed by area.pixelIndex[j]
+  //
+  //  Each writes out[] (intensity), ctx.zone[] (palette), ctx.crest[]
   //  (candle blend). All rotations obey the restraint budget.
   // ============================================================
-  // rotation phases (all SLOW — see per-effect periods)
+  // rotation phases (all SLOW — see per-effect periods). ENGINE-scoped, not
+  // per-voice: see the one-voice restriction in the module header.
   let strataScallop = 0, meridianRing = 4, meridianTarget = 4, meridianMix = 0, meridianPhase = 0;
   let processTheta = 0, spiralTheta = 0, latticePhase = 0, latticeC = 0.3, tideR = 0.15, tideVal = 0, driftPhase = 0, bloomWob = 0;
   let bloomR = 0.15;
+  // The per-tick context handed to whichever effect is running. Reused rather
+  // than reallocated — this object is touched once per frame, not per pixel.
+  const fxCtx = { t: 0, dt: 0, first: true, last: true, zone: null, crest: null, bands: null };
+  // The band view showCharacters reads (`readBand`/`readVoiceBand`). These are
+  // `F.*` — the engine's audio front end AFTER sensitivity shaping but BEFORE
+  // the modes' authored attack/release envelopes (CLK.*), because every
+  // character runs its own smoothAR with its own attack tau. Feeding CLK here
+  // would smooth an already-smoothed value twice and blunt exactly the
+  // transient response the ensemble exists to deliver. Reused, never
+  // reallocated: it is stamped once per tick, not once per voice.
+  const fxBands = { bass: 0, mid: 0, high: 0, energy: 0, beat: 0 };
+
+  // The ensemble names palettes with strings (a voice's authored `palette`, or
+  // its character key); this renderer knows three numeric zones. Unrecognised
+  // names land on Hearth, the warm bed the aesthetic contract makes the
+  // default — never on a cooler palette by accident.
+  function zoneIdForName(name) {
+    if (name === 'patina') return Z_PATINA;
+    if (name === 'candle') return Z_CANDLE;
+    return Z_HEARTH;
+  }
+
+  // Copy the ensemble's per-pixel palette ownership (already hysteresis-damped
+  // inside the runtime) into the renderer's `zoneOf`. `crestOf` is zeroed: the
+  // candle crest blend is geometry owned by the nine modes, and a value left
+  // over from the last mode step would tint the ensemble.
+  // Flip the paint step to an ensemble composition, live. The runtime is built
+  // on first use and kept afterwards, so switching compositions rebinds rather
+  // than reallocates. A falsy argument means "back to the nine modes".
+  function setComposition(next) {
+    if (!next) { clearComposition(); return; }
+    composition = next;
+    ensembleZoneMap = null;
+    if (ensemble) ensemble.setComposition(composition);
+    else ensemble = createEnsembleRuntime({ template: templateSource, composition });
+  }
+
+  // The instant fallback. Dropping the runtime is enough: every piece of mode
+  // state (clocks, knobs, preset, per-pixel vals) lived on the engine the whole
+  // time and was never touched by the ensemble path, so the next tick paints
+  // exactly what it would have painted had no composition ever been set.
+  function clearComposition() {
+    composition = null;
+    ensemble = null;
+    ensembleZoneMap = null;
+  }
+
+  function applyEnsembleZones() {
+    const zones = ensemble.getVoiceZones();
+    const names = zones.zoneNames;
+    if (!ensembleZoneMap || ensembleZoneMap.length !== names.length) {
+      ensembleZoneMap = new Uint8Array(names.length);
+      for (let k = 0; k < names.length; k++) ensembleZoneMap[k] = zoneIdForName(names[k]);
+    }
+    const src = zones.zoneOf;
+    const n = Math.min(total, src.length);
+    for (let i = 0; i < n; i++) zoneOf[i] = ensembleZoneMap[src[i]];
+    crestOf.fill(0);
+  }
   // ---- 1. Strata (EQ flagship) — the spectrum, real dark-to-bright swing ----
   const strataBand = [0, 0, 0, 0, 0];
-  function fxStrata(t, dt) {
-    strataScallop += dt * speedMul * 0.20;
-    const teeth = dLobes(6, 2);                                    // fewer scallops when sparse
-    const fb = freqTilt !== 0 ? F.bass * Math.max(0, 1 - 0.7 * freqTilt) : F.bass;
-    const fh = freqTilt !== 0 ? F.high * Math.max(0, 1 + 0.7 * freqTilt) : F.high;
-    const band = [fb, 0.5 * fb + 0.5 * F.mid, F.mid, 0.5 * F.mid + 0.5 * fh, fh];
-    for (let r = 0; r < strataBand.length; r++) {
-      // subtractive quiet floor: a band idling near its noise floor reads as
-      // silent and goes dark, instead of the floor being amplified into a glow.
-      // Release mirrors the pixel envelope: collapsed band → fast empty, so
-      // 120bpm hits land on darkness instead of the last hit's smear.
-      const bandTarget = clamp01((band[r] - 0.12) * P.modDepth * 1.42);
-      const rel = (bandTarget < 0.35 * strataBand[r] ? 0.28 : 0.8) * P.relScale;
-      strataBand[r] = smoothAR(strataBand[r], bandTarget, 0.10, rel, dt);
+  function fxStrata(ctx, area, from, to, out) {
+    if (ctx.first) {
+      strataScallop += ctx.dt * speedMul * 0.20;
+      const fb = freqTilt !== 0 ? F.bass * Math.max(0, 1 - 0.7 * freqTilt) : F.bass;
+      const fh = freqTilt !== 0 ? F.high * Math.max(0, 1 + 0.7 * freqTilt) : F.high;
+      const band = [fb, 0.5 * fb + 0.5 * F.mid, F.mid, 0.5 * F.mid + 0.5 * fh, fh];
+      for (let r = 0; r < strataBand.length; r++) {
+        // subtractive quiet floor: a band idling near its noise floor reads as
+        // silent and goes dark, instead of the floor being amplified into a glow.
+        // Release mirrors the pixel envelope: collapsed band → fast empty, so
+        // 120bpm hits land on darkness instead of the last hit's smear.
+        const bandTarget = clamp01((band[r] - 0.12) * P.modDepth * 1.42);
+        const rel = (bandTarget < 0.35 * strataBand[r] ? 0.28 : 0.8) * P.relScale;
+        strataBand[r] = smoothAR(strataBand[r], bandTarget, 0.10, rel, ctx.dt);
+      }
     }
-    for (let i = 0; i < total; i++) {
-      const { radialProgress, angle, stripProgress } = samples[i];
+    const zone = ctx.zone, crest = ctx.crest;
+    const teeth = dLobes(6, 2);                                    // fewer scallops when sparse
+    for (let j = from; j < to; j++) {
+      const p = area.pixelIndex[j];
+      const radialProgress = area.rf[j], angle = area.ang[j], stripProgress = area.u[j];
       const bandPosition = radialProgress * (strataBand.length - 1);
       const lo = Math.floor(bandPosition), hi = Math.min(strataBand.length - 1, lo + 1);
-      let L = lerp(strataBand[lo], strataBand[hi], bandPosition - lo); L *= L;
-      L *= 1 + 1.8 * evt;                                            // onsets blaze the loud bands to full
+      let Lq = lerp(strataBand[lo], strataBand[hi], bandPosition - lo); Lq *= Lq;
+      const L = Lq * (1 + 1.8 * evt);                                // onsets blaze the loud bands to full
       const ang = angle + stripProgress * 0.01;
       const scallop = 0.75 + 0.25 * Math.sin(teeth * ang + strataScallop); // density-scaled teeth so parts of the ring lead
-      target[i] = Math.max(L * scallop, 0.0);                       // no floor — silent band = dark
-      zoneOf[i] = radialProgress < 0.375 ? Z_HEARTH : radialProgress < 0.625 ? Z_PATINA : Z_CANDLE;
-      crestOf[i] = 0;
+      // A whole-loud-band's L already sits near its 1.0 ceiling on a
+      // bright-content track (e.g. brightAcoustic's mid/high rings), so
+      // multiplying an already-clipped ring by evt shows nothing — and a
+      // dark ring (e.g. the same track's near-silent bass ring) stays 0
+      // regardless of the multiplier, since 0 × anything is 0. Neither
+      // extreme of the spectrum can show a hit through L alone
+      // (onsetVisibility measured 0.135/0.129/0.027 on strata/dynamicBuild/
+      // brightAcoustic). This additive felt-pulse rides on top, scaled by the
+      // scallop teeth so it keeps the ring's texture, and reaches every band
+      // including ones the hit's own frequency content does not lie in — a
+      // kick is felt as a pulse through the whole spectrum reading, not just
+      // amplified within whichever band was already loud.
+      // ...but it is GATED by the presence of the light this pixel already
+      // carries (see ONSET_PRESENCE_KNEE). Ungated, this additive term lit
+      // every pixel on every hit, including the rings whose band is quiet and
+      // the scallop troughs between the teeth, and Strata stopped reaching
+      // true dark anywhere — tests/mandala-engine.mjs requires >=15% of
+      // pixel-samples to be truly dark under Active music, because reading a
+      // spectrum depends on a quiet band being visibly OFF. The structure fed
+      // to the gate is the band level BEFORE the evt multiplier above, so the
+      // onset cannot bootstrap its own permission; an already-clipped loud
+      // band is fully open and still shows the hit, which is the point above.
+      // evt² not evt — see ONSET_PRESENCE_KNEE. The gain is held at 0.65: the
+      // localized hit layer in tests/mandala-engine-transients.mjs measures the
+      // bloom's trail against the background it lands on, so a bigger
+      // instantaneous pop here drowns the hit it is supposed to reveal.
+      const onsetPop = 0.65 * evt * evt * (0.35 + 0.65 * scallop) * onsetPresence(Lq * scallop);
+      out[p] = Math.max(L * scallop + onsetPop, 0.0);                // no floor — silent band = dark
+      zone[p] = radialProgress < 0.375 ? Z_HEARTH : radialProgress < 0.625 ? Z_PATINA : Z_CANDLE;
+      crest[p] = 0;
     }
     return 'spectrum';
   }
 
   // ---- 2. Hearth — fireplace mood over ~20s, PLUS a live bass swell ----
-  function fxHearth(t, dt) {
-    driftPhase += dt * speedMul * 0.06;
+  function fxHearth(ctx, area, from, to, out) {
+    if (ctx.first) driftPhase += ctx.dt * speedMul * 0.06;
+    const t = ctx.t, zone = ctx.zone, crest = ctx.crest;
     const mood = 0.10 + 0.35 * CLK.energyTrend;    // slow bed (20s)
-    const swell = 0.55 * CLK.bass + 0.3 * evt;     // onset kicks the swell, decays with onsetEnv
+    const swell = 0.55 * CLK.bass + 0.9 * evt;     // onset kicks the swell, decays with onsetEnv (was 0.3 — median onsetVisibility 0.125, needed 0.15: the slow 20s mood bed was diluting the kick's share of the mean)
     const lobes = dLobes(3, 2), width = dWide(0.72, 0.95);          // sparse: fewer, wider swells
-    for (let i = 0; i < total; i++) {
-      const { radialProgress: rf, angle: ang, spatialKey: seed } = samples[i];
+    const crestValue = clamp01(CLK.centroid - 0.4) * 0.3;
+    for (let j = from; j < to; j++) {
+      const p = area.pixelIndex[j];
+      const rf = area.rf[j], ang = area.ang[j], seed = area.seed[j];
       const local = 0.25 + 0.75 * Math.pow(arcGate(ang, lobes, width, driftPhase + rf * 0.1), 2);
       const base = (mood + swell * local) * (0.85 + 0.15 * Math.sin(lobes * ang + driftPhase + 1.5 * rf));
       // embers of brightness wander with a live hash so it reads as a living fire, not a flat glow
       const flick = 0.85 + 0.15 * hash01(seed, Math.floor(t * 2));
-      target[i] = Math.min(1, Math.max(base * flick, 0.015)); // onset-kicked swell must not park pixels above ceiling
-      zoneOf[i] = Z_HEARTH; crestOf[i] = clamp01(CLK.centroid - 0.4) * 0.3;
+      out[p] = Math.min(1, Math.max(base * flick, 0.015)); // onset-kicked swell must not park pixels above ceiling
+      zone[p] = Z_HEARTH; crest[p] = crestValue;
     }
     return 'fireplace';
   }
 
   // ---- 3. Embers — sparks on true darkness; louder = more AND brighter sparks ----
-  function fxEmbers(t, dt) {
-    const rate = (0.05 + 1.6 * CLK.highTex + 1.0 * CLK.energy + 1.0 * evt) * P.emberRate; // hits birth extra sparks
+  // `emberSparks` accumulates across every range painted this tick, so the
+  // status line reports the whole piece's live spark count, not one range's.
+  let emberSparks = 0;
+  function fxEmbers(ctx, area, from, to, out) {
+    if (ctx.first) emberSparks = 0;
+    const t = ctx.t, zone = ctx.zone, crest = ctx.crest;
+    // `highTex` is a TEXTURE term (deviation from its own running average), so
+    // sustained treble (dense rock, bass electronic) reads as near-zero no
+    // matter how loud it is — the running average catches up to it. That left
+    // Embers band-blind (0.071, needed 0.25) and nearly flat between a quiet
+    // and a loud record (1.94×, needed 3.0×). CLK.high is the absolute LEVEL
+    // of the same band: bright acoustic and bass electronic sit at opposite
+    // ends of it (~0.45 vs ~0.05) even though their broadband `energy` is
+    // similar, which is what actually lets sparks answer "how much treble is
+    // in this music" instead of "how much energy is in this music".
+    // A hit-bloom lands the same way on every mode (see tick()) and is driven
+    // by onset STRENGTH, which is largest on bass kicks — so a bass-heavy
+    // track gets an extra boost through that shared layer even when Embers'
+    // own field ignores bass. The intrinsic CLK.high term below has to be
+    // large enough that it, not the shared onset overlay, decides the mean.
+    const rate = (0.04 + 0.9 * CLK.highTex + 2.1 * CLK.high + 0.15 * CLK.bass + 0.25 * CLK.energy + 1.0 * evt) * P.emberRate; // hits birth extra sparks
     const db = dWide(1, 2.8);                                       // sparse: light a comparable fraction, not fewer sparks
     const ignitionChance = clamp((0.001 + rate * 0.0028) * db, 0.001, 0.05);
     const epochDuration = 0.5;
     const currentEpoch = Math.floor(t / epochDuration);
-    let sparkCount = 0;
-    for (let i = 0; i < total; i++) {
-      const { angle, radialProgress, spatialKey: seed } = samples[i];
-      const field = (0.008 + 0.045 * (0.3 * CLK.energy + 0.7 * CLK.highTex)
+    for (let j = from; j < to; j++) {
+      const p = area.pixelIndex[j];
+      const angle = area.ang[j], radialProgress = area.rf[j], seed = area.seed[j];
+      const field = (0.005 + 0.065 * (0.06 * CLK.energy + 0.62 * CLK.high + 0.32 * CLK.highTex)
         * (0.35 + 0.65 * hash01(seed, Math.floor(t * 4)))
         * (0.75 + 0.25 * Math.sin(angle * 5 + radialProgress * 3))) * db;
-      target[i] = field; zoneOf[i] = Z_HEARTH; crestOf[i] = 0;
+      out[p] = field; zone[p] = Z_HEARTH; crest[p] = 0;
 
       // Each physical sample owns its ignition history. Looking back across
       // deterministic epochs preserves long spark envelopes without storing a
@@ -516,135 +817,248 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
         spark = Math.max(spark, Math.min(1, (0.35 + 0.65 * F.energy) * (1 + 1.2 * evt) * env)); // hits flare live sparks
       }
       if (spark > 0.01) {
-        sparkCount += 1;
-        target[i] = Math.max(target[i], spark);
-        crestOf[i] = clamp01(CLK.centroid - 0.35) * 0.5;
+        emberSparks += 1;
+        out[p] = Math.max(out[p], spark);
+        crest[p] = clamp01(CLK.centroid - 0.35) * 0.5;
       }
     }
-    return sparkCount + ' sparks';
+    return emberSparks + ' sparks';
   }
 
   // ---- 4. Meridian — one crisp ring that BREATHES live with the band it sits on ----
-  function fxMeridian(t, dt) {
-    meridianPhase += dt * speedMul * 0.04;            // authored 25s cycle; audio never changes velocity
+  function fxMeridian(ctx, area, from, to, out) {
     const ringMax = ringCount - 1;                    // pick among the piece's real rings
-    const wantRing = Math.round(clamp(CLK.centroid * ringMax, 0, ringMax));
-    if (wantRing !== meridianTarget) { meridianTarget = wantRing; meridianMix = 0; }
-    meridianMix = Math.min(1, meridianMix + dt / 6);     // 6s migrate — you can see it move
+    if (ctx.first) {
+      meridianPhase += ctx.dt * speedMul * 0.04;      // authored 25s cycle; audio never changes velocity
+      const wantRing = Math.round(clamp(CLK.centroid * ringMax, 0, ringMax));
+      if (wantRing !== meridianTarget) { meridianTarget = wantRing; meridianMix = 0; }
+      meridianMix = Math.min(1, meridianMix + ctx.dt / 6);   // 6s migrate — you can see it move
+    }
+    const zone = ctx.zone, crest = ctx.crest;
     // the lit ring's brightness tracks the band it represents, LIVE, with arc detail.
     const bandOfRing = [CLK.bass, CLK.bass, CLK.mid, CLK.high, CLK.high];
     const spin = meridianPhase;
-    for (let i = 0; i < total; i++) {
-      const { radialProgress, angle } = samples[i];
+    for (let j = from; j < to; j++) {
+      const p = area.pixelIndex[j];
+      const radialProgress = area.rf[j], angle = area.ang[j];
       const ringPosition = radialProgress * ringMax;
       const distanceToTarget = Math.abs(ringPosition - meridianTarget);
       const distanceToPrior = Math.abs(ringPosition - meridianRing);
       const on = Math.exp(-distanceToTarget * distanceToTarget * 22) * meridianMix
         + Math.exp(-distanceToPrior * distanceToPrior * 22) * (1 - meridianMix);
-      const echo = 0.055 * Math.max(0, 1 - distanceToTarget / Math.max(1, ringMax)) * (0.4 + 0.6 * CLK.energy);
+      // `on` is a narrow Gaussian around the ONE selected ring (half-max at
+      // ~0.18 ring-units), so a big evt coefficient inside `level` only ever
+      // reaches the pixels already on that ring — most of the piece never
+      // sees it, which is why raising that coefficient alone barely moved the
+      // whole-piece mean (onsetVisibility measured 0.145 at 2.2, then 0.128 at
+      // 2.8 — noise-level, not a real gain). `echo` and `neigh` are the terms
+      // that actually reach OTHER rings, so the onset needs to ride those too.
+      const echo = (0.055 + 0.34 * evt) * Math.max(0, 1 - distanceToTarget / Math.max(1, ringMax)) * (0.4 + 0.6 * CLK.energy);
       const band = bandOfRing[Math.min(4, Math.round(radialProgress * 4))]; // spectrum slice, ring-count-independent
       const level = 0.03 + 0.97 * band + 2.2 * evt; // near-black when its band is quiet; onsets saturate the ramp top
       const arcW = Math.min(0.9, dWide(0.35, 0.6) + 0.5 * band + 0.25 * evt); // widen with band + onsets + sparseness
       const arc = 0.12 + 0.88 * arcGate(angle, dLobes(3, 2), arcW, spin);
-      const neigh = distanceToTarget < 1.4 ? 0.11 * band * (1 - distanceToTarget / 1.4) : 0;
-      target[i] = Math.max(0.0, on * level * arc + neigh + echo);
-      zoneOf[i] = Z_PATINA; crestOf[i] = 0;
+      const neigh = distanceToTarget < 1.4 ? (0.11 * band + 0.22 * evt) * (1 - distanceToTarget / 1.4) : 0;
+      out[p] = Math.max(0.0, on * level * arc + neigh + echo);
+      zone[p] = Z_PATINA; crest[p] = 0;
     }
-    if (meridianMix >= 1) meridianRing = meridianTarget;
+    // Deferred on purpose: the original committed `meridianRing` only AFTER
+    // painting, so the pixels of this tick still cross-fade from the PRIOR
+    // ring. With ranges that means after the LAST range, not after each one.
+    if (ctx.last && meridianMix >= 1) meridianRing = meridianTarget;
     return 'ring ' + (meridianTarget + 1);
   }
 
   // ---- 5. Procession — slow brass arms (motion), brightness LIVE with mids ----
-  function fxProcession(t, dt) {
-    processTheta += dt * speedMul * (2 * Math.PI / 60); // 60s/rev at neutral speed
-    const broadband = 0.45 * CLK.energy + 0.30 * CLK.bass + 0.25 * CLK.high;
-    const bright = 0.04 + 0.80 * Math.max(CLK.mid, broadband * 0.5, F.beat * 0.35) * P.modDepth + 2.0 * evt; // onsets blaze the arms
-    const breadth = dWide(0.38, 0.62) + 0.18 * Math.max(CLK.mid, broadband) + 0.12 * evt; // wider on onsets + sparseness
+  function fxProcession(ctx, area, from, to, out) {
+    if (ctx.first) processTheta += ctx.dt * speedMul * (2 * Math.PI / 60); // 60s/rev at neutral speed
+    const zone = ctx.zone, crest = ctx.crest;
+    // "mids/broadband" was measuring as pure broadband energy (bandDiscrimination
+    // 0.047, needed 0.25): `energy` folds bass in at 50% weight, so a bass-heavy
+    // track drove the arms almost as hard as a mid/treble one through the back
+    // door. Drop bass out of the mix entirely — the arms answer mid + high,
+    // which is the axis this mode is authored to own.
+    const broadband = 0.62 * CLK.mid + 0.38 * CLK.high;
+    // Coefficient raised from 0.80: the shared onset hit-bloom layer (tick())
+    // rides F.beat, which is strongest on bass-driven kicks — so a modest
+    // broadband signal here was getting swamped by that shared bass-flavoured
+    // overlay and band discrimination stayed near zero even after removing
+    // bass from `broadband` above. This has to be big enough to dominate it.
+    const bright = 0.04 + 1.6 * Math.max(broadband, F.beat * 0.35) * P.modDepth + 2.0 * evt; // onsets blaze the arms
+    const breadth = dWide(0.38, 0.62) + 0.34 * broadband + 0.12 * evt; // wider on onsets + sparseness
     const armN = dLobes(2, 1), arm2N = dLobes(3, 2);               // fewer arms when sparse
-    for (let i = 0; i < total; i++) {
-      const { radialProgress: rf, angle: ang } = samples[i];
+    for (let j = from; j < to; j++) {
+      const p = area.pixelIndex[j];
+      const rf = area.rf[j], ang = area.ang[j];
       const a = ang - processTheta - 0.9 * rf; const u = a * (armN / (2 * Math.PI)); const f = u - Math.floor(u);
       const dA = Math.min(f, 1 - f) * (2 * Math.PI / armN); let arm = clamp01(1 - dA / breadth); arm = arm * arm;
       const a2 = ang + processTheta * 0.6 - 1.4 * rf; const u2 = a2 * (arm2N / (2 * Math.PI)); const f2 = u2 - Math.floor(u2);
       const dA2 = Math.min(f2, 1 - f2) * (2 * Math.PI / arm2N); let arm2 = clamp01(1 - dA2 / (breadth * 1.3)); arm2 = arm2 * arm2;
-      target[i] = Math.max(0.0, bright * Math.max(arm, arm2 * 0.6));   // dark between arms
-      zoneOf[i] = Z_PATINA; crestOf[i] = 0;
+      out[p] = Math.max(0.0, bright * Math.max(arm, arm2 * 0.6));   // dark between arms
+      zone[p] = Z_PATINA; crest[p] = 0;
     }
     return 'procession';
   }
 
   // ---- 6. Tide — a swell rising center→rim, LIVE and dark between swells ----
-  function fxTide(t, dt) {
-    tideVal = smoothAR(tideVal, CLK.bass, 0.06, 1.2, dt);  // rides CLK.bass directly; graceful ~1.2s release
-    const drive = tideVal * P.tideCrest;
-    const targetR = 0.1 + 0.95 * drive; tideR += (targetR - tideR) * Math.min(1, dt / 1.2); // 1.2s travel — visible
-    const spin = t * 0.04;
-    for (let i = 0; i < total; i++) {
-      const { radialProgress: rf, angle } = samples[i];
+  function fxTide(ctx, area, from, to, out) {
+    if (ctx.first) {
+      tideVal = smoothAR(tideVal, CLK.bass, 0.06, 1.2, ctx.dt);  // rides CLK.bass directly; graceful ~1.2s release
+      const targetR = 0.1 + 0.95 * (tideVal * P.tideCrest);
+      tideR += (targetR - tideR) * Math.min(1, ctx.dt / 1.2);     // 1.2s travel — visible
+    }
+    const zone = ctx.zone, crestOut = ctx.crest;
+    const driveRaw = tideVal * P.tideCrest;
+    // A sustained bass-heavy track (bassElectronic, four-on-the-floor's own
+    // plateau) keeps `driveRaw` near its own ceiling continuously — kicks
+    // every ~0.5s never let the 1.2s release fall before the next one lands —
+    // so the field was ALREADY at ~1.0 before a hit arrived and had nowhere
+    // left to rise to (onsetVisibility as low as 0.021-0.097 on those tracks).
+    // This soft-knee leaves genuine headroom near the top of the range so a
+    // kick still has somewhere to go, without shrinking the loud-vs-quiet
+    // reach that makes Tide read as a bass instrument (driveRaw stays
+    // ~linear until it gets close to its own ceiling).
+    const drive = driveRaw / (1 + 0.62 * driveRaw);
+    const spin = ctx.t * 0.04;
+    const arcLobes = dLobes(2, 1), arcWidth = dWide(0.8, 0.95);
+    for (let j = from; j < to; j++) {
+      const p = area.pixelIndex[j];
+      const rf = area.rf[j], angle = area.ang[j];
       const inside = clamp01((tideR - rf) / 0.16 + 1);
       const crest = clamp01(1 - Math.abs(rf - tideR) / 0.14);
-      const arc = 0.55 + 0.45 * arcGate(angle, dLobes(2, 1), dWide(0.8, 0.95), spin);  // broad lobes; wider/fewer when sparse
-      target[i] = Math.max(0.0, inside * (0.06 + 0.94 * drive) * arc + crest * (drive * 0.4 + 0.25 * evt)); // onsets lift the crest
-      zoneOf[i] = Z_HEARTH; crestOf[i] = Math.min(0.85, crest * drive);
+      const arc = 0.55 + 0.45 * arcGate(angle, arcLobes, arcWidth, spin);  // broad lobes; wider/fewer when sparse
+      // The kick itself used to leave no mark (onsetVisibility 0.064, needed
+      // 0.15): `drive` rides CLK.bass on a smoothed swell, and `inside`/`crest`
+      // only light up once tideR has traveled there, so a hit could arrive
+      // while most of the piece was still "outside" the tide. This term rides
+      // the fast onset envelope directly, gated by the same angular arc (so it
+      // stays a tide, not a flash) but not by radial position — the hit is felt
+      // across the arc immediately, the swell still arrives on its own 1.2s travel.
+      // GATED by the tide's own body (see ONSET_PRESENCE_KNEE): ungated it was
+      // felt just as hard OUTSIDE the tide as inside it, which erased the one
+      // thing that makes this mode a tide — the dark water ahead of the swell —
+      // and took Tide from 33.33% of wire pixel-samples truly dark to 0.00%.
+      // evt² not evt, for the reason in ONSET_PRESENCE_KNEE: on a sustained
+      // bass track the linear form never cleared between kicks, so it was a
+      // level rather than a hit and onsetVisibility actually FELL as its gain
+      // rose (0.62·evt → 0.134, 1.15·evt → 0.116, 1.4·evt² → 0.187).
+      const body = inside * (0.06 + 0.80 * drive) * arc;
+      out[p] = Math.max(0.0, body + crest * (drive * 0.4 + 0.25 * evt) + 1.4 * evt * evt * (0.4 + 0.6 * arc) * onsetPresence(body)); // onsets lift the crest AND land as a felt hit
+      zone[p] = Z_HEARTH; crestOut[p] = Math.min(0.85, crest * drive);
     }
     return 'tide';
   }
 
   // ---- 7. Lattice — 6-fold star, contrast LIVE with bass, dark nodes real ----
-  function fxLattice(t, dt) {
-    latticePhase += dt * speedMul * (2 * Math.PI / 30); // 30s precession at neutral speed
-    latticeC = smoothAR(latticeC, clamp01(0.20 + 0.80 * CLK.bass * P.modDepth + 0.35 * evt), 0.06, 1.0 * P.relScale, dt); // LIVE contrast; onsets sharpen the star
+  function fxLattice(ctx, area, from, to, out) {
+    if (ctx.first) {
+      latticePhase += ctx.dt * speedMul * (2 * Math.PI / 30); // 30s precession at neutral speed
+      latticeC = smoothAR(latticeC, clamp01(0.20 + 0.80 * CLK.bass * P.modDepth + 0.35 * evt), 0.06, 1.0 * P.relScale, ctx.dt); // LIVE contrast; onsets sharpen the star
+    }
+    const zone = ctx.zone, crest = ctx.crest;
     const level = 0.05 + 0.75 * CLK.energy + 0.8 * evt; // whole star brightens with energy, blazes on hits, near-black when quiet
     const fold = dLobes(6, 3);                                     // fewer star points when sparse
-    for (let i = 0; i < total; i++) {
-      const { radialProgress: rf, angle: ang, x, y } = samples[i];
+    for (let j = from; j < to; j++) {
+      const idx = area.pixelIndex[j];
+      const rf = area.rf[j], ang = area.ang[j], x = area.x[j], y = area.y[j];
       const cartesianPhase = (x * 0.7 + y * 0.3) * F.beat;
       const p = 0.5 + 0.5 * Math.sin(fold * ang + latticePhase + 2.0 * rf + cartesianPhase); const p2 = p * p * p;
       let B = level * ((1 - latticeC) + latticeC * p2);
       const q = 0.5 + 0.5 * Math.sin(2 * fold * ang - 2 * latticePhase);
       B += level * (0.30 * CLK.mid + 0.10 * F.beat) * q * q * q;
-      target[i] = Math.max(0.0, Math.min(1, B));         // dark nodes go to zero
-      zoneOf[i] = Z_HEARTH; crestOf[i] = 0;
+      out[idx] = Math.max(0.0, Math.min(1, B));          // dark nodes go to zero
+      zone[idx] = Z_HEARTH; crest[idx] = 0;
     }
     return '6-fold star';
   }
 
   // ---- 8. Bloom — 8-petal flower, LIVE bass, dark between petals ----
-  function fxBloom(t, dt) {
-    bloomWob = 0.6 * Math.sin(0.4 * t);
-    bloomR = smoothAR(bloomR, CLK.bass, 0.06, 1.0 * P.relScale, dt);  // LIVE: opens with the bass hit itself
+  function fxBloom(ctx, area, from, to, out) {
+    if (ctx.first) {
+      bloomWob = 0.6 * Math.sin(0.4 * ctx.t);
+      bloomR = smoothAR(bloomR, CLK.bass, 0.06, 1.0 * P.relScale, ctx.dt);  // LIVE: opens with the bass hit itself
+    }
+    const zone = ctx.zone, crest = ctx.crest;
     // flagship: petals expand a little on the bass hit — evt kicks the radius instantly, rides the envelope down
-    const Rrad = 0.15 + 0.90 * bloomR * P.modDepth + 0.18 * evt, open = 0.2 + 0.8 * bloomR + 0.15 * evt;
+    // Soft-knee the modDepth-driven reach: at Active modDepth=1.5, a sustained
+    // bass track (bassElectronic, four-on-the-floor) holds bloomR near 1 so
+    // Rrad's raw value overshoots past 1 and the flower's radial gate opens
+    // across the WHOLE piece — no radial headroom left for a kick to add to
+    // (onsetVisibility was pinned near 0.13 regardless of how hard the flash
+    // term below was pushed). Compressing keeps the same shape at low/medium
+    // bloomR (where Rrad never approached its ceiling) while leaving a little
+    // room open at the top.
+    // The knee is NORMALIZED by its own value at full drive, so a sustained
+    // loud bass always opens the flower to radial progress 1 whatever the
+    // preset. Compressing without normalizing (an earlier tuning pass) capped
+    // the reach near 0.77 and left the outermost samples of a connected layout
+    // permanently dark — tests/mandala-engine.mjs asserts they are reached,
+    // and "every ring stays alive" is the first restraint rule in
+    // docs/mandala-effects-direction-v2.md. Keep both properties: the curve
+    // still holds mid-range reach back so a kick has somewhere to go, and evt
+    // still adds on top of a full-radius base.
+    const bloomKnee = (x) => x / (1 + 0.45 * x);
+    const bloomDriveC = bloomKnee(bloomR * P.modDepth) / bloomKnee(P.modDepth);
+    const Rrad = 0.15 + 0.85 * bloomDriveC + 0.18 * evt, open = 0.2 + 0.8 * bloomR + 0.15 * evt;
     const petalsN = dLobes(8, 3), sharp = dWide(2, 1.15);          // sparse: fewer, softer/wider petals
-    for (let i = 0; i < total; i++) {
-      const { radialProgress: rf, angle: ang } = samples[i];
+    for (let j = from; j < to; j++) {
+      const p = area.pixelIndex[j];
+      const rf = area.rf[j], ang = area.ang[j];
       const radial = clamp01((Rrad - rf) / 0.18 + 1);
       const fr = clamp01(1 - Math.abs(rf - Rrad) / 0.15);
       const trail = clamp01(1 - Math.abs(rf - (Rrad - 0.16)) / 0.24);
       const petal = Math.pow(0.5 + 0.5 * Math.sin(petalsN * ang + bloomWob), sharp); // density-scaled petals with dark gaps
       let B = radial * (0.04 + 0.96 * petal) * open;                        // petals clearly separated, near-black between
       B += fr * petal * 0.4 + trail * petal * (0.08 + 0.12 * CLK.energy);
-      target[i] = Math.max(0.0, Math.min(1, B));
-      zoneOf[i] = Z_HEARTH; crestOf[i] = fr * 0.3;
+      // The kick used to move only Rrad/open (the flower's radius and
+      // openness), which a 200ms window barely resolves as a brightness change
+      // (onsetVisibility 0.069, needed 0.15) — the flower shifts WHERE it is
+      // more than how bright it is. This adds a direct petal-shaped flash so
+      // the hit itself is visible, not just its slower effect on geometry.
+      // Weighted AGAINST petal (stronger in the dark gaps, weaker at an
+      // already-near-ceiling petal peak): a continuous bass track (bass
+      // electronic, four-on-the-floor) keeps bloomR — and so most petal
+      // peaks — already near full open, leaving no headroom there for a
+      // flash to register; the gaps between petals are where a kick still
+      // has somewhere to rise to.
+      // But "the gap between petals" is not one thing: a gap the flower has
+      // reached is dim-but-lit and has headroom, while a gap OUTSIDE the
+      // flower's radius is authored darkness. Ungated, this term flashed both
+      // alike and the flower lost its separated petals entirely — 31.41% of
+      // wire pixel-samples truly dark went to 0.00%. Gating on the light
+      // already painted here (see ONSET_PRESENCE_KNEE) keeps the anti-petal
+      // weighting where there IS a flower and leaves the dark outside it dark.
+      B += 1.3 * evt * (0.85 - 0.5 * petal) * onsetPresence(B);
+      out[p] = Math.max(0.0, Math.min(1, B));
+      zone[p] = Z_HEARTH; crest[p] = fr * 0.3;
     }
     return 'flower';
   }
 
   // ---- 9. Spiral (gallery-grade, middle speed) — 1 rev / 15s ----
-  function fxSpiral(t, dt) {
-    spiralTheta += dt * speedMul * (2 * Math.PI / 15);  // 15s/rev at neutral speed — watchable
-    const broadband = 0.45 * CLK.energy + 0.30 * CLK.bass + 0.25 * CLK.high;
-    const bright = 0.05 + 0.85 * Math.max(CLK.mid, broadband * 0.55, F.beat * 0.4) * P.modDepth + 1.2 * evt, halfW = dWide(0.35, 0.6) + 0.12 * evt; // blaze + widen on onsets + sparseness
+  function fxSpiral(ctx, area, from, to, out) {
+    if (ctx.first) spiralTheta += ctx.dt * speedMul * (2 * Math.PI / 15);  // 15s/rev at neutral speed — watchable
+    const zone = ctx.zone, crest = ctx.crest;
+    // Same fix as Procession's broadband (see comment there): drop bass out of
+    // the mix so this authored-mids/broadband mode actually discriminates
+    // bass-heavy from bright-treble music (was 0.080, needed 0.25) instead of
+    // answering broadband energy that bass alone can supply.
+    const broadband = 0.58 * CLK.mid + 0.42 * CLK.high;
+    // Coefficient raised from 0.85 for the same reason as Procession's identical
+    // fix (see comment there): the shared onset hit-bloom layer rides F.beat,
+    // strongest on bass kicks, and was swamping a modest broadband signal.
+    const bright = 0.05 + 1.6 * Math.max(broadband, F.beat * 0.4) * P.modDepth + 1.2 * evt, halfW = dWide(0.35, 0.6) + 0.22 * broadband + 0.12 * evt; // blaze + widen on onsets + sparseness
     const armN = dLobes(3, 2);                                      // fewer arms when sparse
-    for (let i = 0; i < total; i++) {
-      const { radialProgress: rf, angle: ang, stripProgress } = samples[i];
+    for (let j = from; j < to; j++) {
+      const p = area.pixelIndex[j];
+      const rf = area.rf[j], ang = area.ang[j], stripProgress = area.u[j];
       const beatTravel = F.beat * (0.15 + 0.2 * rf) * Math.sin(Math.PI * 2 * stripProgress + 3 * rf);
       const a = ang - spiralTheta - 1.4 * rf - beatTravel;
       const u = a * (armN / (2 * Math.PI)); const f = u - Math.floor(u);
       const dA = Math.min(f, 1 - f) * (2 * Math.PI / armN);
       let arm = clamp01(1 - dA / halfW); arm = arm * arm;
-      target[i] = Math.max(0.0, arm * bright);          // dark between arms — real contrast
-      zoneOf[i] = arm > 0.3 ? Z_HEARTH : Z_PATINA; crestOf[i] = arm * rf * 0.25;
+      out[p] = Math.max(0.0, arm * bright);             // dark between arms — real contrast
+      zone[p] = arm > 0.3 ? Z_HEARTH : Z_PATINA; crest[p] = arm * rf * 0.25;
     }
     return 'spiral';
   }
@@ -752,17 +1166,68 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     // fxHearth is exempt (its fireplace bed is the mode's identity); the
     // check is on the MODE, not the Hearth palette other modes borrow.
     gateEnv = smoothAR(gateEnv, Ptarget, 0.5, 0.25, dt);
-    darkGate = (presetName === 'Active' && listening && mode !== 'hearth') ? gateEnv : 0;
+    // The gate is a NINE-MODE amendment and stays off under a composition:
+    // showEnsemble applies LIVING_COAL_FLOOR to every pixel, every frame, as a
+    // law no authored setting may defeat. Letting the gate crush that floor to
+    // black at render time would defeat it from outside — two modules holding
+    // opposite positions on the same never-black rule.
+    darkGate = (!ensemble && presetName === 'Active' && listening && mode !== 'hearth') ? gateEnv : 0;
 
     updateOnsets(t, dt);
     evt = onsetEnv * (presetName === 'Active' ? 1.0 : 0.4);   // preset-gated geometry pulse
     updateClocks(t, dt);
-    const lead = (STEPS[mode] || fxStrata)(t, dt);
+    fxCtx.t = t; fxCtx.dt = dt;
+    fxCtx.first = true; fxCtx.last = true;
+    fxCtx.zone = zoneOf; fxCtx.crest = crestOf;
+    let lead;
+    if (ensemble) {
+      // ---- ENSEMBLE PATH: many areas, many voices, one accumulator ----------
+      // `tickVoices` owns the range walk the RANGE-PAINTING block describes: it
+      // ticks each voice's character ONCE per frame, then calls that
+      // character's kernel once per instance range of its area binding
+      // (`instanceStart[k] .. instanceStart[k+1]`), so a voice's authored clock
+      // advances exactly once however many wedges it paints. That is the same
+      // exactly-once contract `ctx.first`/`ctx.last` give the nine fx* kernels,
+      // enforced inside the runtime instead of by this caller. The two flags
+      // stay true because this single delegated call IS both the first and the
+      // last paint of the tick; no fx* runs here, so not one of the
+      // engine-scoped mode clocks (strataScallop, spiralTheta, latticePhase, …)
+      // advances at all and none can be double-advanced.
+      fxBands.bass = F.bass; fxBands.mid = F.mid; fxBands.high = F.high;
+      fxBands.energy = F.energy; fxBands.beat = F.beat;
+      fxCtx.bands = fxBands;
+      const status = ensemble.tickVoices(target, fxCtx);
+      applyEnsembleZones();
+      lead = `${status.label} ${status.painted}/${status.voices}`;
+    } else {
+      // ---- NINE-MODE PATH: unchanged, and it must stay unchanged ------------
+      // One voice, one range: the whole-piece binding covers every pixel in
+      // template order, and this is both the first and the last paint of the
+      // tick, so the mode's clocks advance exactly once. See the RANGE-PAINTING
+      // block in the module header before handing these kernels more than one
+      // range. `mandalaEngine.legacyParity.test.js` pins this branch to
+      // byte-identical wire frames across all nine modes.
+      fxCtx.bands = null;
+      lead = (STEPS[mode] || fxStrata)(fxCtx, wholePiece, 0, wholePiece.count, target);
+    }
+
+    // ---- EVERYTHING BELOW RUNS EXACTLY ONCE PER TICK, ON BOTH PATHS ---------
+    // Fill lift, coal floor, beat substrate, hit blooms, silence decay and the
+    // per-pixel envelope sit OUTSIDE the branch on purpose. They are
+    // whole-piece passes over `target`, not per-range ones: moving any of them
+    // inside a per-voice or per-range loop would apply it once per area, which
+    // reads as a piece that is too bright and stops decaying.
+
+    // The Embers exemption below belongs to the Embers MODE, whose authored
+    // canvas IS the darkness. Under a composition no mode is running, so a
+    // stale `mode === 'embers'` must not silently strip the ensemble of its
+    // fill lift and its coal floor.
+    const emberCanvas = !ensemble && mode === 'embers';
 
     // Fill knob: raise how much of the piece is lit at once, lifting the dark
     // toward mid without over-brightening what's already lit. Scaled by presence
     // so silence still hands off to the coal idle; Embers keeps its dark canvas.
-    if (fillLift > 0 && mode !== 'embers') {
+    if (fillLift > 0 && !emberCanvas) {
       const lift = fillLift * 0.35 * presence;
       for (let i = 0; i < total; i++) target[i] += lift * (1 - clamp01(target[i]));
     }
@@ -775,7 +1240,7 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     // Embers is exempt: its authored canvas IS the darkness. Applied BEFORE
     // the substrate so beats ripple through the glow field, not under it.
     const glow = 0.15 * presence * (1 - darkGate);
-    if (glow > 0.001 && mode !== 'embers') {
+    if (glow > 0.001 && !emberCanvas) {
       for (let i = 0; i < total; i++) {
         if (target[i] < glow) target[i] = glow;
       }
@@ -1000,6 +1465,17 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     setTemplate(next) {
       installTemplate(next);
     },
+    // ---- the ensemble switch: nine modes <-> a composition, live ----------
+    // The Show screen flips between the two with no reload and no re-install.
+    // `clearComposition()` is the instant fallback to what ships today.
+    setComposition,
+    clearComposition,
+    getComposition() { return composition; },
+    hasComposition() { return ensemble !== null; },
+    // The runtime's own view of what it resolved (voices, areas, warnings) —
+    // null while the nine modes are running.
+    getEnsembleResolved() { return ensemble ? ensemble.getResolved() : null; },
+    getVoiceDebug(voiceId) { return ensemble ? ensemble.getVoiceDebug(voiceId) : null; },
     // introspection (meters, status line, preview render)
     getLevels() { return { ...F }; },
     getTransients() {

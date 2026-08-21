@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  mandala-6fold.svg — hand-written fixture for artworkSymmetry.js.
+
+  A 6-fold rotationally symmetric mandala centred on (200,200), built from
+  one base wedge ("wedge-0") repeated 6x around the centre by a mix of
+  <g transform="rotate(...)"> and <use> clones (the two duplication idioms
+  real laser-cut art files use interchangeably). Deliberately NOT
+  perfectly clean:
+
+    - "signature" is a single off-pattern path (an engraver's mark) with
+      no rotational partner — the kind of stray shape estimateCentre's
+      top-60%-by-path-length filter exists to ignore.
+    - "spot-1".."spot-3" are three small dust/mounting-hole dots, placed
+      asymmetrically (3, not 6) and NOT aligned to the wedge boundaries.
+
+  This file is not parsed by the unit tests in artworkSymmetry.test.js
+  (those use an injectable analytic sampler and need no DOM/SVG parser).
+  It exists for manual/visual verification and for any future consumer
+  that samples real SVG geometry.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <title>6-fold mandala fixture</title>
+
+  <!-- Undecorated centre hub — the single <circle> in this file. -->
+  <circle id="centre-hub" cx="200" cy="200" r="10" fill="#c9a227" />
+
+  <!-- Base wedge: one 60-degree slice of the motif, drawn once and reused
+       by every other wedge via rotate transforms and <use> clones. -->
+  <g id="wedge-0">
+    <!-- lotus: the large petal motif -->
+    <path id="lotus" d="M200,200 Q235,168 355,200 Q235,232 200,200 Z" fill="#7a3f8f" />
+    <!-- bee: a small blob offset from the wedge centreline -->
+    <path id="bee" d="M296.6,174.1 m-12,0 a12,8 0 1,0 24,0 a12,8 0 1,0 -24,0 Z" fill="#caa000" />
+    <!-- sun-ray: the single <polygon> in this file -->
+    <polygon id="sun-ray" points="260,196 350,200 260,204" fill="#e07b39" />
+  </g>
+
+  <!-- (a) one wedge realised as a <g transform="rotate(...)"> around the
+       base wedge, via <use> — this is the required rotate-transform
+       wedge. -->
+  <g transform="rotate(60 200 200)">
+    <use href="#wedge-0" />
+  </g>
+
+  <!-- (b) two further wedges duplicated as direct <use> clones. -->
+  <use href="#wedge-0" transform="rotate(120 200 200)" />
+  <use href="#wedge-0" transform="rotate(180 200 200)" />
+
+  <!-- Remaining two wedges, completing the 6-fold ring. -->
+  <g transform="rotate(240 200 200)">
+    <use href="#wedge-0" />
+  </g>
+  <g transform="rotate(300 200 200)">
+    <use href="#wedge-0" />
+  </g>
+
+  <!-- spot-1..3: a few small asymmetric dust/mounting-hole dots — three
+       of them, not six, and not on any wedge boundary. Paths (not
+       circles), so this file keeps exactly one <circle> element. -->
+  <path id="spot-1" d="M62,74 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 Z" fill="#555" />
+  <path id="spot-2" d="M340,330 m-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0 Z" fill="#555" />
+  <path id="spot-3" d="M120,326 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z" fill="#555" />
+
+  <!-- (e) signature: one deliberately asymmetric mark, no rotational
+       partner anywhere in the piece. -->
+  <path id="signature" d="M370,372 Q378,364 372,356 Q365,364 374,369 Q368,373 370,378" fill="none" stroke="#333" stroke-width="1.2" />
+</svg>

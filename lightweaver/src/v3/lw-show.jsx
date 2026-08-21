@@ -18,6 +18,17 @@ import {
   TOTAL_PIXELS,
 } from '../lib/mandalaEngine.js';
 import { createShowAudioFeatures } from '../lib/showAudioFeatures.js';
+import { createDemoTrack, DEMO_TRACKS } from '../lib/demoTracks.js';
+import { ShowVoices } from './ShowVoices.jsx';
+import { loadCompositions, persistCompositions } from '../lib/showComposition.js';
+import {
+  buildStarterComposition,
+  characterKeyOf,
+  patchGround,
+  patchVoice,
+  performanceComposition,
+  restoreCharacters,
+} from '../lib/showEnsembleBench.js';
 import {
   createConnectedSpatialTemplate,
   createMandalaSpatialTemplate,
@@ -201,7 +212,7 @@ function BandMeter({ label, value }) {
 }
 
 function ShowScreen({ connected, cardLink, currentProject, go }) {
-  const { strips, hidden, patchBoard } = useProject();
+  const { strips, hidden, patchBoard, layerGroups } = useProject();
   const mandalaTemplate = useMemo(() => createMandalaSpatialTemplate(), []);
   const connectedTemplate = useMemo(
     () => createConnectedSpatialTemplate({ strips, hidden, patchBoard }),
@@ -259,7 +270,7 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
   // running animation.
   const benchStripRef = useRef('');
   benchStripRef.current = benchStripId;
-  const audioRef = useRef({ ctx: null, analyser: null, source: null, micStream: null, elSource: null, objectUrl: '' });
+  const audioRef = useRef({ ctx: null, analyser: null, source: null, micStream: null, elSource: null, objectUrl: '', demo: null });
   const featureRef = useRef(null);
   const playerRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -296,7 +307,8 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
   const [preset, setPreset] = useState('Calm');
   const [sensitivity, setSensitivity] = useState(1.0);
   const [master, setMaster] = useState(0.75);
-  const [source, setSource] = useState('quiet'); // quiet | mic | file
+  const [source, setSource] = useState('quiet'); // quiet | mic | file | demo
+  const [demoId, setDemoId] = useState('');
   const [fileName, setFileName] = useState('');
   const [songPaused, setSongPaused] = useState(false);
   const [onLights, setOnLights] = useState(false);
@@ -306,6 +318,20 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
   const [knobs, setKnobs] = useState(KNOB_DEFAULTS);
   const [tuneOpen, setTuneOpen] = useState(false);
   const [tuneStatus, setTuneStatus] = useState('');
+
+  // ── the ensemble ("Voices") ───────────────────────────────────────────────
+  // Two ways for the same piece to listen, switchable while the music plays:
+  // 'modes' is the nine hand-tuned whole-piece effects, byte-for-byte what
+  // shipped before this screen learned about voices; 'voices' hands the paint
+  // step to an ensemble composition. Nothing else is torn down when this
+  // changes — the audio graph, the analyser, and the card stream all belong to
+  // refs that never see it — so the two can be A/B'd against one song.
+  const [engineMode, setEngineMode] = useState('modes');   // 'modes' | 'voices'
+  const [composition, setComposition] = useState(null);
+  const [expandedVoiceId, setExpandedVoiceId] = useState(null);
+  const [soloVoiceId, setSoloVoiceId] = useState(null);
+  const [audition, setAudition] = useState(null);          // { voiceId, patch } | null
+  const projectId = currentProject?.id || '';
 
   const modeInfo = MODE_LIBRARY.find((m) => m.key === modeKey) || MODE_LIBRARY[0];
 
@@ -359,6 +385,100 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
     hexBufRef.current = null;
     if (pausedRef.current) renderFrameRef.current?.({ push: true });
   }, [activeTemplate, activeTemplateKind]);
+
+  // ── composition: load, build, play, save ─────────────────────────────────
+  // Saved silently under the project id, a sibling of the project file (never
+  // inside it — see the header of showComposition.js: a knob turned mid-song
+  // would otherwise change the project fingerprint and revoke this tab's live
+  // control of the card).
+  useEffect(() => {
+    setSoloVoiceId(null);
+    setAudition(null);
+    setExpandedVoiceId(null);
+    if (!projectId) { setComposition(null); return; }
+    const saved = loadCompositions(projectId);
+    setComposition(saved.length > 0 ? restoreCharacters(saved[0]) : null);
+  }, [projectId]);
+
+  // The starter is built the first time Voices is opened, not on load: a
+  // project the owner has not looked at yet should not get a composition
+  // written under it.
+  const buildStarter = useCallback(
+    () => buildStarterComposition({ strips, layerGroups, template: activeTemplate }),
+    [activeTemplate, layerGroups, strips],
+  );
+
+  const chooseEngineMode = useCallback((next) => {
+    if (next === 'voices') setComposition((current) => current || buildStarter());
+    setEngineMode(next);
+  }, [buildStarter]);
+
+  const rebuildComposition = useCallback(() => {
+    setSoloVoiceId(null);
+    setAudition(null);
+    setComposition(buildStarter());
+  }, [buildStarter]);
+
+  // What the ENGINE gets: the authored composition plus the two live overlays
+  // (solo dimming, held-chip audition) that are deliberately never saved.
+  // Named `livePerformance`, not `performance` — a local called `performance`
+  // would shadow the global the animation loop's `performance.now()` needs.
+  const livePerformance = useMemo(
+    () => (engineMode === 'voices'
+      ? performanceComposition(composition, { soloVoiceId, audition })
+      : null),
+    [audition, composition, engineMode, soloVoiceId],
+  );
+
+  // Pushed straight through, not coalesced behind requestAnimationFrame: a
+  // hidden or throttled tab never fires RAF, and an edit that waits for a
+  // frame that never comes is an edit the owner watched do nothing. React
+  // renders at most once per input event, so a Depth drag already arrives here
+  // about once a frame anyway.
+  useEffect(() => {
+    if (livePerformance) engineRef.current.setComposition(livePerformance);
+    else engineRef.current.clearComposition();
+    // A paused song still has to show the edit — the loop is not painting.
+    if (pausedRef.current) renderFrameRef.current?.({ push: true });
+  }, [livePerformance]);
+
+  useEffect(() => {
+    if (!projectId || !composition) return undefined;
+    const timer = setTimeout(() => { persistCompositions(projectId, [composition]); }, 400);
+    return () => clearTimeout(timer);
+  }, [composition, projectId]);
+
+  // One card per area, in composition order (which buildStarterComposition
+  // sorts centre-outwards). `fold` is the authored instance count, which is
+  // what decides whether spread/direction are worth showing at all.
+  const voiceCards = useMemo(() => {
+    if (!composition) return [];
+    const areaById = new Map((composition.areas || []).map((area) => [area.id, area]));
+    return (composition.voices || []).map((voice) => {
+      const area = areaById.get(voice.areaId) || null;
+      return {
+        id: voice.id,
+        areaId: voice.areaId,
+        name: area?.name || 'Motif',
+        character: characterKeyOf(voice),
+        band: typeof voice.band === 'string' ? voice.band : 'mid',
+        depth: Number.isFinite(voice.depth) ? voice.depth : 0.5,
+        spread: Number.isFinite(voice.spread) ? voice.spread : 0,
+        direction: voice.direction === -1 ? -1 : 1,
+        fold: area && Array.isArray(area.instances) ? Math.max(1, area.instances.length) : 1,
+        unresolved: !area,
+      };
+    });
+  }, [composition]);
+
+  const commitVoice = useCallback((voiceId, patch) => {
+    setAudition(null);
+    setComposition((current) => patchVoice(current, voiceId, patch));
+  }, []);
+
+  const changeGround = useCallback((patch) => {
+    setComposition((current) => patchGround(current, patch));
+  }, []);
 
   // ── the one animation loop: analyze → tick → paint → (stream) ───────────
   useEffect(() => {
@@ -475,6 +595,8 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
     const audio = audioRef.current;
     audio.micStream?.getTracks?.().forEach((track) => track.stop());
     audio.micStream = null;
+    if (audio.demo) { try { audio.demo.dispose(); } catch { /* already closing */ } }
+    audio.demo = null;
     if (audio.objectUrl) URL.revokeObjectURL(audio.objectUrl);
     try { audio.ctx?.close(); } catch { /* already closed */ }
     audio.ctx = null;
@@ -545,16 +667,28 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
     audio.micStream = null;
   }, []);
 
+  // A demo track is a third kind of source, alongside the mic and a file: an
+  // ordinary AudioNode that connects to the same analyser. Only one is ever
+  // alive, and it is disposed rather than parked — its scheduler is a timer.
+  const stopDemo = useCallback(() => {
+    const audio = audioRef.current;
+    const demo = audio.demo;
+    audio.demo = null;
+    if (demo) { try { demo.dispose(); } catch { /* context closing */ } }
+    setDemoId('');
+  }, []);
+
   const goQuiet = useCallback(() => {
     sourceRequestGenerationRef.current += 1;
     stopMicTracks();
+    stopDemo();
     try { playerRef.current?.pause(); } catch { /* noop */ }
     pausedRef.current = false;
     resetTimingRef.current = true;
     setSongPaused(false);
     engineRef.current.setListening(false);
     setSource('quiet');
-  }, [stopMicTracks]);
+  }, [stopDemo, stopMicTracks]);
 
   const startMic = useCallback(async () => {
     if (globalThis.__LW_RUNTIME_MODE__?.secureTools === false) {
@@ -580,6 +714,7 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
       resetTimingRef.current = true;
       setSongPaused(false);
       stopMicTracks();
+      stopDemo();
       audio.micStream = mic;
       connectSource(audio.ctx.createMediaStreamSource(mic), false);
       engineRef.current.setListening(true);
@@ -589,7 +724,35 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
       if (sourceRequestGenerationRef.current !== requestGeneration) return;
       setNotice({ kind: 'err', text: `Couldn't use the microphone: ${error?.message || error}` });
     }
-  }, [connectSource, ensureAudio, stopMicTracks]);
+  }, [connectSource, ensureAudio, stopDemo, stopMicTracks]);
+
+  // Built-in music: no microphone, no file to find. Synthesised in the browser
+  // (src/lib/demoTracks.js) and looping until something else takes the source.
+  const startDemoTrack = useCallback((id) => {
+    const requestGeneration = sourceRequestGenerationRef.current + 1;
+    sourceRequestGenerationRef.current = requestGeneration;
+    const audio = ensureAudio();
+    try { playerRef.current?.pause(); } catch { /* noop */ }
+    stopMicTracks();
+    stopDemo();
+    let track;
+    try {
+      track = createDemoTrack(audio.ctx, id);
+    } catch (error) {
+      setNotice({ kind: 'err', text: `Couldn't start the demo track: ${error?.message || error}` });
+      return;
+    }
+    audio.demo = track;
+    connectSource(track.node, true);
+    track.start();
+    pausedRef.current = false;
+    resetTimingRef.current = true;
+    setSongPaused(false);
+    engineRef.current.setListening(true);
+    setDemoId(id);
+    setSource('demo');
+    setNotice(null);
+  }, [connectSource, ensureAudio, stopDemo, stopMicTracks]);
 
   const pickFile = useCallback(() => fileInputRef.current?.click(), []);
 
@@ -602,6 +765,7 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
     const audio = ensureAudio();
     const player = playerRef.current;
     stopMicTracks();
+    stopDemo();
     if (audio.objectUrl) URL.revokeObjectURL(audio.objectUrl);
     audio.objectUrl = URL.createObjectURL(file);
     player.src = audio.objectUrl;
@@ -630,7 +794,7 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
       setSongPaused(true);
       setNotice({ kind: 'err', text: `Couldn't play the song: ${error?.message || error}` });
     });
-  }, [connectSource, ensureAudio, stopMicTracks]);
+  }, [connectSource, ensureAudio, stopDemo, stopMicTracks]);
 
   const toggleSongPause = useCallback(() => {
     if (source !== 'file' || !fileName) return;
@@ -805,6 +969,10 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
   }, [handleStreamHealth, lightsBusy, showAuthorityInput, showRenderingContract, stopLights]);
 
   const listening = source !== 'quiet';
+  const demoTrack = useMemo(() => DEMO_TRACKS.find((track) => track.id === demoId) || null, [demoId]);
+  const hearing = source === 'mic'
+    ? 'the room'
+    : (source === 'demo' ? (demoTrack?.name || 'a demo track') : (fileName || 'your song'));
 
   return (
     <div className="screen">
@@ -814,7 +982,7 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
             <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-hi)' }}>The piece listens</span>
             <span className="mono" style={{ fontSize: 10, color: 'var(--text-faint)' }}>
-              {listening ? `hearing ${source === 'mic' ? 'the room' : (fileName || 'your song')} · ${modeInfo.name.toLowerCase()}` : 'quiet — pick a sound source to begin'}
+              {listening ? `hearing ${hearing} · ${engineMode === 'voices' ? `${voiceCards.length} voices` : modeInfo.name.toLowerCase()}` : 'quiet — pick a sound source to begin'}
             </span>
           </div>
           <div className="tp-spring" />
@@ -893,7 +1061,9 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
               <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block', borderRadius: activeTemplateKind === 'mandala' ? '50%' : 'var(--r-lg)' }} />
             </div>
             <div className="mono" style={{ fontSize: 10.5, letterSpacing: '0.06em', color: 'var(--text-lo)', textAlign: 'center' }}>
-              {modeInfo.name} · {preset === 'Calm' ? 'calm' : 'listening closely'}
+              {engineMode === 'voices'
+                ? `${soloVoiceId ? `${voiceCards.find((v) => v.id === soloVoiceId)?.name || 'one voice'} in front` : 'Voices'} · ${preset === 'Calm' ? 'calm' : 'listening closely'}`
+                : `${modeInfo.name} · ${preset === 'Calm' ? 'calm' : 'listening closely'}`}
             </div>
             {/*
               Which part of the design goes to the card. The screen above always
@@ -970,6 +1140,47 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
                 <Chip on={source === 'file'} onClick={pickFile} title="Play a song from a file">Song file</Chip>
                 <Chip on={source === 'quiet'} onClick={goQuiet} title="Stop listening — the piece settles to a dim glow">Quiet</Chip>
               </ChipRow>
+              {/*
+                Built-in music. No microphone, no hunting for a file: three
+                short pieces played straight out of the browser, each one
+                shaped to exercise a different part of the listening — deep
+                and sustained, a plain pulse, and all air. Held together they
+                are the fastest way to see whether an area is really hearing
+                the band it was told to hear.
+              */}
+              <div style={{ marginTop: 10 }} data-testid="show-demo-tracks">
+                <div className="mono" style={{ fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 6 }}>
+                  Built-in music
+                </div>
+                <div role="group" aria-label="Built-in music" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {DEMO_TRACKS.map((track) => {
+                    const on = source === 'demo' && demoId === track.id;
+                    return (
+                      <button
+                        key={track.id}
+                        type="button"
+                        data-testid={`show-demo-${track.id}`}
+                        aria-pressed={on}
+                        onClick={() => startDemoTrack(track.id)}
+                        style={{
+                          ...chipStyle(on),
+                          borderRadius: 'var(--r-md)',
+                          padding: '8px 12px',
+                          textAlign: 'left',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 2,
+                        }}
+                      >
+                        <span style={{ fontWeight: 600 }}>{track.name}</span>
+                        <span style={{ fontSize: 10.5, fontWeight: 400, lineHeight: 1.4, opacity: on ? 0.85 : 0.75 }}>
+                          {track.description}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
               {source === 'file' && fileName && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
                   <button type="button" className="btn" data-testid="show-pause" onClick={toggleSongPause}>
@@ -989,6 +1200,54 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
               <Slider k="Sensitivity" v={`${sensitivity.toFixed(1)}×`} value={sensitivity} min={0.3} max={3} step={0.05} onChange={changeSensitivity} />
 
               <div className="field-sep" />
+              {/*
+                The A/B. Both sides read the same live audio and feed the same
+                canvas and the same card stream, so the owner can stand in
+                front of the piece with one song playing and flip between the
+                nine whole-piece modes and his own named motifs reacting one by
+                one. Switching costs one engine call and nothing else.
+              */}
+              <div className="sec-h"><span className="t">What plays</span><span className="line" /></div>
+              <div role="group" aria-label="What plays" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                <button
+                  type="button"
+                  data-testid="show-engine-modes"
+                  aria-pressed={engineMode === 'modes'}
+                  onClick={() => chooseEngineMode('modes')}
+                  title="The nine hand-tuned effects, painted across the whole piece"
+                  style={chipStyle(engineMode === 'modes')}
+                >
+                  Modes
+                </button>
+                <button
+                  type="button"
+                  data-testid="show-engine-voices"
+                  aria-pressed={engineMode === 'voices'}
+                  onClick={() => chooseEngineMode('voices')}
+                  title="Each named part of your piece listening to its own part of the music"
+                  style={chipStyle(engineMode === 'voices')}
+                >
+                  Voices
+                </button>
+              </div>
+
+              <div className="field-sep" />
+              {engineMode === 'voices' ? (
+                <ShowVoices
+                  voices={voiceCards}
+                  ground={composition?.ground || null}
+                  levels={levels}
+                  soloVoiceId={soloVoiceId}
+                  expandedId={expandedVoiceId}
+                  onExpand={setExpandedVoiceId}
+                  onSolo={setSoloVoiceId}
+                  onCommit={commitVoice}
+                  onAudition={setAudition}
+                  onGround={changeGround}
+                  onRebuild={rebuildComposition}
+                />
+              ) : (
+              <>
               <div className="sec-h"><span className="t">Mode</span><span className="line" /></div>
               <div className="mono" style={{ fontSize: 9.5, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--text-faint)', margin: '2px 0 6px' }}>Slow &amp; meditative</div>
               <ChipRow>
@@ -1048,6 +1307,8 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
                     {tuneStatus || KNOB_META.find(({ key }) => Math.abs(knobs[key] - KNOB_DEFAULTS[key]) > 1e-6)?.hint || 'Move a slider to hear the piece change, then Save as default.'}
                   </div>
                 </div>
+              )}
+              </>
               )}
 
               <div className="field-sep" />
