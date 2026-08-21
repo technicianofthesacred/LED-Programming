@@ -231,3 +231,55 @@ test('a parked patch folds into the single release commit, not a commit of its o
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('a parked branch is merged in, and a branch that has vanished stops the run', () => {
+  const { root, upstream } = buildSandbox();
+  try {
+    const author = clone(root, upstream, 'author');
+    run(['checkout', '--quiet', '-b', 'parked-work'], author);
+    writeFileSync(join(author, 'carried.txt'), 'from a branch\n');
+    run(['commit', '--quiet', '-am', 'work on a branch'], author);
+    run(['push', '--quiet', 'origin', 'parked-work'], author);
+    run(['checkout', '--quiet', 'main'], author);
+    park(author, {
+      id: 'parked-work',
+      what: 'A change that lives on a branch.',
+      why: 'Not worth a card update on its own.',
+      added: '2026-08-21',
+      source: { kind: 'branch', branch: 'parked-work' },
+    });
+
+    const owner = clone(root, upstream, 'owner');
+    assert.equal(queue(owner, ['release']).status !== 2, true);
+    run(['fetch', '--quiet', 'origin'], owner);
+    assert.equal(run(['show', 'origin/firmware-release/1.2.4:carried.txt'], owner), 'from a branch');
+    assert.equal(run(['show', 'origin/firmware-release/1.2.4:firmware/lightweaver-controller/VERSION'], owner), '1.2.4');
+    assert.deepEqual(
+      JSON.parse(run(['show', 'origin/firmware-release/1.2.4:firmware-queue/queue.json'], owner)).waiting,
+      [],
+    );
+
+    // Same list, but the branch is gone from the shared copy.
+    const second = clone(root, upstream, 'second');
+    run(['push', '--quiet', 'origin', '--delete', 'parked-work'], second);
+    run(['push', '--quiet', 'origin', '--delete', 'firmware-release/1.2.4'], second);
+    run(['reset', '--hard', '--quiet', 'HEAD~1'], second);
+    run(['push', '--quiet', '--force', 'origin', 'main'], second);
+    park(second, {
+      id: 'parked-work',
+      what: 'A change that lives on a branch.',
+      why: 'Not worth a card update on its own.',
+      added: '2026-08-21',
+      source: { kind: 'branch', branch: 'parked-work' },
+    });
+    const third = clone(root, upstream, 'third');
+    const gone = queue(third, ['release']);
+    assert.notEqual(gone.status, 0);
+    assert.match(gone.stderr, /has gone missing/);
+    assert.match(gone.stderr, /A change that lives on a branch\./);
+    assert.equal(run(['status', '--porcelain'], third), '');
+    assert.equal(run(['branch', '--list', 'firmware-release/*'], third), '');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
