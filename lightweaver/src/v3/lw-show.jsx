@@ -18,6 +18,7 @@ import {
   TOTAL_PIXELS,
 } from '../lib/mandalaEngine.js';
 import { createShowAudioFeatures } from '../lib/showAudioFeatures.js';
+import { createDemoTrack, DEMO_TRACKS } from '../lib/demoTracks.js';
 import { ShowVoices } from './ShowVoices.jsx';
 import { loadCompositions, persistCompositions } from '../lib/showComposition.js';
 import {
@@ -269,7 +270,7 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
   // running animation.
   const benchStripRef = useRef('');
   benchStripRef.current = benchStripId;
-  const audioRef = useRef({ ctx: null, analyser: null, source: null, micStream: null, elSource: null, objectUrl: '' });
+  const audioRef = useRef({ ctx: null, analyser: null, source: null, micStream: null, elSource: null, objectUrl: '', demo: null });
   const featureRef = useRef(null);
   const playerRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -306,7 +307,8 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
   const [preset, setPreset] = useState('Calm');
   const [sensitivity, setSensitivity] = useState(1.0);
   const [master, setMaster] = useState(0.75);
-  const [source, setSource] = useState('quiet'); // quiet | mic | file
+  const [source, setSource] = useState('quiet'); // quiet | mic | file | demo
+  const [demoId, setDemoId] = useState('');
   const [fileName, setFileName] = useState('');
   const [songPaused, setSongPaused] = useState(false);
   const [onLights, setOnLights] = useState(false);
@@ -593,6 +595,8 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
     const audio = audioRef.current;
     audio.micStream?.getTracks?.().forEach((track) => track.stop());
     audio.micStream = null;
+    if (audio.demo) { try { audio.demo.dispose(); } catch { /* already closing */ } }
+    audio.demo = null;
     if (audio.objectUrl) URL.revokeObjectURL(audio.objectUrl);
     try { audio.ctx?.close(); } catch { /* already closed */ }
     audio.ctx = null;
@@ -663,16 +667,28 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
     audio.micStream = null;
   }, []);
 
+  // A demo track is a third kind of source, alongside the mic and a file: an
+  // ordinary AudioNode that connects to the same analyser. Only one is ever
+  // alive, and it is disposed rather than parked — its scheduler is a timer.
+  const stopDemo = useCallback(() => {
+    const audio = audioRef.current;
+    const demo = audio.demo;
+    audio.demo = null;
+    if (demo) { try { demo.dispose(); } catch { /* context closing */ } }
+    setDemoId('');
+  }, []);
+
   const goQuiet = useCallback(() => {
     sourceRequestGenerationRef.current += 1;
     stopMicTracks();
+    stopDemo();
     try { playerRef.current?.pause(); } catch { /* noop */ }
     pausedRef.current = false;
     resetTimingRef.current = true;
     setSongPaused(false);
     engineRef.current.setListening(false);
     setSource('quiet');
-  }, [stopMicTracks]);
+  }, [stopDemo, stopMicTracks]);
 
   const startMic = useCallback(async () => {
     if (globalThis.__LW_RUNTIME_MODE__?.secureTools === false) {
@@ -698,6 +714,7 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
       resetTimingRef.current = true;
       setSongPaused(false);
       stopMicTracks();
+      stopDemo();
       audio.micStream = mic;
       connectSource(audio.ctx.createMediaStreamSource(mic), false);
       engineRef.current.setListening(true);
@@ -707,7 +724,35 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
       if (sourceRequestGenerationRef.current !== requestGeneration) return;
       setNotice({ kind: 'err', text: `Couldn't use the microphone: ${error?.message || error}` });
     }
-  }, [connectSource, ensureAudio, stopMicTracks]);
+  }, [connectSource, ensureAudio, stopDemo, stopMicTracks]);
+
+  // Built-in music: no microphone, no file to find. Synthesised in the browser
+  // (src/lib/demoTracks.js) and looping until something else takes the source.
+  const startDemoTrack = useCallback((id) => {
+    const requestGeneration = sourceRequestGenerationRef.current + 1;
+    sourceRequestGenerationRef.current = requestGeneration;
+    const audio = ensureAudio();
+    try { playerRef.current?.pause(); } catch { /* noop */ }
+    stopMicTracks();
+    stopDemo();
+    let track;
+    try {
+      track = createDemoTrack(audio.ctx, id);
+    } catch (error) {
+      setNotice({ kind: 'err', text: `Couldn't start the demo track: ${error?.message || error}` });
+      return;
+    }
+    audio.demo = track;
+    connectSource(track.node, true);
+    track.start();
+    pausedRef.current = false;
+    resetTimingRef.current = true;
+    setSongPaused(false);
+    engineRef.current.setListening(true);
+    setDemoId(id);
+    setSource('demo');
+    setNotice(null);
+  }, [connectSource, ensureAudio, stopDemo, stopMicTracks]);
 
   const pickFile = useCallback(() => fileInputRef.current?.click(), []);
 
@@ -720,6 +765,7 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
     const audio = ensureAudio();
     const player = playerRef.current;
     stopMicTracks();
+    stopDemo();
     if (audio.objectUrl) URL.revokeObjectURL(audio.objectUrl);
     audio.objectUrl = URL.createObjectURL(file);
     player.src = audio.objectUrl;
@@ -748,7 +794,7 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
       setSongPaused(true);
       setNotice({ kind: 'err', text: `Couldn't play the song: ${error?.message || error}` });
     });
-  }, [connectSource, ensureAudio, stopMicTracks]);
+  }, [connectSource, ensureAudio, stopDemo, stopMicTracks]);
 
   const toggleSongPause = useCallback(() => {
     if (source !== 'file' || !fileName) return;
@@ -923,6 +969,10 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
   }, [handleStreamHealth, lightsBusy, showAuthorityInput, showRenderingContract, stopLights]);
 
   const listening = source !== 'quiet';
+  const demoTrack = useMemo(() => DEMO_TRACKS.find((track) => track.id === demoId) || null, [demoId]);
+  const hearing = source === 'mic'
+    ? 'the room'
+    : (source === 'demo' ? (demoTrack?.name || 'a demo track') : (fileName || 'your song'));
 
   return (
     <div className="screen">
@@ -932,7 +982,7 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
             <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-hi)' }}>The piece listens</span>
             <span className="mono" style={{ fontSize: 10, color: 'var(--text-faint)' }}>
-              {listening ? `hearing ${source === 'mic' ? 'the room' : (fileName || 'your song')} · ${engineMode === 'voices' ? `${voiceCards.length} voices` : modeInfo.name.toLowerCase()}` : 'quiet — pick a sound source to begin'}
+              {listening ? `hearing ${hearing} · ${engineMode === 'voices' ? `${voiceCards.length} voices` : modeInfo.name.toLowerCase()}` : 'quiet — pick a sound source to begin'}
             </span>
           </div>
           <div className="tp-spring" />
@@ -1090,6 +1140,47 @@ function ShowScreen({ connected, cardLink, currentProject, go }) {
                 <Chip on={source === 'file'} onClick={pickFile} title="Play a song from a file">Song file</Chip>
                 <Chip on={source === 'quiet'} onClick={goQuiet} title="Stop listening — the piece settles to a dim glow">Quiet</Chip>
               </ChipRow>
+              {/*
+                Built-in music. No microphone, no hunting for a file: three
+                short pieces played straight out of the browser, each one
+                shaped to exercise a different part of the listening — deep
+                and sustained, a plain pulse, and all air. Held together they
+                are the fastest way to see whether an area is really hearing
+                the band it was told to hear.
+              */}
+              <div style={{ marginTop: 10 }} data-testid="show-demo-tracks">
+                <div className="mono" style={{ fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 6 }}>
+                  Built-in music
+                </div>
+                <div role="group" aria-label="Built-in music" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {DEMO_TRACKS.map((track) => {
+                    const on = source === 'demo' && demoId === track.id;
+                    return (
+                      <button
+                        key={track.id}
+                        type="button"
+                        data-testid={`show-demo-${track.id}`}
+                        aria-pressed={on}
+                        onClick={() => startDemoTrack(track.id)}
+                        style={{
+                          ...chipStyle(on),
+                          borderRadius: 'var(--r-md)',
+                          padding: '8px 12px',
+                          textAlign: 'left',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 2,
+                        }}
+                      >
+                        <span style={{ fontWeight: 600 }}>{track.name}</span>
+                        <span style={{ fontSize: 10.5, fontWeight: 400, lineHeight: 1.4, opacity: on ? 0.85 : 0.75 }}>
+                          {track.description}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
               {source === 'file' && fileName && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
                   <button type="button" className="btn" data-testid="show-pause" onClick={toggleSongPause}>
