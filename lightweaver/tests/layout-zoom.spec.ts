@@ -120,6 +120,13 @@ test('Fit all frames artwork geometry outside the imported viewBox', async ({ pa
   await page.addInitScript(() => localStorage.clear());
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.setInputFiles('input[accept=".svg"]', fixture);
+  // Wait for the artwork to actually be in the document before fitting. Reading
+  // the file is async, and on a slower host the import lands AFTER this click —
+  // so "Fit all" framed an empty canvas, the fitted viewBox captured below was
+  // the empty-canvas one, and the later reset (which fits the real artwork)
+  // could never match it. That is exactly how this spec failed in CI while
+  // passing locally: the expected string in the CI log is the pre-import view.
+  await expect(page.locator('[data-artwork-path-id]').first()).toBeAttached();
 
   await page.getByRole('button', { name: 'Fit all' }).click();
   const canvasBox = await page.locator('.lw-viewport svg').boundingBox();
@@ -143,6 +150,13 @@ test('Cmd/Ctrl+0 prevents browser zoom and fits all content', async ({ page }) =
   await page.addInitScript(() => localStorage.clear());
   await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
   await page.setInputFiles('input[accept=".svg"]', fixture);
+  // Wait for the artwork to actually be in the document before fitting. Reading
+  // the file is async, and on a slower host the import lands AFTER this click —
+  // so "Fit all" framed an empty canvas, the fitted viewBox captured below was
+  // the empty-canvas one, and the later reset (which fits the real artwork)
+  // could never match it. That is exactly how this spec failed in CI while
+  // passing locally: the expected string in the CI log is the pre-import view.
+  await expect(page.locator('[data-artwork-path-id]').first()).toBeAttached();
 
   const svg = page.locator('.lw-viewport svg');
   await page.getByRole('button', { name: 'Fit all' }).click();
