@@ -8,10 +8,19 @@ import {
   shouldAcceptPatternLabWorkerReply,
   validatePatternLabWorkerFrameReply,
 } from '../lib/patternLabWorkerProtocol.js';
+import {
+  RENDER_DEGRADE_MS,
+  RENDER_GIVE_UP_DEADLINES,
+  RENDER_GIVE_UP_MS,
+  classifyRenderDeadline,
+  createRenderDeadlineTracker,
+} from '../lib/patternLabRenderDeadline.js';
 
-// One frame may take this long before the preview degrades to sampled frames.
-// A missed deadline is a slow frame, not a dead worker: it never terminates anything.
-const SLOW_FRAME_MS = 400;
+// The two deadlines, their numbers, and why hidden time is excluded, all live in
+// patternLabRenderDeadline.js — read that file before changing anything here.
+// In short: 400 ms degrades (cheap, self-healing), 1500 ms x 3 replaces the worker
+// (destructive), and a page that is hidden or asleep accrues neither.
+const SLOW_FRAME_MS = RENDER_DEGRADE_MS;
 // The watchdog measures each deadline from the moment its request was POSTED, so it
 // has to sample more often than the deadline itself. It is a single interval that
 // lives as long as a render is in flight and is never re-armed by a later dispatch —
@@ -20,8 +29,14 @@ const SLOW_FRAME_MS = 400;
 const WATCHDOG_TICK_MS = 100;
 // Only a worker that misses this many consecutive deadlines without saying anything
 // at all is treated as genuinely unresponsive.
-const UNRESPONSIVE_DEADLINES = 3;
+const UNRESPONSIVE_DEADLINES = RENDER_GIVE_UP_DEADLINES;
 const UNRESPONSIVE_RETRY_MS = 400;
+
+// `document.visibilityState` behind a guard, because this hook also runs in the
+// windowless/node contract tests where there is no document at all.
+function pageHidden() {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+}
 // Replacing a wedged worker is worth doing once: a worker can be born into a bad
 // state, and the retry costs ~1.6 s. Replacing it a second time and finding the very
 // same request wedged again is proof the PATTERN does not terminate, not the worker —
@@ -184,13 +199,22 @@ export default function usePatternLabWorker({
       clearWatchdog();
       return;
     }
-    // Measured from when THIS request was posted, so later dispatches cannot postpone it.
-    const missed = Math.floor((performance.now() - pending.postedAt) / SLOW_FRAME_MS);
-    if (missed <= pending.reportedMisses) return;
-    pending.reportedMisses = missed;
-    missedDeadlinesRef.current = missed;
-    degradedRef.current = true;
-    if (missed < UNRESPONSIVE_DEADLINES) {
+    // Measured in AWAKE time since THIS request was posted, so later dispatches
+    // cannot postpone it and a locked phone cannot age it.
+    const now = performance.now();
+    const verdict = classifyRenderDeadline({
+      awakeElapsed: pending.deadline.awakeElapsed(now),
+      hidden: pending.deadline.hidden,
+      awakeSinceResume: pending.deadline.awakeSinceResume(now),
+    });
+    if (verdict.level === 'ok') return;
+    if (verdict.level === 'degrade') {
+      // Said once per request. The degrade is a standing condition, not an event
+      // to re-announce every 100 ms until the destructive clock takes over.
+      if (pending.reportedDegrade) return;
+      pending.reportedDegrade = true;
+      missedDeadlinesRef.current = 0;
+      degradedRef.current = true;
       setResult(current => ({
         ...current,
         status: 'timeout',
@@ -204,6 +228,11 @@ export default function usePatternLabWorker({
       }));
       return;
     }
+    const missed = verdict.missed;
+    if (missed <= pending.reportedMisses) return;
+    pending.reportedMisses = missed;
+    missedDeadlinesRef.current = missed;
+    degradedRef.current = true;
     clearWatchdog();
     const payload = lastRenderPayloadRef.current;
     terminateCurrentWorker();
@@ -221,7 +250,7 @@ export default function usePatternLabWorker({
       degraded: true,
       warning: {
         code: 'render-unresponsive',
-        message: `Pattern Lab worker missed ${missed} consecutive ${SLOW_FRAME_MS} ms deadlines and was replaced`,
+        message: `Pattern Lab worker missed ${missed} consecutive ${RENDER_GIVE_UP_MS} ms deadlines and was replaced`,
       },
     }));
     if (!payload) return;
@@ -237,6 +266,10 @@ export default function usePatternLabWorker({
 
   const ensureWatchdog = useCallback(() => {
     if (watchdogRef.current) return;
+    // Never armed while the page is hidden. A hidden tab clamps setInterval to
+    // 1000 ms and the tick would decide nothing anyway (the awake clock is
+    // stopped), so the visibilitychange handler re-arms it on resume instead.
+    if (pageHidden()) return;
     watchdogRef.current = setInterval(() => watchdogTickRef.current?.(), WATCHDOG_TICK_MS);
   }, []);
 
@@ -411,7 +444,9 @@ export default function usePatternLabWorker({
       time: payload.time,
       generation: payload.generation,
       postedAt,
+      deadline: createRenderDeadlineTracker({ startedAt: postedAt, hidden: pageHidden() }),
       reportedMisses: 0,
+      reportedDegrade: false,
     };
     lastDispatchAtRef.current = postedAt;
     setResult(current => ({
@@ -450,6 +485,32 @@ export default function usePatternLabWorker({
   }, []);
 
   drainRef.current = drainQueuedRender;
+
+  // The owner streams these frames to a physical piece and then puts the phone in
+  // his pocket. requestAnimationFrame freezes when the tab hides, so no new render
+  // is posted while it is away — but the render already in flight kept ageing
+  // against a wall clock, and thirty seconds of locked screen read as seventy-five
+  // missed deadlines. The preview gave up on his pattern while nobody was looking.
+  //
+  // So: the in-flight request's clock stops on hide and resumes on show, and the
+  // watchdog interval itself is torn down while hidden — nothing can escalate on a
+  // page that is not awake. Unmounting while hidden takes this listener with it and
+  // the teardown effect below drops the pending render and the worker as usual.
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const onVisibilityChange = () => {
+      const hidden = pageHidden();
+      const pending = pendingRenderRef.current;
+      if (pending) pending.deadline.setHidden(hidden, performance.now());
+      if (hidden) {
+        clearWatchdog();
+        return;
+      }
+      if (pendingRenderRef.current && mountedRef.current) ensureWatchdog();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [clearWatchdog, ensureWatchdog]);
 
   useEffect(() => {
     mountedRef.current = true;

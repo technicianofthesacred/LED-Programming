@@ -33,14 +33,20 @@ function matchesQuery(pattern, query) {
   return haystack.includes(query);
 }
 
-function Tile({ id, name, preview, native, selected, onSelect }) {
+// `working` is acknowledgement, never a lock. The button keeps its handler, stays
+// enabled, and is not covered by anything — the renderer is latest-wins, so tapping
+// three tiles in a row is safe and must keep feeling instant. All this adds is a
+// visible sign that the tap landed, for the seconds before the first frame draws.
+function Tile({ id, name, preview, native, selected, working, onSelect }) {
   return (
     <button
       type="button"
-      className={`plab-tile${selected ? ' is-selected' : ''}`}
+      className={`plab-tile${selected ? ' is-selected' : ''}${working ? ' is-working' : ''}`}
       data-testid="pattern-lab-tile"
       data-pattern-id={id}
+      data-working={working ? 'true' : undefined}
       aria-pressed={selected}
+      aria-busy={working ? 'true' : undefined}
       onClick={() => onSelect(id)}
     >
       <span className="plab-tile-swatch" style={{ background: preview }} aria-hidden="true" />
@@ -51,11 +57,17 @@ function Tile({ id, name, preview, native, selected, onSelect }) {
         {native ? '⚡' : '📱'}
       </span>
       <span className="plab-tile-name">{name}</span>
+      {working && (
+        <span className="plab-tile-working" data-testid="pattern-lab-tile-working">
+          <span className="plab-tile-working-dot" aria-hidden="true" />
+          <span className="sr-only">Preparing this pattern</span>
+        </span>
+      )}
     </button>
   );
 }
 
-function Shelf({ title, items, selectedPatternId, onSelect }) {
+function Shelf({ title, items, selectedPatternId, pendingPatternId, onSelect }) {
   if (!items.length) return null;
   return (
     <div className="plab-tile-shelf">
@@ -69,6 +81,7 @@ function Shelf({ title, items, selectedPatternId, onSelect }) {
             preview={item.preview}
             native={item.native}
             selected={item.id === selectedPatternId}
+            working={item.id === pendingPatternId}
             onSelect={onSelect}
           />
         ))}
@@ -77,7 +90,7 @@ function Shelf({ title, items, selectedPatternId, onSelect }) {
   );
 }
 
-export default function PatternTileBrowser({ patterns, selectedPatternId, onSelect }) {
+export default function PatternTileBrowser({ patterns, selectedPatternId, pendingPatternId = null, onSelect }) {
   const [query, setQuery] = useState('');
 
   const { onPiece, more, custom } = useMemo(() => {
@@ -131,10 +144,10 @@ export default function PatternTileBrowser({ patterns, selectedPatternId, onSele
         <p className="plab-tile-empty">No patterns match “{query}”.</p>
       ) : (
         <div className="plab-tile-shelves">
-          <Shelf title="On the piece" items={onPiece} selectedPatternId={selectedPatternId} onSelect={onSelect} />
-          <Shelf title="More looks" items={more} selectedPatternId={selectedPatternId} onSelect={onSelect} />
-          <Shelf title="Your patterns" items={custom} selectedPatternId={selectedPatternId} onSelect={onSelect} />
-          <Shelf title="Living" items={living} selectedPatternId={selectedPatternId} onSelect={onSelect} />
+          <Shelf title="On the piece" items={onPiece} selectedPatternId={selectedPatternId} pendingPatternId={pendingPatternId} onSelect={onSelect} />
+          <Shelf title="More looks" items={more} selectedPatternId={selectedPatternId} pendingPatternId={pendingPatternId} onSelect={onSelect} />
+          <Shelf title="Your patterns" items={custom} selectedPatternId={selectedPatternId} pendingPatternId={pendingPatternId} onSelect={onSelect} />
+          <Shelf title="Living" items={living} selectedPatternId={selectedPatternId} pendingPatternId={pendingPatternId} onSelect={onSelect} />
         </div>
       )}
     </div>
