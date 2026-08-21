@@ -13,6 +13,10 @@ carries them all automatically. See [docs/firmware-queue.md](docs/firmware-queue
 cd "/Users/adrianrasmussen/Documents/Files/2 Areas/Coding/led" && npm run firmware:waiting
 ```
 
+## Follow-ups
+
+- [ ] Give the card a version stamp Studio can find in one read _(band: agent-runnable)_ _(effort: deep)_ → Plan: [card-version-stamp.md](todo/plans/card-version-stamp.md)
+
 ## Top priority — make the card boringly reliable
 
 - [ ] **Execute the staged [Reliable Chip Closure plan](docs/superpowers/plans/2026-08-08-reliable-chip-closure.md).** _(firmware agent + Studio agent + CI/docs agent + Adrian)_ Phase 1 fixes proven-network retry when the router starts late, adds the firmware-owned reboot fallback after an interrupted config save, gates Art-Net consistently, publishes the exact signed release, and passes the real-card power-cycle/outage matrix. Phase 2 immediately adds universal two-envelope authority and a truthful LAN/router-address recovery action. The obsolete `2462ca4` branch is reference evidence only; implement selectively from current `main`. Done only when the exact merged Studio and signed firmware build numbers match the live release and the recorded hardware pass.

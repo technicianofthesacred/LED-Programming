@@ -1,7 +1,7 @@
 /* Lightweaver v3 — safe automatic installer + technician diagnostics. */
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { I } from './lw-shared.jsx';
-import { connectESP, disconnectESP, flashFirmware, inspectConnectedESP, writeApplicationWithoutReset } from '../lib/flash.js';
+import { connectESP, disconnectESP, espCanReportFirmwareIdentity, flashFirmware, inspectConnectedESP, readConnectedEspFirmwareIdentity, writeApplicationWithoutReset } from '../lib/flash.js';
 import {
   FLASH_COMPLETE_RELEASED_LOG,
   FLASH_COMPLETE_RELEASED_STATUS,
@@ -876,6 +876,9 @@ import {
     const [installState, setInstallState] = useState('idle');
     const [releaseAttempt, setReleaseAttempt] = useState(0);
     const [commissioning, setCommissioning] = useState(readCardCommissioning);
+    // Reading the version stored on the card is a slow serial scan that runs
+    // after the card is already found, so the connect step never waits on it.
+    const [usbFirmwareRead, setUsbFirmwareRead] = useState({ state: 'idle', progress: 0 });
     // What the card is running NOW, so the screen can say which direction this
     // install moves it. A live link is the best account; a remembered identity
     // is used only when it belongs to the card actually plugged in.
@@ -935,13 +938,53 @@ import {
     const mountedRef = useRef(true);
     const findingRef = useRef(false);
     const installingRef = useRef(false);
+    const firmwareReadRef = useRef({ token: 0, done: Promise.resolve() });
     const browserAssociationRef = useRef(null);
     const InstallHeading = embedded ? 'h2' : 'h1';
+
+    // A read and a write cannot share the USB line, so every path that takes
+    // the card back — installing, or letting the card go — waits for an
+    // in-flight version read to stop first. It stops between chunks, so the
+    // wait is about a second, never the length of the whole scan.
+    const stopFirmwareRead = async () => {
+      firmwareReadRef.current.token += 1;
+      try { await firmwareReadRef.current.done; } catch { /* the read never rejects fatally */ }
+    };
+
+    const startFirmwareRead = (loader, hardware) => {
+      if (!espCanReportFirmwareIdentity(hardware)) {
+        setUsbFirmwareRead({ state: 'unavailable', progress: 0 });
+        return;
+      }
+      const token = firmwareReadRef.current.token + 1;
+      firmwareReadRef.current.token = token;
+      const live = () => firmwareReadRef.current.token === token && mountedRef.current;
+      setUsbFirmwareRead({ state: 'reading', progress: 0 });
+      firmwareReadRef.current.done = readConnectedEspFirmwareIdentity(loader, hardware, {
+        shouldStop: () => !live() || installingRef.current,
+        onProgress: ({ bytesRead, totalBytes }) => {
+          if (live()) setUsbFirmwareRead({ state: 'reading', progress: totalBytes > 0 ? bytesRead / totalBytes : 0 });
+        },
+      }).then(identity => {
+        if (!live()) return;
+        if (!identity) {
+          setUsbFirmwareRead({ state: 'unavailable', progress: 0 });
+          return;
+        }
+        setCardState(previous => (previous.hardware?.cardId === hardware.cardId
+          ? { ...previous, hardware: { ...previous.hardware, ...identity } }
+          : previous));
+        setUsbFirmwareRead({ state: 'done', progress: 1 });
+      }).catch(() => {
+        if (live()) setUsbFirmwareRead({ state: 'unavailable', progress: 0 });
+      });
+    };
 
     const releaseHeldInspection = async ({ clearRegistry = false } = {}) => {
       if (installingRef.current) return false;
       const token = inspectionRef.current;
       if (clearRegistry && token) clearActiveUsbInspection(token);
+      await stopFirmwareRead();
       const loader = loaderRef.current;
       const transport = transportRef.current;
       const released = await releaseInspectedConnection(loader, transport);
@@ -1043,8 +1086,10 @@ import {
       if (findingRef.current || installingRef.current) return;
       findingRef.current = true;
       setCardState({ state: 'finding', hardware: null, error: '' });
+      setUsbFirmwareRead({ state: 'idle', progress: 0 });
       setEraseConfirmed(false);
       try {
+        await stopFirmwareRead();
         const previous = transportRef.current
           ? { loader: loaderRef.current, transport: transportRef.current }
           : null;
@@ -1077,6 +1122,7 @@ import {
           release: () => releaseHeldInspection(),
         });
         setCardState({ state: 'ready', hardware, error: '' });
+        startFirmwareRead(connection.loader, hardware);
       } catch (error) {
         if (inspectionRef.current) clearActiveUsbInspection(inspectionRef.current);
         inspectionRef.current = null;
@@ -1093,6 +1139,7 @@ import {
       installingRef.current = true;
       if (inspectionRef.current) clearActiveUsbInspection(inspectionRef.current);
       inspectionRef.current = null;
+      await stopFirmwareRead();
       const { manifest, bytes } = releaseState.release;
       const file = new File([bytes], `lightweaver-${manifest.firmwareVersion}.bin`, { type: 'application/octet-stream' });
       setInstallState('installing');
@@ -1240,7 +1287,7 @@ import {
               <p>Studio will ask which USB device to use, then confirm it is the correct ESP32-S3 card with 16 MB of flash.</p>
             </div>
             <button className="btn-lg" type="button" onClick={findCard} disabled={!releaseReady || cardState.state === 'finding' || installState === 'installing' || installState === 'observing'}>
-              {cardState.state === 'finding' ? 'Checking card and firmware…' : cardState.state === 'ready' ? 'Change connected card' : 'Find connected card'}
+              {cardState.state === 'finding' ? 'Checking this card…' : cardState.state === 'ready' ? 'Change connected card' : 'Find connected card'}
             </button>
             {cardState.state === 'ready' && (
               <div className="install-check-ok" data-testid="install-card-identity">
@@ -1249,9 +1296,11 @@ import {
                   <dt>Card</dt><dd>{cardState.hardware.cardId}</dd>
                   <dt>Hardware</dt><dd>ESP32-S3 · 16 MB</dd>
                   <dt>Installed firmware</dt>
-                  <dd>{installedFirmware
+                  <dd data-testid="install-card-installed-firmware">{installedFirmware
                     ? `v${installedFirmware.firmwareVersion || 'unknown'} · ${formatFirmwareBuildLabel(installedFirmware)} (${installedEvidenceLabel})`
-                    : 'Unknown — USB confirms the card hardware, not the firmware stored on it.'}</dd>
+                    : usbFirmwareRead.state === 'reading'
+                      ? `Reading the version stored on this card… ${Math.round(usbFirmwareRead.progress * 100)}% (you can install without waiting)`
+                      : 'Unknown — USB confirms the card hardware, not the firmware stored on it.'}</dd>
                   <dt>Current firmware</dt>
                   <dd>{releaseState.state === 'ready'
                     ? `v${releaseState.release.manifest.firmwareVersion} · ${formatFirmwareBuildLabel(releaseState.release.manifest)}`

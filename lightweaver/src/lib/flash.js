@@ -5,7 +5,9 @@ import {
 } from './flashConnection.js';
 import { writeVerifiedFlash } from './flashPlan.js';
 import { cardIdFromEspMac } from './cardCommissioningFlow.js';
-import { readLightweaverFirmwareIdentity } from './usbFirmwareIdentity.js';
+import { espCanReportFirmwareIdentity, readLightweaverFirmwareIdentity } from './usbFirmwareIdentity.js';
+
+export { espCanReportFirmwareIdentity };
 
 const WLED_API_URL = 'https://api.github.com/repos/wled/WLED/releases/latest';
 
@@ -24,22 +26,30 @@ export async function connectESP({ onAttempt, onLog } = {}) {
   });
 }
 
+// Identifying the card is three quick register reads. Reading back which
+// firmware version it is carrying is a multi-megabyte serial scan, so it is a
+// separate call: nothing about connecting, confirming or installing needs the
+// version, and making the connect step wait for it turned a two-second action
+// into a minute of a button that looked dead.
 export async function inspectConnectedESP(loader, chipDescription = '') {
   if (!loader) throw new Error('The connected card could not be inspected');
   const flashSize = await loader.detectFlashSize();
   const mac = await loader.chip?.readMac?.(loader);
   const chipName = String(loader.chip?.CHIP_NAME || '');
-  const firmware = chipName === 'ESP32-S3' && String(flashSize) === '16MB'
-    ? await readLightweaverFirmwareIdentity(loader)
-    : null;
   return {
     chipDescription: String(chipDescription || loader.chip?.CHIP_NAME || 'Unknown chip'),
     chipName,
     flashSize,
     mac: String(mac || ''),
     cardId: cardIdFromEspMac(mac),
-    ...(firmware || {}),
   };
+}
+
+// Runs only against a card already identified by inspectConnectedESP, and only
+// while no write is in flight — a read and a write cannot share the serial line.
+export async function readConnectedEspFirmwareIdentity(loader, hardware, options = {}) {
+  if (!loader || !espCanReportFirmwareIdentity(hardware)) return null;
+  return readLightweaverFirmwareIdentity(loader, options);
 }
 
 export async function disconnectESP(loader, transport) {

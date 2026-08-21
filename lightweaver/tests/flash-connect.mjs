@@ -14,6 +14,26 @@ assert.match(flashSource, /detectFlashSize\(\)/);
 assert.match(flashSource, /writeVerifiedFlash/);
 
 {
+  // Identifying the card must stay a few register reads. Folding the
+  // multi-megabyte version scan back into it is what made "Find connected card"
+  // sit on "Checking card and firmware…" for a minute with nothing to show.
+  const inspect = flashSource.slice(
+    flashSource.indexOf('export async function inspectConnectedESP'),
+    flashSource.indexOf('export async function readConnectedEspFirmwareIdentity'),
+  );
+  assert.doesNotMatch(
+    inspect,
+    /readLightweaverFirmwareIdentity/,
+    'identifying the connected card must not read the firmware stored on it',
+  );
+  assert.match(
+    flashSource,
+    /export async function readConnectedEspFirmwareIdentity/,
+    'the stored-version read must be a separate call the screen can run in the background',
+  );
+}
+
+{
   const attempts = [];
   const disconnected = [];
   const port = { id: 'esp32s3' };
@@ -167,6 +187,21 @@ assert.match(flashSource, /writeVerifiedFlash/);
     'Flash screen should log the concrete post-flash WiFi/IP next step',
   );
   assert.match(screen, /findingRef\.current/, 'card selection should have a synchronous single-flight guard');
+  assert.match(
+    screen,
+    /startFirmwareRead\(connection\.loader, hardware\)/,
+    'the stored-version read must start after the card is already reported found',
+  );
+  for (const takeover of [
+    screen.slice(screen.indexOf('const install = async ()'), screen.indexOf('const install = async ()') + 900),
+    screen.slice(screen.indexOf('const releaseHeldInspection'), screen.indexOf('const persistProject')),
+  ]) {
+    assert.match(
+      takeover,
+      /await stopFirmwareRead\(\)/,
+      'a read and a write cannot share the serial line, so taking the card back must wait for the read to stop',
+    );
+  }
   assert.match(screen, /beforeunload/, 'active erase/write should guard accidental page unload');
   assert.match(screen, /resetEspIntoApp/, 'leaving USB inspection must restart the card application before releasing USB');
   assert.match(screen, /releaseInspectedConnection/, 'every non-flashing USB inspection exit must use the restart release path');
