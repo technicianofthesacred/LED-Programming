@@ -21,6 +21,7 @@ import { readFileSync } from 'node:fs';
 import { classifyChangedPaths, LANE_NAMES } from './ci-changed-lanes.mjs';
 import { cardBundleCheckRelevant } from './ci-card-bundle-check.mjs';
 import { firmwareBundleOnly } from './ci-changed-lanes.mjs';
+import { countInWords, readRegister } from './firmware-queue.mjs';
 
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 // NOT trimmed: an unstaged porcelain line begins with a space (" M path"), and
@@ -42,6 +43,14 @@ const lanes = classifyChangedPaths(paths);
 const selected = LANE_NAMES.filter(name => lanes[name]);
 console.log(`Changed paths vs ${base}: ${paths.length}`);
 console.log(`CI lanes: ${selected.join(', ') || '(none — CI runs nothing)'}`);
+
+// Printed on every run, not only on failure: the waiting list is only useful
+// if it is impossible to forget it exists.
+const waiting = readRegister().waiting;
+console.log(waiting.length === 0
+  ? 'Waiting for the next card update: nothing.'
+  : `Waiting for the next card update: ${countInWords(waiting.length).toLowerCase()} `
+    + `${waiting.length === 1 ? 'change' : 'changes'} (npm run firmware:waiting).`);
 
 function versionNumbers(value) {
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(value).trim());
@@ -91,10 +100,22 @@ if (lanes.firmware && !bundleOnly && bundleVerdict !== 'unchanged') {
         : left[2] > right[2]
   );
   if (!greater) {
+    // This exact moment — a finished change refused for want of a VERSION bump
+    // — is when work gets deferred. Print the one command that parks it, so
+    // deferring is cheaper than writing a paragraph nobody will find again.
+    const branch = (() => {
+      try { return git('rev-parse', '--abbrev-ref', 'HEAD'); } catch { return '<your-branch>'; }
+    })();
     problems.push(
       `firmware-sensitive change, but firmware/lightweaver-controller/VERSION (${current}) is not greater `
       + `than the already-signed ${previous}. Bump VERSION and the pinned literal in `
-      + 'firmware/lightweaver-controller/tests/firmware-version-policy.mjs, or the signer will refuse the release.',
+      + 'firmware/lightweaver-controller/tests/firmware-version-policy.mjs, or the signer will refuse the release.'
+      + '\n\n  Not ready to publish a card update for this? Park it instead — push this branch, then:\n\n'
+      + `    node scripts/firmware-queue.mjs add --branch ${branch} \\\n`
+      + '      --what "<one plain sentence Adrian would understand>" \\\n'
+      + '      --why "<one plain sentence saying why it is not worth a card update alone>"\n\n'
+      + '  It is then carried automatically by the next card update. Commit the waiting-list\n'
+      + '  change on a branch that is NOT firmware-sensitive, and open that as its own PR.',
     );
   } else {
     console.log(`Firmware VERSION ok: ${current} is publishable over signed ${previous}.`);
