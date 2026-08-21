@@ -82,6 +82,18 @@ Two paths, chosen by one question: **is the card on a USB cable?**
   download. "Ship it to main" runs it. Requires a `VERSION` bump; run
   `node scripts/ci-preflight.mjs` first — it answers in ~2s what CI will demand.
 
+**Anything held back for want of a release goes in the waiting list, never in
+prose.** `firmware-queue/queue.json` is the one register of finished changes
+that are firmware-sensitive but not worth a customer-facing signed release on
+their own. Park with `node scripts/firmware-queue.mjs add …` (ci-preflight
+prints the exact command when it refuses a change for want of a VERSION bump);
+read it with `npm run firmware:waiting`; drain it with `npm run
+firmware:release`, which merges every parked change, bumps VERSION and its
+pinned literal, empties the register, and opens ONE pull request without
+merging or publishing. Full contract: `docs/firmware-queue.md`. Do not
+reintroduce the old pattern of a TODO paragraph, a stash, or a patch file
+outside the repo — all three lost work.
+
 Iterating never needs the release path. A bench card can live on dev builds
 indefinitely and jump to a signed release any time (USB flash or Wi-Fi update).
 
