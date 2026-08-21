@@ -58,10 +58,27 @@ export function classifyChangedPaths(paths, {
 
     if (isPath(path, '.github/workflows')
       || path === 'scripts/ci-changed-lanes.mjs'
-      || path === 'scripts/ci-changed-lanes.test.mjs'
-      || path === 'lightweaver/package.json'
-      || path === 'lightweaver/package-lock.json') {
+      || path === 'scripts/ci-changed-lanes.test.mjs') {
       Object.assign(lanes, ALL_LANES);
+      continue;
+    }
+
+    // A lightweaver/package.json or package-lock.json edit can be an npm
+    // script alias (build-card-studio.mjs invokes node_modules/.bin/vite
+    // directly, never `npm run <script>`, so scripts:* text can never reach
+    // the built bundle) or a dependency/version bump (which genuinely can
+    // change what vite emits). Path text alone can't tell those apart, so
+    // this defers to the same byte-level proof lightweaver/src already uses:
+    // firmware stays selected unless a canonical rebuild off the new
+    // package.json/lockfile hashes identical to the last signed bundle.
+    // Every non-firmware lane still runs unconditionally — only the
+    // signed-release trigger is gated.
+    if (path === 'lightweaver/package.json' || path === 'lightweaver/package-lock.json') {
+      lanes.source = true;
+      lanes.browser = true;
+      lanes.cloud = true;
+      lanes.production = true;
+      if (studioFirmware) lanes.firmware = true;
       continue;
     }
 
