@@ -7,9 +7,12 @@
       "why": "The change teaches the build system to tell a harmless rename apart from a real change to what the cards do. It cannot land by itself, because changing that judgement is treated as the most suspicious kind of change there is — which is correct, and is exactly the trap it exists to remove.",
       "added": "2026-08-21",
       "source": {
-        "kind": "branch",
-        "branch": "claude/ci-package-json-lane",
-        "pullRequest": 165
+        "kind": "patch",
+        "patch": "firmware-queue/patches/package-json-lane.patch",
+        "supersedes": {
+          "pullRequest": 165,
+          "branch": "claude/ci-package-json-lane"
+        }
       }
     },
     {
