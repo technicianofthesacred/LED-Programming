@@ -531,14 +531,22 @@ test('lazy route shows its fallback while the screen module loads', async ({ pag
 });
 
 test('initial Layout route excludes lazy Studio screen modules', async ({ page }) => {
+  // Asked through the browser's own resource log, this question cannot be
+  // answered here. That log holds 250 entries and the Studio dev server serves
+  // more than that before Layout has finished, so everything loaded afterwards
+  // is dropped: the screen module genuinely arrives and the log still says it
+  // did not. Worse, the same overflow makes the "was NOT loaded" half pass for
+  // no reason. Counting the requests as they are made has neither problem.
+  const requested = [];
+  page.on('request', request => requested.push(request.url()));
   await page.goto('/?lazy-initial=1#screen=layout', { waitUntil: 'networkidle' });
-  const initial = await page.evaluate(() => performance.getEntriesByType('resource').map(entry => entry.name));
+  const initial = [...requested];
   for (const moduleName of ['lw-pattern.jsx', 'lw-show.jsx', 'lw-playlist.jsx', 'lw-settings.jsx', 'lw-flash.jsx', 'lw-installer.jsx']) {
     expect(initial.some(url => url.includes(moduleName))).toBe(false);
   }
   await page.locator('.rail-item', { hasText: 'Patterns' }).click();
   await expect(page.locator('.pm')).toBeVisible();
-  await expect.poll(() => page.evaluate(() => performance.getEntriesByType('resource').some(entry => entry.name.includes('lw-pattern.jsx')))).toBe(true);
+  await expect.poll(() => requested.some(url => url.includes('lw-pattern.jsx'))).toBe(true);
 });
 
 test('Studio stylesheet declares coarse targets and reduced motion', async ({ page }) => {

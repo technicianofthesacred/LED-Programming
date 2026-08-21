@@ -13,7 +13,28 @@ test.beforeEach(async ({ page }) => {
   await page.route('http://192.168.4.1/**', route => route.abort());
 });
 
+// The footer card badge is on screen before the shell has finished wiring what
+// it opens, so a click can land on a button that is not listening yet and be
+// lost with no retry. Under a single-file run the wiring wins and the check
+// passes; alongside other files it loses and the check fails describing a
+// missing panel rather than a swallowed click. Ask for the panel until it is
+// there, and never click while it is already open, which would close it.
+async function openConnectionCenter(page) {
+  const center = page.locator('#card-connection-center');
+  await expect(async () => {
+    if (!(await center.isVisible())) await page.getByTestId('card-link-status').click();
+    await expect(center).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 20_000 });
+  return center;
+}
+
 async function dispatchCardLink(page, events) {
+  // The shell subscribes to the shared card link when it mounts. Dispatching
+  // before that happens throws the event away silently: the card never appears
+  // to connect, and every later assertion fails describing the symptom rather
+  // than the cause. The footer card chip is rendered by the shell, so waiting
+  // for it is waiting for the subscriber.
+  await page.waitForSelector('[data-testid="card-link-status"]');
   await page.evaluate(async (nextEvents) => {
     const { getSharedCardLink } = await import('/src/lib/cardLink.js');
     const link = getSharedCardLink();
@@ -54,9 +75,7 @@ test('a reflashed card can keep its new firmware instead of being re-flashed (ui
     readiness: liveStatus(),
   }]);
 
-  await page.getByTestId('card-link-status').click();
-  const center = page.locator('#card-connection-center');
-  await expect(center).toBeVisible();
+  const center = await openConnectionCenter(page);
   await expect(center).toContainText(/its firmware changed/i);
   const trust = center.getByTestId('trust-updated-card');
   await expect(trust).toHaveText('Keep the new firmware on this card');
