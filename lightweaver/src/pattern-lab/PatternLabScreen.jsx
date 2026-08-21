@@ -17,7 +17,21 @@ import {
 import { resolvePatternLabControls } from '../lib/patternLabControls.js';
 import { recipeFromPattern } from '../lib/patternLabPatternAdapter.js';
 import { normalizePatternLabRecipe, PATTERN_LAB_RECIPE_VERSION } from '../lib/patternLabRecipe.js';
-import { readPatternLabDraftState, savePatternLabDraft } from '../lib/patternLabStorage.js';
+import {
+  deletePatternLabDraft,
+  readPatternLabDraftState,
+  readPatternLabDrafts,
+  savePatternLabDraft,
+  writePatternLabDrafts,
+} from '../lib/patternLabStorage.js';
+import {
+  MAX_DRAFT_NAME_LENGTH,
+  createSavedCopy,
+  describeSaveOptions,
+  restoreDraftAtIndex,
+  sanitizeDraftName,
+  uniqueDraftName,
+} from '../lib/patternLabDraftActions.js';
 import { PATTERN_LAB_WORKER_BUDGETS } from '../lib/patternLabWorkerProtocol.js';
 import { isBuiltInPattern, listPatterns } from '../lib/patternRegistry.js';
 import { useCloudLibrary } from '../state/CloudLibraryContext.jsx';
@@ -437,6 +451,20 @@ export default function PatternLabScreen() {
   const [draftState, setDraftState] = useState('loading');
   const [message, setMessage] = useState('');
   const [importErrors, setImportErrors] = useState([]);
+  // One level of undo, deliberately not a history stack.
+  //
+  // It covers the three things that can destroy work the owner cannot get
+  // back by moving a slider: choosing a different base pattern (which
+  // rebuilds the draft from scratch and discards every edit), opening a
+  // saved draft over an edited one, and deleting or replacing a saved
+  // draft. It does NOT cover individual control moves — those are visible,
+  // reversible by hand, and a stack of them is a different feature.
+  //
+  // It does not expire on a timer. A toast that vanishes after four seconds
+  // is not an undo, it is a lottery: the owner who looked away at the wrong
+  // moment is exactly the one who needed it. The entry stays until it is
+  // used, dismissed, or superseded by the next undoable act.
+  const [undoEntry, setUndoEntry] = useState(null);
   // The phone control sheet is a three-detent sheet, not a fixed 82%-tall
   // modal drawer (todo/plans/patternlab-rebuild.md §5, §7 Phase 2). The owner
   // could not "get real tangible designs or play" because reaching any slider
@@ -649,7 +677,13 @@ export default function PatternLabScreen() {
       observer.disconnect();
       window.clearTimeout(timeout);
     };
-  }, [geometry, previewRecipe]);
+    // Keyed on the recipe's ID, not the recipe object. The body reads
+    // nothing else off it, and now that the design's name is an editable
+    // field, an object-identity dependency would tear down and restart this
+    // canvas telemetry on every keystroke of a rename — resetting the
+    // darkness signals that "Why is this dark?" reads from, for a change
+    // that cannot affect a single pixel.
+  }, [geometry, previewRecipe?.id]);
 
   const runtimeMetrics = useMemo(
     () => draft ? runtimeMetricsFor(draft, geometry) : null,
@@ -659,6 +693,10 @@ export default function PatternLabScreen() {
     () => draft ? compatibilityFor(draft, geometry) : null,
     [draft, geometry],
   );
+  // "Has this exact design already been kept?" is the whole question the
+  // save row turns on, and it is answered by the stored list, not by a flag
+  // the screen carries around and can get wrong after a reload.
+  const saveOptions = useMemo(() => (draft ? describeSaveOptions(draft, drafts) : null), [draft, drafts]);
   const diagnosticMasterBrightness = draft ? previewMasterBrightness(draft, previewTime) : 1;
   const diagnosticFrameSignals = previewFrameSignals.recipeId === draft?.id
     ? previewFrameSignals
@@ -724,6 +762,68 @@ export default function PatternLabScreen() {
     if (Number.isInteger(step) && step >= 0 && step <= 2) setActiveWorkflowStep(step);
   }
 
+  function refreshDrafts() {
+    const state = readPatternLabDraftState();
+    setDrafts(state.drafts);
+    setDraftState(state.status === 'empty' || state.status === 'restored' ? 'ready' : state.status);
+    return state.drafts;
+  }
+
+  // A snapshot of everything the working area holds, taken BEFORE something
+  // replaces it. Restoring it puts the owner back exactly where they were,
+  // including where they were in the evolution timeline.
+  function captureWorkingState() {
+    if (!draft) return null;
+    return {
+      draft: cloneRecipe(draft),
+      sourceRecipe: sourceRecipe ? cloneRecipe(sourceRecipe) : null,
+      previewTime,
+    };
+  }
+
+  function offerUndo(label, restore) {
+    setUndoEntry({ label, restore });
+  }
+
+  function offerWorkingStateUndo(label, snapshot) {
+    if (!snapshot) {
+      setUndoEntry(null);
+      return;
+    }
+    offerUndo(label, () => {
+      setSourceRecipe(snapshot.sourceRecipe);
+      setDraft(cloneRecipe(snapshot.draft));
+      setPreviewTime(snapshot.previewTime);
+      setMessage(`Back to ${sanitizeDraftName(snapshot.draft.name)}.`);
+      setUndoEntry(null);
+    });
+  }
+
+  function runUndo() {
+    const entry = undoEntry;
+    if (!entry) return;
+    setUndoEntry(null);
+    try {
+      entry.restore();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not undo that.');
+    }
+  }
+
+  function renameDraft(value) {
+    // Bound raw so the field behaves like a text field while typing — an
+    // empty box mid-edit is normal, and the fallback is applied on blur and
+    // again at save, never mid-keystroke.
+    setDraft(current => (current ? { ...current, name: String(value).slice(0, MAX_DRAFT_NAME_LENGTH) } : current));
+    setMessage('');
+  }
+
+  function settleDraftName() {
+    setDraft(current => (current
+      ? { ...current, name: sanitizeDraftName(current.name, sourceRecipe?.name || 'Untitled design') }
+      : current));
+  }
+
   function choosePattern(patternId) {
     if (!patternId) {
       setSourceRecipe(null);
@@ -741,6 +841,17 @@ export default function PatternLabScreen() {
         })
       : withEvolutionDisabled(recipeFromPattern(patternId, { palette: project.palette }));
     const source = { ...selected, sourcePalette: cloneRecipe(selected.palette) };
+    // Choosing a base pattern rebuilds the draft from scratch — every
+    // slider, knob and colour move on the previous one is gone. That is the
+    // single most expensive silent loss on this screen, so it is the case
+    // undo exists for first.
+    const previous = captureWorkingState();
+    offerWorkingStateUndo(
+      previous
+        ? `Switched to ${sanitizeDraftName(selected.name)}. Your work on ${sanitizeDraftName(previous.draft.name)} was set aside.`
+        : '',
+      previous,
+    );
     setSourceRecipe(source);
     setDraft(cloneRecipe(source));
     setPreviewTime(0);
@@ -1005,6 +1116,13 @@ export default function PatternLabScreen() {
 
   function openDraft(saved) {
     const normalized = normalizePatternLabRecipe(saved);
+    const previous = captureWorkingState();
+    offerWorkingStateUndo(
+      previous
+        ? `Opened ${sanitizeDraftName(normalized.name)}. Your work on ${sanitizeDraftName(previous.draft.name)} was set aside.`
+        : '',
+      previous,
+    );
     setSourceRecipe(sourceFromRecipe(normalized));
     setDraft(cloneRecipe(normalized));
     setPreviewTime(0);
@@ -1012,18 +1130,79 @@ export default function PatternLabScreen() {
     setImportErrors([]);
   }
 
-  function saveDraft() {
-    if (!draft) return;
+  // One place where a draft actually reaches storage, so the name is
+  // sanitized exactly once and every caller reports the same way.
+  function persistDraft(recipe, describe) {
     try {
-      const saved = savePatternLabDraft(normalizePatternLabRecipe(draft));
+      const saved = savePatternLabDraft(normalizePatternLabRecipe({
+        ...recipe,
+        name: sanitizeDraftName(recipe.name, sourceRecipe?.name || 'Untitled design'),
+      }));
       setDraft(saved);
-      const state = readPatternLabDraftState();
-      setDrafts(state.drafts);
-      setDraftState(state.status === 'empty' || state.status === 'restored' ? 'ready' : state.status);
-      setMessage(`Saved privately — ${saved.name}`);
+      refreshDrafts();
+      setMessage(describe(saved));
       setActiveWorkflowStep(3);
+      return saved;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not save this private draft.');
+      return null;
+    }
+  }
+
+  // The primary save. For a design that has never been saved it writes a new
+  // record. For one that HAS been saved it writes a SECOND record with a
+  // fresh id — so the default action can never destroy the version the owner
+  // already kept. Overwriting is still available, but only from the button
+  // that says out loud which design it overwrites.
+  function saveDraft() {
+    if (!draft) return;
+    if (saveOptions?.canReplace) {
+      const copy = createSavedCopy(draft, drafts);
+      setUndoEntry(null);
+      persistDraft(copy, saved => `Saved as a new design — ${saved.name}. ${saveOptions.savedName} is untouched.`);
+      return;
+    }
+    const named = { ...draft, name: uniqueDraftName(sanitizeDraftName(draft.name, sourceRecipe?.name || 'Untitled design'), drafts, { exceptId: draft.id }) };
+    setUndoEntry(null);
+    persistDraft(named, saved => `Saved privately — ${saved.name}`);
+  }
+
+  function replaceSavedDraft() {
+    if (!draft || !saveOptions?.canReplace) return;
+    const previousSaved = drafts.find(item => item.id === draft.id);
+    const named = { ...draft, name: uniqueDraftName(sanitizeDraftName(draft.name, sourceRecipe?.name || 'Untitled design'), drafts, { exceptId: draft.id }) };
+    const saved = persistDraft(named, next => `Replaced ${saveOptions.savedName} with ${next.name}.`);
+    if (!saved || !previousSaved) return;
+    offerUndo(`Replaced “${saveOptions.savedName}”.`, () => {
+      savePatternLabDraft(previousSaved);
+      setDraft(cloneRecipe(previousSaved));
+      refreshDrafts();
+      setMessage(`Put ${previousSaved.name} back the way it was.`);
+      setUndoEntry(null);
+    });
+  }
+
+  // Deleting is destructive, so it needs a way back. It gets an undo rather
+  // than a confirm dialog: a confirm taxes every delete, including the many
+  // that are correct, and still gives nothing back to an owner who taps
+  // "Delete" by accident and then confirms by reflex. The undo costs nothing
+  // when the delete was intended and restores the draft to its exact place
+  // in the list when it was not.
+  function deleteDraft(saved, index) {
+    try {
+      if (!deletePatternLabDraft(saved.id)) return;
+      refreshDrafts();
+      setMessage(`Deleted ${saved.name}.`);
+      offerUndo(`Deleted “${sanitizeDraftName(saved.name)}”.`, () => {
+        writePatternLabDrafts(restoreDraftAtIndex(readPatternLabDrafts(), saved, index));
+        // Restoring writes the whole list back, so nothing else in it moves.
+        refreshDrafts();
+        setMessage(`Put ${sanitizeDraftName(saved.name)} back.`);
+        setUndoEntry(null);
+      });
+      void remaining;
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not delete this private draft.');
     }
   }
 
@@ -1215,7 +1394,28 @@ export default function PatternLabScreen() {
         <section className="plab-workspace" aria-label="Pattern authoring workspace" ref={workspaceRef}>
           <div className="plab-preview" inert={sheetModal ? '' : undefined}>
             <div className="plab-preview-bar">
-              <span>{previewRecipe ? <strong data-testid="pattern-lab-draft-name">{previewRecipe.name}</strong> : 'Artwork preview'}</span>
+              {/* The design's name lives ON the design, in the bar directly
+                  above the artwork, and is editable at any moment. It is
+                  deliberately NOT a prompt attached to the save button:
+                  naming is how you recognise the thing you made, so it
+                  belongs with the thing, not behind a dialog that appears
+                  once and then never again. Being here it is also visible at
+                  every sheet detent on a phone, so an owner can rename while
+                  watching the piece run. */}
+              {previewRecipe ? (
+                <input
+                  className="plab-draft-name"
+                  data-testid="pattern-lab-draft-name"
+                  type="text"
+                  aria-label="Design name"
+                  placeholder="Name this design"
+                  maxLength={MAX_DRAFT_NAME_LENGTH}
+                  value={previewRecipe.name}
+                  onChange={event => renameDraft(event.target.value)}
+                  onBlur={settleDraftName}
+                  onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+                />
+              ) : <span>Artwork preview</span>}
               <div className="plab-preview-meta">
                 <span>{previewRecipe ? 'Mapped to current artwork' : 'No source selected'}</span>
                 <button type="button" className="plab-play" disabled={!previewRecipe} aria-pressed={playing} onClick={() => setPlaying(value => !value)}>{playing ? 'Pause' : 'Play'}</button>
@@ -1420,11 +1620,23 @@ export default function PatternLabScreen() {
               {draftState === 'ready' && drafts.length === 0 && <p>No saved drafts yet. Your first save will be kept in your private workspace.</p>}
               {drafts.length > 0 && (
                 <ul>
-                  {drafts.map(saved => (
-                    <li key={saved.id}>
+                  {drafts.map((saved, index) => (
+                    <li key={saved.id} className="plab-draft-row">
                       <button type="button" onClick={() => openDraft(saved)} aria-label={`Open ${saved.name}`}>
-                        <strong>{saved.name}</strong>
+                        <strong>{saved.name}{draft?.id === saved.id ? <span className="plab-draft-open-flag"> · open</span> : null}</strong>
                         <small>{Math.round(saved.evolution.durationSeconds / 60)} min · {saved.evolution.character.replaceAll('-', ' ')}</small>
+                      </button>
+                      <button
+                        type="button"
+                        className="plab-draft-delete"
+                        data-testid="pattern-lab-draft-delete"
+                        aria-label={`Delete ${saved.name}`}
+                        title={`Delete ${saved.name}`}
+                        onClick={() => deleteDraft(saved, index)}
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                          <path d="M5 7h14M10 7V5h4v2M8 7l1 12h6l1-12" />
+                        </svg>
                       </button>
                     </li>
                   ))}
@@ -1459,11 +1671,51 @@ export default function PatternLabScreen() {
 
             </div>
 
-            <div className="plab-actions">
-              <button id="plab-save-private" type="button" className="btn primary" disabled={!draft} onClick={saveDraft}>Save private draft</button>
-              <button type="button" className="btn" disabled={!draft} onClick={exportRecipe}>Export recipe</button>
-              <button type="button" className="btn" onClick={() => importRef.current?.click()}>Import recipe</button>
-              <input ref={importRef} className="plab-file-input" aria-label="Import recipe" aria-hidden="true" tabIndex={-1} type="file" accept=".lwrecipe.json,application/json" onChange={importRecipe} />
+            {/* The sheet's pinned foot. The undo bar sits here rather than
+                floating over the artwork because this strip is the one part
+                of the sheet that is visible at EVERY detent — peek, half and
+                full — so an undo is never something the owner has to go and
+                find. */}
+            <div className="plab-sheet-footer">
+              {undoEntry && (
+                <div className="plab-undo-bar" data-testid="pattern-lab-undo-bar" role="status">
+                  <span>{undoEntry.label}</span>
+                  <button type="button" className="btn" data-testid="pattern-lab-undo" onClick={runUndo}>Undo</button>
+                  <button
+                    type="button"
+                    className="plab-undo-dismiss"
+                    aria-label="Dismiss undo"
+                    onClick={() => setUndoEntry(null)}
+                  >×</button>
+                </div>
+              )}
+              <div className="plab-actions">
+                <button
+                  id="plab-save-private"
+                  type="button"
+                  className="btn primary"
+                  disabled={!draft}
+                  onClick={saveDraft}
+                >{saveOptions?.canReplace ? 'Save as a new design' : 'Save private draft'}</button>
+                {saveOptions?.canReplace && (
+                  <button
+                    type="button"
+                    className="btn"
+                    data-testid="pattern-lab-replace-draft"
+                    onClick={replaceSavedDraft}
+                  >{saveOptions.replaceLabel}</button>
+                )}
+                {/* File in/out is library housekeeping, not playing. It is
+                    hidden at the peek and half detents (CSS) so the play
+                    strip's action row stays one line of two full-size save
+                    buttons instead of wrapping to two rows of clipped
+                    labels, which is what it did the moment Replace joined
+                    it. Both are back at full height, where the drafts list
+                    and the browser live. */}
+                <button type="button" className="btn plab-action-file" disabled={!draft} onClick={exportRecipe}>Export recipe</button>
+                <button type="button" className="btn plab-action-file" onClick={() => importRef.current?.click()}>Import recipe</button>
+                <input ref={importRef} className="plab-file-input" aria-label="Import recipe" aria-hidden="true" tabIndex={-1} type="file" accept=".lwrecipe.json,application/json" onChange={importRecipe} />
+              </div>
             </div>
           </aside>
         </section>

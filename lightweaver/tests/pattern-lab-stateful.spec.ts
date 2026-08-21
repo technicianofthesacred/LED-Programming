@@ -25,7 +25,7 @@ test('chooses and sculpts a living simulation through the simple Pattern Lab con
 
   await choosePattern(page, 'generator:particles');
   await expect(page.getByTestId('pattern-lab-mapped-preview')).toHaveAttribute('data-worker-state', 'frame');
-  await expect(page.getByTestId('pattern-lab-draft-name')).toHaveText('Particle Drift');
+  await expect(page.getByTestId('pattern-lab-draft-name')).toHaveValue('Particle Drift');
   // PatternLabVariants.jsx (the four thumbnail previews this used to check)
   // was deleted in this rebuild, and the generator's advanced sliders are no
   // longer behind an "Advanced controls" disclosure — they render directly

@@ -163,6 +163,38 @@
   font-weight: 600;
 }
 
+/* The design's name, editable in place. Styled as the title it is rather
+   than as a form field: no box until you touch it, so the bar still reads as
+   a caption on the artwork and does not turn the top of the screen into a
+   form. The 44px min-height comes from the bar itself. */
+.plab-draft-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 320px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  /* A dotted underline is the whole "you can type here" signal at rest. Left
+     completely borderless the field reads as a caption and nobody discovers
+     it; given a full input box it turns the top of the artwork into a form. */
+  border-bottom: 1px dashed var(--border-soft);
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  background: transparent;
+  color: var(--text-hi);
+  font: 700 12px/1.3 var(--font-sans);
+  text-overflow: ellipsis;
+}
+
+.plab-draft-name::placeholder { color: var(--text-mid); font-weight: 500; }
+.plab-draft-name:hover { border-color: var(--border-soft); }
+.plab-draft-name:focus {
+  border-color: var(--accent);
+  border-bottom-style: solid;
+  background: var(--bg-elev);
+  border-radius: var(--r-sm);
+  outline: none;
+}
+
 .plab-preview-meta {
   display: flex;
   align-items: center;
@@ -1065,6 +1097,39 @@
 
 .plab-private-library li small { color: var(--text-mid); font-size: 11px; text-transform: capitalize; }
 
+/* Open on the left, delete on the right. The delete is a real, separately
+   labelled control rather than a swipe gesture: a swipe is invisible until
+   discovered and impossible with a mouse, and this list is reached on both. */
+.plab-draft-row { display: flex; align-items: stretch; gap: 6px; }
+.plab-private-library li.plab-draft-row > button:first-child { flex: 1 1 auto; min-width: 0; }
+.plab-draft-open-flag { color: var(--text-mid); font-weight: 400; }
+
+.plab-private-library li button.plab-draft-delete {
+  flex: 0 0 auto;
+  width: 44px;
+  min-height: 48px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-mid);
+  cursor: pointer;
+}
+
+.plab-private-library li button.plab-draft-delete svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.plab-private-library li button.plab-draft-delete:hover { border-color: var(--danger); color: var(--danger); }
+
 .plab-import-errors,
 .plab-save-status {
   margin: 12px 18px 0;
@@ -1122,14 +1187,50 @@
   line-height: 1.4;
 }
 
-.plab-actions {
+/* The pinned foot of the control column: undo bar + save/export row. They
+   are wrapped together so the undo can never be scrolled away independently
+   of the actions it undoes, and so that on a phone the flex column pins one
+   element rather than two competing sticky siblings. */
+.plab-sheet-footer {
   position: sticky;
   bottom: 0;
   z-index: 3;
+  margin-top: auto;
+  background: var(--bg-panel);
+}
+
+.plab-undo-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--border-hair);
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-panel));
+  color: var(--text-hi);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.plab-undo-bar > span { flex: 1 1 auto; min-width: 0; }
+.plab-undo-bar .btn { flex: 0 0 auto; min-height: 36px; }
+
+.plab-undo-dismiss {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-mid);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.plab-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 7px;
-  margin-top: auto;
   padding: 18px;
   border-top: 1px solid var(--border-hair);
   background: var(--bg-panel);
@@ -1158,12 +1259,14 @@
   .plab-stage { min-height: 455px; }
   .plab-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; }
   .plab-control-heading,
+  .plab-sheet-footer,
   .plab-actions,
   .plab-private-library,
   .plab-runtime-tools,
   .plab-import-errors,
   .plab-save-status { grid-column: 1 / -1; }
   .plab-control-body { border-right: 1px solid var(--border-hair); }
+  .plab-sheet-footer,
   .plab-actions { position: static; }
 }
 
@@ -1330,19 +1433,24 @@
   .plab-screen[data-sheet-detent="half"] .plab-compact-step-body { padding: 10px 14px 14px; }
   .plab-screen[data-sheet-detent="peek"] .plab-macro small,
   .plab-screen[data-sheet-detent="half"] .plab-macro small { display: none; }
-  /* One compact row of actions at peek instead of two: Keep stays reachable
-     without stealing the height the sliders need. */
+  /* One row of actions at peek instead of two. Flex rather than a fixed
+     column count because the row holds either one save button or two (once
+     a design has been saved, Replace joins it) — a 3-column grid wrapped a
+     four-button row onto a second line and clipped every label, eating the
+     height the sliders need. */
   .plab-screen[data-sheet-detent="peek"] .plab-actions,
   .plab-screen[data-sheet-detent="half"] .plab-actions {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    display: flex;
     padding-block: 10px;
   }
-  .plab-screen[data-sheet-detent="peek"] .plab-actions .btn:first-child,
-  .plab-screen[data-sheet-detent="half"] .plab-actions .btn:first-child { grid-column: auto; }
+  .plab-screen[data-sheet-detent="peek"] .plab-action-file,
+  .plab-screen[data-sheet-detent="half"] .plab-action-file { display: none; }
   .plab-screen[data-sheet-detent="peek"] .plab-actions .btn,
   .plab-screen[data-sheet-detent="half"] .plab-actions .btn {
-    padding-inline: 4px;
-    font-size: 10.5px;
+    flex: 1 1 0;
+    min-width: 0;
+    padding-inline: 6px;
+    font-size: 11px;
     text-align: center;
     overflow: hidden;
   }
@@ -1354,6 +1462,30 @@
   .plab-source-field select { min-height: 44px; }
   .plab-runtime-tools { padding-inline: 14px; }
   .plab-use-in-project-promoted { margin-inline: 14px; }
+  /* The footer (undo bar + actions) is the sheet's pinned foot at every
+     detent, so the undo is reachable from the play strip without opening
+     anything. */
+  .plab-sheet-footer {
+    position: static;
+    flex: 0 0 auto;
+    margin-top: 0;
+  }
+  .plab-undo-bar { padding-inline: 14px; }
+  .plab-undo-bar .btn,
+  .plab-undo-dismiss { min-width: 44px; min-height: 44px; }
+  /* On the play strip the undo has to be present without costing the
+     sliders a row: one clipped line of explanation, full-size Undo button. */
+  .plab-screen[data-sheet-detent="peek"] .plab-undo-bar,
+  .plab-screen[data-sheet-detent="half"] .plab-undo-bar {
+    padding-block: 4px;
+    font-size: 11px;
+  }
+  .plab-screen[data-sheet-detent="peek"] .plab-undo-bar > span,
+  .plab-screen[data-sheet-detent="half"] .plab-undo-bar > span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .plab-actions {
     position: static;
     flex: 0 0 auto;
