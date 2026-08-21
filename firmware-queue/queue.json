@@ -1,29 +1,4 @@
 {
   "note": "Changes that are finished but are waiting for the next card update, because sending one costs a signed update to every card in a customer's home. Run \"npm run firmware:waiting\" to read this, and \"npm run firmware:release\" to carry it all at once.",
-  "waiting": [
-    {
-      "id": "package-json-lane",
-      "what": "Stop a rename inside a settings file from demanding a card update on its own.",
-      "why": "The change teaches the build system to tell a harmless rename apart from a real change to what the cards do. It cannot land by itself, because changing that judgement is treated as the most suspicious kind of change there is — which is correct, and is exactly the trap it exists to remove.",
-      "added": "2026-08-21",
-      "source": {
-        "kind": "patch",
-        "patch": "firmware-queue/patches/package-json-lane.patch",
-        "supersedes": {
-          "pullRequest": 165,
-          "branch": "claude/ci-package-json-lane"
-        }
-      }
-    },
-    {
-      "id": "browser-smoke-remaining-six",
-      "what": "Turn on six more automatic checks that run before anything ships.",
-      "why": "Switching them on means editing one settings file, and editing that file is treated as a change to what the cards do — so six extra checks would otherwise cost a signed update to every card in a customer's home for an unchanged card.",
-      "added": "2026-08-21",
-      "source": {
-        "kind": "patch",
-        "patch": "firmware-queue/patches/browser-smoke-remaining-six.patch"
-      }
-    }
-  ]
+  "waiting": []
 }
