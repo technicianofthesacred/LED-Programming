@@ -24,6 +24,16 @@
         "kind": "patch",
         "patch": "firmware-queue/patches/browser-smoke-remaining-six.patch"
       }
+    },
+    {
+      "id": "mandala-engine-local-check",
+      "what": "Make the mandala light-engine checks run on this machine, not only on the build server.",
+      "why": "These checks guard the dark-to-bright and localized-lighting rules, but they run only in the build server's lanes and in no command an agent would think to run locally. On 21 August 2026 a session tuned all fourteen effects, saw 2115 local tests pass, pushed, and only then found two real failures in this suite — including effects that could never reach true dark any more. Adding them to the local check makes that impossible to miss. It is held back only because switching them on means editing one settings file, and editing that file is treated as a change to what the cards do.",
+      "added": "2026-08-21",
+      "source": {
+        "kind": "patch",
+        "patch": "firmware-queue/patches/mandala-engine-local-check.patch"
+      }
     }
   ]
 }

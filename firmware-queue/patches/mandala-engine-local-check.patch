@@ -1,0 +1,13 @@
+diff --git a/lightweaver/package.json b/lightweaver/package.json
+index 8832c489..a7488b2e 100644
+--- a/lightweaver/package.json
++++ b/lightweaver/package.json
+@@ -47,7 +47,7 @@
+     "firmware:bump": "node ../firmware/lightweaver-controller/scripts/firmware-version.mjs bump",
+     "firmware:version:check": "node ../firmware/lightweaver-controller/scripts/firmware-version.mjs check",
+     "check:prod": "node scripts/check-prod-freshness.mjs",
+-    "test:unit": "node --test src/lib/*.test.js",
++    "test:unit": "node --test src/lib/*.test.js tests/mandala-engine.mjs tests/mandala-engine-transients.mjs",
+     "test:windowless:tooling": "node --test tests/windowless-*.test.mjs",
+     "test:windowless:browser": "playwright test --config tests/windowless-playwright.config.ts",
+     "test:projects": "node --test functions/api/library/_shared/accountAuth.test.js functions/api/library/library-api.test.js tests/cloud-bindings.mjs src/lib/cloudLibraryClient.test.js src/lib/libraryBackup.test.js src/lib/workspaceAssets.test.js",
