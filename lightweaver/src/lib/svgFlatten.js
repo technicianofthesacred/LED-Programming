@@ -162,6 +162,21 @@ export function accumulatedMatrix(el) {
   return composite;
 }
 
+// True when m maps every point to itself. Worth asking, because a shape
+// under the identity needs no rewriting at all — and rewriting it anyway
+// would silently renormalise perfectly good path data (`H`/`V` collapsing
+// to `L`, relative commands going absolute, coordinates rounding), which
+// changes stored geometry text for artwork that had nothing wrong with it.
+export function isIdentityMatrix(m, tolerance = 1e-9) {
+  if (!m) return false;
+  return Math.abs(m.a - 1) <= tolerance
+    && Math.abs(m.b) <= tolerance
+    && Math.abs(m.c) <= tolerance
+    && Math.abs(m.d - 1) <= tolerance
+    && Math.abs(m.e) <= tolerance
+    && Math.abs(m.f) <= tolerance;
+}
+
 export function matrixDeterminant(m) {
   return m.a * m.d - m.b * m.c;
 }
@@ -591,6 +606,13 @@ export function expandUses(svgRoot, { maxDepth = 4, maxExpansions = 2000 } = {})
 
       const doc = child.ownerDocument || node.ownerDocument || svgRoot.ownerDocument;
       const wrapper = createSvgElement(doc, node, 'g');
+      // Marks this <g> as an instanced COPY, not a group the artist drew.
+      // Layer detection downstream (measureLayers) uses it to tell "this
+      // layer contains several sub-layers" from "this layer contains one
+      // motif repeated six times" — without it, a single named layer
+      // holding a six-fold mandala would break apart into six layers the
+      // moment expansion started working.
+      wrapper.setAttribute('data-lw-instance', '1');
       const x = parseFloat(child.getAttribute('x') || '0') || 0;
       const y = parseFloat(child.getAttribute('y') || '0') || 0;
       const ownTransform = child.getAttribute('transform') || '';
@@ -599,6 +621,11 @@ export function expandUses(svgRoot, { maxDepth = 4, maxExpansions = 2000 } = {})
       if (combinedTransform) wrapper.setAttribute('transform', combinedTransform);
       const sourceId = child.getAttribute('id');
       if (sourceId) wrapper.setAttribute('data-expanded-from', sourceId);
+      // Carry the <use>'s own layer name onto the wrapper. Downstream layer
+      // detection (measureLayers) groups by `<g data-name>`, so a named
+      // instance must not lose its name on the way through expansion.
+      const sourceName = child.getAttribute('data-name');
+      if (sourceName) wrapper.setAttribute('data-name', sourceName);
 
       // A <symbol> (or a <use> that targets a nested <svg>) doesn't render
       // itself — only its children do — so unwrap it into the wrapper.
@@ -766,10 +793,21 @@ export function flattenSvgDocument(doc, opts = {}) {
 
     if (SHAPE_TAGS.has(tag)) {
       const matrix = accumulatedMatrix(el);
+      // Nothing to bake in. Emit the primitive's own path data unchanged —
+      // for a <path> that means leaving the exporter's `d` exactly as
+      // written, and for a rect/circle/polygon it means the same string the
+      // old un-flattened reader produced. Running it through the matrix
+      // pipeline anyway would renormalise perfectly good geometry (`H`/`V`
+      // collapsing to `L`, relatives going absolute, coordinates rounding)
+      // for every ordinary flat SVG, to no benefit.
+      const identity = isIdentityMatrix(matrix);
+      if (tag === 'path' && identity) {
+        el.removeAttribute?.('transform');
+        return;
+      }
       const rawD = primitiveToPathD(el, tag);
       if (rawD) {
-        const transformedD = applyMatrixToPathData(rawD, matrix);
-        convertShapeToPath(rootDoc, el, tag, transformedD);
+        convertShapeToPath(rootDoc, el, tag, identity ? rawD : applyMatrixToPathData(rawD, matrix));
       }
       return;
     }

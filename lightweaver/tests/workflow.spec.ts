@@ -415,3 +415,93 @@ test('the latest section preview wins rapid taps and never writes the card confi
   expect(card.controls.every(control => control.zone === undefined)).toBe(true);
   await expect(page.locator('.pmx-status')).toContainText('played on the whole piece');
 });
+
+// ── Mandala import: repeats and transforms ────────────────────────────────
+//
+// Adrian draws mandalas the way vector editors are built for: one wedge,
+// then copies of it rotated around the centre. In SVG that is one `<g>`
+// plus a handful of `<use href="#wedge" transform="rotate(...)">`. The
+// layout import used to read raw geometry attributes only — it matched no
+// `<use>` at all and ignored every `transform` — so a six-fold piece came
+// in as one sixth of itself, silently, and a transformed group landed at
+// the wrong coordinates. This is the browser-side proof that the whole
+// artwork now arrives, measured by the real DOM rather than a stub.
+//
+// The test name deliberately begins "imports SVG" so the merge-gating
+// browser-smoke lane's grep picks it up alongside the workflow test above.
+
+function writeMandalaFixture(tmp: string) {
+  const fixture = path.join(tmp, 'six-fold-mandala.svg');
+  // One 60-degree wedge pointing due right from the centre (200,200),
+  // drawn once and repeated five times around the circle.
+  fs.writeFileSync(fixture, `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <g id="cuts" data-name="Cuts">
+    <g id="wedge-0"><path d="M 200,200 L 300,180 L 300,220 Z" fill="none" stroke="#000"/></g>
+    <use href="#wedge-0" transform="rotate(60 200 200)"/>
+    <use href="#wedge-0" transform="rotate(120 200 200)"/>
+    <use href="#wedge-0" transform="rotate(180 200 200)"/>
+    <use href="#wedge-0" transform="rotate(240 200 200)"/>
+    <use href="#wedge-0" transform="rotate(300 200 200)"/>
+  </g>
+  <g id="frame" data-name="Frame" transform="translate(0 300)">
+    <rect x="10" y="10" width="80" height="20" fill="none" stroke="#000"/>
+  </g>
+</svg>`);
+  return fixture;
+}
+
+test('imports SVG built from one wedge and rotated copies as the whole mandala, not one sixth', async ({ page }) => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lightweaver-mandala-'));
+  const fixture = writeMandalaFixture(tmp);
+
+  await page.goto('/#screen=layout', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('button', { name: 'Import SVG' }).first()).toBeVisible();
+  await page.setInputFiles('input[accept=".svg"]', fixture);
+
+  // Two authored layers: the repeated motif, and the transformed frame.
+  await expect(page.locator('.layer-row')).toHaveCount(2);
+
+  const measured = await page.evaluate(() => {
+    const paths = Array.from(document.querySelectorAll('svg [data-artwork-path-id]')) as SVGPathElement[];
+    const inCuts = paths.filter(p => p.closest('g[id="cuts"]'));
+    const inFrame = paths.filter(p => p.closest('g[id="frame"]'));
+    const union = (els: SVGPathElement[]) => {
+      const boxes = els.map(el => el.getBBox());
+      return {
+        minX: Math.min(...boxes.map(b => b.x)),
+        minY: Math.min(...boxes.map(b => b.y)),
+        maxX: Math.max(...boxes.map(b => b.x + b.width)),
+        maxY: Math.max(...boxes.map(b => b.y + b.height)),
+      };
+    };
+    return {
+      wedgeCount: inCuts.length,
+      cuts: union(inCuts),
+      frame: union(inFrame),
+      totalLength: inCuts.reduce((sum, el) => sum + el.getTotalLength(), 0),
+    };
+  });
+
+  // All six wedges arrived, not just the one that was drawn.
+  expect(measured.wedgeCount).toBe(6);
+
+  // And they form a ring around the centre rather than a sliver on the
+  // right-hand side. One wedge alone spans x 200..300, y 180..220.
+  expect(measured.cuts.minX).toBeLessThan(110);
+  expect(measured.cuts.maxX).toBeGreaterThan(290);
+  expect(measured.cuts.minY).toBeLessThan(120);
+  expect(measured.cuts.maxY).toBeGreaterThan(280);
+
+  // Real measured arc length, six wedges' worth. One wedge's outline is
+  // ~244 units, so anything under ~1400 means copies went missing.
+  expect(measured.totalLength).toBeGreaterThan(1400);
+  expect(measured.totalLength).toBeLessThan(1500);
+
+  // The transformed group sits where it is drawn — translate(0 300) applied
+  // to a rect at (10,10) 80x20 — not at the raw attribute coordinates.
+  expect(measured.frame.minX).toBeCloseTo(10, 1);
+  expect(measured.frame.minY).toBeCloseTo(310, 1);
+  expect(measured.frame.maxX).toBeCloseTo(90, 1);
+  expect(measured.frame.maxY).toBeCloseTo(330, 1);
+});

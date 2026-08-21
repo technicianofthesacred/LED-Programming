@@ -31,6 +31,12 @@ export class FakeElement {
     return this.childNodes;
   }
 
+  // Real elements reflect the `id` content attribute as a property, and
+  // readers in this repo (measureLayers) use the property form.
+  get id() {
+    return this.getAttribute('id') || '';
+  }
+
   get attributes() {
     // Real NamedNodeMap is iterable and holds live Attr nodes; a plain array
     // of {name,value} objects satisfies every call site in this repo
@@ -104,7 +110,11 @@ export class FakeElement {
 
   querySelectorAll(sel) {
     const out = [];
-    const matches = sel === '*' ? () => true : (el) => el.localName === sel.toLowerCase();
+    // Supports `*` and a comma-separated list of bare tag names — the only
+    // two selector shapes this repo's SVG readers use (`measureLayers` asks
+    // for 'path, rect, circle, ellipse, line, polyline, polygon').
+    const names = String(sel).split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    const matches = sel === '*' ? () => true : (el) => names.includes(el.localName);
     const walk = (node) => {
       for (const child of node.childNodes) {
         if (matches(child)) out.push(child);
