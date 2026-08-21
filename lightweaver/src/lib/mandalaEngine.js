@@ -249,6 +249,51 @@ const OVERDRIVE = 0.7;        // wire scale = min(1, master·(1 + OVERDRIVE·evt
 const GATE_KNEE = 0.015;      // dark gate: true black below this intensity…
 const GATE_RAMP = 1 / 0.165;  // …ramping smoothly to unmodified by ≈ knee + 0.165
 
+// ---- onset presence gate (2026-08-21) --------------------------------------
+// An ADDITIVE onset term must ride the light the mode already painted, never
+// paint over the dark. docs/mandala-effects-direction-v2.md §4 rule 2 scopes
+// the discrete onset layer to each mode's GEOMETRY (radius, breadth, contrast,
+// spark rate); rule 6 says the beat layer "lifts existing light and travels
+// through space instead of replacing a frame with a flash".
+//
+// A responsiveness pass gave Strata, Tide and Bloom additive onset terms that
+// landed on every pixel equally. Because `onsetEnv`'s 0.28 s tau never falls
+// below ~0.13 between 120 bpm kicks, a flat pedestal is not a transient at
+// all — it is a permanent DC lift. Measured under the pulseStream in
+// tests/mandala-engine.mjs it raised the DARKEST pixel of the whole piece
+// from 0.0152 → 0.0445 (Strata), 0.0000 → 0.0604 (Tide) and 0.0140 → 0.0607
+// (Bloom): clear of the 0.0396 coal floor, clear of the dark gate's knee, and
+// the three modes stopped reaching true dark ANYWHERE (28.72% / 33.33% /
+// 31.41% of wire pixel-samples → 0.01% / 0.00% / 0.00%).
+//
+// The two laws are not actually in conflict. "Never black" governs SILENCE —
+// the piece settling to a living coal field — and is carried by the coal floor
+// and the ~0.03 idle, both scaled by `presence`. Under music an individual
+// pixel MUST be able to reach true dark, or the spectrum cannot be read and
+// localized partial-ring lighting is impossible; that is exactly what the dark
+// gate exists to allow. So the fix is not to delete these onset terms (a hit
+// in a band that is loud but already clipped genuinely needs somewhere to go)
+// but to weight each by the pixel's OWN structural presence: the value the
+// mode painted there before the onset. Zero where the mode painted dark, full
+// where the mode painted light — the same "lifts existing light" rule the beat
+// substrate's 4·b·(1−b) weighting already obeys, expressed for an additive
+// layer. The knee sits above the coal floor (0.0396 at full presence) so a
+// pixel resting on the floor is never mistaken for structure.
+//
+// The second half of the same fix is the ENVELOPE SHAPE. Strata and Tide ride
+// `evt * evt` rather than `evt`, which halves the additive pulse's effective
+// tau (0.28 s → ~0.14 s): the hit reads as an impact that lands and clears,
+// not a level the field sits at between kicks. That matters for BOTH laws at
+// once. It restores the dark the amendment lock asks for, and it is also what
+// finally moved `responsiveness.test.js`'s onsetVisibility — that metric is a
+// RELATIVE rise (peak within 200 ms over the mean of the 300 ms before), and
+// the probe clamps intensity to 1, so simply raising a coefficient lifts the
+// pre-hit baseline and saturates the peak. Measured on Strata: 0.4·evt gave
+// 0.133 and 0.75·evt still gave 0.133, while 0.65·evt² gives 0.170. Reach for
+// a sharper envelope before a bigger number.
+const ONSET_PRESENCE_KNEE = 0.16;
+function onsetPresence(structure) { return smoothstep(structure / ONSET_PRESENCE_KNEE); }
+
 // 2026-07-13 density amendment: the pattern shapes itself to the pixel COUNT so
 // a 60-light piece reads as finished as a 600-light one — coarser geometry,
 // wider features (more lights on at once), bigger sparks/hit-blooms. At/above
@@ -665,8 +710,8 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
       const radialProgress = area.rf[j], angle = area.ang[j], stripProgress = area.u[j];
       const bandPosition = radialProgress * (strataBand.length - 1);
       const lo = Math.floor(bandPosition), hi = Math.min(strataBand.length - 1, lo + 1);
-      let L = lerp(strataBand[lo], strataBand[hi], bandPosition - lo); L *= L;
-      L *= 1 + 1.8 * evt;                                            // onsets blaze the loud bands to full
+      let Lq = lerp(strataBand[lo], strataBand[hi], bandPosition - lo); Lq *= Lq;
+      const L = Lq * (1 + 1.8 * evt);                                // onsets blaze the loud bands to full
       const ang = angle + stripProgress * 0.01;
       const scallop = 0.75 + 0.25 * Math.sin(teeth * ang + strataScallop); // density-scaled teeth so parts of the ring lead
       // A whole-loud-band's L already sits near its 1.0 ceiling on a
@@ -681,7 +726,21 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
       // including ones the hit's own frequency content does not lie in — a
       // kick is felt as a pulse through the whole spectrum reading, not just
       // amplified within whichever band was already loud.
-      const onsetPop = 0.4 * evt * (0.35 + 0.65 * scallop);
+      // ...but it is GATED by the presence of the light this pixel already
+      // carries (see ONSET_PRESENCE_KNEE). Ungated, this additive term lit
+      // every pixel on every hit, including the rings whose band is quiet and
+      // the scallop troughs between the teeth, and Strata stopped reaching
+      // true dark anywhere — tests/mandala-engine.mjs requires >=15% of
+      // pixel-samples to be truly dark under Active music, because reading a
+      // spectrum depends on a quiet band being visibly OFF. The structure fed
+      // to the gate is the band level BEFORE the evt multiplier above, so the
+      // onset cannot bootstrap its own permission; an already-clipped loud
+      // band is fully open and still shows the hit, which is the point above.
+      // evt² not evt — see ONSET_PRESENCE_KNEE. The gain is held at 0.65: the
+      // localized hit layer in tests/mandala-engine-transients.mjs measures the
+      // bloom's trail against the background it lands on, so a bigger
+      // instantaneous pop here drowns the hit it is supposed to reveal.
+      const onsetPop = 0.65 * evt * evt * (0.35 + 0.65 * scallop) * onsetPresence(Lq * scallop);
       out[p] = Math.max(L * scallop + onsetPop, 0.0);                // no floor — silent band = dark
       zone[p] = radialProgress < 0.375 ? Z_HEARTH : radialProgress < 0.625 ? Z_PATINA : Z_CANDLE;
       crest[p] = 0;
@@ -875,7 +934,16 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
       // the fast onset envelope directly, gated by the same angular arc (so it
       // stays a tide, not a flash) but not by radial position — the hit is felt
       // across the arc immediately, the swell still arrives on its own 1.2s travel.
-      out[p] = Math.max(0.0, inside * (0.06 + 0.80 * drive) * arc + crest * (drive * 0.4 + 0.25 * evt) + 0.62 * evt * (0.4 + 0.6 * arc)); // onsets lift the crest AND land as a felt hit
+      // GATED by the tide's own body (see ONSET_PRESENCE_KNEE): ungated it was
+      // felt just as hard OUTSIDE the tide as inside it, which erased the one
+      // thing that makes this mode a tide — the dark water ahead of the swell —
+      // and took Tide from 33.33% of wire pixel-samples truly dark to 0.00%.
+      // evt² not evt, for the reason in ONSET_PRESENCE_KNEE: on a sustained
+      // bass track the linear form never cleared between kicks, so it was a
+      // level rather than a hit and onsetVisibility actually FELL as its gain
+      // rose (0.62·evt → 0.134, 1.15·evt → 0.116, 1.4·evt² → 0.187).
+      const body = inside * (0.06 + 0.80 * drive) * arc;
+      out[p] = Math.max(0.0, body + crest * (drive * 0.4 + 0.25 * evt) + 1.4 * evt * evt * (0.4 + 0.6 * arc) * onsetPresence(body)); // onsets lift the crest AND land as a felt hit
       zone[p] = Z_HEARTH; crestOut[p] = Math.min(0.85, crest * drive);
     }
     return 'tide';
@@ -920,9 +988,18 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
     // term below was pushed). Compressing keeps the same shape at low/medium
     // bloomR (where Rrad never approached its ceiling) while leaving a little
     // room open at the top.
-    const bloomDrive = bloomR * P.modDepth;
-    const bloomDriveC = bloomDrive / (1 + 0.45 * bloomDrive);
-    const Rrad = 0.15 + 0.90 * bloomDriveC + 0.18 * evt, open = 0.2 + 0.8 * bloomR + 0.15 * evt;
+    // The knee is NORMALIZED by its own value at full drive, so a sustained
+    // loud bass always opens the flower to radial progress 1 whatever the
+    // preset. Compressing without normalizing (an earlier tuning pass) capped
+    // the reach near 0.77 and left the outermost samples of a connected layout
+    // permanently dark — tests/mandala-engine.mjs asserts they are reached,
+    // and "every ring stays alive" is the first restraint rule in
+    // docs/mandala-effects-direction-v2.md. Keep both properties: the curve
+    // still holds mid-range reach back so a kick has somewhere to go, and evt
+    // still adds on top of a full-radius base.
+    const bloomKnee = (x) => x / (1 + 0.45 * x);
+    const bloomDriveC = bloomKnee(bloomR * P.modDepth) / bloomKnee(P.modDepth);
+    const Rrad = 0.15 + 0.85 * bloomDriveC + 0.18 * evt, open = 0.2 + 0.8 * bloomR + 0.15 * evt;
     const petalsN = dLobes(8, 3), sharp = dWide(2, 1.15);          // sparse: fewer, softer/wider petals
     for (let j = from; j < to; j++) {
       const p = area.pixelIndex[j];
@@ -944,7 +1021,14 @@ export function createMandalaEngine({ template = createMandalaSpatialTemplate() 
       // peaks — already near full open, leaving no headroom there for a
       // flash to register; the gaps between petals are where a kick still
       // has somewhere to rise to.
-      B += 1.3 * evt * (0.85 - 0.5 * petal);
+      // But "the gap between petals" is not one thing: a gap the flower has
+      // reached is dim-but-lit and has headroom, while a gap OUTSIDE the
+      // flower's radius is authored darkness. Ungated, this term flashed both
+      // alike and the flower lost its separated petals entirely — 31.41% of
+      // wire pixel-samples truly dark went to 0.00%. Gating on the light
+      // already painted here (see ONSET_PRESENCE_KNEE) keeps the anti-petal
+      // weighting where there IS a flower and leaves the dark outside it dark.
+      B += 1.3 * evt * (0.85 - 0.5 * petal) * onsetPresence(B);
       out[p] = Math.max(0.0, Math.min(1, B));
       zone[p] = Z_HEARTH; crest[p] = fr * 0.3;
     }

@@ -550,6 +550,19 @@ const LIVING_COAL_FLOOR = 0.0390625;
 // re-record the affected entries and say so in the commit. It is NOT legitimate
 // as a side effect of ensemble work; if an ensemble change turned these red,
 // the branch is leaking.
+//
+// RE-RECORDED 2026-08-21 — strata, tide and bloom only (all four runs each:
+// mandala/connected × neutral/tuned). Their arithmetic was deliberately
+// retuned in `mandalaEngine.js`: the additive onset terms a responsiveness
+// pass had given them landed on every pixel equally, which is a DC lift rather
+// than a transient (onsetEnv's 0.28 s tau never falls below ~0.13 between
+// 120 bpm kicks) and cost all three the ability to reach true dark under music
+// — 28.72% / 33.33% / 31.41% of wire pixel-samples truly dark went to 0.01% /
+// 0.00% / 0.00%, breaking the amendment lock in tests/mandala-engine.mjs. Each
+// term is now weighted by the pixel's own structural presence and rides evt²
+// so it decays as an impact, not a pedestal. The other SIX modes' digests were
+// NOT touched and stayed green through the change, which is the evidence that
+// nothing leaked outside the three retuned kernels.
 
 const PRE_ENSEMBLE_DIGESTS = {
   'mandala/meridian/neutral': 'd87a8fc2231cc570568c36b8d740c5c1',
@@ -558,16 +571,16 @@ const PRE_ENSEMBLE_DIGESTS = {
   'mandala/hearth/tuned': '73318a5b22689f8a971f14956a6f5ae3',
   'mandala/embers/neutral': '4d611bd6e1fe0319839871bf7d6f94bf',
   'mandala/embers/tuned': 'c77eedfd9195037b27d62a0c1f2bbb1c',
-  'mandala/strata/neutral': '7cc13f89d630929c78ab5bbe6d52acd8',
-  'mandala/strata/tuned': '6c052659be80c9f102004c5b1f3f9c32',
-  'mandala/tide/neutral': '086533e44d427f7852076fa6e9f8facc',
-  'mandala/tide/tuned': '92ac116d59a0027b12bad34490917d8a',
+  'mandala/strata/neutral': 'af3e1bc774198a60efc300837210f555',
+  'mandala/strata/tuned': '0730e1fe5375209315b16349f816291a',
+  'mandala/tide/neutral': '900d5870391a35fb0a6202f143041ae0',
+  'mandala/tide/tuned': '14c71d5493f0c72ca31d902e21b70e1e',
   'mandala/lattice/neutral': '78590afec7b7e26dc006e68c0a2461a4',
   'mandala/lattice/tuned': '7e1695fce505f69e116c5e343461553b',
   'mandala/procession/neutral': 'b16c148c23ced22b90465a40b880964d',
   'mandala/procession/tuned': '6f4917551f933e0f726867a11ce82c3e',
-  'mandala/bloom/neutral': '0c6df13849172f832332ef25b7130013',
-  'mandala/bloom/tuned': 'e7755b360d6e5d1028cea93429bc4a26',
+  'mandala/bloom/neutral': 'add87c4c8ae5777cc3f8320207196017',
+  'mandala/bloom/tuned': '589d614bfc1512d30cf1c00da53a5e75',
   'mandala/spiral/neutral': '918d8c41d336b2f326103fa2f2f3f2c1',
   'mandala/spiral/tuned': 'b183219bfafde06a4ec0beb758cb3025',
   'connected/meridian/neutral': '09cd08e70becf535790a703c95de5675',
@@ -576,16 +589,16 @@ const PRE_ENSEMBLE_DIGESTS = {
   'connected/hearth/tuned': 'f647fe13923b1a816b0672909d0bad81',
   'connected/embers/neutral': 'fc99b85b8db41b60e23401daa08c3527',
   'connected/embers/tuned': '8e4bdbb50af60e06e5d8e3a6d8f20c4c',
-  'connected/strata/neutral': 'f5d6e93a6ee6b1d3633a2a98d9fe28e3',
-  'connected/strata/tuned': '4a241ab7f79cac4b5d60627c336c46b4',
-  'connected/tide/neutral': '3533bb685543226cf01be55e23e3bae4',
-  'connected/tide/tuned': 'efada1d0d6aeb416347db1425354ef32',
+  'connected/strata/neutral': 'a46fbe270a73be38aeb062f41f45e329',
+  'connected/strata/tuned': '636371059b22736f0f69f096e353754e',
+  'connected/tide/neutral': 'e9db477e434c4512dfdbd5901ec2127d',
+  'connected/tide/tuned': 'fe1e4bf5fabebca0b9b88087ab4081d4',
   'connected/lattice/neutral': 'c4de692af8c50ed34868d05606add6dd',
   'connected/lattice/tuned': '4dbd3f64a0d1b0d2f3b0df12c6812636',
   'connected/procession/neutral': '0b489532b9358002fae7cbf4ddff087f',
   'connected/procession/tuned': '3799572df5ab3a88d9c0d5e4b92b2a05',
-  'connected/bloom/neutral': '2826c6cc11feca42dbaf22c4a37ffe98',
-  'connected/bloom/tuned': 'c23b6dcb4ff7b5a195fb03515b517683',
+  'connected/bloom/neutral': '2e5ee3c2204b6fa1fa0616909d5a6f26',
+  'connected/bloom/tuned': 'f0e28d98534e6bddea1c80893e1df4ba',
   'connected/spiral/neutral': '3be91a53bd09f6dff69c7335a7e96d6a',
   'connected/spiral/tuned': 'ef8585f55a344bb4858493542f67012a',
 };
