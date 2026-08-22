@@ -28,6 +28,7 @@ import {
   connectCardLink,
   getCardLinkState,
   isCardLinkConnected,
+  isCardTransportConnected,
   reportDirectCardStatus,
   subscribeCardLink,
 } from '../lib/cardLink.js';
@@ -475,15 +476,33 @@ function FirmwareStatusControl({ status, installedBuildId, releaseBuildId, relea
 function OfflineStatusControl({ state, onActivate }) {
   if (!state || state.status === 'disabled') return null;
   if (state.status === 'update-waiting') {
+    // The label carries the refusal. "Update ready" that silently declines to
+    // update is the same to an owner as a broken button; naming the one thing
+    // standing in the way turns a dead click into an instruction.
+    const blocked = {
+      'card-operation-active': {
+        label: 'Update after this card step',
+        title: 'A Studio update is ready. It will not interrupt the card operation running now — finish or stop it, then press this again.',
+      },
+      'unsaved-project-transition': {
+        label: 'Save, then update',
+        title: 'A Studio update is ready. Updating reloads Studio, so save the project first (Save project, top right), then press this again.',
+      },
+      'no-update-waiting': {
+        label: 'No update waiting',
+        title: 'Studio is already running the newest build it has downloaded.',
+      },
+    }[state.reason];
     return (
       <button
         type="button"
-        className="sb-firmware sb-offline is-update-available"
+        className={`sb-firmware sb-offline is-update-available${blocked ? ' is-blocked' : ''}`}
         data-testid="offline-update-status"
-        title={state.reason ? `Update waits for safety: ${state.reason}.` : 'A verified Studio update is ready.'}
+        data-blocked-reason={state.reason || ''}
+        title={blocked?.title || 'A verified Studio update is ready. Press to reload Studio into it.'}
         onClick={onActivate}
       >
-        Update ready
+        {blocked?.label || 'Update ready'}
       </button>
     );
   }
@@ -514,7 +533,7 @@ function StatusBar({ link, lifecycle, connectionCenterOpen, cardControlOpen, onO
 
       <FirmwareStatusControl
         status={firmwareStatus}
-        installedBuildId={isCardLinkConnected(link) ? link.card?.buildId : ''}
+        installedBuildId={isCardTransportConnected(link) ? link.card?.buildId : ''}
         releaseBuildId={firmwareRelease?.buildId}
         releaseError={firmwareReleaseError}
         onOpenFirmwareUpdate={onOpenFirmwareUpdate}
@@ -1039,10 +1058,14 @@ function Shell({ offlineUpdateController = null }) {
     cardStatus.allowAdopt,
   ]);
   const connected = isCardLinkConnected(cardLink);
+  // Firmware is a READ of what the card already reported, so it is answered
+  // from the transport, not from command readiness — a factory-blank card
+  // names its build on the first status and must not be labelled "firmware
+  // unknown" while it does so.
   const firmwareStatus = useMemo(() => classifyFooterFirmwareStatus(
-    connected ? cardLink.card : null,
+    isCardTransportConnected(cardLink) ? cardLink.card : null,
     firmwareReleaseIdentity.state === 'verified' ? firmwareReleaseIdentity.manifest : null,
-  ), [cardLink.card, connected, firmwareReleaseIdentity.manifest, firmwareReleaseIdentity.state]);
+  ), [cardLink, firmwareReleaseIdentity.manifest, firmwareReleaseIdentity.state]);
   const openSetupTask = useCallback(taskId => {
     if (installActiveRef.current) return;
     markCardSectionNavigation();

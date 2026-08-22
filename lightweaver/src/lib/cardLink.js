@@ -30,7 +30,7 @@ import {
   readPersistedCardIdentity,
   verifyExpectedCardAtHost,
 } from './cardIdentity.js';
-import { isCardLinkConnected as isFreshCardLinkConnected } from './cardConnectionFlow.js';
+import { isCardLinkConnected as isFreshCardLinkConnected, isCardTransportConnected } from './cardConnectionFlow.js';
 import { classifyCardReadiness } from './cardReadiness.js';
 import {
   acceptWifiHandoff,
@@ -679,6 +679,8 @@ export function reduceCardLink(prev = initialCardLinkState(), event = {}, {
 export function isCardLinkConnected(state = {}) {
   return isFreshCardLinkConnected(state);
 }
+
+export { isCardTransportConnected };
 
 // Plain, friendly copy for the footer — the audience is a visual artist.
 export function cardLinkReasonText(reason = '') {

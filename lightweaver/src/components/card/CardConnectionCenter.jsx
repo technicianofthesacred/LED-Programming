@@ -1,11 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createBridgeResultChannel, resumeBridgeReturnCode } from '../../lib/bridgeLaunch.js';
-import {
-  acquireCardBridgeFromGesture,
-  adoptDiscoveredCardBridgeIdentity,
-  getCardBridgeState,
-  rePairDiscoveredCardBridgeIdentity,
-} from '../../lib/cardBridge.js';
+import { acquireCardBridgeFromGesture } from '../../lib/cardBridge.js';
 import {
   CARD_HOST_CHANGED_EVENT,
   isLocalCardHost,
@@ -19,7 +14,8 @@ import { openCardFlow } from '../../lib/cardFlowEntry.js';
 import { cardTaskCopy } from '../../lib/cardTaskCopy.js';
 import { connectPanelRouteOut } from '../../lib/connectPanelRouting.js';
 import { cardBuildLabel, readPersistedCardIdentity, setupNetworkLabelForCardId } from '../../lib/cardIdentity.js';
-import { adoptDiscoveredDirectCard, connectCardLink } from '../../lib/cardLink.js';
+import { connectCardLink } from '../../lib/cardLink.js';
+import { pairDiscoveredCard } from '../../lib/cardPairing.js';
 import { connectCardTransport, getActiveCardTransportAuthority } from '../../lib/cardTransport.js';
 import { classifyFooterFirmwareStatus } from '../../lib/footerFirmwareStatus.js';
 import {
@@ -297,35 +293,22 @@ export function CardConnectionCenter({
   };
 
   const pairDiscoveredBridgeCard = async (targetHost) => {
-    if (!readPersistedCardIdentity()?.id) {
-      await adoptDiscoveredCardBridgeIdentity(targetHost);
-    } else {
-      await rePairDiscoveredCardBridgeIdentity(targetHost);
-    }
+    const result = await pairDiscoveredCard({ host: targetHost });
+    if (!result.ok) throw Object.assign(new Error(result.message), { reason: result.reason });
   };
 
   const useDiscoveredCard = async () => {
     setPairingBusy(true);
-    try {
-      if (link.transport === 'direct' && link.discoveredCard?.id) {
-        await adoptDiscoveredDirectCard();
-      } else {
-        await pairDiscoveredBridgeCard(link.host);
-      }
-      setTakeoverHost('');
-      setFailure('');
-    } catch (error) {
-      if (error?.reason === 'stale-host') {
-        const activeHost = normalizeCardHost(getCardBridgeState().host || link.host || readStoredCardHost());
-        setTakeoverHost(activeHost);
-        setFailure('Studio found the card through an earlier connection. Take over that connection to use the card in this Studio.');
-      } else {
-        setTakeoverHost('');
-        setFailure(error?.message || 'Studio could not pair this card.');
-      }
-    } finally {
-      setPairingBusy(false);
-    }
+    const result = await pairDiscoveredCard(link);
+    setTakeoverHost(result.ok ? '' : result.takeoverHost);
+    setFailure(result.ok ? '' : result.message);
+    setPairingBusy(false);
+    // Pairing was the whole reason this panel opened. Staying open afterwards
+    // left a second, differently-worded next step ("Continue on Card Home")
+    // beside the one the screen behind it had already moved on to — two
+    // instructions for one moment, which is what made the flow feel like it
+    // was happening in several places at once.
+    if (result.ok) closeAndRestore();
   };
 
   const takeOverConnection = async () => {

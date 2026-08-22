@@ -231,6 +231,19 @@ function classifiedLinkReadiness(link = {}, options = {}) {
   });
 }
 
+// Whether the card is ANSWERING, regardless of whether it holds a usable
+// project. `isCardLinkConnected` deliberately also requires command readiness,
+// which is right for anything that sends the card an instruction — but wrong
+// for reading what the card has already told us about itself. A freshly
+// flashed card reports its firmware version and build on the first
+// /api/status and is factory-blank at the same time; gating the footer's
+// firmware line on command readiness printed "Card firmware unknown" beside a
+// card that had just named its build, which reads as a fault on a healthy card.
+export function isCardTransportConnected(link = {}) {
+  if (!link || typeof link !== 'object' || Array.isArray(link)) return false;
+  return link.state === 'connected-bridge' || link.state === 'connected-direct';
+}
+
 export function isCardLinkConnected(link = {}, options = {}) {
   if (!link || typeof link !== 'object' || Array.isArray(link)) return false;
   const transportConnected = link.state === 'connected-bridge' || link.state === 'connected-direct';

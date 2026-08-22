@@ -16,7 +16,7 @@ export function createOfflineUpdateController({
     listeners.forEach(listener => { try { listener(state); } catch { /* isolated */ } });
   };
   const inspectWaiting = registration => {
-    if (registration?.waiting) setState({ status: 'update-waiting', registration });
+    if (registration?.waiting) setState({ status: 'update-waiting', registration, reason: '' });
   };
   return Object.freeze({
     getState: () => state,
@@ -60,11 +60,19 @@ export function createOfflineUpdateController({
       const mutation = activeMutationGuard();
       const unsaved = unsavedTransitionGuard();
       if (!waiting || mutation || unsaved) {
-        if (waiting) setState({ status: 'update-waiting', reason: mutation ? 'card-operation-active' : 'unsaved-project-transition' });
+        // A refusal has to be VISIBLE. This used to re-set the same status with
+        // a reason that only ever reached a title attribute, so the owner
+        // pressed "Update ready", watched nothing happen, and reasonably read
+        // the button as broken. The reason is now part of the state the label
+        // is rendered from.
+        setState({
+          status: 'update-waiting',
+          reason: !waiting ? 'no-update-waiting' : mutation ? 'card-operation-active' : 'unsaved-project-transition',
+        });
         return false;
       }
       waiting.postMessage({ type: 'SKIP_WAITING' });
-      setState({ status: 'activating' });
+      setState({ status: 'activating', reason: '' });
       return true;
     },
   });
