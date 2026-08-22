@@ -14,6 +14,7 @@ import { currentInstallation, structurallyInstalledRecord } from '../lib/project
 import { guardedResolutionRun, resolvedMatchKey } from '../lib/cardProjectAdoption.js';
 import { importProjectFromPickedFile } from '../lib/projectTransfer.js';
 import { PROJECT_IMPORT_ACCEPT } from '../lib/projectFiles.js';
+import { pairDiscoveredCard } from '../lib/cardPairing.js';
 import { useCardActions } from './CardActionsProvider.jsx';
 
 // The reconstruction itself moved to lib/cardProjectAdoption.js (the
@@ -100,6 +101,7 @@ export function SetupScreen({
   const [resolution, setResolution] = useState({ kind: 'unknown' });
   const [recheckTick, setRecheckTick] = useState(0);
   const [adoptionError, setAdoptionError] = useState('');
+  const [pairState, setPairState] = useState({ busy: false, message: '' });
   const importRef = useRef(null);
   const resolveInputsRef = useRef({ currentProject, activeCloudProjects, browserProjects });
   const previousPhaseRef = useRef('');
@@ -448,6 +450,28 @@ export function SetupScreen({
   // sent the owner back to this screen.
   const recheckCard = () => setRecheckTick(tick => tick + 1);
 
+  // Phase 1's primary button PAIRS. It used to open the Connection Center,
+  // which — for the ordinary case where Studio had already found the card —
+  // did nothing but restate "a card was found" and ask for the same click
+  // again in a second window. The panel is still the answer when pairing
+  // actually fails (stale bridge takeover, wrong card, address entry), so a
+  // failure hands off to it rather than dead-ending here.
+  const pairThisCard = async () => {
+    if (pairState.busy) return;
+    setPairState({ busy: true, message: '' });
+    const result = await pairDiscoveredCard(cardLink || {});
+    setPairState({ busy: false, message: result.ok ? '' : result.message });
+    if (result.ok) {
+      setRecheckTick(tick => tick + 1);
+      return;
+    }
+    // Every failure hands off to the panel: taking over a stale bridge,
+    // launching one, or entering an address all live there. Removing the
+    // extra click on the path that works must not remove the recovery on the
+    // path that does not.
+    onOpenConnectionCenter?.();
+  };
+
   const onImportFile = event => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -479,6 +503,11 @@ export function SetupScreen({
       const connectionLabel = taskId === 'pair-card' ? 'Pair this card'
         : taskId === 'reconnect-card' ? 'Reconnect this card'
           : 'Find my card';
+      // Studio can only pair what it has already FOUND. A discovered card (the
+      // "Found — pair" state) is the whole precondition; without one there is
+      // nothing to pair here and the panel's find, bridge and by-address steps
+      // are the real answer, so the button keeps opening it.
+      const canPairInPlace = taskId === 'pair-card' && Boolean(cardLink?.discoveredCard?.id);
       // The card holds a project Studio has not matched. This is the state the
       // owner was looping in: it used to fall through to a generic "Find my
       // card" that reopened the connection center, whose only exit was back
@@ -552,8 +581,15 @@ export function SetupScreen({
             >Continue Wi-Fi setup</button>
           ) : (
             <>
-              <button type="button" className="btn primary" data-testid="setup-connect-card" onClick={() => onOpenConnectionCenter?.()}>{connectionLabel}</button>
-              {taskId === 'connect-card' && <button type="button" className="btn" data-testid="setup-connect-manual" onClick={() => onOpenConnectionCenter?.()}>Connect by address</button>}
+              {canPairInPlace ? (
+                <button type="button" className="btn primary" data-testid="setup-connect-card" disabled={pairState.busy} onClick={() => void pairThisCard()}>
+                  {pairState.busy ? 'Pairing this card…' : connectionLabel}
+                </button>
+              ) : (
+                <button type="button" className="btn primary" data-testid="setup-connect-card" onClick={() => onOpenConnectionCenter?.()}>{connectionLabel}</button>
+              )}
+              {pairState.message && <p className="card-connection-failure" role="alert" data-testid="setup-pair-failure">{pairState.message}</p>}
+              <button type="button" className="btn" data-testid="setup-connect-manual" onClick={() => onOpenConnectionCenter?.()}>Card connection options</button>
             </>
           )}
         </div>

@@ -259,6 +259,10 @@ export function CardCommissioningPanel({
   const [lightCheckNotice, setLightCheckNotice] = useState('');
   const [bridgeHandoffStatus, setBridgeHandoffStatus] = useState(null);
   const [setupReach, setSetupReach] = useState({ state: 'idle' });
+  // Which route the owner said they can actually see after an inconclusive
+  // install. Showing both routes at once put three headings and three buttons
+  // on one screen and left the owner with no way to tell which was theirs.
+  const [postFlashChoice, setPostFlashChoice] = useState('');
   const markerSessionRef = useRef(null);
   const markerTimeoutRef = useRef(null);
   const acknowledgementPersistenceRef = useRef('');
@@ -815,6 +819,13 @@ export function CardCommissioningPanel({
     && flow.postFlashDetection === 'inconclusive'
     && ['setup-required', 'setup-joined'].includes(flow.networkState);
 
+  // Whether anything is actually watching for the card to come back. The
+  // auto-advance poll below is a direct http fetch, which a page served over
+  // https cannot make — so on the public Studio nothing polls, and every
+  // sentence promising that Studio "continues automatically" was false there.
+  // Owners waited on that sentence indefinitely. It is now conditional, and
+  // the manual reconnect is named as the thing that moves the step.
+  const canAutoDetect = canPushDirectlyToCard();
   const reconnectHost = link?.handoffCorrelation?.host
     || (stationDetected && !flow.cardAcknowledgedAt ? flow.stationHost : '')
     || link?.host || 'lightweaver.local';
@@ -838,6 +849,10 @@ export function CardCommissioningPanel({
       const next = returnCardToSetupNetworkPath(flow);
       await writeCardCommissioning(next);
       setFlow(next);
+      // The owner has just LOOKED and reported a hotspot. That answers the
+      // inconclusive fork (which this transition otherwise re-raises), so go
+      // straight to the join steps instead of asking the same question again.
+      setPostFlashChoice('hotspot');
     } catch (error) {
       setFailure(error?.message || 'Studio could not switch back to the setup-hotspot instructions.');
     }
@@ -1083,13 +1098,16 @@ export function CardCommissioningPanel({
               <button type="button" className="btn" onClick={useSetupNetworkPathInstead}>{setupSsid ? `No — the card is showing ${setupSsid}` : 'No — the card is showing its setup hotspot'}</button>
             </div>
           )}
-          {!flow.cardAcknowledgedAt && !['found', 'return-to-gallery'].includes(detection.state) && postFlashInconclusive && (
+          {!flow.cardAcknowledgedAt && !['found', 'return-to-gallery'].includes(detection.state) && postFlashInconclusive && postFlashChoice !== 'hotspot' && (
             <div className="card-commissioning-network" data-post-flash="inconclusive">
-              <p role="status"><strong>Studio could not confirm how this card came back up.</strong> If the install kept the Wi-Fi it was already using, the card is on your network right now and never started {setupNetworkLabel} — the setup address would spin forever. Follow whichever of these you can actually see.</p>
-              <button type="button" className="btn" onClick={reconnectInstalledCard} disabled={reconnecting}>{reconnecting ? 'Reconnecting…' : 'The card is already on my Wi-Fi'}</button>
+              <p role="status"><strong>Studio could not confirm how this card came back up.</strong> Open this device&rsquo;s Wi-Fi list and answer one question: is <strong>{setupNetworkLabel}</strong> there?</p>
+              <div className="card-connection-actions">
+                <button type="button" className="btn primary" onClick={reconnectInstalledCard} disabled={reconnecting} data-testid="post-flash-on-wifi">{reconnecting ? 'Reconnecting…' : 'No — the card is already on my Wi-Fi'}</button>
+                <button type="button" className="btn" onClick={() => setPostFlashChoice('hotspot')} data-testid="post-flash-hotspot">{setupSsid ? `Yes — I can see ${setupSsid}` : 'Yes — I can see the setup network'}</button>
+              </div>
             </div>
           )}
-          {!flow.cardAcknowledgedAt && !['found', 'return-to-gallery'].includes(detection.state) && flow.networkState === 'setup-required' && (
+          {!flow.cardAcknowledgedAt && !['found', 'return-to-gallery'].includes(detection.state) && (!postFlashInconclusive || postFlashChoice === 'hotspot') && flow.networkState === 'setup-required' && (
             <div className="card-commissioning-network" data-hotspot-wait={hotspotWait.phase}>
               <p>The clean installation reset Wi-Fi, so the card is now broadcasting <strong>{setupNetworkLabel}</strong> for you to join. The setup address only works while that network is joined.</p>
               {/*
@@ -1110,7 +1128,7 @@ export function CardCommissioningPanel({
               {detection.state === 'searching' && <p role="status">Looking for {flow.expectedCard.id} on your network…</p>}
             </div>
           )}
-          {!flow.cardAcknowledgedAt && !['found', 'return-to-gallery'].includes(detection.state) && flow.networkState === 'setup-joined' && (
+          {!flow.cardAcknowledgedAt && !['found', 'return-to-gallery'].includes(detection.state) && (!postFlashInconclusive || postFlashChoice === 'hotspot') && flow.networkState === 'setup-joined' && (
             <div className="card-commissioning-network">
               <p><strong>{setupSsid ? `${setupSsid} joined.` : 'Setup network joined.'}</strong> If the card is still on its setup network, open it at 192.168.4.1, choose its permanent Wi-Fi, and return here. Once it rejoins your network Studio continues automatically. This progress stays saved while networks change.</p>
               <button type="button" className="btn" onClick={openSetupNetworkCard}>Open 192.168.4.1 Wi-Fi setup</button>
@@ -1120,13 +1138,24 @@ export function CardCommissioningPanel({
                   {`The setup page opened, but the card never answered at 192.168.4.1, so that tab will keep loading forever. Usually this device is not on ${setupNetworkLabel}, it silently switched back to a different network, or the card already rejoined your home Wi-Fi and its setup hotspot is gone. Check this device’s Wi-Fi and open Wi-Fi setup again — or if the card is already back on your network, use “Reconnect installed card” below.`}
                 </p>
               )}
-              <p role="status">{detection.state === 'searching' ? `Waiting for the card to rejoin your network — looking for ${flow.expectedCard.id}…` : 'Waiting for the card to rejoin your network…'}</p>
+              <p role="status">{detection.state === 'searching'
+                ? `Waiting for the card to rejoin your network — looking for ${flow.expectedCard.id}…`
+                : canAutoDetect
+                  ? 'Waiting for the card to rejoin your network…'
+                  : 'This browser cannot search your network from the public Studio. Once the card is back on your Wi-Fi, use “Reconnect installed card” below.'}</p>
             </div>
           )}
           {!flow.cardAcknowledgedAt ? (
             <>
-              <p>{identityFailure || 'Studio continues automatically once the exact card, firmware version, and firmware build answer on your network. You can also reconnect the installed card manually.'}</p>
-              <button type="button" className="btn" onClick={reconnectInstalledCard} disabled={reconnecting}>{reconnecting ? 'Reconnecting…' : 'Reconnect installed card'}</button>
+              <p>{identityFailure || (canAutoDetect
+                ? 'Studio continues automatically once the exact card, firmware version, and firmware build answer on your network. You can also reconnect the installed card manually.'
+                : 'Studio continues as soon as it can read the exact card, firmware version, and firmware build. Reconnect the installed card to check now.')}</p>
+              {/* The inconclusive fork already offers this exact reconnect as
+                  its own answer; repeating it underneath was one of the three
+                  competing buttons that made this step unreadable. */}
+              {!(postFlashInconclusive && postFlashChoice !== 'hotspot') && (
+                <button type="button" className="btn" onClick={reconnectInstalledCard} disabled={reconnecting}>{reconnecting ? 'Reconnecting…' : 'Reconnect installed card'}</button>
+              )}
             </>
           ) : (
             <>

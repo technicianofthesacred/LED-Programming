@@ -516,7 +516,12 @@ test('a setup hotspot that never appears stops asking the owner to wait', async 
   await expect(page.getByTestId('setup-hotspot-no-network')).toBeVisible();
 });
 
-test('an inconclusive post-flash observation offers both routes instead of asserting one', async ({ page }) => {
+// Both routes still reachable, but as ONE question with two answers rather
+// than three blocks stacked on one screen. The reported failure was not that
+// Studio guessed wrong; it was that the owner could not tell which of three
+// headings and three buttons was theirs, and the join steps for a hotspot
+// that did not exist sat there as an equal-looking option.
+test('an inconclusive post-flash observation asks one question with both answers', async ({ page }) => {
   await page.goto('/#screen=card&section=install', { waitUntil: 'domcontentloaded' });
   await seedCommissioningFlow(page, 'wifi', { state: 'inconclusive' });
   await page.reload({ waitUntil: 'domcontentloaded' });
@@ -524,10 +529,21 @@ test('an inconclusive post-flash observation offers both routes instead of asser
   const commissioning = page.locator('.card-commissioning');
   await expect(commissioning.locator('[data-post-flash="inconclusive"]')).toBeVisible();
   await expect(commissioning).toContainText('could not confirm how this card came back up');
-  // Both paths, side by side, with no claim about which one is true.
-  await expect(page.getByRole('button', { name: 'The card is already on my Wi-Fi', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'I\u2019ve joined Lightweaver-EEFF', exact: true })).toBeVisible();
+  const onWifi = page.getByTestId('post-flash-on-wifi');
+  const onHotspot = page.getByTestId('post-flash-hotspot');
+  await expect(onWifi).toBeVisible();
+  await expect(onHotspot).toBeVisible();
   await expect(commissioning.locator('[data-post-flash="station"]')).toHaveCount(0);
+
+  // Until the question is answered, the hotspot join steps stay out of the way
+  // and the reconnect action appears exactly once.
+  await expect(page.getByRole('button', { name: 'I\u2019ve joined Lightweaver-EEFF', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Reconnect installed card', exact: true })).toHaveCount(0);
+
+  // Answering "yes, I can see it" reveals the join steps and nothing else.
+  await onHotspot.click();
+  await expect(page.getByRole('button', { name: 'I\u2019ve joined Lightweaver-EEFF', exact: true })).toBeVisible();
+  await expect(commissioning.locator('[data-post-flash="inconclusive"]')).toHaveCount(0);
 });
 
 test('an opened setup tab that never reaches the card explains why instead of spinning silently', async ({ page }) => {
